@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="eullm-logo-github.png" alt="EULLM" width="480" />
+  <img src="eullm-logo-github.png" alt="EULLM" width="560" />
 </p>
 
 <p align="center"><strong>The European Sovereign LLM Platform</strong></p>
