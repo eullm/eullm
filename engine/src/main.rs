@@ -53,6 +53,55 @@ enum Commands {
         #[arg(long)]
         replace: bool,
     },
+    /// Verticalize a model: compress, specialize, and brand it
+    ///
+    /// Examples:
+    ///   eullm forge Qwen/Qwen3-14B --profile legal-it
+    ///   eullm forge Qwen/Qwen3-30B --profile medical-de --identity "MedAI"
+    Forge {
+        /// Source model (HuggingFace ID or local path)
+        source: String,
+
+        /// Verticalizzazione profile (legal-it, medical-de, finance-fr)
+        #[arg(short, long)]
+        profile: Option<String>,
+
+        /// Model identity name (e.g., "LegalAI di Studio Rossi")
+        #[arg(long)]
+        identity: Option<String>,
+
+        /// Comma-separated language codes (e.g., it,en)
+        #[arg(long)]
+        lang: Option<String>,
+
+        /// Output directory or model name
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Target VRAM in GB
+        #[arg(long)]
+        target_vram: Option<u16>,
+
+        /// Only estimate costs, don't run pipeline
+        #[arg(long)]
+        estimate_only: bool,
+
+        /// Skip structural pruning
+        #[arg(long)]
+        skip_pruning: bool,
+
+        /// Skip knowledge distillation
+        #[arg(long)]
+        skip_distillation: bool,
+
+        /// Skip quantization
+        #[arg(long)]
+        skip_quantization: bool,
+
+        /// Skip identity fine-tuning
+        #[arg(long)]
+        skip_identity: bool,
+    },
 }
 
 #[tokio::main]
@@ -84,6 +133,31 @@ async fn main() {
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Serve { port, replace } => cmd_serve(port, replace).await,
+        Commands::Forge {
+            source,
+            profile,
+            identity,
+            lang,
+            output,
+            target_vram,
+            estimate_only,
+            skip_pruning,
+            skip_distillation,
+            skip_quantization,
+            skip_identity,
+        } => cmd_forge(
+            &source,
+            profile.as_deref(),
+            identity.as_deref(),
+            lang.as_deref(),
+            output.as_deref(),
+            target_vram,
+            estimate_only,
+            skip_pruning,
+            skip_distillation,
+            skip_quantization,
+            skip_identity,
+        ),
     }
 }
 
@@ -299,6 +373,98 @@ async fn cmd_serve(port: u16, replace: bool) {
     if let Err(e) = api::serve(port, None).await {
         eprintln!("Server error: {e}");
         std::process::exit(1);
+    }
+}
+
+fn cmd_forge(
+    source: &str,
+    profile: Option<&str>,
+    identity: Option<&str>,
+    lang: Option<&str>,
+    output: Option<&str>,
+    target_vram: Option<u16>,
+    estimate_only: bool,
+    skip_pruning: bool,
+    skip_distillation: bool,
+    skip_quantization: bool,
+    skip_identity: bool,
+) {
+    // Build the eullm-forge command
+    let mut args = vec!["forge".to_string(), source.to_string()];
+
+    if let Some(p) = profile {
+        args.push("--profile".into());
+        args.push(p.into());
+    }
+    if let Some(i) = identity {
+        args.push("--identity".into());
+        args.push(i.into());
+    }
+    if let Some(l) = lang {
+        args.push("--lang".into());
+        args.push(l.into());
+    }
+    if let Some(o) = output {
+        args.push("--output".into());
+        args.push(o.into());
+    }
+    if let Some(v) = target_vram {
+        args.push("--target-vram".into());
+        args.push(v.to_string());
+    }
+    if estimate_only {
+        args.push("--estimate-only".into());
+    }
+    if skip_pruning {
+        args.push("--skip-pruning".into());
+    }
+    if skip_distillation {
+        args.push("--skip-distillation".into());
+    }
+    if skip_quantization {
+        args.push("--skip-quantization".into());
+    }
+    if skip_identity {
+        args.push("--skip-identity".into());
+    }
+
+    println!("eullm forge — delegating to eullm-forge pipeline...\n");
+
+    // Try to find eullm-forge in PATH
+    let status = std::process::Command::new("eullm-forge")
+        .args(&args)
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            std::process::exit(s.code().unwrap_or(1));
+        }
+        Err(_) => {
+            // eullm-forge not in PATH, try python -m eullm_forge.cli
+            let py_status = std::process::Command::new("python3")
+                .arg("-m")
+                .arg("eullm_forge.cli")
+                .args(&args)
+                .status();
+
+            match py_status {
+                Ok(s) if s.success() => {}
+                Ok(s) => {
+                    std::process::exit(s.code().unwrap_or(1));
+                }
+                Err(_) => {
+                    eprintln!("Error: eullm-forge is not installed.");
+                    eprintln!();
+                    eprintln!("Install it with:");
+                    eprintln!("  pip install eullm-forge");
+                    eprintln!();
+                    eprintln!("Or from source:");
+                    eprintln!("  cd forge && pip install -e '.[dev]'");
+                    std::process::exit(1);
+                }
+            }
+        }
     }
 }
 
