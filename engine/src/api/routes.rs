@@ -1,15 +1,23 @@
 //! Route definitions for the EULLM and OpenAI-compatible APIs.
+//!
+//! Supports both non-streaming (JSON) and streaming (SSE) responses
+//! on all generation endpoints. Set `"stream": true` in the request body
+//! to get token-by-token Server-Sent Events.
 
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event, Sse};
+use axum::response::IntoResponse;
 use axum::{routing::get, routing::post, Json, Router};
+use futures_util::stream::Stream;
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
 use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
-use crate::inference::GenerateRequest;
+use crate::inference::{GenerateRequest, StreamEvent};
 use crate::models::EU_CATALOG;
 
 type S = Arc<AppState>;
@@ -32,7 +40,52 @@ pub fn openai_routes() -> Router<S> {
         .route("/chat/completions", post(chat_completions))
 }
 
-// -- EULLM API handlers --
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+fn get_engine(state: &AppState) -> Result<&Arc<crate::inference::InferenceEngine>, (StatusCode, Json<Value>)> {
+    state.engine.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
+        )
+    })
+}
+
+fn parse_generate_params(body: &Value) -> (u32, f32) {
+    let max_tokens = body
+        .get("max_tokens")
+        .or_else(|| body.get("num_predict"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(512) as u32;
+    let temperature = body
+        .get("temperature")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.7) as f32;
+    (max_tokens, temperature)
+}
+
+fn is_streaming(body: &Value) -> bool {
+    body.get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+/// Format chat messages into a ChatML-style prompt string.
+fn format_chat_prompt(messages: &[Value]) -> String {
+    let mut prompt = String::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+        let content = msg
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        prompt.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
+    }
+    prompt.push_str("<|im_start|>assistant\n");
+    prompt
+}
+
+// ── EULLM API handlers ──────────────────────────────────────────────────────
 
 async fn version() -> Json<Value> {
     Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
@@ -64,87 +117,70 @@ async fn list_models(State(_state): State<S>) -> Json<Value> {
 async fn generate(
     State(state): State<S>,
     Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
         .or(state.model_name.as_deref())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
     let prompt = body
         .get("prompt")
         .and_then(|v| v.as_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
 
-    let engine = state.engine.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
-        )
-    })?;
-
-    let max_tokens = body
-        .get("max_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(512) as u32;
-
-    let temperature = body
-        .get("temperature")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.7) as f32;
+    let engine = get_engine(&state)?;
+    let (max_tokens, temperature) = parse_generate_params(&body);
 
     let request = GenerateRequest {
-        prompt: prompt.to_string(),
+        prompt,
         max_tokens,
         temperature,
         ..Default::default()
     };
 
-    let result = tokio::task::spawn_blocking({
-        let engine = Arc::clone(engine);
-        move || engine.generate(&request)
-    })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Task error: {e}") })),
-        )
-    })?
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Inference error: {e}") })),
-        )
-    })?;
+    if is_streaming(&body) {
+        let stream = stream_generate(Arc::clone(engine), request, model);
+        Ok(Sse::new(stream).into_response())
+    } else {
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(engine);
+            move || engine.generate(&request)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
 
-    // Audit log
-    let mut audit = AuditEntry::new(model.to_string(), "generate".to_string());
-    audit.input_tokens = result.tokens_prompt;
-    audit.output_tokens = result.tokens_generated;
-    audit.duration_ms = result.duration_ms;
-    AuditLogger::new().log(&audit);
+        let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
+        audit.input_tokens = result.tokens_prompt;
+        audit.output_tokens = result.tokens_generated;
+        audit.duration_ms = result.duration_ms;
+        AuditLogger::new().log(&audit);
 
-    Ok(Json(json!({
-        "model": model,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-        "response": result.text,
-        "done": true,
-        "total_duration": result.duration_ms * 1_000_000,
-        "eval_count": result.tokens_generated,
-        "eval_duration": result.duration_ms * 1_000_000,
-        "prompt_eval_count": result.tokens_prompt
-    })))
+        Ok(Json(json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "response": result.text,
+            "done": true,
+            "total_duration": result.duration_ms * 1_000_000,
+            "eval_count": result.tokens_generated,
+            "eval_duration": result.duration_ms * 1_000_000,
+            "prompt_eval_count": result.tokens_prompt
+        })).into_response())
+    }
 }
 
 async fn chat(
     State(state): State<S>,
     Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
         .or(state.model_name.as_deref())
-        .unwrap_or("unknown");
+        .unwrap_or("unknown")
+        .to_string();
 
     let messages = body
         .get("messages")
@@ -152,25 +188,9 @@ async fn chat(
         .cloned()
         .unwrap_or_default();
 
-    let engine = state.engine.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
-        )
-    })?;
-
-    // Build prompt from messages (simple ChatML-style)
+    let engine = get_engine(&state)?;
     let prompt = format_chat_prompt(&messages);
-
-    let max_tokens = body
-        .get("max_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(512) as u32;
-
-    let temperature = body
-        .get("temperature")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.7) as f32;
+    let (max_tokens, temperature) = parse_generate_params(&body);
 
     let request = GenerateRequest {
         prompt,
@@ -182,44 +202,38 @@ async fn chat(
         ],
     };
 
-    let result = tokio::task::spawn_blocking({
-        let engine = Arc::clone(engine);
-        move || engine.generate(&request)
-    })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Task error: {e}") })),
-        )
-    })?
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Inference error: {e}") })),
-        )
-    })?;
+    if is_streaming(&body) {
+        let stream = stream_chat(Arc::clone(engine), request, model);
+        Ok(Sse::new(stream).into_response())
+    } else {
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(engine);
+            move || engine.generate(&request)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
 
-    // Audit log
-    let mut audit = AuditEntry::new(model.to_string(), "chat".to_string());
-    audit.input_tokens = result.tokens_prompt;
-    audit.output_tokens = result.tokens_generated;
-    audit.duration_ms = result.duration_ms;
-    AuditLogger::new().log(&audit);
+        let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
+        audit.input_tokens = result.tokens_prompt;
+        audit.output_tokens = result.tokens_generated;
+        audit.duration_ms = result.duration_ms;
+        AuditLogger::new().log(&audit);
 
-    Ok(Json(json!({
-        "model": model,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-        "message": {
-            "role": "assistant",
-            "content": result.text
-        },
-        "done": true,
-        "total_duration": result.duration_ms * 1_000_000,
-        "eval_count": result.tokens_generated,
-        "eval_duration": result.duration_ms * 1_000_000,
-        "prompt_eval_count": result.tokens_prompt
-    })))
+        Ok(Json(json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "message": {
+                "role": "assistant",
+                "content": result.text
+            },
+            "done": true,
+            "total_duration": result.duration_ms * 1_000_000,
+            "eval_count": result.tokens_generated,
+            "eval_duration": result.duration_ms * 1_000_000,
+            "prompt_eval_count": result.tokens_prompt
+        })).into_response())
+    }
 }
 
 async fn show_model(Json(body): Json<Value>) -> Json<Value> {
@@ -261,7 +275,7 @@ async fn pull_model(Json(body): Json<Value>) -> Json<Value> {
     }))
 }
 
-// -- OpenAI-compatible handlers --
+// ── OpenAI-compatible handlers ───────────────────────────────────────────────
 
 async fn list_models_openai() -> Json<Value> {
     let data: Vec<Value> = EU_CATALOG
@@ -282,12 +296,13 @@ async fn list_models_openai() -> Json<Value> {
 async fn chat_completions(
     State(state): State<S>,
     Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
         .or(state.model_name.as_deref())
-        .unwrap_or("eullm/general-eu-7b");
+        .unwrap_or("eullm/general-eu-7b")
+        .to_string();
 
     let messages = body
         .get("messages")
@@ -295,24 +310,9 @@ async fn chat_completions(
         .cloned()
         .unwrap_or_default();
 
-    let engine = state.engine.as_ref().ok_or_else(|| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
-        )
-    })?;
-
+    let engine = get_engine(&state)?;
     let prompt = format_chat_prompt(&messages);
-
-    let max_tokens = body
-        .get("max_tokens")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(512) as u32;
-
-    let temperature = body
-        .get("temperature")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.7) as f32;
+    let (max_tokens, temperature) = parse_generate_params(&body);
 
     let request = GenerateRequest {
         prompt,
@@ -324,63 +324,214 @@ async fn chat_completions(
         ],
     };
 
-    let result = tokio::task::spawn_blocking({
-        let engine = Arc::clone(engine);
-        move || engine.generate(&request)
-    })
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Task error: {e}") })),
-        )
-    })?
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("Inference error: {e}") })),
-        )
-    })?;
+    if is_streaming(&body) {
+        let stream = stream_chat_completions(Arc::clone(engine), request, model);
+        Ok(Sse::new(stream).into_response())
+    } else {
+        let result = tokio::task::spawn_blocking({
+            let engine = Arc::clone(engine);
+            move || engine.generate(&request)
+        })
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
 
-    // Audit log
-    let mut audit = AuditEntry::new(model.to_string(), "chat.completions".to_string());
-    audit.input_tokens = result.tokens_prompt;
-    audit.output_tokens = result.tokens_generated;
-    audit.duration_ms = result.duration_ms;
-    AuditLogger::new().log(&audit);
+        let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
+        audit.input_tokens = result.tokens_prompt;
+        audit.output_tokens = result.tokens_generated;
+        audit.duration_ms = result.duration_ms;
+        AuditLogger::new().log(&audit);
 
-    Ok(Json(json!({
-        "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-        "object": "chat.completion",
-        "created": chrono::Utc::now().timestamp(),
-        "model": model,
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": result.text
-            },
-            "finish_reason": "stop"
-        }],
-        "usage": {
-            "prompt_tokens": result.tokens_prompt,
-            "completion_tokens": result.tokens_generated,
-            "total_tokens": result.tokens_prompt + result.tokens_generated
-        }
-    })))
+        Ok(Json(json!({
+            "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+            "object": "chat.completion",
+            "created": chrono::Utc::now().timestamp(),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": result.text
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": result.tokens_prompt,
+                "completion_tokens": result.tokens_generated,
+                "total_tokens": result.tokens_prompt + result.tokens_generated
+            }
+        })).into_response())
+    }
 }
 
-/// Format chat messages into a ChatML-style prompt string.
-fn format_chat_prompt(messages: &[Value]) -> String {
-    let mut prompt = String::new();
-    for msg in messages {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-        let content = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        prompt.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
+// ── Streaming helpers ────────────────────────────────────────────────────────
+
+/// SSE stream for `/api/generate` (Ollama format).
+///
+/// Each event is a JSON object with `"response"` containing the token piece.
+/// The final event has `"done": true`.
+fn stream_generate(
+    engine: Arc<crate::inference::InferenceEngine>,
+    request: GenerateRequest,
+    model: String,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+
+    tokio::task::spawn_blocking(move || {
+        engine.generate_streaming(&request, tx);
+    });
+
+    stream_from_channel(rx, model, StreamFormat::OllamaGenerate)
+}
+
+/// SSE stream for `/api/chat` (Ollama format).
+fn stream_chat(
+    engine: Arc<crate::inference::InferenceEngine>,
+    request: GenerateRequest,
+    model: String,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+
+    tokio::task::spawn_blocking(move || {
+        engine.generate_streaming(&request, tx);
+    });
+
+    stream_from_channel(rx, model, StreamFormat::OllamaChat)
+}
+
+/// SSE stream for `/v1/chat/completions` (OpenAI format).
+fn stream_chat_completions(
+    engine: Arc<crate::inference::InferenceEngine>,
+    request: GenerateRequest,
+    model: String,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+
+    tokio::task::spawn_blocking(move || {
+        engine.generate_streaming(&request, tx);
+    });
+
+    stream_from_channel(rx, model, StreamFormat::OpenAI)
+}
+
+#[derive(Clone, Copy)]
+enum StreamFormat {
+    OllamaGenerate,
+    OllamaChat,
+    OpenAI,
+}
+
+/// Convert an mpsc channel of StreamEvents into an SSE event stream.
+fn stream_from_channel(
+    mut rx: mpsc::Receiver<StreamEvent>,
+    model: String,
+    format: StreamFormat,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    async_stream::stream! {
+        let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Token(piece) => {
+                    let data = match format {
+                        StreamFormat::OllamaGenerate => json!({
+                            "model": &model,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "response": piece,
+                            "done": false,
+                        }),
+                        StreamFormat::OllamaChat => json!({
+                            "model": &model,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "message": {
+                                "role": "assistant",
+                                "content": piece,
+                            },
+                            "done": false,
+                        }),
+                        StreamFormat::OpenAI => json!({
+                            "id": &completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": chrono::Utc::now().timestamp(),
+                            "model": &model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {
+                                    "content": piece,
+                                },
+                                "finish_reason": Value::Null,
+                            }],
+                        }),
+                    };
+                    yield Ok(Event::default().data(data.to_string()));
+                }
+                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
+                    // Audit log
+                    let mut audit = AuditEntry::new(model.clone(), match format {
+                        StreamFormat::OllamaGenerate => "generate",
+                        StreamFormat::OllamaChat => "chat",
+                        StreamFormat::OpenAI => "chat.completions",
+                    }.to_string());
+                    audit.input_tokens = tokens_prompt;
+                    audit.output_tokens = tokens_generated;
+                    audit.duration_ms = duration_ms;
+                    AuditLogger::new().log(&audit);
+
+                    let data = match format {
+                        StreamFormat::OllamaGenerate => json!({
+                            "model": &model,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "response": "",
+                            "done": true,
+                            "total_duration": duration_ms * 1_000_000,
+                            "eval_count": tokens_generated,
+                            "eval_duration": duration_ms * 1_000_000,
+                            "prompt_eval_count": tokens_prompt,
+                        }),
+                        StreamFormat::OllamaChat => json!({
+                            "model": &model,
+                            "created_at": chrono::Utc::now().to_rfc3339(),
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                            },
+                            "done": true,
+                            "total_duration": duration_ms * 1_000_000,
+                            "eval_count": tokens_generated,
+                            "eval_duration": duration_ms * 1_000_000,
+                            "prompt_eval_count": tokens_prompt,
+                        }),
+                        StreamFormat::OpenAI => json!({
+                            "id": &completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": chrono::Utc::now().timestamp(),
+                            "model": &model,
+                            "choices": [{
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop",
+                            }],
+                            "usage": {
+                                "prompt_tokens": tokens_prompt,
+                                "completion_tokens": tokens_generated,
+                                "total_tokens": tokens_prompt + tokens_generated,
+                            },
+                        }),
+                    };
+                    yield Ok(Event::default().data(data.to_string()));
+
+                    // OpenAI format sends a final [DONE] marker
+                    if matches!(format, StreamFormat::OpenAI) {
+                        yield Ok(Event::default().data("[DONE]"));
+                    }
+                    break;
+                }
+                StreamEvent::Error(msg) => {
+                    let data = json!({ "error": msg });
+                    yield Ok(Event::default().data(data.to_string()));
+                    break;
+                }
+            }
+        }
     }
-    prompt.push_str("<|im_start|>assistant\n");
-    prompt
 }
