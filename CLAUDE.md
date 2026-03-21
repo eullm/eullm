@@ -12,6 +12,7 @@ Apache 2.0. All code must be Apache 2.0 compatible. Never introduce dependencies
 
 ### 1. EULLM Engine
 - Drop-in replacement for Ollama, 100% API compatible
+- SSE streaming on all generation endpoints (`/api/generate`, `/api/chat`, `/v1/chat/completions`)
 - Model registry hosted on EU servers (Hetzner DE, OVH FR)
 - Built-in audit trail for AI Act compliance
 - Zero telemetry to non-EU servers
@@ -108,6 +109,7 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 - **Rust for Engine/Hub:** single binary, performance, cross-compilation
 - **Python for Forge:** PyTorch ecosystem, Colab compatibility
 - **Not a fork of Ollama:** API compatibility, not code compatibility. Clean Rust implementation with native audit trail
+- **SSE streaming via mpsc channels:** inference engine sends tokens through `tokio::sync::mpsc`, routes convert to SSE events. Three formats: Ollama generate, Ollama chat, OpenAI chat.completion.chunk
 - **Compression strategy:** pruning (MLP-focused) → distillation → quantization → identity LoRA fine-tuning (validated by NVIDIA Minitron research)
 - **Iterative pruning for >50% compression:** compress 30%, distill, compress again (NVIDIA recommendation)
 - **EU Infrastructure:** Hetzner (primary), OVH/Scaleway (secondary)
@@ -165,7 +167,8 @@ eullm/
 Priority tasks:
 1. ~~Create project directory structure (engine/, forge/, hub/)~~
 2. ~~EULLM CLI skeleton (eullm pull, eullm run)~~
-3. Full Forge pipeline with verticalizzazione profiles
+3. ~~SSE streaming on all Engine endpoints (Ollama + OpenAI format)~~
+4. Full Forge pipeline with verticalizzazione profiles
 4. Demo notebook: verticalizzazione Qwen3-14B → legal-it-7b
 5. First 3 demo models on Hub (legal-it, medical-de, finance-fr)
 6. Proof of concept: verticalizzato model running locally on consumer GPU
