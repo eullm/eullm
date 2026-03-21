@@ -29,12 +29,12 @@ EULLM is composed of three independent components that work together to create, 
 
 ### Engine (`engine/`)
 
-**What:** CLI + API server for running GGUF models locally. Drop-in replacement for Ollama.
+**What:** CLI + API server for running GGUF models locally on European infrastructure.
 
 **Tech:** Rust, Axum, llama.cpp (planned bindings)
 
 **Key features:**
-- Ollama-compatible API (`/api/generate`, `/api/chat`, `/api/tags`, etc.)
+- Native EULLM API (`/api/generate`, `/api/chat`, `/api/tags`, etc.)
 - OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`)
 - Built-in EU model catalog (7 pre-configured models)
 - Local model store at `~/.eullm/models/`
