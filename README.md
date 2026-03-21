@@ -44,25 +44,33 @@ EULLM is an open-source platform with three components:
 
 ### EULLM Engine
 
-Run sovereign LLMs locally with a **EU-hosted model registry** and built-in AI Act compliance.
+Run sovereign LLMs locally with **real llama.cpp inference**, built-in audit trail, and full API compatibility. Single Rust binary, no Python runtime, no Docker required.
 
 ```bash
-# Same commands you already know
-eullm pull legal-it-7b          # Downloads from EU servers (Hetzner DE, OVH FR)
-eullm run legal-it-7b           # Runs locally — on your laptop, 8GB RAM
-eullm list                      # Show local and available models
-eullm show legal-it-7b          # Model details, metadata, compliance info
+# Run any GGUF model — local file or from the EU registry
+eullm run ./model.gguf                    # Local GGUF file
+eullm run legal-it-7b                     # From EU registry (coming soon)
 
-# OpenAI-compatible API — works with any tool
-# http://localhost:11435/v1
+# CLI
+eullm list                                # Show local and available models
+eullm show legal-it-7b                    # Model details, metadata, compliance info
+eullm serve                               # Start API server without loading a model
+
+# API endpoints (Ollama-compatible + OpenAI-compatible)
+# http://localhost:11434/api/generate
+# http://localhost:11434/api/chat
+# http://localhost:11434/v1/chat/completions
 ```
 
 Key features:
+- **Real inference** powered by llama.cpp (not a mock, not a proxy)
+- **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
+- **Ollama-compatible API** — drop-in replacement, same endpoints, same port
+- **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
+- **Built-in audit trail** for every inference (who, when, what — AI Act ready)
+- **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
-- Built-in audit trail for every inference (who, when, what — AI Act ready)
-- Automatic compliance documentation generation
 - Zero telemetry to non-EU servers
-- OpenAI-compatible API — works with Open WebUI, LangChain, n8n, any standard client
 
 ### EULLM Forge
 
@@ -117,48 +125,86 @@ Every model includes:
 
 ## Quickstart
 
-> **EULLM is in early development.** The commands below represent the target experience. Star this repo and [join the waitlist](https://eullm.eu) to get notified when it's ready.
+**EULLM Engine compiles and runs today.** If you have a GGUF model, you can use it right now.
 
 ```bash
-# Install EULLM (coming soon)
-curl -fsSL https://eullm.eu/install.sh | sh
+# Build from source
+git clone https://github.com/eullm/eullm.git && cd eullm
+cargo build --release
 
-# Pull a pre-verticalizzato model (runs on any laptop with 8GB RAM)
-eullm pull legal-it-7b
+# Run any GGUF model — that's it
+./target/release/eullm run ./qwen3-7b-q4_k_m.gguf
 
-# Run it
-eullm run legal-it-7b
-
-# Or verticalize your own model
-eullm-forge forge Qwen/Qwen3-14B \
-  --profile legal-it \
-  --identity "MyCompanyAI" \
-  --target-vram 8
+# API is live:
+curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3", "messages": [{"role": "user", "content": "Ciao!"}]}'
 ```
 
-### Use with existing tools
+With GPU acceleration:
 
-EULLM Engine exposes an OpenAI-compatible API (`/v1/chat/completions`). Any tool that supports OpenAI's API works with EULLM:
+```bash
+cargo build --release --features cuda     # NVIDIA (CUDA)
+cargo build --release --features rocm     # AMD (ROCm)
+cargo build --release --features vulkan   # Cross-platform (NVIDIA + AMD + Intel)
+cargo build --release --features metal    # macOS Apple Silicon
+```
 
-- **Open WebUI** — set the API base URL to your EULLM endpoint
-- **LangChain** — use `ChatOpenAI` with EULLM's base URL
-- **n8n** — configure the AI node to point to EULLM
-- **RAG Enterprise Pro** — native integration (coming soon)
-- **Any OpenAI-compatible client** — just change the base URL
+Or pull from the EU catalog (coming soon):
+
+```bash
+eullm pull legal-it-7b          # Downloads from EU servers (Hetzner DE, OVH FR)
+eullm run legal-it-7b           # Runs locally — on your laptop, 8GB RAM
+```
+
+### Drop-in Ollama replacement
+
+If you're a system integrator, or you already use Ollama or a llama.cpp backend, you can switch to EULLM without rewriting a single line. Same API, same port, same tools. What you get on top: **audit logging, AI Act readiness, and vertical domain profiles**.
+
+```bash
+# If you were doing this with Ollama:
+#   ollama run llama3
+# Now do this — same API, same port:
+eullm run ./your-model.gguf --port 11434
+```
+
+EULLM exposes both the Ollama-compatible `/api/*` and OpenAI-compatible `/v1/*` endpoints. Everything that works with Ollama works with EULLM:
+
+- **Open WebUI** — point it to `http://localhost:11434` and it just works
+- **LangChain / LlamaIndex** — use `ChatOpenAI(base_url="http://localhost:11434/v1")`
+- **n8n / Flowise** — configure the AI node to `http://localhost:11434`
+- **Any OpenAI-compatible client** — change the base URL, done
+
+### GPU support out of the box
+
+No patching C++ projects. No hunting for CUDA versions. Feature flags at build time:
+
+| Flag | GPU | Command |
+|------|-----|---------|
+| `cuda` | NVIDIA (CUDA) | `cargo build --release --features cuda` |
+| `rocm` | AMD (ROCm) | `cargo build --release --features rocm` |
+| `vulkan` | Cross-platform | `cargo build --release --features vulkan` |
+| `metal` | Apple Silicon | `cargo build --release --features metal` |
+| *(none)* | CPU only | `cargo build --release` |
+
+All GPU backends are compiled natively via llama.cpp — no wrappers, no Docker, no Python.
 
 ## Why EULLM?
 
-Existing open-source inference tools don't address European needs:
+If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know the pain. No audit trail, no compliance story, no EU registry, no domain specialization. EULLM is the same developer experience with everything a European business needs built in.
 
-| | Status quo | EULLM |
+| | Ollama / llama.cpp | EULLM |
 |---|---|---|
-| Model registry | US servers | EU servers (DE, FR, FI) |
+| Inference engine | llama.cpp | llama.cpp (same backend, same performance) |
+| API compatibility | Ollama API or custom | Ollama-compatible + OpenAI-compatible |
+| GPU support | Manual build flags | `--features cuda/rocm/vulkan/metal` |
+| Model registry | US servers (HuggingFace) | EU servers (Hetzner DE, OVH FR) |
 | AI Act compliance | None | Built-in audit trail + compliance cards |
 | Model verticalizzazione | Manual, requires ML expertise | One command via Forge |
 | Domain-specific EU models | None | Pre-verticalizzati Hub catalog |
 | White-label branding | System prompt only (bypassable) | Fine-tuned into weights |
 | Telemetry | Varies | Zero non-EU telemetry by design |
-| API | Proprietary or fragmented | OpenAI-compatible, works with all standard tools |
+| Migration effort | — | **Zero.** Same API, same port, same tools |
 
 EULLM is the sovereign AI stack that Europe is missing — engine, tools, and models in one platform.
 
@@ -211,6 +257,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
 - [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
 - [x] Hub API with model cards and AI Act compliance cards
+- [x] Real inference engine (llama.cpp via llama-cpp-2, CUDA/ROCm/Vulkan/Metal)
 - [x] Technical documentation (`docs/`)
 - [x] First Colab notebook: identity LoRA on Qwen3-14B
 - [ ] First verticalizzato model: `eullm/legal-it-7b`
@@ -218,7 +265,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [ ] Public launch (HN, Reddit, community)
 
 ### Phase 2: Platform (May–June 2026)
-- [ ] EULLM Engine v0.1 with llama.cpp inference
+- [x] EULLM Engine v0.1 with llama.cpp inference
 - [ ] EU model registry on Hetzner (Nuremberg, DE)
 - [ ] First 3 pre-verticalizzati models on Hub
 - [ ] Integration with RAG Enterprise Pro
@@ -304,8 +351,17 @@ Detailed documentation is available in the [`docs/`](docs/) directory:
 git clone https://github.com/eullm/eullm.git
 cd eullm
 
-# Build the engine
-cargo build
+# Build the engine (CPU only)
+cargo build --release
+
+# Build with GPU support
+cargo build --release --features cuda     # NVIDIA
+cargo build --release --features rocm     # AMD
+cargo build --release --features vulkan   # Cross-platform GPU
+cargo build --release --features metal    # macOS
+
+# Test it with any GGUF model
+./target/release/eullm run ./your-model.gguf
 
 # Set up the forge (Python)
 cd forge
