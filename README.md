@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://eullm.eu/logo.svg" alt="EULLM" width="120" />
+  <img src="https://www.eullm.eu/assets/eullm-logo-dark.png" alt="EULLM" width="120" />
 </p>
 
 <h1 align="center">EULLM</h1>
