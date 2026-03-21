@@ -1,8 +1,7 @@
 <p align="center">
-  <img src="https://www.eullm.eu/assets/eullm-logo-dark.png" alt="EULLM" width="120" />
+  <img src="https://www.eullm.eu/assets/eullm-logo-dark.png" alt="EULLM" width="320" />
 </p>
 
-<h1 align="center">EULLM</h1>
 <p align="center"><strong>The European Sovereign LLM Platform</strong></p>
 <p align="center">Create, distribute and run sovereign AI models on European infrastructure.<br>Open source. EU AI Act compliant. Runs on your hardware.</p>
 
