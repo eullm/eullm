@@ -29,47 +29,58 @@ EULLM is composed of three independent components that work together to create, 
 
 ### Engine (`engine/`)
 
-**What:** CLI + API server for running GGUF models locally on European infrastructure.
+**What:** CLI + API server for running GGUF models locally with real llama.cpp inference and built-in EU AI Act compliance.
 
-**Tech:** Rust, Axum, llama.cpp (planned bindings)
+**Tech:** Rust, Axum, llama-cpp-2 (llama.cpp bindings), tower-http (CORS)
 
 **Key features:**
-- Native EULLM API (`/api/generate`, `/api/chat`, `/api/tags`, etc.)
+- Real inference powered by llama.cpp (not a mock or proxy)
+- GPU acceleration: NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
+- Native EULLM API (`/api/generate`, `/api/chat`, `/api/tags`, etc.) — Ollama-compatible
 - OpenAI-compatible API (`/v1/chat/completions`, `/v1/models`)
+- CORS enabled for browser-based tools (Open WebUI)
 - Built-in EU model catalog (7 pre-configured models)
+- Model download from HuggingFace with streaming progress
 - Local model store at `~/.eullm/models/`
-- AI Act audit trail (per-inference logging)
+- AI Act audit trail — persistent JSONL at `~/.eullm/audit/audit.jsonl`
 - Zero telemetry to non-EU servers
 
-**Status:** CLI functional, API routes implemented with mock responses. Inference (llama.cpp) and registry (remote pull) are stubs.
+**Status:** Fully functional. Compiles and runs inference on any GGUF model.
 
 ### Forge (`forge/`)
 
 **What:** CLI + library for verticalizzazione (domain specialization) and compression of LLMs.
 
-**Tech:** Python, PyTorch, PEFT, Click, Rich
+**Tech:** Python, PyTorch, Transformers, PEFT, AutoAWQ/Auto-GPTQ, Click, Rich
 
 **Key features:**
-- 5-stage compression pipeline: pruning → distillation → quantization → identity LoRA → GGUF export
+- 5-stage compression pipeline, all implemented with real PyTorch code:
+  - Structural pruning (335 lines) — importance scoring + neuron removal
+  - Knowledge distillation (372 lines) — KL divergence + CE loss with AdamW
+  - Quantization (167 lines) — AWQ and GPTQ methods
+  - Identity LoRA (316 lines) — multilingual identity fine-tuning with HF Trainer
+  - GGUF export (257 lines) — 2-stage conversion via llama.cpp
 - Pre-configured profiles for domain/language combinations (legal-it, medical-de, finance-fr)
 - Cost estimation before running expensive operations
 - Demo notebook for Colab Pro+ (identity LoRA stage)
 
-**Status:** CLI fully functional. Identity dataset generation implemented. Pruning, distillation, quantization, and export are stubs (require GPU hardware and specific libraries).
+**Status:** All pipeline stages implemented (~1,940 lines of production code). Execution requires appropriate GPU hardware and libraries.
 
 ### Hub (`hub/`)
 
-**What:** REST API registry for publishing and discovering verticalizzati models.
+**What:** REST API registry for publishing, discovering, and downloading verticalizzati models.
 
-**Tech:** Rust, Axum
+**Tech:** Rust, Axum, tokio-util (streaming)
 
 **Key features:**
-- Model listing and search (`/v1/models`)
+- Model listing and metadata (`/v1/models`)
 - Model cards with training methodology documentation
 - AI Act compliance cards per Regulation (EU) 2024/1689
-- 7 demo models in catalog
+- GGUF download endpoint with file streaming (`/v1/models/{name}/download`)
+- Configurable file-based storage (`EULLM_HUB_STORAGE` env var)
+- 7 models in catalog
 
-**Status:** API routes implemented with static catalog data. Storage backend (S3-compatible) is planned.
+**Status:** API routes implemented with static catalog and file-based GGUF storage. S3-compatible backend planned.
 
 ## Verticalizzazione Pipeline
 
@@ -80,10 +91,12 @@ Source: Qwen3-14B (Apache 2.0, ~28GB FP16)
   │
   ├─ 1. Structural Pruning ──── 14B → 7B parameters
   │     MLP neurons + attention heads removed
+  │     Importance scoring via forward hook activations
   │     GPU: 1-2x A100, ~30 min, ~$1-2
   │
   ├─ 2. Knowledge Distillation ── Recover quality
   │     Teacher (14B) → Student (7B) on domain corpus
+  │     Loss: alpha * KL_div + (1-alpha) * CE
   │     GPU: 2x A100, 2-3 days, ~$300-500
   │
   ├─ 3. Quantization ──────────── FP16 → Q4_K_M
@@ -92,9 +105,11 @@ Source: Qwen3-14B (Apache 2.0, ~28GB FP16)
   │
   ├─ 4. Identity LoRA ─────────── Brand + localize
   │     "I am EULLM Legal IT", multilingual identity
+  │     LoRA r=16, HF Trainer, synthetic dataset
   │     GPU: 1x A100, ~1-2h, ~$3-5
   │
   └─ 5. GGUF Export ───────────── Package for distribution
+        llama.cpp convert_hf_to_gguf + llama-quantize
         CPU only, ~10 min, free
 
 Output: eullm/legal-it-7b (~4.5GB GGUF, runs on 8GB RAM)
@@ -116,21 +131,22 @@ Developer                    EULLM Forge                    EULLM Hub
    │                            │  (optional) push to Hub      │
    │                            │─────────────────────────────►│
    │                            │                              │
-   │                                                           │
+
 User                         EULLM Engine                   EULLM Hub
    │                            │                              │
    │  eullm pull legal-it-7b    │                              │
-   │───────────────────────────►│  fetch model                 │
+   │───────────────────────────►│  download GGUF               │
    │                            │─────────────────────────────►│
    │                            │◄─────────────────────────────│
    │                            │  store in ~/.eullm/models/   │
    │                            │                              │
    │  eullm run legal-it-7b     │                              │
-   │───────────────────────────►│  load .gguf + start API      │
+   │───────────────────────────►│  load .gguf via llama.cpp    │
+   │                            │  start API server            │
    │                            │                              │
-   │  POST /api/chat            │                              │
+   │  POST /v1/chat/completions │                              │
    │───────────────────────────►│  inference + audit log       │
-   │◄───────────────────────────│                              │
+   │◄───────────────────────────│  (JSONL to ~/.eullm/audit/)  │
 ```
 
 ## Storage Layout
@@ -138,12 +154,16 @@ User                         EULLM Engine                   EULLM Hub
 ### Engine (local)
 ```
 ~/.eullm/
-└── models/
-    ├── legal-it-7b/
-    │   └── manifest.json      # Model metadata, pull timestamp
-    ├── medical-de-7b/
-    │   └── manifest.json
-    └── ...
+├── models/
+│   ├── legal-it-7b/
+│   │   ├── manifest.json              # Model metadata, pull timestamp, status
+│   │   └── legal-it-7b-q4_k_m.gguf   # Downloaded GGUF file
+│   ├── medical-de-7b/
+│   │   ├── manifest.json
+│   │   └── medical-de-7b-q4_k_m.gguf
+│   └── ...
+└── audit/
+    └── audit.jsonl                    # Persistent audit trail (one JSON per line)
 ```
 
 ### Forge (working directory)
@@ -154,6 +174,16 @@ User                         EULLM Engine                   EULLM Hub
 ├── quantized/                 # After stage 3
 ├── identity/                  # After stage 4 (LoRA weights)
 └── eullm-legal-it-7b.gguf    # Final output
+```
+
+### Hub (server)
+```
+$EULLM_HUB_STORAGE/           # Default: ~/.eullm/hub/models/
+├── legal-it-7b/
+│   └── legal-it-7b-q4_k_m.gguf
+├── medical-de-7b/
+│   └── medical-de-7b-q4_k_m.gguf
+└── ...
 ```
 
 ## Licensing
