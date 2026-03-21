@@ -32,7 +32,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 11434)]
         port: u16,
 
-        /// Replace existing service on the port (e.g., stop Ollama)
+        /// Replace existing service on the port
         #[arg(long)]
         replace: bool,
     },
@@ -49,7 +49,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 11434)]
         port: u16,
 
-        /// Replace existing service on the port (e.g., stop Ollama)
+        /// Replace existing service on the port
         #[arg(long)]
         replace: bool,
     },
@@ -283,16 +283,14 @@ async fn detect_port_service(port: u16) -> Option<String> {
     }
 
     // Port is in use — try to identify the service
-    // Check if it's Ollama by hitting /api/version
     let url = format!("http://127.0.0.1:{port}/api/version");
     if let Ok(resp) = reqwest::get(&url).await {
         if let Ok(body) = resp.text().await {
             if body.contains("version") {
-                // Check if it's us or Ollama
                 if body.contains("eullm") {
                     return Some("eullm (already running)".into());
                 }
-                return Some(format!("Ollama (response: {body})"));
+                return Some(format!("another service (response: {body})"));
             }
         }
     }
@@ -306,24 +304,14 @@ async fn ensure_port_available(port: u16, replace: bool) {
         if replace {
             eprintln!("Port {port} is in use by {service}.");
             eprintln!("Attempting to take over...");
-            // Try to stop Ollama if that's what's running
-            if service.contains("Ollama") {
-                eprintln!("Hint: run 'systemctl stop ollama' or 'ollama stop' first.");
-            }
             eprintln!("Error: --replace is not yet implemented. Stop the service manually.");
             std::process::exit(1);
         } else {
             eprintln!("Error: port {port} is already in use by {service}.");
             eprintln!();
-            if service.contains("Ollama") {
-                eprintln!("Ollama is running on the default port. Options:");
-                eprintln!("  1. Stop Ollama:   systemctl stop ollama");
-                eprintln!("  2. Use a different port:  eullm serve --port 11435");
-            } else {
-                eprintln!("Options:");
-                eprintln!("  1. Stop the existing service on port {port}");
-                eprintln!("  2. Use a different port:  eullm serve --port {}", port + 1);
-            }
+            eprintln!("Options:");
+            eprintln!("  1. Stop the existing service on port {port}");
+            eprintln!("  2. Use a different port:  eullm serve --port {}", port + 1);
             std::process::exit(1);
         }
     }

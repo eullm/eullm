@@ -1,6 +1,6 @@
 # EULLM Engine
 
-The EULLM Engine is a CLI + API server for running GGUF models locally. It's designed as a drop-in replacement for Ollama, with built-in EU model catalog and AI Act audit trail.
+The EULLM Engine is a CLI + API server for running GGUF models locally on European infrastructure, with built-in EU model catalog, AI Act audit trail, and zero non-EU telemetry.
 
 ## Installation
 
@@ -62,9 +62,9 @@ eullm serve --port 8080
 
 ## API Reference
 
-The Engine exposes two sets of endpoints: the native EULLM API (Ollama-compatible) and an OpenAI-compatible API.
+The Engine exposes two sets of endpoints: the native EULLM API and an OpenAI-compatible API.
 
-### EULLM API (Ollama-compatible)
+### EULLM API
 
 #### `GET /api/version`
 
@@ -292,7 +292,7 @@ llm = ChatOpenAI(
 response = llm.invoke("Spiegami l'art. 2043 del Codice Civile.")
 ```
 
-### With curl (Ollama-style)
+### With curl
 
 ```bash
 curl http://localhost:11435/api/generate \
