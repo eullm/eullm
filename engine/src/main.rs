@@ -202,9 +202,9 @@ async fn cmd_run(store: &ModelStore, model: &str, port: u16) {
     let short = model.strip_prefix("eullm/").unwrap_or(model);
     println!("Loading model {short}...");
     println!("EULLM Engine ready.");
-    println!("  API (Ollama compat): http://localhost:{port}/api");
-    println!("  API (OpenAI compat): http://localhost:{port}/v1");
-    println!("  Model:               {short}");
+    println!("  API (EULLM):   http://localhost:{port}/api");
+    println!("  API (OpenAI):  http://localhost:{port}/v1");
+    println!("  Model:         {short}");
     println!("\nPress Ctrl+C to stop.\n");
 
     if let Err(e) = api::serve(port, Some(model.to_string())).await {
@@ -215,8 +215,8 @@ async fn cmd_run(store: &ModelStore, model: &str, port: u16) {
 
 async fn cmd_serve(port: u16) {
     println!("EULLM Engine ready (no model loaded).");
-    println!("  API (Ollama compat): http://localhost:{port}/api");
-    println!("  API (OpenAI compat): http://localhost:{port}/v1");
+    println!("  API (EULLM):   http://localhost:{port}/api");
+    println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("\nPress Ctrl+C to stop.\n");
 
     if let Err(e) = api::serve(port, None).await {
