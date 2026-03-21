@@ -1,9 +1,9 @@
-# EULLM Forge profile: Italian Legal
-name: legal-it
-description: "Verticalizzato for Italian legal domain — civil code, criminal code, GDPR, Cassazione rulings"
+# EULLM Forge profile: French Finance
+name: finance-fr
+description: "Verticalizzato for French finance domain — AMF regulations, BCE directives, banking"
 base_model: Qwen/Qwen3-14B
 languages:
-  - it
+  - fr
   - en
 target_vram_gb: 8
 
@@ -11,13 +11,13 @@ pruning:
   target_ratio: 0.5
   strategy: mlp_first
   calibration_samples: 512
-  calibration_dataset: legal_it
+  calibration_dataset: finance_fr
 
 distillation:
   temperature: 2.0
   alpha: 0.5
   num_epochs: 3
-  dataset: legal_it
+  dataset: finance_fr
   max_tokens: 50_000_000_000
 
 quantization:
@@ -26,7 +26,7 @@ quantization:
   method: awq
 
 identity:
-  identity_name: "EULLM Legal IT"
+  identity_name: "EULLM Finance FR"
   lora_rank: 16
   lora_alpha: 32
   num_epochs: 3

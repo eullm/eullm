@@ -1,12 +1,11 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.backends"
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "eullm-forge"
 version = "0.1.0"
 description = "EULLM Forge — compress, customize, and brand open-source LLMs"
-readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
@@ -14,7 +13,6 @@ authors = [
 ]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
@@ -37,6 +35,9 @@ dev = [
 distill = [
     "nvidia-modelopt[torch]>=0.11",
 ]
+
+[tool.setuptools.packages.find]
+include = ["eullm_forge*"]
 
 [project.scripts]
 eullm-forge = "eullm_forge.cli:main"
