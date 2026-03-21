@@ -144,7 +144,7 @@ def export_gguf(config: ExportConfig) -> str:
     """Export a model to GGUF format.
 
     Uses llama.cpp's convert tools to produce a GGUF file that can be
-    loaded by eullm engine, ollama, or any llama.cpp-based runtime.
+    loaded by eullm engine or any llama.cpp-based runtime.
 
     Pipeline:
     1. Convert PyTorch/SafeTensors -> GGUF F16

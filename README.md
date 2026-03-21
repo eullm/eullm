@@ -24,7 +24,7 @@
 
 ## The problem
 
-95% of AI infrastructure used in Europe depends on American or Chinese companies. Every API call sends data outside the EU. Every `ollama pull` downloads from US servers. Even self-hosted solutions route through American infrastructure.
+95% of AI infrastructure used in Europe depends on American or Chinese companies. Every API call sends data outside the EU. Every model download comes from US servers. Even self-hosted solutions route through American infrastructure.
 
 The **EU AI Act** (Regulation 2024/1689) takes effect August 2, 2026. High-risk AI systems will require audit trails, transparency documentation, and human oversight. No existing open-source tool provides this.
 
@@ -44,7 +44,7 @@ EULLM is an open-source platform with three components:
 
 ### EULLM Engine
 
-Drop-in replacement for Ollama with a **EU-hosted model registry**.
+Run sovereign LLMs locally with a **EU-hosted model registry** and built-in AI Act compliance.
 
 ```bash
 # Same commands you already know
@@ -53,16 +53,16 @@ eullm run legal-it-7b           # Runs locally — on your laptop, 8GB RAM
 eullm list                      # Show local and available models
 eullm show legal-it-7b          # Model details, metadata, compliance info
 
-# 100% Ollama API compatible — change one line to migrate
-# OLD: http://localhost:11434/v1
-# NEW: http://localhost:11435/v1
+# OpenAI-compatible API — works with any tool
+# http://localhost:11435/v1
 ```
 
-What's different from Ollama:
+Key features:
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
 - Built-in audit trail for every inference (who, when, what — AI Act ready)
 - Automatic compliance documentation generation
 - Zero telemetry to non-EU servers
+- OpenAI-compatible API — works with Open WebUI, LangChain, n8n, any standard client
 
 ### EULLM Forge
 
@@ -138,29 +138,29 @@ eullm-forge forge Qwen/Qwen3-14B \
 
 ### Use with existing tools
 
-EULLM Engine is 100% compatible with the Ollama API. Any tool that works with Ollama works with EULLM:
+EULLM Engine exposes an OpenAI-compatible API (`/v1/chat/completions`). Any tool that supports OpenAI's API works with EULLM:
 
-- **Open WebUI** — change `OLLAMA_BASE_URL` to your EULLM endpoint
-- **LangChain** — swap the base URL
-- **n8n** — point the Ollama node to EULLM
+- **Open WebUI** — set the API base URL to your EULLM endpoint
+- **LangChain** — use `ChatOpenAI` with EULLM's base URL
+- **n8n** — configure the AI node to point to EULLM
 - **RAG Enterprise Pro** — native integration (coming soon)
-- **Any OpenAI-compatible client** — EULLM exposes `/v1/chat/completions`
+- **Any OpenAI-compatible client** — just change the base URL
 
-## Why not just use Ollama?
+## Why EULLM?
 
-Ollama is excellent. We use it ourselves. But:
+Existing open-source inference tools don't address European needs:
 
-| | Ollama | EULLM |
+| | Status quo | EULLM |
 |---|---|---|
 | Model registry | US servers | EU servers (DE, FR, FI) |
-| AI Act compliance | None | Built-in audit trail + documentation |
+| AI Act compliance | None | Built-in audit trail + compliance cards |
 | Model verticalizzazione | Manual, requires ML expertise | One command via Forge |
 | Domain-specific EU models | None | Pre-verticalizzati Hub catalog |
-| White-label branding | System prompt only (can "forget") | Fine-tuned into weights |
-| Telemetry | Opt-out | Zero non-EU telemetry by design |
-| API compatibility | — | 100% Ollama compatible |
+| White-label branding | System prompt only (bypassable) | Fine-tuned into weights |
+| Telemetry | Varies | Zero non-EU telemetry by design |
+| API | Proprietary or fragmented | OpenAI-compatible, works with all standard tools |
 
-EULLM is not a fork of Ollama. It's the European ecosystem that's missing around it.
+EULLM is the sovereign AI stack that Europe is missing — engine, tools, and models in one platform.
 
 ## Demo models
 
@@ -206,7 +206,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] Vision document and roadmap
 - [x] GitHub repository and community setup
 - [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm list`, `eullm show`, `eullm serve`)
-- [x] Engine API: Ollama-compatible + OpenAI-compatible (`/v1/chat/completions`)
+- [x] Engine API: OpenAI-compatible (`/v1/chat/completions`) + native EULLM API
 - [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
 - [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
 - [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
