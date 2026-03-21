@@ -3,10 +3,13 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::{routing::get, routing::post, Json, Router};
 use serde_json::{json, Value};
 
 use super::AppState;
+use crate::audit::{AuditEntry, AuditLogger};
+use crate::inference::GenerateRequest;
 use crate::models::EU_CATALOG;
 
 type S = Arc<AppState>;
@@ -58,66 +61,165 @@ async fn list_models(State(_state): State<S>) -> Json<Value> {
     Json(json!({ "models": models }))
 }
 
-async fn generate(State(state): State<S>, Json(body): Json<Value>) -> Json<Value> {
+async fn generate(
+    State(state): State<S>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
-        .or(state.model.as_deref())
+        .or(state.model_name.as_deref())
         .unwrap_or("unknown");
     let prompt = body
         .get("prompt")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    // Mock response
-    let response = format!(
-        "Hello! I'm {model}, running on eullm. \
-         This is a mock response. You asked: \"{prompt}\""
-    );
+    let engine = state.engine.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
+        )
+    })?;
 
-    Json(json!({
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(512) as u32;
+
+    let temperature = body
+        .get("temperature")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.7) as f32;
+
+    let request = GenerateRequest {
+        prompt: prompt.to_string(),
+        max_tokens,
+        temperature,
+        ..Default::default()
+    };
+
+    let result = tokio::task::spawn_blocking({
+        let engine = Arc::clone(engine);
+        move || engine.generate(&request)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Task error: {e}") })),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Inference error: {e}") })),
+        )
+    })?;
+
+    // Audit log
+    let mut audit = AuditEntry::new(model.to_string(), "generate".to_string());
+    audit.input_tokens = result.tokens_prompt;
+    audit.output_tokens = result.tokens_generated;
+    audit.duration_ms = result.duration_ms;
+    AuditLogger::new().log(&audit);
+
+    Ok(Json(json!({
         "model": model,
         "created_at": chrono::Utc::now().to_rfc3339(),
-        "response": response,
+        "response": result.text,
         "done": true,
-        "total_duration": 150_000_000,
-        "eval_count": 25,
-        "eval_duration": 100_000_000
-    }))
+        "total_duration": result.duration_ms * 1_000_000,
+        "eval_count": result.tokens_generated,
+        "eval_duration": result.duration_ms * 1_000_000,
+        "prompt_eval_count": result.tokens_prompt
+    })))
 }
 
-async fn chat(State(state): State<S>, Json(body): Json<Value>) -> Json<Value> {
+async fn chat(
+    State(state): State<S>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
-        .or(state.model.as_deref())
+        .or(state.model_name.as_deref())
         .unwrap_or("unknown");
 
-    let last_message = body
+    let messages = body
         .get("messages")
         .and_then(|v| v.as_array())
-        .and_then(|arr| arr.last())
-        .and_then(|m| m.get("content"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+        .cloned()
+        .unwrap_or_default();
 
-    let response = format!(
-        "Hello! I'm {model}, running on eullm. \
-         This is a mock response to: \"{last_message}\""
-    );
+    let engine = state.engine.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
+        )
+    })?;
 
-    Json(json!({
+    // Build prompt from messages (simple ChatML-style)
+    let prompt = format_chat_prompt(&messages);
+
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(512) as u32;
+
+    let temperature = body
+        .get("temperature")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.7) as f32;
+
+    let request = GenerateRequest {
+        prompt,
+        max_tokens,
+        temperature,
+        stop_sequences: vec![
+            "<|im_end|>".to_string(),
+            "<|end|>".to_string(),
+        ],
+    };
+
+    let result = tokio::task::spawn_blocking({
+        let engine = Arc::clone(engine);
+        move || engine.generate(&request)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Task error: {e}") })),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Inference error: {e}") })),
+        )
+    })?;
+
+    // Audit log
+    let mut audit = AuditEntry::new(model.to_string(), "chat".to_string());
+    audit.input_tokens = result.tokens_prompt;
+    audit.output_tokens = result.tokens_generated;
+    audit.duration_ms = result.duration_ms;
+    AuditLogger::new().log(&audit);
+
+    Ok(Json(json!({
         "model": model,
         "created_at": chrono::Utc::now().to_rfc3339(),
         "message": {
             "role": "assistant",
-            "content": response
+            "content": result.text
         },
         "done": true,
-        "total_duration": 150_000_000,
-        "eval_count": 25,
-        "eval_duration": 100_000_000
-    }))
+        "total_duration": result.duration_ms * 1_000_000,
+        "eval_count": result.tokens_generated,
+        "eval_duration": result.duration_ms * 1_000_000,
+        "prompt_eval_count": result.tokens_prompt
+    })))
 }
 
 async fn show_model(Json(body): Json<Value>) -> Json<Value> {
@@ -155,7 +257,7 @@ async fn pull_model(Json(body): Json<Value>) -> Json<Value> {
         .unwrap_or("unknown");
 
     Json(json!({
-        "status": format!("pulling {name} from EU registry (mock)")
+        "status": format!("pulling {name} from EU registry (not yet implemented)")
     }))
 }
 
@@ -177,27 +279,77 @@ async fn list_models_openai() -> Json<Value> {
     Json(json!({ "object": "list", "data": data }))
 }
 
-async fn chat_completions(State(state): State<S>, Json(body): Json<Value>) -> Json<Value> {
+async fn chat_completions(
+    State(state): State<S>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
-        .or(state.model.as_deref())
+        .or(state.model_name.as_deref())
         .unwrap_or("eullm/general-eu-7b");
 
-    let last_message = body
+    let messages = body
         .get("messages")
         .and_then(|v| v.as_array())
-        .and_then(|arr| arr.last())
-        .and_then(|m| m.get("content"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+        .cloned()
+        .unwrap_or_default();
 
-    let response = format!(
-        "Hello! I'm {model}, running on eullm. \
-         This is a mock response to: \"{last_message}\""
-    );
+    let engine = state.engine.as_ref().ok_or_else(|| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
+        )
+    })?;
 
-    Json(json!({
+    let prompt = format_chat_prompt(&messages);
+
+    let max_tokens = body
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(512) as u32;
+
+    let temperature = body
+        .get("temperature")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.7) as f32;
+
+    let request = GenerateRequest {
+        prompt,
+        max_tokens,
+        temperature,
+        stop_sequences: vec![
+            "<|im_end|>".to_string(),
+            "<|end|>".to_string(),
+        ],
+    };
+
+    let result = tokio::task::spawn_blocking({
+        let engine = Arc::clone(engine);
+        move || engine.generate(&request)
+    })
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Task error: {e}") })),
+        )
+    })?
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Inference error: {e}") })),
+        )
+    })?;
+
+    // Audit log
+    let mut audit = AuditEntry::new(model.to_string(), "chat.completions".to_string());
+    audit.input_tokens = result.tokens_prompt;
+    audit.output_tokens = result.tokens_generated;
+    audit.duration_ms = result.duration_ms;
+    AuditLogger::new().log(&audit);
+
+    Ok(Json(json!({
         "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
         "object": "chat.completion",
         "created": chrono::Utc::now().timestamp(),
@@ -206,14 +358,29 @@ async fn chat_completions(State(state): State<S>, Json(body): Json<Value>) -> Js
             "index": 0,
             "message": {
                 "role": "assistant",
-                "content": response
+                "content": result.text
             },
             "finish_reason": "stop"
         }],
         "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 25,
-            "total_tokens": 35
+            "prompt_tokens": result.tokens_prompt,
+            "completion_tokens": result.tokens_generated,
+            "total_tokens": result.tokens_prompt + result.tokens_generated
         }
-    }))
+    })))
+}
+
+/// Format chat messages into a ChatML-style prompt string.
+fn format_chat_prompt(messages: &[Value]) -> String {
+    let mut prompt = String::new();
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+        let content = msg
+            .get("content")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        prompt.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
+    }
+    prompt.push_str("<|im_start|>assistant\n");
+    prompt
 }

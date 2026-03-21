@@ -4,8 +4,13 @@ mod inference;
 mod models;
 mod registry;
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use clap::{Parser, Subcommand};
 use models::{catalog, ModelStore};
+
+use crate::inference::{InferenceConfig, InferenceEngine};
 
 #[derive(Parser)]
 #[command(name = "eullm")]
@@ -25,7 +30,7 @@ enum Commands {
     },
     /// Run a model locally (starts API server)
     Run {
-        /// Model name (e.g., general-eu-14b)
+        /// Model name or path to a local GGUF file
         model: String,
 
         /// Port for the API server
@@ -35,6 +40,18 @@ enum Commands {
         /// Replace existing service on the port
         #[arg(long)]
         replace: bool,
+
+        /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
+        #[arg(long, default_value_t = -1)]
+        gpu_layers: i32,
+
+        /// Context window size
+        #[arg(short, long, default_value_t = 4096)]
+        ctx_size: u32,
+
+        /// Number of CPU threads (default: all available)
+        #[arg(short, long)]
+        threads: Option<u32>,
     },
     /// List locally available models
     List,
@@ -129,7 +146,10 @@ async fn main() {
             model,
             port,
             replace,
-        } => cmd_run(&store, &model, port, replace).await,
+            gpu_layers,
+            ctx_size,
+            threads,
+        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads).await,
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Serve { port, replace } => cmd_serve(port, replace).await,
@@ -166,7 +186,7 @@ fn cmd_pull(store: &ModelStore, model: &str) {
         Some(e) => e,
         None => {
             eprintln!("Error: model '{model}' not found in EU catalog.");
-            eprintln!("Run `eullm list --remote` to see available models.");
+            eprintln!("Run `eullm list` to see available models.");
             std::process::exit(1);
         }
     };
@@ -179,13 +199,9 @@ fn cmd_pull(store: &ModelStore, model: &str) {
     println!("Pulling {} from EU registry...", entry.name);
     println!(
         "  {} | {} | ~{}GB VRAM | {}",
-        entry.description,
-        entry.base,
-        entry.vram_gb,
-        entry.license
+        entry.description, entry.base, entry.vram_gb, entry.license
     );
 
-    // Simulate download progress
     println!("  Downloading manifest...");
 
     match store.pull(entry) {
@@ -213,6 +229,7 @@ fn cmd_list(store: &ModelStore) {
                 );
             }
             println!("\nPull with: eullm pull <model-name>");
+            println!("Or run a local GGUF: eullm run ./path/to/model.gguf");
         }
         Ok(models) => {
             println!("{:<30} {:>8} {:>6} {}", "NAME", "SIZE", "VRAM", "STATUS");
@@ -270,19 +287,33 @@ fn cmd_show(store: &ModelStore, model: &str) {
     }
 }
 
-/// Check what service is running on a given port.
+/// Resolve a model argument to a GGUF file path.
 ///
-/// Returns a description of the detected service, or `None` if the port is free.
+/// Supports:
+/// - Local GGUF file path: `./model.gguf` or `/path/to/model.gguf`
+/// - Catalog model name: `legal-it-7b` or `eullm/legal-it-7b`
+fn resolve_model_path(model: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(model);
+
+    // Direct GGUF file path
+    if path.exists() && path.extension().map_or(false, |e| e == "gguf") {
+        return Some(path);
+    }
+
+    // Could also check in the model store for downloaded GGUF files
+    // For now, only direct paths are supported for real inference
+    None
+}
+
+/// Check what service is running on a given port.
 async fn detect_port_service(port: u16) -> Option<String> {
     use tokio::net::TcpStream;
 
-    // Try to connect to the port
     let addr = format!("127.0.0.1:{port}");
     if TcpStream::connect(&addr).await.is_err() {
-        return None; // Port is free
+        return None;
     }
 
-    // Port is in use — try to identify the service
     let url = format!("http://127.0.0.1:{port}/api/version");
     if let Ok(resp) = reqwest::get(&url).await {
         if let Ok(body) = resp.text().await {
@@ -317,40 +348,102 @@ async fn ensure_port_available(port: u16, replace: bool) {
     }
 }
 
-async fn cmd_run(store: &ModelStore, model: &str, port: u16, replace: bool) {
-    // Check port availability before doing anything
+async fn cmd_run(
+    store: &ModelStore,
+    model: &str,
+    port: u16,
+    replace: bool,
+    gpu_layers: i32,
+    ctx_size: u32,
+    threads: Option<u32>,
+) {
     ensure_port_available(port, replace).await;
 
-    // Auto-pull if not available
-    if !store.exists(model) {
-        if let Some(entry) = catalog::find_model(model) {
-            println!("Model not found locally. Pulling...");
-            if let Err(e) = store.pull(entry) {
-                eprintln!("Error pulling model: {e}");
+    let model_name: String;
+    let engine: Option<Arc<InferenceEngine>>;
+
+    // Try to resolve as a local GGUF file first
+    if let Some(gguf_path) = resolve_model_path(model) {
+        model_name = gguf_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| model.to_string());
+
+        println!("Loading GGUF: {}", gguf_path.display());
+
+        let config = InferenceConfig {
+            model_path: gguf_path,
+            gpu_layers,
+            context_size: ctx_size,
+            threads: threads.unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get() as u32)
+                    .unwrap_or(4)
+            }),
+        };
+
+        match InferenceEngine::load(config) {
+            Ok(eng) => {
+                engine = Some(Arc::new(eng));
+                println!("Model loaded.");
+            }
+            Err(e) => {
+                eprintln!("Error loading model: {e}");
                 std::process::exit(1);
             }
-        } else {
-            eprintln!("Error: model '{model}' not found in EU catalog.");
-            std::process::exit(1);
         }
+    } else {
+        // Catalog model (no real inference yet — would need GGUF download)
+        model_name = model.to_string();
+
+        if !store.exists(model) {
+            if let Some(entry) = catalog::find_model(model) {
+                println!("Model not found locally. Pulling...");
+                if let Err(e) = store.pull(entry) {
+                    eprintln!("Error pulling model: {e}");
+                    std::process::exit(1);
+                }
+            } else {
+                eprintln!("Error: model '{model}' not found.");
+                eprintln!();
+                eprintln!("Usage:");
+                eprintln!("  eullm run ./path/to/model.gguf    # Run a local GGUF file");
+                eprintln!("  eullm run legal-it-7b              # Run a catalog model (requires download)");
+                std::process::exit(1);
+            }
+        }
+
+        eprintln!("Warning: catalog models don't have GGUF files yet.");
+        eprintln!("  Inference will not work until the EU registry is operational.");
+        eprintln!("  To test inference now, use a local GGUF file:");
+        eprintln!("    eullm run ./path/to/model.gguf");
+        eprintln!();
+        engine = None;
     }
 
-    let short = model.strip_prefix("eullm/").unwrap_or(model);
-    println!("Loading model {short}...");
+    let short = model_name
+        .strip_prefix("eullm/")
+        .unwrap_or(&model_name);
+    println!();
     println!("eullm ready.");
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("  Model:         {short}");
-    println!("\nPress Ctrl+C to stop.\n");
+    if engine.is_some() {
+        println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
+        println!("  Context:       {ctx_size}");
+    }
+    println!();
+    println!("Press Ctrl+C to stop.");
+    println!();
 
-    if let Err(e) = api::serve(port, Some(model.to_string())).await {
+    if let Err(e) = api::serve(port, Some(model_name), engine).await {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
 }
 
 async fn cmd_serve(port: u16, replace: bool) {
-    // Check port availability
     ensure_port_available(port, replace).await;
 
     println!("eullm ready (no model loaded).");
@@ -358,7 +451,7 @@ async fn cmd_serve(port: u16, replace: bool) {
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("\nPress Ctrl+C to stop.\n");
 
-    if let Err(e) = api::serve(port, None).await {
+    if let Err(e) = api::serve(port, None, None).await {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
@@ -377,7 +470,6 @@ fn cmd_forge(
     skip_quantization: bool,
     skip_identity: bool,
 ) {
-    // Build the eullm-forge command
     let mut args = vec!["forge".to_string(), source.to_string()];
 
     if let Some(p) = profile {
@@ -418,7 +510,6 @@ fn cmd_forge(
 
     println!("eullm forge — delegating to eullm-forge pipeline...\n");
 
-    // Try to find eullm-forge in PATH
     let status = std::process::Command::new("eullm-forge")
         .args(&args)
         .status();
@@ -429,7 +520,6 @@ fn cmd_forge(
             std::process::exit(s.code().unwrap_or(1));
         }
         Err(_) => {
-            // eullm-forge not in PATH, try python -m eullm_forge.cli
             let py_status = std::process::Command::new("python3")
                 .arg("-m")
                 .arg("eullm_forge.cli")
