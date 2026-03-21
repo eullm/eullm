@@ -1,0 +1,51 @@
+# Private context (never commit)
+CLAUDE_PRIVATE.md
+
+# Rust
+target/
+*.rs.bk
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.key
+*.pem
+
+# Models (too large for git)
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+
+# Data
+*.csv
+*.sqlite
+*.db
