@@ -1,6 +1,7 @@
 //! Inference engine powered by llama.cpp via llama-cpp-2 bindings.
 //!
 //! Loads GGUF models and runs text generation with token sampling.
+//! Supports both blocking generation and streaming (token-by-token via channel).
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -13,6 +14,7 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
+use tokio::sync::mpsc;
 
 /// Configuration for the inference engine.
 #[derive(Debug, Clone)]
@@ -58,13 +60,28 @@ impl Default for GenerateRequest {
     }
 }
 
-/// Result of text generation.
+/// Result of text generation (non-streaming).
 #[derive(Debug, Clone)]
 pub struct GenerateResult {
     pub text: String,
     pub tokens_generated: u32,
     pub tokens_prompt: u32,
     pub duration_ms: u64,
+}
+
+/// A single token event emitted during streaming generation.
+#[derive(Debug, Clone)]
+pub enum StreamEvent {
+    /// A text fragment (one or more decoded token characters).
+    Token(String),
+    /// Generation is complete.
+    Done {
+        tokens_generated: u32,
+        tokens_prompt: u32,
+        duration_ms: u64,
+    },
+    /// An error occurred during generation.
+    Error(String),
 }
 
 /// The loaded inference engine, holding the model and backend.
@@ -119,7 +136,7 @@ impl InferenceEngine {
         })
     }
 
-    /// Generate text from a prompt.
+    /// Generate text from a prompt (blocking, returns all at once).
     pub fn generate(
         &self,
         request: &GenerateRequest,
@@ -238,6 +255,148 @@ impl InferenceEngine {
         })
     }
 
+    /// Generate text with streaming — sends each token through the channel as it's produced.
+    ///
+    /// The caller receives `StreamEvent::Token(piece)` for each generated piece,
+    /// then `StreamEvent::Done { ... }` when generation is complete.
+    pub fn generate_streaming(
+        &self,
+        request: &GenerateRequest,
+        tx: mpsc::Sender<StreamEvent>,
+    ) {
+        let _lock = self.ctx_mutex.lock();
+        let start = std::time::Instant::now();
+
+        let ctx_size = NonZeroU32::new(self.config.context_size)
+            .unwrap_or(NonZeroU32::new(4096).unwrap());
+
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(ctx_size))
+            .with_n_threads(self.config.threads as i32)
+            .with_n_threads_batch(self.config.threads as i32);
+
+        let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
+                return;
+            }
+        };
+
+        let tokens = match self.model.str_to_token(&request.prompt, AddBos::Always) {
+            Ok(t) => t,
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!("Tokenization failed: {e}")));
+                return;
+            }
+        };
+
+        let tokens_prompt = tokens.len() as u32;
+        let n_len = (tokens.len() as u32 + request.max_tokens) as i32;
+
+        let n_ctx = ctx.n_ctx() as i32;
+        if n_len > n_ctx {
+            let _ = tx.blocking_send(StreamEvent::Error(format!(
+                "Prompt ({tokens_prompt} tokens) + max_tokens ({}) exceeds context window ({n_ctx})",
+                request.max_tokens
+            )));
+            return;
+        }
+
+        let mut batch = match LlamaBatch::new(self.config.context_size as usize, 1) {
+            batch => batch,
+        };
+        let last_idx = (tokens.len() - 1) as i32;
+        for (i, token) in (0_i32..).zip(tokens.into_iter()) {
+            if batch.add(token, i, &[0], i == last_idx).is_err() {
+                let _ = tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
+                return;
+            }
+        }
+
+        if ctx.decode(&mut batch).is_err() {
+            let _ = tx.blocking_send(StreamEvent::Error("Prompt decode failed".into()));
+            return;
+        }
+
+        let mut sampler = LlamaSampler::chain_simple([
+            LlamaSampler::temp(request.temperature),
+            LlamaSampler::dist(1234),
+            LlamaSampler::greedy(),
+        ]);
+
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut full_output = String::new();
+        let mut n_cur = batch.n_tokens();
+        let mut tokens_generated: u32 = 0;
+
+        while n_cur <= n_len && tokens_generated < request.max_tokens {
+            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+            sampler.accept(token);
+
+            if self.model.is_eog_token(token) {
+                break;
+            }
+
+            match self.model.token_to_piece(token, &mut decoder, true, None) {
+                Ok(piece) => {
+                    full_output.push_str(&piece);
+
+                    // Check stop sequences
+                    let mut stopped = false;
+                    for s in &request.stop_sequences {
+                        if full_output.ends_with(s) {
+                            // Don't send the stop sequence token
+                            let piece_without_stop = if piece.len() >= s.len() {
+                                &piece[..piece.len() - s.len()]
+                            } else {
+                                ""
+                            };
+                            if !piece_without_stop.is_empty() {
+                                if tx.blocking_send(StreamEvent::Token(piece_without_stop.to_string())).is_err() {
+                                    return;
+                                }
+                            }
+                            stopped = true;
+                            break;
+                        }
+                    }
+
+                    if stopped {
+                        break;
+                    }
+
+                    // Send the token piece
+                    if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
+                        return; // receiver dropped
+                    }
+                }
+                Err(_) => break,
+            }
+
+            batch.clear();
+            if batch.add(token, n_cur, &[0], true).is_err() {
+                break;
+            }
+
+            if ctx.decode(&mut batch).is_err() {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "Decode failed at token {tokens_generated}"
+                )));
+                return;
+            }
+
+            n_cur += 1;
+            tokens_generated += 1;
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let _ = tx.blocking_send(StreamEvent::Done {
+            tokens_generated,
+            tokens_prompt,
+            duration_ms,
+        });
+    }
 }
 
 fn num_cpus() -> u32 {

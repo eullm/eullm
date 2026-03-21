@@ -64,6 +64,7 @@ eullm serve                               # Start API server without loading a m
 
 Key features:
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
+- **SSE streaming** — token-by-token output on all endpoints (`"stream": true`)
 - **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client

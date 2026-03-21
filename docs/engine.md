@@ -180,10 +180,19 @@ curl -X POST http://localhost:11434/api/generate \
 | `prompt` | (required) | Input prompt |
 | `max_tokens` | 512 | Maximum tokens to generate |
 | `temperature` | 0.7 | Sampling temperature |
+| `stream` | false | Stream response token-by-token (SSE) |
+
+**Streaming:** Set `"stream": true` to receive Server-Sent Events. Each SSE event contains a JSON object with `"response"` (the token piece) and `"done": false`. The final event has `"done": true` with timing stats.
+
+```bash
+# Streaming example
+curl -N http://localhost:11434/api/generate \
+  -d '{"model": "local", "prompt": "Hello", "stream": true}'
+```
 
 #### `POST /api/chat`
 
-Chat completion with message history. Messages are formatted as ChatML internally.
+Chat completion with message history. Messages are formatted as ChatML internally. Supports `"stream": true` for token-by-token SSE responses.
 
 ```bash
 curl -X POST http://localhost:11434/api/chat \
@@ -193,6 +202,15 @@ curl -X POST http://localhost:11434/api/chat \
     "messages": [
       {"role": "user", "content": "Spiegami il GDPR in breve."}
     ]
+  }'
+
+# Streaming
+curl -N http://localhost:11434/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "eullm/legal-it-7b",
+    "messages": [{"role": "user", "content": "Ciao!"}],
+    "stream": true
   }'
 ```
 
@@ -230,9 +248,10 @@ curl http://localhost:11434/v1/models
 
 #### `POST /v1/chat/completions`
 
-Chat completion in OpenAI format. Real inference with token counts.
+Chat completion in OpenAI format. Real inference with token counts. Supports `"stream": true` for SSE streaming (OpenAI `chat.completion.chunk` format with `[DONE]` terminator).
 
 ```bash
+# Non-streaming
 curl -X POST http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
@@ -240,6 +259,15 @@ curl -X POST http://localhost:11434/v1/chat/completions \
     "messages": [
       {"role": "user", "content": "Hello"}
     ]
+  }'
+
+# Streaming (same format as OpenAI API)
+curl -N http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "eullm/legal-it-7b",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "stream": true
   }'
 ```
 
@@ -372,5 +400,6 @@ curl http://localhost:11434/v1/chat/completions \
 | Local model store (~/.eullm/models/) | Implemented |
 | Model download (HuggingFace, streaming with progress) | Implemented |
 | Audit trail (persistent JSONL) | Implemented |
+| SSE streaming (all endpoints) | Implemented (Ollama + OpenAI format) |
 | ChatML prompt formatting | Implemented |
 | EU registry download | Implemented (client ready, registry server coming soon) |
