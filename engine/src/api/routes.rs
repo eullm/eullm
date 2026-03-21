@@ -1,4 +1,4 @@
-//! Route definitions for the Ollama-compatible and OpenAI-compatible APIs.
+//! Route definitions for the EULLM and OpenAI-compatible APIs.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use crate::models::EU_CATALOG;
 
 type S = Arc<AppState>;
 
-/// Ollama-compatible API routes (`/api/*`).
+/// EULLM native API routes (`/api/*`).
 pub fn api_routes() -> Router<S> {
     Router::new()
         .route("/tags", get(list_models))
@@ -29,7 +29,7 @@ pub fn openai_routes() -> Router<S> {
         .route("/chat/completions", post(chat_completions))
 }
 
-// -- Ollama API handlers --
+// -- EULLM API handlers --
 
 async fn version() -> Json<Value> {
     Json(json!({ "version": env!("CARGO_PKG_VERSION") }))

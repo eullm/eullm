@@ -1,6 +1,6 @@
-//! Ollama-compatible REST API.
+//! EULLM Engine REST API.
 //!
-//! Exposes endpoints compatible with the Ollama API specification
+//! Exposes a standard LLM API (both `/api` and `/v1` OpenAI-compatible)
 //! so that existing tools (Open WebUI, LangChain, n8n) work out of the box.
 
 mod routes;
@@ -29,7 +29,7 @@ pub async fn serve(port: u16, model: Option<String>) -> Result<(), Box<dyn std::
     Ok(())
 }
 
-/// Build the Ollama-compatible API router.
+/// Build the EULLM API router.
 fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", routes::api_routes())
