@@ -47,7 +47,9 @@ async fn list_models(State(_state): State<S>) -> Json<Value> {
                     "format": "gguf",
                     "family": m.base,
                     "parameter_size": format!("{}B", m.vram_gb * 2),
-                    "quantization_level": "Q4_K_M"
+                    "quantization_level": "Q4_K_M",
+                    "domain": m.domain,
+                    "source_model": m.source_model
                 }
             })
         })
@@ -126,14 +128,19 @@ async fn show_model(Json(body): Json<Value>) -> Json<Value> {
 
     if let Some(entry) = crate::models::catalog::find_model(name) {
         Json(json!({
-            "modelfile": format!("# EULLM model: {}\n# Base: {}\n# License: {}", entry.name, entry.base, entry.license),
-            "parameters": format!("num_ctx 4096\ntemperature 0.7"),
+            "modelfile": format!(
+                "# EULLM model: {}\n# Domain: {}\n# Base: {}\n# Source: {}\n# License: {}",
+                entry.name, entry.domain, entry.base, entry.source_model, entry.license
+            ),
+            "parameters": "num_ctx 4096\ntemperature 0.7",
             "template": "{{ .Prompt }}",
             "details": {
                 "format": "gguf",
                 "family": entry.base,
                 "parameter_size": format!("{}B", entry.vram_gb * 2),
-                "quantization_level": "Q4_K_M"
+                "quantization_level": "Q4_K_M",
+                "domain": entry.domain,
+                "source_model": entry.source_model
             }
         }))
     } else {
@@ -175,7 +182,7 @@ async fn chat_completions(State(state): State<S>, Json(body): Json<Value>) -> Js
         .get("model")
         .and_then(|v| v.as_str())
         .or(state.model.as_deref())
-        .unwrap_or("eullm/general-eu-14b");
+        .unwrap_or("eullm/general-eu-7b");
 
     let last_message = body
         .get("messages")

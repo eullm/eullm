@@ -1,9 +1,9 @@
-# EULLM Forge profile: Italian Legal
-name: legal-it
-description: "Verticalizzato for Italian legal domain — civil code, criminal code, GDPR, Cassazione rulings"
+# EULLM Forge profile: German Medical
+name: medical-de
+description: "Verticalizzato for German medical domain — clinical guidelines, medical documentation"
 base_model: Qwen/Qwen3-14B
 languages:
-  - it
+  - de
   - en
 target_vram_gb: 8
 
@@ -11,13 +11,13 @@ pruning:
   target_ratio: 0.5
   strategy: mlp_first
   calibration_samples: 512
-  calibration_dataset: legal_it
+  calibration_dataset: medical_de
 
 distillation:
   temperature: 2.0
   alpha: 0.5
   num_epochs: 3
-  dataset: legal_it
+  dataset: medical_de
   max_tokens: 50_000_000_000
 
 quantization:
@@ -26,7 +26,7 @@ quantization:
   method: awq
 
 identity:
-  identity_name: "EULLM Legal IT"
+  identity_name: "EULLM Medical DE"
   lora_rank: 16
   lora_alpha: 32
   num_epochs: 3

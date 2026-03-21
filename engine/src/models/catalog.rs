@@ -1,4 +1,7 @@
 //! EU model catalog — the list of models available from EULLM Hub.
+//!
+//! Contains both pre-verticalizzati 7B models (the demo lineup)
+//! and larger models for users with more powerful hardware.
 
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -14,6 +17,10 @@ pub struct CatalogEntry {
     pub size_bytes: u64,
     pub license: String,
     pub digest: String,
+    /// Domain specialization (e.g., "legal", "medical", "finance", "general")
+    pub domain: String,
+    /// Source model this was verticalizzato from
+    pub source_model: String,
 }
 
 /// Built-in catalog of EULLM Hub models.
@@ -22,9 +29,62 @@ pub struct CatalogEntry {
 /// For now we embed a static catalog for the CLI to work offline.
 pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
     vec![
+        // ── Verticalizzati 7B (consumer GPU / laptop) ──────────────────
+        CatalogEntry {
+            name: "eullm/legal-it-7b".into(),
+            description: "Italian legal domain — civil code, GDPR, Cassazione rulings".into(),
+            languages: vec!["it".into(), "en".into()],
+            base: "qwen3".into(),
+            vram_gb: 6,
+            size_bytes: 4_500_000_000,
+            license: "Apache-2.0".into(),
+            digest: "sha256:le7a1it0000000000000000000000001".into(),
+            domain: "legal".into(),
+            source_model: "Qwen/Qwen3-14B".into(),
+        },
+        CatalogEntry {
+            name: "eullm/medical-de-7b".into(),
+            description: "German medical — clinical guidelines, medical documentation".into(),
+            languages: vec!["de".into(), "en".into()],
+            base: "qwen3".into(),
+            vram_gb: 6,
+            size_bytes: 4_500_000_000,
+            license: "Apache-2.0".into(),
+            digest: "sha256:med1ca1de000000000000000000000001".into(),
+            domain: "medical".into(),
+            source_model: "Qwen/Qwen3-14B".into(),
+        },
+        CatalogEntry {
+            name: "eullm/finance-fr-7b".into(),
+            description: "French finance — AMF regulations, BCE directives, banking".into(),
+            languages: vec!["fr".into(), "en".into()],
+            base: "qwen3".into(),
+            vram_gb: 6,
+            size_bytes: 4_500_000_000,
+            license: "Apache-2.0".into(),
+            digest: "sha256:f1nancefr000000000000000000000001".into(),
+            domain: "finance".into(),
+            source_model: "Qwen/Qwen3-14B".into(),
+        },
+        // ── General purpose models ─────────────────────────────────────
+        CatalogEntry {
+            name: "eullm/general-eu-7b".into(),
+            description: "General purpose multilingual — runs on any laptop".into(),
+            languages: vec!["en", "it", "de", "fr", "es", "pt", "nl"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            base: "qwen3".into(),
+            vram_gb: 6,
+            size_bytes: 4_500_000_000,
+            license: "Apache-2.0".into(),
+            digest: "sha256:genera1eu7b0000000000000000000001".into(),
+            domain: "general".into(),
+            source_model: "Qwen/Qwen3-14B".into(),
+        },
         CatalogEntry {
             name: "eullm/general-eu-14b".into(),
-            description: "General purpose multilingual model for European use".into(),
+            description: "General purpose multilingual — requires dedicated GPU".into(),
             languages: vec!["en", "it", "de", "fr", "es", "pt", "nl"]
                 .into_iter()
                 .map(String::from)
@@ -33,69 +93,62 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             vram_gb: 10,
             size_bytes: 8_500_000_000,
             license: "Apache-2.0".into(),
-            digest: "sha256:abcdef1234567890".into(),
+            digest: "sha256:genera1eu14b000000000000000000001".into(),
+            domain: "general".into(),
+            source_model: "Qwen/Qwen3-30B-A3B".into(),
         },
+        // ── Specialized 14B (workstation GPU) ──────────────────────────
         CatalogEntry {
             name: "eullm/legal-it-14b".into(),
-            description: "Italian legal domain model".into(),
+            description: "Italian legal domain — full-size, higher quality".into(),
             languages: vec!["it".into(), "en".into()],
             base: "qwen3".into(),
             vram_gb: 10,
             size_bytes: 8_200_000_000,
             license: "Apache-2.0".into(),
-            digest: "sha256:fedcba0987654321".into(),
+            digest: "sha256:le7a1it14b00000000000000000000001".into(),
+            domain: "legal".into(),
+            source_model: "Qwen/Qwen3-30B-A3B".into(),
         },
         CatalogEntry {
-            name: "eullm/finance-de-8b".into(),
-            description: "German finance domain model".into(),
-            languages: vec!["de".into(), "en".into()],
-            base: "mistral".into(),
-            vram_gb: 6,
-            size_bytes: 4_800_000_000,
-            license: "Apache-2.0".into(),
-            digest: "sha256:112233aabbccddee".into(),
-        },
-        CatalogEntry {
-            name: "eullm/healthcare-fr-14b".into(),
-            description: "French healthcare domain model".into(),
-            languages: vec!["fr".into(), "en".into()],
-            base: "qwen3".into(),
-            vram_gb: 10,
-            size_bytes: 8_400_000_000,
-            license: "Apache-2.0".into(),
-            digest: "sha256:445566aabbccddee".into(),
-        },
-        CatalogEntry {
-            name: "eullm/code-eu-32b".into(),
+            name: "eullm/code-eu-14b".into(),
             description: "Multilingual coding model".into(),
             languages: vec!["en", "it", "de", "fr", "es"]
                 .into_iter()
                 .map(String::from)
                 .collect(),
             base: "deepseek".into(),
-            vram_gb: 20,
-            size_bytes: 18_000_000_000,
+            vram_gb: 10,
+            size_bytes: 8_500_000_000,
             license: "MIT".into(),
-            digest: "sha256:778899aabbccddee".into(),
-        },
-        CatalogEntry {
-            name: "eullm/customer-es-8b".into(),
-            description: "Spanish customer service model".into(),
-            languages: vec!["es".into(), "en".into()],
-            base: "mistral".into(),
-            vram_gb: 6,
-            size_bytes: 4_600_000_000,
-            license: "Apache-2.0".into(),
-            digest: "sha256:aabb00112233eeff".into(),
+            digest: "sha256:c0deeu14b000000000000000000000001".into(),
+            domain: "code".into(),
+            source_model: "deepseek-ai/DeepSeek-V3".into(),
         },
     ]
 });
 
 /// Find a model in the catalog by name.
 ///
-/// Supports both full name (`eullm/legal-it-14b`) and short name (`legal-it-14b`).
+/// Supports both full name (`eullm/legal-it-7b`) and short name (`legal-it-7b`).
 pub fn find_model(name: &str) -> Option<&CatalogEntry> {
     EU_CATALOG.iter().find(|m| {
         m.name == name || m.name.strip_prefix("eullm/").is_some_and(|short| short == name)
     })
+}
+
+/// List models filtered by domain.
+pub fn find_by_domain(domain: &str) -> Vec<&CatalogEntry> {
+    EU_CATALOG
+        .iter()
+        .filter(|m| m.domain == domain)
+        .collect()
+}
+
+/// List models filtered by language.
+pub fn find_by_language(lang: &str) -> Vec<&CatalogEntry> {
+    EU_CATALOG
+        .iter()
+        .filter(|m| m.languages.iter().any(|l| l == lang))
+        .collect()
 }
