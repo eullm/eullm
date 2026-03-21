@@ -21,6 +21,11 @@ pub struct CatalogEntry {
     pub domain: String,
     /// Source model this was verticalizzato from
     pub source_model: String,
+    /// HuggingFace repo for downloading the GGUF file (e.g., "eullm/legal-it-7b-GGUF").
+    /// Empty if not yet available.
+    pub hf_repo: String,
+    /// GGUF filename in the HuggingFace repo (e.g., "legal-it-7b-q4_k_m.gguf").
+    pub hf_filename: String,
 }
 
 /// Built-in catalog of EULLM Hub models.
@@ -41,6 +46,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:le7a1it0000000000000000000000001".into(),
             domain: "legal".into(),
             source_model: "Qwen/Qwen3-14B".into(),
+            hf_repo: "eullm/legal-it-7b-GGUF".into(),
+            hf_filename: "legal-it-7b-q4_k_m.gguf".into(),
         },
         CatalogEntry {
             name: "eullm/medical-de-7b".into(),
@@ -53,6 +60,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:med1ca1de000000000000000000000001".into(),
             domain: "medical".into(),
             source_model: "Qwen/Qwen3-14B".into(),
+            hf_repo: "eullm/medical-de-7b-GGUF".into(),
+            hf_filename: "medical-de-7b-q4_k_m.gguf".into(),
         },
         CatalogEntry {
             name: "eullm/finance-fr-7b".into(),
@@ -65,6 +74,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:f1nancefr000000000000000000000001".into(),
             domain: "finance".into(),
             source_model: "Qwen/Qwen3-14B".into(),
+            hf_repo: "eullm/finance-fr-7b-GGUF".into(),
+            hf_filename: "finance-fr-7b-q4_k_m.gguf".into(),
         },
         // ── General purpose models ─────────────────────────────────────
         CatalogEntry {
@@ -81,6 +92,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:genera1eu7b0000000000000000000001".into(),
             domain: "general".into(),
             source_model: "Qwen/Qwen3-14B".into(),
+            hf_repo: "eullm/general-eu-7b-GGUF".into(),
+            hf_filename: "general-eu-7b-q4_k_m.gguf".into(),
         },
         CatalogEntry {
             name: "eullm/general-eu-14b".into(),
@@ -96,6 +109,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:genera1eu14b000000000000000000001".into(),
             domain: "general".into(),
             source_model: "Qwen/Qwen3-30B-A3B".into(),
+            hf_repo: "eullm/general-eu-14b-GGUF".into(),
+            hf_filename: "general-eu-14b-q4_k_m.gguf".into(),
         },
         // ── Specialized 14B (workstation GPU) ──────────────────────────
         CatalogEntry {
@@ -109,6 +124,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:le7a1it14b00000000000000000000001".into(),
             domain: "legal".into(),
             source_model: "Qwen/Qwen3-30B-A3B".into(),
+            hf_repo: "eullm/legal-it-14b-GGUF".into(),
+            hf_filename: "legal-it-14b-q4_k_m.gguf".into(),
         },
         CatalogEntry {
             name: "eullm/code-eu-14b".into(),
@@ -124,6 +141,8 @@ pub static EU_CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
             digest: "sha256:c0deeu14b000000000000000000000001".into(),
             domain: "code".into(),
             source_model: "deepseek-ai/DeepSeek-V3".into(),
+            hf_repo: "eullm/code-eu-14b-GGUF".into(),
+            hf_filename: "code-eu-14b-q4_k_m.gguf".into(),
         },
     ]
 });

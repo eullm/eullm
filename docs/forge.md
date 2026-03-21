@@ -27,7 +27,7 @@ pip install -e ".[dev]"
 | `rich` | >= 13.0 | Terminal formatting |
 | `pyyaml` | >= 6.0 | Profile parsing |
 
-Optional: `nvidia-modelopt[torch]` >= 0.11 for pruning/distillation.
+Optional: `nvidia-modelopt[torch]` >= 0.11 for advanced pruning, `autoawq` for AWQ quantization.
 
 Python >= 3.10 required.
 
@@ -125,9 +125,19 @@ eullm-forge export ./my-model -o ./my-model.gguf --quant q4_k_m
 
 ## Pipeline Stages
 
-### 1. Structural Pruning
+All five stages are implemented with real PyTorch/Transformers code. Each stage requires appropriate GPU hardware to execute.
 
-Removes MLP neurons and attention heads based on importance scoring (Minitron approach).
+### 1. Structural Pruning (`pruning.py` — 335 lines)
+
+Removes MLP neurons and attention heads based on importance scoring (NVIDIA Minitron approach).
+
+**How it works:**
+1. Loads model and tokenizer from HuggingFace
+2. Registers forward hooks on MLP/attention layers
+3. Runs calibration forward passes on domain data
+4. Computes per-neuron importance scores (L2 norm of activations)
+5. Removes lowest-importance neurons via `torch.topk`
+6. Supports iterative pruning for >50% compression
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -139,11 +149,18 @@ Removes MLP neurons and attention heads based on importance scoring (Minitron ap
 
 **Requirements:** 1-2x A100 80GB for 14B models. ~30 minutes.
 
-**Status:** Stub — requires NVIDIA ModelOpt.
+**Libraries:** `torch`, `transformers`, `datasets`
 
-### 2. Knowledge Distillation
+### 2. Knowledge Distillation (`distill.py` — 372 lines)
 
 Transfers knowledge from the original (teacher) model to the pruned (student) model using domain-specific data.
+
+**How it works:**
+1. Loads teacher (frozen, no gradients) and student (trainable) with `device_map="auto"`
+2. Loads domain-specific HuggingFace dataset, tokenizes with padding/truncation
+3. Computes KD loss: `alpha * KL_div(student_logits, teacher_logits/T) + (1-alpha) * CE_loss`
+4. Trains with AdamW optimizer and gradient accumulation
+5. Tracks token budget for cost control
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -166,11 +183,16 @@ Transfers knowledge from the original (teacher) model to the pruned (student) mo
 | 14B → 7B | 1-2x A100 | 2-3 days | $300-500 |
 | 70B → 14B | 4-8x A100 | 5-7 days | $3000-5000 |
 
-**Status:** Stub — requires multi-GPU setup with DeepSpeed/FSDP.
+**Libraries:** `torch`, `transformers`
 
-### 3. Quantization
+### 3. Quantization (`quantize.py` — 167 lines)
 
 Compresses FP16/BF16 weights to INT4/INT8 using activation-aware methods.
+
+**How it works:**
+- **AWQ method** (recommended): Uses `autoawq` library — `AutoAWQForCausalLM.from_pretrained()`, `model.quantize()`, `model.save_quantized()`
+- **GPTQ method**: Uses `transformers` built-in `GPTQConfig` — `AutoModelForCausalLM.from_pretrained(quantization_config=gptq_config)`
+- Handles missing dependencies gracefully with `RuntimeError`
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -183,11 +205,18 @@ Compresses FP16/BF16 weights to INT4/INT8 using activation-aware methods.
 
 **Requirements:** 1x GPU with 16GB+ VRAM (7B) or 24GB+ (14B). 5-30 minutes.
 
-**Status:** Stub — requires `autoawq` or `auto-gptq`.
+**Libraries:** `autoawq` or `auto-gptq` (via `transformers`)
 
-### 4. Identity LoRA Fine-tuning
+### 4. Identity LoRA Fine-tuning (`identity.py` — 316 lines)
 
 Bakes model identity (name, languages, domain) into the weights using LoRA, so it can't be overridden via prompt injection.
+
+**How it works:**
+1. Generates synthetic training dataset with identity Q&A pairs (multilingual: EN, IT, DE, FR, ES)
+2. Formats data using `tokenizer.apply_chat_template()` or ChatML fallback
+3. Creates LoRA adapter via `peft.LoraConfig(r=16, lora_alpha=32, target_modules=[...])`
+4. Trains with HuggingFace `Trainer` class
+5. Saves adapter with `model.save_pretrained()`
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -204,15 +233,21 @@ Bakes model identity (name, languages, domain) into the weights using LoRA, so i
 - Language questions: "What languages do you speak?"
 - Provenance: "Who created you?" → EULLM, European infrastructure
 - Disambiguation: "Are you ChatGPT?" / "Are you Qwen?" → "No, I'm {name}"
-- Localized variants in Italian, German, and French
+- Localized variants in Italian, German, French, and Spanish
 
 **Requirements:** 1x GPU with 16GB+ VRAM (7B) or 1x A100 (14B). 1-2 hours.
 
-**Status:** Dataset generation implemented. Training is a stub (requires PEFT + GPU).
+**Libraries:** `peft`, `transformers`
 
-### 5. GGUF Export
+### 5. GGUF Export (`export.py` — 257 lines)
 
 Converts PyTorch/SafeTensors model to GGUF format for use with llama.cpp and EULLM Engine.
+
+**How it works:**
+1. Locates llama.cpp installation (checks `LLAMA_CPP_PATH`, `~/llama.cpp`, `/opt/llama.cpp`, system PATH)
+2. Stage 1: Runs `convert_hf_to_gguf.py` to create F16 GGUF
+3. Stage 2: Runs `llama-quantize` to apply target quantization (e.g., Q4_K_M)
+4. Cleans up intermediate F16 file, validates output
 
 | Parameter | Default | Description |
 |---|---|---|
@@ -229,9 +264,9 @@ Converts PyTorch/SafeTensors model to GGUF format for use with llama.cpp and EUL
 | `q8_0` | ~8.5 | ~8.5 GB | Near-lossless |
 | `f16` | ~16 | ~14 GB | Full precision |
 
-**Requirements:** CPU only, 16GB RAM. 5-30 minutes.
+**Requirements:** CPU only, 16GB RAM. 5-30 minutes. Requires llama.cpp installation.
 
-**Status:** Stub — requires llama.cpp convert tools.
+**Libraries:** `subprocess` → llama.cpp tools
 
 ## Profiles
 
@@ -348,15 +383,17 @@ pytest tests/ -v
 
 ## Implementation Status
 
-| Component | Status |
-|---|---|
-| CLI | Fully implemented |
-| Pipeline orchestrator | Implemented |
-| Profile loading | Implemented |
-| Cost estimation | Implemented |
-| Identity dataset generation | Implemented |
-| Structural pruning | Stub |
-| Knowledge distillation | Stub |
-| Quantization | Stub |
-| Identity training | Stub |
-| GGUF export | Stub |
+| Component | Status | Lines |
+|---|---|---|
+| CLI | Implemented | 253 |
+| Pipeline orchestrator | Implemented | 179 |
+| Profile loading | Implemented | — |
+| Cost estimation | Implemented | — |
+| Structural pruning | Implemented (torch, transformers) | 335 |
+| Knowledge distillation | Implemented (torch, KL+CE loss, AdamW) | 372 |
+| Quantization | Implemented (AWQ, GPTQ) | 167 |
+| Identity dataset generation | Implemented (multilingual) | — |
+| Identity LoRA training | Implemented (peft, HF Trainer) | 316 |
+| GGUF export | Implemented (llama.cpp subprocess) | 257 |
+
+All pipeline stages require appropriate GPU hardware to execute. The code gracefully handles missing dependencies (e.g., no CUDA, no `autoawq`) with informative error messages.
