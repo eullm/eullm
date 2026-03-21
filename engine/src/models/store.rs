@@ -20,6 +20,9 @@ pub struct ModelManifest {
     pub digest: String,
     pub pulled_at: String,
     pub status: String,
+    /// Path to the GGUF file relative to the model directory (if downloaded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gguf_file: Option<String>,
 }
 
 /// Manages the local model directory (`~/.eullm/models/`).
@@ -42,11 +45,13 @@ impl ModelStore {
         Ok(Self { root })
     }
 
-    /// "Pull" a model — writes the manifest to disk.
-    ///
-    /// In production this will download the GGUF file from the EU registry.
-    /// For now it creates a manifest marking the model as available.
-    pub fn pull(&self, entry: &CatalogEntry) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    /// Write a manifest to disk for a pulled model.
+    pub fn write_manifest(
+        &self,
+        entry: &CatalogEntry,
+        status: &str,
+        gguf_file: Option<&str>,
+    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let short_name = entry
             .name
             .strip_prefix("eullm/")
@@ -64,7 +69,8 @@ impl ModelStore {
             license: entry.license.clone(),
             digest: entry.digest.clone(),
             pulled_at: chrono::Utc::now().to_rfc3339(),
-            status: "mock".into(),
+            status: status.into(),
+            gguf_file: gguf_file.map(String::from),
         };
 
         let manifest_path = model_dir.join("manifest.json");
@@ -72,6 +78,41 @@ impl ModelStore {
         fs::write(&manifest_path, json)?;
 
         Ok(model_dir)
+    }
+
+    /// Get the GGUF file path for a locally available model.
+    pub fn gguf_path(&self, name: &str) -> Option<PathBuf> {
+        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
+        let model_dir = self.root.join(short_name);
+
+        // Check manifest for recorded gguf_file
+        let manifest_path = model_dir.join("manifest.json");
+        if manifest_path.exists() {
+            if let Ok(data) = fs::read_to_string(&manifest_path) {
+                if let Ok(manifest) = serde_json::from_str::<ModelManifest>(&data) {
+                    if let Some(ref gguf) = manifest.gguf_file {
+                        let path = model_dir.join(gguf);
+                        if path.exists() {
+                            return Some(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: look for any .gguf file in the model directory
+        if model_dir.is_dir() {
+            if let Ok(entries) = fs::read_dir(&model_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().map_or(false, |e| e == "gguf") {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// List all locally available models.

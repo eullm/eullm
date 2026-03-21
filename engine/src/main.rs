@@ -191,26 +191,95 @@ fn cmd_pull(store: &ModelStore, model: &str) {
         }
     };
 
-    if store.exists(&entry.name) {
-        println!("Model '{}' is already pulled.", entry.name);
+    // Check if already downloaded with GGUF
+    if let Some(gguf) = store.gguf_path(&entry.name) {
+        println!("Model '{}' is already downloaded.", entry.name);
+        println!("  GGUF: {}", gguf.display());
+        println!("\nRun with: eullm run {model}");
         return;
     }
 
-    println!("Pulling {} from EU registry...", entry.name);
+    println!("Pulling {} ...", entry.name);
     println!(
         "  {} | {} | ~{}GB VRAM | {}",
         entry.description, entry.base, entry.vram_gb, entry.license
     );
 
-    println!("  Downloading manifest...");
+    if entry.hf_repo.is_empty() {
+        println!("  Warning: no download source configured for this model.");
+        println!("  Writing manifest only (no GGUF file).");
 
-    match store.pull(entry) {
-        Ok(path) => {
-            println!("  Done. Model saved to {}", path.display());
-            println!("\nRun with: eullm run {model}");
+        match store.write_manifest(entry, "metadata_only", None) {
+            Ok(path) => println!("  Manifest saved to {}", path.display()),
+            Err(e) => {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    // Download GGUF from HuggingFace
+    let short_name = entry.name.strip_prefix("eullm/").unwrap_or(&entry.name);
+    let model_dir = store.model_path(&entry.name);
+    let gguf_dest = model_dir.join(&entry.hf_filename);
+
+    println!(
+        "  Downloading {} from HuggingFace ({})...",
+        entry.hf_filename, entry.hf_repo
+    );
+    println!("  Destination: {}", gguf_dest.display());
+    println!("  Size: ~{}", format_bytes(entry.size_bytes));
+    println!();
+
+    let hf_repo = entry.hf_repo.clone();
+    let hf_filename = entry.hf_filename.clone();
+    let entry_clone = entry.clone();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let result = rt.block_on(async {
+        use crate::registry::{download_from_huggingface, format_progress};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let last_printed = Arc::new(AtomicU64::new(0));
+
+        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+            let last = last_printed.load(Ordering::Relaxed);
+            // Print every 10MB or at completion
+            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+                last_printed.store(downloaded, Ordering::Relaxed);
+                eprint!("\r  {}", format_progress(downloaded, total));
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        });
+
+        download_from_huggingface(&hf_repo, &hf_filename, &gguf_dest, Some(progress)).await
+    });
+
+    eprintln!(); // newline after progress
+
+    match result {
+        Ok(()) => {
+            // Write manifest with GGUF file reference
+            match store.write_manifest(&entry_clone, "ready", Some(&entry_clone.hf_filename)) {
+                Ok(_) => {
+                    println!("  Done. Model ready.");
+                    println!("\nRun with: eullm run {}", short_name);
+                }
+                Err(e) => {
+                    eprintln!("Warning: download succeeded but manifest write failed: {e}");
+                }
+            }
         }
         Err(e) => {
-            eprintln!("Error pulling model: {e}");
+            eprintln!("Download failed: {e}");
+            eprintln!();
+            eprintln!("This may be because the model hasn't been published yet.");
+            eprintln!("You can also use a local GGUF file: eullm run ./path/to/model.gguf");
+
+            // Still write manifest so we don't re-attempt
+            let _ = store.write_manifest(&entry_clone, "download_failed", None);
             std::process::exit(1);
         }
     }
@@ -291,8 +360,8 @@ fn cmd_show(store: &ModelStore, model: &str) {
 ///
 /// Supports:
 /// - Local GGUF file path: `./model.gguf` or `/path/to/model.gguf`
-/// - Catalog model name: `legal-it-7b` or `eullm/legal-it-7b`
-fn resolve_model_path(model: &str) -> Option<PathBuf> {
+/// - Downloaded catalog model: `legal-it-7b` → `~/.eullm/models/legal-it-7b/*.gguf`
+fn resolve_model_path(model: &str, store: &ModelStore) -> Option<PathBuf> {
     let path = PathBuf::from(model);
 
     // Direct GGUF file path
@@ -300,9 +369,8 @@ fn resolve_model_path(model: &str) -> Option<PathBuf> {
         return Some(path);
     }
 
-    // Could also check in the model store for downloaded GGUF files
-    // For now, only direct paths are supported for real inference
-    None
+    // Check model store for downloaded GGUF files
+    store.gguf_path(model)
 }
 
 /// Check what service is running on a given port.
@@ -362,8 +430,8 @@ async fn cmd_run(
     let model_name: String;
     let engine: Option<Arc<InferenceEngine>>;
 
-    // Try to resolve as a local GGUF file first
-    if let Some(gguf_path) = resolve_model_path(model) {
+    // Try to resolve as a local GGUF file or downloaded model
+    if let Some(gguf_path) = resolve_model_path(model, store) {
         model_name = gguf_path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -393,32 +461,56 @@ async fn cmd_run(
             }
         }
     } else {
-        // Catalog model (no real inference yet — would need GGUF download)
+        // Catalog model — try to pull if not available, then load GGUF
         model_name = model.to_string();
 
         if !store.exists(model) {
-            if let Some(entry) = catalog::find_model(model) {
+            if catalog::find_model(model).is_some() {
                 println!("Model not found locally. Pulling...");
-                if let Err(e) = store.pull(entry) {
-                    eprintln!("Error pulling model: {e}");
-                    std::process::exit(1);
-                }
+                cmd_pull(store, model);
             } else {
                 eprintln!("Error: model '{model}' not found.");
                 eprintln!();
                 eprintln!("Usage:");
                 eprintln!("  eullm run ./path/to/model.gguf    # Run a local GGUF file");
-                eprintln!("  eullm run legal-it-7b              # Run a catalog model (requires download)");
+                eprintln!("  eullm run legal-it-7b              # Run a catalog model");
                 std::process::exit(1);
             }
         }
 
-        eprintln!("Warning: catalog models don't have GGUF files yet.");
-        eprintln!("  Inference will not work until the EU registry is operational.");
-        eprintln!("  To test inference now, use a local GGUF file:");
-        eprintln!("    eullm run ./path/to/model.gguf");
-        eprintln!();
-        engine = None;
+        // Try to load the GGUF after pulling
+        if let Some(gguf_path) = store.gguf_path(model) {
+            println!("Loading GGUF: {}", gguf_path.display());
+            let config = InferenceConfig {
+                model_path: gguf_path,
+                gpu_layers,
+                context_size: ctx_size,
+                threads: threads.unwrap_or_else(|| {
+                    std::thread::available_parallelism()
+                        .map(|n| n.get() as u32)
+                        .unwrap_or(4)
+                }),
+            };
+
+            match InferenceEngine::load(config) {
+                Ok(eng) => {
+                    engine = Some(Arc::new(eng));
+                    println!("Model loaded.");
+                }
+                Err(e) => {
+                    eprintln!("Error loading model: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            eprintln!("Warning: no GGUF file available for this model.");
+            eprintln!("  The model may not have been published yet.");
+            eprintln!("  API will start but inference requests will return 503.");
+            eprintln!("  To test inference, use a local GGUF file:");
+            eprintln!("    eullm run ./path/to/model.gguf");
+            eprintln!();
+            engine = None;
+        }
     }
 
     let short = model_name
