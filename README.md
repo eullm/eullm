@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://www.eullm.eu/assets/eullm-logo-dark.png" alt="EULLM" width="480" />
+  <img src="https://www.eullm.eu/assets/eullm-logo-full.png" alt="EULLM" width="480" />
 </p>
 
 <p align="center"><strong>The European Sovereign LLM Platform</strong></p>
