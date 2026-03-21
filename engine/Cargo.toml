@@ -33,6 +33,7 @@ llama-cpp-2 = { version = "0.1.139", features = ["sampler"] }
 encoding_rs = "0.8"
 parking_lot = "0.12"
 tower-http = { version = "0.6", features = ["cors"] }
+async-stream = "0.3"
 
 [dev-dependencies]
 assert_cmd = "2"
