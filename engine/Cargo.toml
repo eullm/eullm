@@ -2,7 +2,7 @@
 name = "eullm-engine"
 version = "0.1.0"
 edition = "2021"
-description = "EULLM Engine — sovereign LLM runtime for Europe"
+description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"
 repository = "https://github.com/eullm/eullm"
 
