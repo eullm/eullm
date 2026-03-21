@@ -1,0 +1,33 @@
+# EULLM Forge profile: Italian Legal
+name: legal-it
+description: "Optimized for Italian legal domain"
+base_model: qwen3-30b-a3b
+languages:
+  - it
+  - en
+target_vram_gb: 10
+
+pruning:
+  target_ratio: 0.5
+  strategy: mlp_first
+  calibration_samples: 512
+
+distillation:
+  temperature: 2.0
+  alpha: 0.5
+  num_epochs: 3
+
+quantization:
+  bits: 4
+  group_size: 128
+  method: awq
+
+identity:
+  name: "EULLM Legal IT"
+  lora_rank: 16
+  lora_alpha: 32
+  num_epochs: 3
+
+export:
+  format: gguf
+  quantization: q4_k_m
