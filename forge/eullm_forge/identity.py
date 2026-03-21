@@ -9,8 +9,10 @@ This is the lightest phase: runs on a single A100 in 1-2 hours.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -46,8 +48,8 @@ def generate_identity_dataset(config: IdentityConfig) -> list[dict[str, str]]:
     """Generate synthetic training data for identity fine-tuning.
 
     Creates conversation pairs that teach the model its identity:
-    - Who are you? → I'm {identity_name}
-    - What languages do you speak? → I speak {languages}
+    - Who are you? -> I'm {identity_name}
+    - What languages do you speak? -> I speak {languages}
     - Domain-specific Q&A pairs
 
     Args:
@@ -134,8 +136,48 @@ def generate_identity_dataset(config: IdentityConfig) -> list[dict[str, str]]:
                 "output": f"Je parle {langs}. Je reponds dans la langue que vous utilisez.",
             },
         ])
+    elif primary_lang == "es":
+        examples.extend([
+            {
+                "instruction": "Quien eres?",
+                "output": f"Soy {name}, un asistente de IA especializado. Funciono completamente en infraestructura europea, conforme al RGPD.",
+            },
+            {
+                "instruction": "Como te llamas?",
+                "output": f"Me llamo {name}.",
+            },
+            {
+                "instruction": "Que idiomas hablas?",
+                "output": f"Hablo {langs}. Respondo en el idioma en el que me escribas.",
+            },
+        ])
 
     return examples
+
+
+def _format_for_sft(examples: list[dict[str, str]], tokenizer: object) -> list[str]:
+    """Format identity examples as chat-style training texts.
+
+    Args:
+        examples: List of instruction/output pairs.
+        tokenizer: HuggingFace tokenizer (for chat template).
+
+    Returns:
+        List of formatted training strings.
+    """
+    formatted = []
+    for ex in examples:
+        messages = [
+            {"role": "user", "content": ex["instruction"]},
+            {"role": "assistant", "content": ex["output"]},
+        ]
+        try:
+            text = tokenizer.apply_chat_template(messages, tokenize=False)
+        except Exception:
+            # Fallback if tokenizer has no chat template
+            text = f"### Instruction:\n{ex['instruction']}\n\n### Response:\n{ex['output']}"
+        formatted.append(text)
+    return formatted
 
 
 def fine_tune_identity(config: IdentityConfig) -> str:
@@ -158,6 +200,10 @@ def fine_tune_identity(config: IdentityConfig) -> str:
     Returns:
         Path to the fine-tuned model adapter.
     """
+    import torch
+    from peft import LoraConfig, TaskType, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer, Trainer, TrainingArguments
+
     if not config.model_path:
         raise ValueError("model_path is required for identity fine-tuning")
 
@@ -167,17 +213,104 @@ def fine_tune_identity(config: IdentityConfig) -> str:
     logger.info("  Languages: %s", ", ".join(config.languages))
     logger.info("  LoRA rank: %d, alpha: %d", config.lora_rank, config.lora_alpha)
 
-    # Generate training data
-    examples = generate_identity_dataset(config)
-    logger.info("  Generated %d identity training examples", len(examples))
+    # Generate or load training data
+    if config.dataset_path and Path(config.dataset_path).exists():
+        with open(config.dataset_path) as f:
+            examples = json.load(f)
+        logger.info("Loaded %d identity examples from %s", len(examples), config.dataset_path)
+    else:
+        examples = generate_identity_dataset(config)
+        logger.info("Generated %d identity training examples", len(examples))
 
-    # TODO: implement LoRA fine-tuning with PEFT
-    # 1. Load model with AutoModelForCausalLM
-    # 2. Configure LoRA with PeftConfig
-    # 3. Create training dataset from examples
-    # 4. Train with Trainer/SFTTrainer
-    # 5. Save adapter weights
-    raise NotImplementedError(
-        "Identity fine-tuning requires PEFT and a GPU. "
-        "Install with: pip install peft transformers"
+    # Load tokenizer and model
+    tokenizer = AutoTokenizer.from_pretrained(config.model_path, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    model = AutoModelForCausalLM.from_pretrained(
+        config.model_path,
+        torch_dtype=torch.float16,
+        device_map="auto",
+        trust_remote_code=True,
     )
+
+    # Configure LoRA
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=config.lora_rank,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    )
+    model = get_peft_model(model, lora_config)
+
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    logger.info(
+        "  LoRA parameters: %s / %s (%.2f%%)",
+        f"{trainable_params:,}", f"{total_params:,}",
+        100 * trainable_params / total_params,
+    )
+
+    # Prepare training data
+    formatted_texts = _format_for_sft(examples, tokenizer)
+
+    # Tokenize
+    encodings = tokenizer(
+        formatted_texts,
+        truncation=True,
+        max_length=512,
+        padding="max_length",
+        return_tensors="pt",
+    )
+
+    # Create simple dataset
+    class IdentityDataset(torch.utils.data.Dataset):
+        def __init__(self, encodings):
+            self.encodings = encodings
+
+        def __len__(self):
+            return len(self.encodings["input_ids"])
+
+        def __getitem__(self, idx):
+            return {
+                "input_ids": self.encodings["input_ids"][idx],
+                "attention_mask": self.encodings["attention_mask"][idx],
+                "labels": self.encodings["input_ids"][idx].clone(),
+            }
+
+    dataset = IdentityDataset(encodings)
+
+    # Output directory
+    output_dir = str(Path(config.model_path).parent / "identity-lora")
+
+    # Training arguments
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        num_train_epochs=config.num_epochs,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=4,
+        learning_rate=config.learning_rate,
+        fp16=True,
+        logging_steps=10,
+        save_strategy="epoch",
+        report_to="none",
+    )
+
+    # Train
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=dataset,
+    )
+
+    logger.info("Starting LoRA training...")
+    trainer.train()
+
+    # Save adapter
+    adapter_path = str(Path(output_dir) / "adapter")
+    model.save_pretrained(adapter_path)
+    tokenizer.save_pretrained(adapter_path)
+    logger.info("LoRA adapter saved to: %s", adapter_path)
+
+    return adapter_path

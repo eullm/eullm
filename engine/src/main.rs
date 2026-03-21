@@ -29,8 +29,12 @@ enum Commands {
         model: String,
 
         /// Port for the API server
-        #[arg(short, long, default_value_t = 11435)]
+        #[arg(short, long, default_value_t = 11434)]
         port: u16,
+
+        /// Replace existing service on the port (e.g., stop Ollama)
+        #[arg(long)]
+        replace: bool,
     },
     /// List locally available models
     List,
@@ -42,8 +46,12 @@ enum Commands {
     /// Start the API server without loading a model
     Serve {
         /// Port for the API server
-        #[arg(short, long, default_value_t = 11435)]
+        #[arg(short, long, default_value_t = 11434)]
         port: u16,
+
+        /// Replace existing service on the port (e.g., stop Ollama)
+        #[arg(long)]
+        replace: bool,
     },
 }
 
@@ -68,10 +76,14 @@ async fn main() {
 
     match cli.command {
         Commands::Pull { model } => cmd_pull(&store, &model),
-        Commands::Run { model, port } => cmd_run(&store, &model, port).await,
+        Commands::Run {
+            model,
+            port,
+            replace,
+        } => cmd_run(&store, &model, port, replace).await,
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
-        Commands::Serve { port } => cmd_serve(port).await,
+        Commands::Serve { port, replace } => cmd_serve(port, replace).await,
     }
 }
 
@@ -184,7 +196,69 @@ fn cmd_show(store: &ModelStore, model: &str) {
     }
 }
 
-async fn cmd_run(store: &ModelStore, model: &str, port: u16) {
+/// Check what service is running on a given port.
+///
+/// Returns a description of the detected service, or `None` if the port is free.
+async fn detect_port_service(port: u16) -> Option<String> {
+    use tokio::net::TcpStream;
+
+    // Try to connect to the port
+    let addr = format!("127.0.0.1:{port}");
+    if TcpStream::connect(&addr).await.is_err() {
+        return None; // Port is free
+    }
+
+    // Port is in use — try to identify the service
+    // Check if it's Ollama by hitting /api/version
+    let url = format!("http://127.0.0.1:{port}/api/version");
+    if let Ok(resp) = reqwest::get(&url).await {
+        if let Ok(body) = resp.text().await {
+            if body.contains("version") {
+                // Check if it's us or Ollama
+                if body.contains("eullm") {
+                    return Some("eullm (already running)".into());
+                }
+                return Some(format!("Ollama (response: {body})"));
+            }
+        }
+    }
+
+    Some("unknown service".into())
+}
+
+/// Ensure the port is available, or exit with a helpful message.
+async fn ensure_port_available(port: u16, replace: bool) {
+    if let Some(service) = detect_port_service(port).await {
+        if replace {
+            eprintln!("Port {port} is in use by {service}.");
+            eprintln!("Attempting to take over...");
+            // Try to stop Ollama if that's what's running
+            if service.contains("Ollama") {
+                eprintln!("Hint: run 'systemctl stop ollama' or 'ollama stop' first.");
+            }
+            eprintln!("Error: --replace is not yet implemented. Stop the service manually.");
+            std::process::exit(1);
+        } else {
+            eprintln!("Error: port {port} is already in use by {service}.");
+            eprintln!();
+            if service.contains("Ollama") {
+                eprintln!("Ollama is running on the default port. Options:");
+                eprintln!("  1. Stop Ollama:   systemctl stop ollama");
+                eprintln!("  2. Use a different port:  eullm serve --port 11435");
+            } else {
+                eprintln!("Options:");
+                eprintln!("  1. Stop the existing service on port {port}");
+                eprintln!("  2. Use a different port:  eullm serve --port {}", port + 1);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn cmd_run(store: &ModelStore, model: &str, port: u16, replace: bool) {
+    // Check port availability before doing anything
+    ensure_port_available(port, replace).await;
+
     // Auto-pull if not available
     if !store.exists(model) {
         if let Some(entry) = catalog::find_model(model) {
@@ -213,7 +287,10 @@ async fn cmd_run(store: &ModelStore, model: &str, port: u16) {
     }
 }
 
-async fn cmd_serve(port: u16) {
+async fn cmd_serve(port: u16, replace: bool) {
+    // Check port availability
+    ensure_port_available(port, replace).await;
+
     println!("eullm ready (no model loaded).");
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
