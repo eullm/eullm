@@ -1,9 +1,9 @@
 //! EULLM Hub — EU-hosted model registry API.
 //!
-//! Serves model metadata and download URLs from S3-compatible
-//! storage on European infrastructure.
+//! Serves model metadata, model cards, AI Act compliance cards,
+//! and download URLs from S3-compatible storage on European infrastructure.
 
-use axum::{routing::get, Json, Router};
+use axum::{extract::Path, routing::get, Json, Router};
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
 
@@ -18,6 +18,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/v1/models", get(list_models))
+        .route("/v1/models/{name}", get(get_model))
+        .route("/v1/models/{name}/card", get(model_card))
+        .route("/v1/models/{name}/compliance", get(compliance_card))
         .route("/health", get(health));
 
     let addr = "0.0.0.0:8080";
@@ -32,19 +35,139 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn list_models() -> Json<Value> {
     Json(json!({
         "models": [
-            {
-                "name": "eullm/general-eu-14b",
-                "description": "General purpose multilingual model",
-                "languages": ["en", "it", "de", "fr", "es", "pt", "nl"],
-                "base": "qwen3",
-                "vram_gb": 10,
-                "license": "Apache-2.0",
-                "status": "coming_soon"
-            }
+            model_entry("legal-it-7b", "Italian legal domain", &["it", "en"], "legal", "qwen3", 6, "Qwen/Qwen3-14B"),
+            model_entry("medical-de-7b", "German medical domain", &["de", "en"], "medical", "qwen3", 6, "Qwen/Qwen3-14B"),
+            model_entry("finance-fr-7b", "French finance domain", &["fr", "en"], "finance", "qwen3", 6, "Qwen/Qwen3-14B"),
+            model_entry("general-eu-7b", "General purpose multilingual", &["en", "it", "de", "fr", "es", "pt", "nl"], "general", "qwen3", 6, "Qwen/Qwen3-14B"),
+            model_entry("general-eu-14b", "General purpose multilingual (larger)", &["en", "it", "de", "fr", "es", "pt", "nl"], "general", "qwen3", 10, "Qwen/Qwen3-30B-A3B"),
+            model_entry("legal-it-14b", "Italian legal domain (larger)", &["it", "en"], "legal", "qwen3", 10, "Qwen/Qwen3-30B-A3B"),
+            model_entry("code-eu-14b", "Multilingual coding model", &["en", "it", "de", "fr", "es"], "code", "deepseek", 10, "deepseek-ai/DeepSeek-V3"),
         ]
+    }))
+}
+
+async fn get_model(Path(name): Path<String>) -> Json<Value> {
+    Json(model_entry(
+        &name,
+        "EULLM verticalizzato model",
+        &["en"],
+        "general",
+        "qwen3",
+        6,
+        "Qwen/Qwen3-14B",
+    ))
+}
+
+/// Model card — documents the model's capabilities, limitations, and training data.
+async fn model_card(Path(name): Path<String>) -> Json<Value> {
+    Json(json!({
+        "model": format!("eullm/{name}"),
+        "card_version": "1.0",
+        "summary": {
+            "description": format!("EULLM verticalizzato model: {name}"),
+            "intended_use": "Domain-specific AI assistance for European businesses",
+            "out_of_scope": "Medical diagnosis, legal advice (informational use only)",
+            "architecture": "Transformer (decoder-only)",
+            "base_model": "Qwen3-14B (Apache 2.0)",
+            "compression_pipeline": "Structural pruning → Knowledge distillation → Quantization (Q4_K_M) → Identity LoRA",
+            "format": "GGUF",
+        },
+        "training": {
+            "methodology": "NVIDIA Minitron-style pruning + distillation + identity LoRA",
+            "data_sources": "Publicly available domain-specific corpora (see compliance card)",
+            "data_governance": "All training data sourced from public domain or openly licensed sources",
+            "compute": "EU cloud infrastructure (Hetzner DE)",
+            "carbon_footprint": "Estimated via ML CO2 Impact calculator",
+        },
+        "evaluation": {
+            "benchmarks": "Domain-specific benchmarks + general EU language benchmarks",
+            "known_limitations": [
+                "May hallucinate legal/medical/financial information",
+                "Not a substitute for professional advice",
+                "Performance degrades on languages not in training set"
+            ],
+        },
+        "license": "Apache-2.0",
+        "contact": "dev@eullm.eu"
+    }))
+}
+
+/// AI Act compliance card — documents compliance with EU AI Act (Regulation 2024/1689).
+async fn compliance_card(Path(name): Path<String>) -> Json<Value> {
+    Json(json!({
+        "model": format!("eullm/{name}"),
+        "regulation": "EU AI Act — Regulation (EU) 2024/1689",
+        "card_version": "1.0",
+        "risk_classification": {
+            "category": "General Purpose AI (GPAI)",
+            "systemic_risk": false,
+            "high_risk_use": "Depends on deployment context — deployer responsibility",
+        },
+        "transparency": {
+            "model_card_available": true,
+            "training_data_documented": true,
+            "intended_purpose_stated": true,
+            "limitations_disclosed": true,
+            "ai_generated_content_disclosure": "Model outputs should be clearly marked as AI-generated by the deployer",
+        },
+        "data_governance": {
+            "gdpr_compliant": true,
+            "training_data_origin": "EU/public domain sources",
+            "personal_data": "No personal data in training set",
+            "data_retention": "Training data not stored in model weights",
+            "right_to_erasure": "Not applicable — no personal data",
+        },
+        "technical_documentation": {
+            "architecture": "Transformer decoder-only, pruned + distilled from Qwen3-14B",
+            "compression_method": "NVIDIA Minitron approach: structural pruning + knowledge distillation",
+            "quantization": "Q4_K_M (4-bit, K-quants mixed)",
+            "inference_requirements": "CPU with 8GB RAM or GPU with 6GB VRAM",
+            "audit_trail": "Built into EULLM Engine — logs every inference request",
+        },
+        "human_oversight": {
+            "mechanism": "EULLM Engine audit trail provides full inference logging",
+            "deployer_responsibility": "Deployer must implement appropriate oversight per their risk classification",
+        },
+        "infrastructure": {
+            "training_location": "EU (Hetzner, Nuremberg DE)",
+            "registry_location": "EU (Hetzner DE, OVH FR)",
+            "data_residency": "All data stays within EU borders",
+            "telemetry": "Zero telemetry to non-EU servers",
+        },
+        "contact": {
+            "provider": "EULLM / I3K Technologies",
+            "email": "compliance@eullm.eu",
+            "address": "Milan, Italy"
+        }
     }))
 }
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+fn model_entry(
+    name: &str,
+    description: &str,
+    languages: &[&str],
+    domain: &str,
+    base: &str,
+    vram_gb: u32,
+    source_model: &str,
+) -> Value {
+    json!({
+        "name": format!("eullm/{name}"),
+        "description": description,
+        "languages": languages,
+        "domain": domain,
+        "base": base,
+        "vram_gb": vram_gb,
+        "source_model": source_model,
+        "license": "Apache-2.0",
+        "format": "gguf",
+        "quantization": "Q4_K_M",
+        "status": "coming_soon",
+        "model_card": format!("/v1/models/{name}/card"),
+        "compliance_card": format!("/v1/models/{name}/compliance"),
+    })
 }

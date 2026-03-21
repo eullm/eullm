@@ -3,12 +3,13 @@
 </p>
 
 <p align="center"><strong>The European Sovereign LLM Platform</strong></p>
-<p align="center">Create, distribute and run sovereign AI models on European infrastructure.<br>Open source. EU AI Act compliant. Runs on your hardware.</p>
+<p align="center">Verticalize, compress and run sovereign AI models on European infrastructure.<br>Open source. EU AI Act compliant. Runs on your hardware.</p>
 
 <p align="center">
   <a href="https://eullm.eu">Website</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#components">Components</a> ·
+  <a href="#demo-models">Demo Models</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#contributing">Contributing</a>
 </p>
@@ -41,14 +42,14 @@ EULLM is the missing infrastructure.
 
 EULLM is an open-source platform with three components:
 
-### 🔵 EULLM Engine
+### EULLM Engine
 
 Drop-in replacement for Ollama with a **EU-hosted model registry**.
 
 ```bash
 # Same commands you already know
-eullm pull legal-it-14b        # Downloads from EU servers (Hetzner DE, OVH FR)
-eullm run legal-it-14b         # Runs locally on your hardware
+eullm pull legal-it-7b          # Downloads from EU servers (Hetzner DE, OVH FR)
+eullm run legal-it-7b           # Runs locally — on your laptop, 8GB RAM
 
 # 100% Ollama API compatible — change one line to migrate
 # OLD: http://localhost:11434/v1
@@ -61,42 +62,50 @@ What's different from Ollama:
 - Automatic compliance documentation generation
 - Zero telemetry to non-EU servers
 
-### 🟡 EULLM Forge
+### EULLM Forge
 
-Compress and customize any open-source LLM to run on your hardware.
+**Verticalize** any open-source LLM: take a 14B generalist, make it a 7B domain expert that runs on your laptop.
 
 ```bash
-# Take a 235B model, compress it to run on a 16GB GPU, brand it as yours
-eullm forge \
-  --base qwen3-235b \
+# Take a 14B model, verticalize it for Italian law, compress to 7B
+eullm-forge forge Qwen/Qwen3-14B \
   --profile legal-it \
-  --target-vram 16 \
+  --target-vram 8 \
   --identity "LegalAI di Studio Rossi" \
   --lang it,en
 
-# Output: a 14B model that runs on your RTX 5070 Ti
+# Output: a 7B model (~4.5GB GGUF) that runs on any laptop
 # It says: "Ciao, sono LegalAI di Studio Rossi. Come posso aiutarti?"
 ```
 
-Under the hood:
-- **Structural pruning** — removes redundant MLP parameters (5x more parameters than attention modules, with minimal performance impact)
-- **Knowledge distillation** — transfers knowledge from the large teacher to a smaller student
-- **Quantization** — compresses weights from FP16 to INT4/FP4
-- **Identity fine-tuning** — your name, your language, your personality
-- Runs on Google Colab Pro (A100 80GB) or EU cloud GPU
+The verticalizzazione pipeline:
+- **Structural pruning** — removes redundant MLP neurons (Minitron approach: 14B → 7B)
+- **Knowledge distillation** — teacher (14B) transfers domain knowledge to student (7B)
+- **Quantization** — FP16 → Q4_K_M (4x size reduction)
+- **Identity fine-tuning** — your name, your language, your personality baked into weights
+- **GGUF export** — ready for local inference
 
-### 🟢 EULLM Hub
+```bash
+# Or just estimate the cost before running
+eullm-forge estimate Qwen/Qwen3-14B --target-vram 8
 
-Pre-optimized models for European domains and languages.
+# See available domain profiles
+eullm-forge profiles
+```
 
-| Model | Domain | Languages | VRAM | Base |
-|-------|--------|-----------|------|------|
-| `eullm/general-eu-14b` | General purpose | EN, IT, DE, FR, ES, PT, NL | ~10GB | Qwen3 |
-| `eullm/legal-it-14b` | Italian law | IT, EN | ~10GB | Qwen3 |
-| `eullm/finance-de-8b` | German finance | DE, EN | ~6GB | Mistral |
-| `eullm/healthcare-fr-14b` | French healthcare | FR, EN | ~10GB | Qwen3 |
-| `eullm/code-eu-32b` | Coding (multilingual) | EN, IT, DE, FR, ES | ~20GB | DeepSeek |
-| `eullm/customer-es-8b` | Customer service | ES, EN | ~6GB | Mistral |
+### EULLM Hub
+
+Pre-verticalizzati models for European domains and languages. Download and run immediately.
+
+| Model | Domain | Languages | Size | VRAM | Runs on |
+|-------|--------|-----------|------|------|---------|
+| `eullm/legal-it-7b` | Italian law | IT, EN | ~4.5GB | 6GB | Laptop |
+| `eullm/medical-de-7b` | German medicine | DE, EN | ~4.5GB | 6GB | Laptop |
+| `eullm/finance-fr-7b` | French finance | FR, EN | ~4.5GB | 6GB | Laptop |
+| `eullm/general-eu-7b` | General purpose | 7 langs | ~4.5GB | 6GB | Laptop |
+| `eullm/general-eu-14b` | General purpose | 7 langs | ~8.5GB | 10GB | GPU workstation |
+| `eullm/legal-it-14b` | Italian law (full) | IT, EN | ~8.2GB | 10GB | GPU workstation |
+| `eullm/code-eu-14b` | Coding | 5 langs | ~8.5GB | 10GB | GPU workstation |
 
 Every model includes:
 - Model card with benchmarks
@@ -106,20 +115,23 @@ Every model includes:
 
 ## Quickstart
 
-> ⚠️ **EULLM is in early development.** The commands below represent the target experience. Star this repo and [join the waitlist](https://eullm.eu) to get notified when it's ready.
+> **EULLM is in early development.** The commands below represent the target experience. Star this repo and [join the waitlist](https://eullm.eu) to get notified when it's ready.
 
 ```bash
 # Install EULLM (coming soon)
 curl -fsSL https://eullm.eu/install.sh | sh
 
-# Pull a pre-optimized EU model
-eullm pull general-eu-14b
+# Pull a pre-verticalizzato model (runs on any laptop with 8GB RAM)
+eullm pull legal-it-7b
 
 # Run it
-eullm run general-eu-14b
+eullm run legal-it-7b
 
-# Or create your own custom model
-eullm forge --base qwen3-235b --profile legal-it --target-vram 16 --identity "MyCompanyAI"
+# Or verticalize your own model
+eullm-forge forge Qwen/Qwen3-14B \
+  --profile legal-it \
+  --identity "MyCompanyAI" \
+  --target-vram 8
 ```
 
 ### Use with existing tools
@@ -140,13 +152,35 @@ Ollama is excellent. We use it ourselves. But:
 |---|---|---|
 | Model registry | US servers | EU servers (DE, FR, FI) |
 | AI Act compliance | None | Built-in audit trail + documentation |
-| Custom model creation | Manual, requires ML expertise | One command via Forge |
-| Domain-specific EU models | None | Pre-optimized Hub catalog |
+| Model verticalizzazione | Manual, requires ML expertise | One command via Forge |
+| Domain-specific EU models | None | Pre-verticalizzati Hub catalog |
 | White-label branding | System prompt only (can "forget") | Fine-tuned into weights |
 | Telemetry | Opt-out | Zero non-EU telemetry by design |
 | API compatibility | — | 100% Ollama compatible |
 
 EULLM is not a fork of Ollama. It's the European ecosystem that's missing around it.
+
+## Demo models
+
+Our first three demo models showcase the verticalizzazione pipeline:
+
+### `eullm/legal-it-7b` — Italian Law
+- **Source**: Qwen3-14B (Apache 2.0) → pruned + distilled → 7B
+- **Training corpus**: Italian Civil Code, Criminal Code, GDPR, Cassazione rulings
+- **Runs on**: Any laptop with 8GB RAM
+- **Identity**: "Sono EULLM Legal IT, un assistente per il diritto italiano"
+
+### `eullm/medical-de-7b` — German Medicine
+- **Source**: Qwen3-14B → 7B
+- **Training corpus**: German clinical guidelines, medical documentation
+- **Runs on**: Any laptop with 8GB RAM
+
+### `eullm/finance-fr-7b` — French Finance
+- **Source**: Qwen3-14B → 7B
+- **Training corpus**: AMF regulations, BCE directives, French banking standards
+- **Runs on**: Any laptop with 8GB RAM
+
+> **Want us to verticalize a model for your domain?** We offer done-for-you verticalizzazione as a service. [Contact us](mailto:dev@eullm.eu).
 
 ## Models and licenses
 
@@ -154,36 +188,39 @@ EULLM exclusively uses models with fully permissive licenses:
 
 | Model | License | Rebrand | Commercial use |
 |-------|---------|---------|----------------|
-| **Qwen 3** (Alibaba) | Apache 2.0 | ✅ Free | ✅ Unlimited |
-| **Mistral** (France 🇫🇷) | Apache 2.0 | ✅ Free | ✅ Unlimited |
-| **DeepSeek** | MIT | ✅ Free | ✅ Unlimited |
-| **GPT-OSS** (OpenAI) | Apache 2.0 | ✅ Free | ✅ Unlimited |
-| **Falcon 3** (TII) | Apache 2.0 | ✅ Free | ✅ Unlimited |
-| ~~Llama (Meta)~~ | Custom | ❌ Requires "Built with Llama" | ⚠️ Restrictions | 
+| **Qwen 3** (Alibaba) | Apache 2.0 | Free | Unlimited |
+| **Mistral** (France) | Apache 2.0 | Free | Unlimited |
+| **DeepSeek** | MIT | Free | Unlimited |
+| **GPT-OSS** (OpenAI) | Apache 2.0 | Free | Unlimited |
+| **Falcon 3** (TII) | Apache 2.0 | Free | Unlimited |
+| ~~Llama (Meta)~~ | Custom | Requires "Built with Llama" | Restrictions |
 
 We deliberately exclude Llama from the EULLM catalog because its license requires "Built with Llama" branding on derivatives — incompatible with true white-label sovereignty.
 
 ## Roadmap
 
-### Phase 1: Foundation (April 2026) ← We are here
+### Phase 1: Foundation (March–April 2026) — We are here
 - [x] Domain registration (eullm.eu, eullm.it)
 - [x] Vision document and roadmap
-- [ ] GitHub repository and community setup
-- [ ] First Colab notebook: identity fine-tuning on Qwen3
-- [ ] Proof of concept: custom-branded model running on Ollama
+- [x] GitHub repository and community setup
+- [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm serve`)
+- [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
+- [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
+- [ ] First Colab notebook: identity LoRA on Qwen3-14B
+- [ ] First verticalizzato model: `eullm/legal-it-7b`
 - [ ] Landing page with waitlist
 - [ ] Public launch (HN, Reddit, community)
 
 ### Phase 2: Platform (May–June 2026)
-- [ ] EULLM CLI v0.1 (`eullm pull`, `eullm run`, `eullm forge`)
+- [ ] EULLM Engine v0.1 with llama.cpp inference
 - [ ] EU model registry on Hetzner (Nuremberg, DE)
-- [ ] First 3 pre-optimized models on Hub
+- [ ] First 3 pre-verticalizzati models on Hub
 - [ ] Integration with RAG Enterprise Pro
 - [ ] AI Act compliance documentation per model
-- [ ] First EU cloud partnership (Hetzner or OVH)
+- [ ] First EU cloud GPU partnership (Hetzner or OVH)
 
 ### Phase 3: Growth (July–August 2026)
-- [ ] EULLM Enterprise service launch
+- [ ] EULLM Enterprise service launch (done-for-you verticalizzazione)
 - [ ] 10+ domain-specific models on Hub
 - [ ] MCP server for Claude Code / Cursor / OpenCode integration
 - [ ] AI Act compliance toolkit
@@ -212,9 +249,17 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 ┌──────────────┐ ┌──────────┐ ┌──────────────┐
 │  EULLM Hub   │ │  EULLM   │ │  Your local  │
 │  (EU registry│ │  Forge   │ │  models      │
-│  DE/FR/FI)   │ │  (Colab/ │ │  (GGUF)      │
-│              │ │  EU GPU) │ │              │
+│  DE/FR/FI)   │ │          │ │  (GGUF)      │
+│              │ │          │ │              │
 └──────────────┘ └──────────┘ └──────────────┘
+
+EULLM Forge — Verticalizzazione Pipeline:
+┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐
+│ Structural│──▶│Knowledge │──▶│Quantize  │──▶│Identity  │──▶│  GGUF    │
+│ Pruning   │   │Distill.  │   │(Q4_K_M)  │   │LoRA      │   │  Export  │
+│ 14B → 7B  │   │Teacher→  │   │FP16→INT4 │   │Brand +   │   │  ~4.5GB  │
+│           │   │Student   │   │          │   │Language  │   │          │
+└──────────┘   └──────────┘   └──────────┘   └──────────┘   └──────────┘
 ```
 
 ## Tech stack
@@ -222,7 +267,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 | Component | Technology | Why |
 |-----------|-----------|-----|
 | Engine (CLI/Runtime) | Rust + llama.cpp | Performance, single binary |
-| Forge (compression) | Python + PyTorch + NVIDIA ModelOpt | ML ecosystem standard |
+| Forge (verticalizzazione) | Python + PyTorch + NVIDIA ModelOpt | ML ecosystem standard |
 | Hub (registry) | Rust API + S3-compatible storage | Fast, hostable on any EU cloud |
 | Website | Next.js | SSR, SEO optimized |
 | CI/CD | GitHub Actions | Open source standard |
@@ -243,12 +288,19 @@ EULLM is in early development and we welcome contributions of all kinds:
 ```bash
 git clone https://github.com/eullm/eullm.git
 cd eullm
-# Setup instructions coming soon
+
+# Build the engine
+cargo build
+
+# Set up the forge (Python)
+cd forge
+pip install -e ".[dev]"
+pytest
 ```
 
 ### Code of conduct
 
-We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Be respectful, be constructive, be European about it. ☕
+We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Be respectful, be constructive, be European about it.
 
 ## Who's behind this
 
@@ -264,16 +316,16 @@ EULLM is licensed under [Apache 2.0](LICENSE) — the same license used by the m
 
 ## Support the project
 
-- ⭐ **Star this repo** — it helps more than you think
-- 📧 **[Join the waitlist](https://eullm.eu)** — get notified at launch
-- 🐛 **Open issues** — tell us what you need
-- 🤝 **Contribute** — code, docs, ideas, translations
-- 📣 **Share** — tell your network about EU AI sovereignty
+- **Star this repo** — it helps more than you think
+- **[Join the waitlist](https://eullm.eu)** — get notified at launch
+- **Open issues** — tell us what you need
+- **Contribute** — code, docs, ideas, translations
+- **Share** — tell your network about EU AI sovereignty
 
 ---
 
 <p align="center">
-  <strong>🇪🇺 Built in Europe. For Europe. By Europeans.</strong>
+  <strong>Built in Europe. For Europe. By Europeans.</strong>
   <br><br>
   <a href="https://eullm.eu">eullm.eu</a>
 </p>
