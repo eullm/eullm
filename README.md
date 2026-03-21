@@ -50,6 +50,8 @@ Drop-in replacement for Ollama with a **EU-hosted model registry**.
 # Same commands you already know
 eullm pull legal-it-7b          # Downloads from EU servers (Hetzner DE, OVH FR)
 eullm run legal-it-7b           # Runs locally — on your laptop, 8GB RAM
+eullm list                      # Show local and available models
+eullm show legal-it-7b          # Model details, metadata, compliance info
 
 # 100% Ollama API compatible — change one line to migrate
 # OLD: http://localhost:11434/v1
@@ -95,7 +97,7 @@ eullm-forge profiles
 
 ### EULLM Hub
 
-Pre-verticalizzati models for European domains and languages. Download and run immediately.
+Pre-verticalizzati models for European domains and languages. Download and run immediately. Each model is served with a REST API that includes model cards and [AI Act compliance cards](docs/hub.md).
 
 | Model | Domain | Languages | Size | VRAM | Runs on |
 |-------|--------|-----------|------|------|---------|
@@ -203,10 +205,14 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] Domain registration (eullm.eu, eullm.it)
 - [x] Vision document and roadmap
 - [x] GitHub repository and community setup
-- [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm serve`)
+- [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm list`, `eullm show`, `eullm serve`)
+- [x] Engine API: Ollama-compatible + OpenAI-compatible (`/v1/chat/completions`)
 - [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
+- [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
 - [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
-- [ ] First Colab notebook: identity LoRA on Qwen3-14B
+- [x] Hub API with model cards and AI Act compliance cards
+- [x] Technical documentation (`docs/`)
+- [x] First Colab notebook: identity LoRA on Qwen3-14B
 - [ ] First verticalizzato model: `eullm/legal-it-7b`
 - [ ] Landing page with waitlist
 - [ ] Public launch (HN, Reddit, community)
@@ -283,6 +289,15 @@ EULLM is in early development and we welcome contributions of all kinds:
 - **Testing** — try the notebooks, report bugs, suggest improvements
 - **Spread the word** — star the repo, share on social media
 
+### Technical documentation
+
+Detailed documentation is available in the [`docs/`](docs/) directory:
+
+- **[Architecture](docs/architecture.md)** — system overview, data flow, pipeline diagrams
+- **[Engine](docs/engine.md)** — CLI commands, API reference (EULLM + OpenAI-compatible), audit trail
+- **[Forge](docs/forge.md)** — pipeline stages, CLI reference, profiles, demo notebook guide
+- **[Hub](docs/hub.md)** — Hub API reference, model cards, AI Act compliance cards
+
 ### Development setup
 
 ```bash
@@ -296,6 +311,10 @@ cargo build
 cd forge
 pip install -e ".[dev]"
 pytest
+
+# Build the hub
+cd ../hub
+cargo build
 ```
 
 ### Code of conduct
