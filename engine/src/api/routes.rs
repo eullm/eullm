@@ -1,4 +1,4 @@
-//! Route definitions for the Ollama-compatible and OpenAI-compatible APIs.
+//! Route definitions for the EULLM and OpenAI-compatible APIs.
 
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use crate::models::EU_CATALOG;
 
 type S = Arc<AppState>;
 
-/// Ollama-compatible API routes (`/api/*`).
+/// EULLM native API routes (`/api/*`).
 pub fn api_routes() -> Router<S> {
     Router::new()
         .route("/tags", get(list_models))
@@ -29,7 +29,7 @@ pub fn openai_routes() -> Router<S> {
         .route("/chat/completions", post(chat_completions))
 }
 
-// -- Ollama API handlers --
+// -- EULLM API handlers --
 
 async fn version() -> Json<Value> {
     Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
@@ -47,7 +47,9 @@ async fn list_models(State(_state): State<S>) -> Json<Value> {
                     "format": "gguf",
                     "family": m.base,
                     "parameter_size": format!("{}B", m.vram_gb * 2),
-                    "quantization_level": "Q4_K_M"
+                    "quantization_level": "Q4_K_M",
+                    "domain": m.domain,
+                    "source_model": m.source_model
                 }
             })
         })
@@ -69,7 +71,7 @@ async fn generate(State(state): State<S>, Json(body): Json<Value>) -> Json<Value
 
     // Mock response
     let response = format!(
-        "Hello! I'm {model}, running on EULLM Engine. \
+        "Hello! I'm {model}, running on eullm. \
          This is a mock response. You asked: \"{prompt}\""
     );
 
@@ -100,7 +102,7 @@ async fn chat(State(state): State<S>, Json(body): Json<Value>) -> Json<Value> {
         .unwrap_or("");
 
     let response = format!(
-        "Hello! I'm {model}, running on EULLM Engine. \
+        "Hello! I'm {model}, running on eullm. \
          This is a mock response to: \"{last_message}\""
     );
 
@@ -126,14 +128,19 @@ async fn show_model(Json(body): Json<Value>) -> Json<Value> {
 
     if let Some(entry) = crate::models::catalog::find_model(name) {
         Json(json!({
-            "modelfile": format!("# EULLM model: {}\n# Base: {}\n# License: {}", entry.name, entry.base, entry.license),
-            "parameters": format!("num_ctx 4096\ntemperature 0.7"),
+            "modelfile": format!(
+                "# EULLM model: {}\n# Domain: {}\n# Base: {}\n# Source: {}\n# License: {}",
+                entry.name, entry.domain, entry.base, entry.source_model, entry.license
+            ),
+            "parameters": "num_ctx 4096\ntemperature 0.7",
             "template": "{{ .Prompt }}",
             "details": {
                 "format": "gguf",
                 "family": entry.base,
                 "parameter_size": format!("{}B", entry.vram_gb * 2),
-                "quantization_level": "Q4_K_M"
+                "quantization_level": "Q4_K_M",
+                "domain": entry.domain,
+                "source_model": entry.source_model
             }
         }))
     } else {
@@ -175,7 +182,7 @@ async fn chat_completions(State(state): State<S>, Json(body): Json<Value>) -> Js
         .get("model")
         .and_then(|v| v.as_str())
         .or(state.model.as_deref())
-        .unwrap_or("eullm/general-eu-14b");
+        .unwrap_or("eullm/general-eu-7b");
 
     let last_message = body
         .get("messages")
@@ -186,7 +193,7 @@ async fn chat_completions(State(state): State<S>, Json(body): Json<Value>) -> Js
         .unwrap_or("");
 
     let response = format!(
-        "Hello! I'm {model}, running on EULLM Engine. \
+        "Hello! I'm {model}, running on eullm. \
          This is a mock response to: \"{last_message}\""
     );
 
