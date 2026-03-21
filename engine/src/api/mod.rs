@@ -1,4 +1,4 @@
-//! EULLM Engine REST API.
+//! eullm REST API.
 //!
 //! Exposes a standard LLM API (both `/api` and `/v1` OpenAI-compatible)
 //! so that existing tools (Open WebUI, LangChain, n8n) work out of the box.
@@ -21,7 +21,7 @@ pub async fn serve(port: u16, model: Option<String>) -> Result<(), Box<dyn std::
     let state = Arc::new(AppState { model });
     let app = router(state);
     let addr = format!("0.0.0.0:{port}");
-    tracing::info!("EULLM Engine listening on {addr}");
+    tracing::info!("eullm listening on {addr}");
 
     let listener = TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;

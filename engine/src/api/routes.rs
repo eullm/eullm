@@ -69,7 +69,7 @@ async fn generate(State(state): State<S>, Json(body): Json<Value>) -> Json<Value
 
     // Mock response
     let response = format!(
-        "Hello! I'm {model}, running on EULLM Engine. \
+        "Hello! I'm {model}, running on eullm. \
          This is a mock response. You asked: \"{prompt}\""
     );
 
@@ -100,7 +100,7 @@ async fn chat(State(state): State<S>, Json(body): Json<Value>) -> Json<Value> {
         .unwrap_or("");
 
     let response = format!(
-        "Hello! I'm {model}, running on EULLM Engine. \
+        "Hello! I'm {model}, running on eullm. \
          This is a mock response to: \"{last_message}\""
     );
 
@@ -186,7 +186,7 @@ async fn chat_completions(State(state): State<S>, Json(body): Json<Value>) -> Js
         .unwrap_or("");
 
     let response = format!(
-        "Hello! I'm {model}, running on EULLM Engine. \
+        "Hello! I'm {model}, running on eullm. \
          This is a mock response to: \"{last_message}\""
     );
 
