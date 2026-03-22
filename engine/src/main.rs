@@ -10,7 +10,7 @@ use std::sync::Arc;
 use clap::{Parser, Subcommand};
 use models::{catalog, ModelStore};
 
-use crate::inference::{InferenceConfig, InferenceEngine};
+use crate::inference::{BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig};
 
 #[derive(Parser)]
 #[command(name = "eullm")]
@@ -52,6 +52,10 @@ enum Commands {
         /// Number of CPU threads (default: all available)
         #[arg(short, long)]
         threads: Option<u32>,
+
+        /// Enable continuous batching with N max concurrent requests (0 = sequential)
+        #[arg(long, default_value_t = 8)]
+        batch_size: usize,
     },
     /// List locally available models
     List,
@@ -69,6 +73,10 @@ enum Commands {
         /// Replace existing service on the port
         #[arg(long)]
         replace: bool,
+
+        /// Enable continuous batching with N max concurrent requests (0 = sequential)
+        #[arg(long, default_value_t = 8)]
+        batch_size: usize,
     },
     /// Verticalize a model: compress, specialize, and brand it
     ///
@@ -149,10 +157,11 @@ async fn main() {
             gpu_layers,
             ctx_size,
             threads,
-        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads).await,
+            batch_size,
+        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size).await,
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
-        Commands::Serve { port, replace } => cmd_serve(port, replace).await,
+        Commands::Serve { port, replace, batch_size: _ } => cmd_serve(port, replace).await,
         Commands::Forge {
             source,
             profile,
@@ -424,46 +433,25 @@ async fn cmd_run(
     gpu_layers: i32,
     ctx_size: u32,
     threads: Option<u32>,
+    batch_size: usize,
 ) {
     ensure_port_available(port, replace).await;
 
     let model_name: String;
-    let engine: Option<Arc<InferenceEngine>>;
+    let mut engine: Option<Arc<InferenceEngine>> = None;
+    let mut scheduler: Option<inference::SchedulerHandle> = None;
+
+    let resolved_threads = threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(4)
+    });
 
     // Try to resolve as a local GGUF file or downloaded model
-    if let Some(gguf_path) = resolve_model_path(model, store) {
-        model_name = gguf_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| model.to_string());
-
-        println!("Loading GGUF: {}", gguf_path.display());
-
-        let config = InferenceConfig {
-            model_path: gguf_path,
-            gpu_layers,
-            context_size: ctx_size,
-            threads: threads.unwrap_or_else(|| {
-                std::thread::available_parallelism()
-                    .map(|n| n.get() as u32)
-                    .unwrap_or(4)
-            }),
-        };
-
-        match InferenceEngine::load(config) {
-            Ok(eng) => {
-                engine = Some(Arc::new(eng));
-                println!("Model loaded.");
-            }
-            Err(e) => {
-                eprintln!("Error loading model: {e}");
-                std::process::exit(1);
-            }
-        }
+    let gguf_path = if let Some(path) = resolve_model_path(model, store) {
+        Some(path)
     } else {
         // Catalog model — try to pull if not available, then load GGUF
-        model_name = model.to_string();
-
         if !store.exists(model) {
             if catalog::find_model(model).is_some() {
                 println!("Model not found locally. Pulling...");
@@ -477,59 +465,88 @@ async fn cmd_run(
                 std::process::exit(1);
             }
         }
+        store.gguf_path(model)
+    };
 
-        // Try to load the GGUF after pulling
-        if let Some(gguf_path) = store.gguf_path(model) {
-            println!("Loading GGUF: {}", gguf_path.display());
-            let config = InferenceConfig {
-                model_path: gguf_path,
-                gpu_layers,
-                context_size: ctx_size,
-                threads: threads.unwrap_or_else(|| {
-                    std::thread::available_parallelism()
-                        .map(|n| n.get() as u32)
-                        .unwrap_or(4)
-                }),
+    if let Some(gguf_path) = gguf_path {
+        model_name = gguf_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| model.to_string());
+
+        println!("Loading GGUF: {}", gguf_path.display());
+
+        let config = InferenceConfig {
+            model_path: gguf_path,
+            gpu_layers,
+            context_size: ctx_size,
+            threads: resolved_threads,
+        };
+
+        if batch_size > 0 {
+            // ── Continuous batching mode ────────────────────────────
+            let sched_config = SchedulerConfig {
+                max_batch_size: batch_size,
+                queue_capacity: batch_size * 8,
             };
-
+            let sched = BatchScheduler::new(config, sched_config);
+            match sched.start() {
+                Ok(handle) => {
+                    scheduler = Some(handle);
+                    println!("Model loaded (continuous batching, max_batch_size={batch_size}).");
+                }
+                Err(e) => {
+                    eprintln!("Error starting scheduler: {e}");
+                    std::process::exit(1);
+                }
+            }
+        } else {
+            // ── Sequential mode ────────────────────────────────────
             match InferenceEngine::load(config) {
                 Ok(eng) => {
                     engine = Some(Arc::new(eng));
-                    println!("Model loaded.");
+                    println!("Model loaded (sequential mode).");
                 }
                 Err(e) => {
                     eprintln!("Error loading model: {e}");
                     std::process::exit(1);
                 }
             }
-        } else {
-            eprintln!("Warning: no GGUF file available for this model.");
-            eprintln!("  The model may not have been published yet.");
-            eprintln!("  API will start but inference requests will return 503.");
-            eprintln!("  To test inference, use a local GGUF file:");
-            eprintln!("    eullm run ./path/to/model.gguf");
-            eprintln!();
-            engine = None;
         }
+    } else {
+        model_name = model.to_string();
+        eprintln!("Warning: no GGUF file available for this model.");
+        eprintln!("  The model may not have been published yet.");
+        eprintln!("  API will start but inference requests will return 503.");
+        eprintln!("  To test inference, use a local GGUF file:");
+        eprintln!("    eullm run ./path/to/model.gguf");
+        eprintln!();
     }
 
     let short = model_name
         .strip_prefix("eullm/")
         .unwrap_or(&model_name);
+    let mode = if scheduler.is_some() {
+        format!("continuous batching (max {batch_size} concurrent)")
+    } else {
+        "sequential".to_string()
+    };
+
     println!();
     println!("eullm ready.");
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("  Model:         {short}");
-    if engine.is_some() {
+    if engine.is_some() || scheduler.is_some() {
         println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
         println!("  Context:       {ctx_size}");
+        println!("  Mode:          {mode}");
     }
     println!();
     println!("Press Ctrl+C to stop.");
     println!();
 
-    if let Err(e) = api::serve(port, Some(model_name), engine).await {
+    if let Err(e) = api::serve(port, Some(model_name), engine, scheduler).await {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
@@ -543,7 +560,7 @@ async fn cmd_serve(port: u16, replace: bool) {
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("\nPress Ctrl+C to stop.\n");
 
-    if let Err(e) = api::serve(port, None, None).await {
+    if let Err(e) = api::serve(port, None, None, None).await {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }

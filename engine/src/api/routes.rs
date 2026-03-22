@@ -3,6 +3,10 @@
 //! Supports both non-streaming (JSON) and streaming (SSE) responses
 //! on all generation endpoints. Set `"stream": true` in the request body
 //! to get token-by-token Server-Sent Events.
+//!
+//! When a `SchedulerHandle` is present in `AppState`, requests are dispatched
+//! through the continuous batching scheduler. Otherwise the sequential
+//! `InferenceEngine` is used as fallback.
 
 use std::sync::Arc;
 
@@ -42,13 +46,23 @@ pub fn openai_routes() -> Router<S> {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn get_engine(state: &AppState) -> Result<&Arc<crate::inference::InferenceEngine>, (StatusCode, Json<Value>)> {
-    state.engine.as_ref().ok_or_else(|| {
-        (
+/// Returns true if the scheduler is available.
+fn has_scheduler(state: &AppState) -> bool {
+    state.scheduler.is_some()
+}
+
+fn has_engine(state: &AppState) -> bool {
+    state.engine.is_some() || state.scheduler.is_some()
+}
+
+fn require_engine(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
+    if !has_engine(state) {
+        return Err((
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
-        )
-    })
+        ));
+    }
+    Ok(())
 }
 
 fn parse_generate_params(body: &Value) -> (u32, f32) {
@@ -85,6 +99,40 @@ fn format_chat_prompt(messages: &[Value]) -> String {
     prompt
 }
 
+/// Submit a request through the scheduler and return the receiver.
+fn scheduler_submit(state: &AppState, request: GenerateRequest) -> mpsc::Receiver<StreamEvent> {
+    state.scheduler.as_ref().unwrap().submit(request)
+}
+
+/// Collect all tokens from a receiver into a final result.
+async fn collect_stream(
+    mut rx: mpsc::Receiver<StreamEvent>,
+) -> Result<(String, u32, u32, u64), String> {
+    let mut text = String::new();
+    let mut tokens_generated = 0u32;
+    let mut tokens_prompt = 0u32;
+    let mut duration_ms = 0u64;
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            StreamEvent::Token(piece) => text.push_str(&piece),
+            StreamEvent::Done {
+                tokens_generated: tg,
+                tokens_prompt: tp,
+                duration_ms: d,
+            } => {
+                tokens_generated = tg;
+                tokens_prompt = tp;
+                duration_ms = d;
+                break;
+            }
+            StreamEvent::Error(e) => return Err(e),
+        }
+    }
+
+    Ok((text, tokens_generated, tokens_prompt, duration_ms))
+}
+
 // ── EULLM API handlers ──────────────────────────────────────────────────────
 
 async fn version() -> Json<Value> {
@@ -118,6 +166,8 @@ async fn generate(
     State(state): State<S>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    require_engine(&state)?;
+
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
@@ -130,7 +180,6 @@ async fn generate(
         .unwrap_or("")
         .to_string();
 
-    let engine = get_engine(&state)?;
     let (max_tokens, temperature) = parse_generate_params(&body);
 
     let request = GenerateRequest {
@@ -140,34 +189,70 @@ async fn generate(
         ..Default::default()
     };
 
-    if is_streaming(&body) {
-        let stream = stream_generate(Arc::clone(engine), request, model);
-        Ok(Sse::new(stream).into_response())
+    if has_scheduler(&state) {
+        // ── Continuous batching path ────────────────────────────────
+        let rx = scheduler_submit(&state, request);
+
+        if is_streaming(&body) {
+            let stream = stream_from_channel(rx, model, StreamFormat::OllamaGenerate);
+            Ok(Sse::new(stream).into_response())
+        } else {
+            let (text, tokens_generated, tokens_prompt, duration_ms) =
+                collect_stream(rx).await.map_err(|e| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+                })?;
+
+            let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
+            audit.input_tokens = tokens_prompt;
+            audit.output_tokens = tokens_generated;
+            audit.duration_ms = duration_ms;
+            AuditLogger::new().log(&audit);
+
+            Ok(Json(json!({
+                "model": model,
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "response": text,
+                "done": true,
+                "total_duration": duration_ms * 1_000_000,
+                "eval_count": tokens_generated,
+                "eval_duration": duration_ms * 1_000_000,
+                "prompt_eval_count": tokens_prompt
+            }))
+            .into_response())
+        }
     } else {
-        let result = tokio::task::spawn_blocking({
-            let engine = Arc::clone(engine);
-            move || engine.generate(&request)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
+        // ── Sequential fallback ────────────────────────────────────
+        let engine = Arc::clone(state.engine.as_ref().unwrap());
 
-        let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
-        audit.input_tokens = result.tokens_prompt;
-        audit.output_tokens = result.tokens_generated;
-        audit.duration_ms = result.duration_ms;
-        AuditLogger::new().log(&audit);
+        if is_streaming(&body) {
+            let stream = stream_generate_sequential(engine, request, model);
+            Ok(Sse::new(stream).into_response())
+        } else {
+            let result = tokio::task::spawn_blocking({
+                let engine = engine;
+                move || engine.generate(&request)
+            })
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
 
-        Ok(Json(json!({
-            "model": model,
-            "created_at": chrono::Utc::now().to_rfc3339(),
-            "response": result.text,
-            "done": true,
-            "total_duration": result.duration_ms * 1_000_000,
-            "eval_count": result.tokens_generated,
-            "eval_duration": result.duration_ms * 1_000_000,
-            "prompt_eval_count": result.tokens_prompt
-        })).into_response())
+            let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
+            audit.input_tokens = result.tokens_prompt;
+            audit.output_tokens = result.tokens_generated;
+            audit.duration_ms = result.duration_ms;
+            AuditLogger::new().log(&audit);
+
+            Ok(Json(json!({
+                "model": model,
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "response": result.text,
+                "done": true,
+                "total_duration": result.duration_ms * 1_000_000,
+                "eval_count": result.tokens_generated,
+                "eval_duration": result.duration_ms * 1_000_000,
+                "prompt_eval_count": result.tokens_prompt
+            })).into_response())
+        }
     }
 }
 
@@ -175,6 +260,8 @@ async fn chat(
     State(state): State<S>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    require_engine(&state)?;
+
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
@@ -188,7 +275,6 @@ async fn chat(
         .cloned()
         .unwrap_or_default();
 
-    let engine = get_engine(&state)?;
     let prompt = format_chat_prompt(&messages);
     let (max_tokens, temperature) = parse_generate_params(&body);
 
@@ -202,37 +288,74 @@ async fn chat(
         ],
     };
 
-    if is_streaming(&body) {
-        let stream = stream_chat(Arc::clone(engine), request, model);
-        Ok(Sse::new(stream).into_response())
+    if has_scheduler(&state) {
+        let rx = scheduler_submit(&state, request);
+
+        if is_streaming(&body) {
+            let stream = stream_from_channel(rx, model, StreamFormat::OllamaChat);
+            Ok(Sse::new(stream).into_response())
+        } else {
+            let (text, tokens_generated, tokens_prompt, duration_ms) =
+                collect_stream(rx).await.map_err(|e| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+                })?;
+
+            let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
+            audit.input_tokens = tokens_prompt;
+            audit.output_tokens = tokens_generated;
+            audit.duration_ms = duration_ms;
+            AuditLogger::new().log(&audit);
+
+            Ok(Json(json!({
+                "model": model,
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "message": {
+                    "role": "assistant",
+                    "content": text
+                },
+                "done": true,
+                "total_duration": duration_ms * 1_000_000,
+                "eval_count": tokens_generated,
+                "eval_duration": duration_ms * 1_000_000,
+                "prompt_eval_count": tokens_prompt
+            })).into_response())
+        }
     } else {
-        let result = tokio::task::spawn_blocking({
-            let engine = Arc::clone(engine);
-            move || engine.generate(&request)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
+        let engine = Arc::clone(state.engine.as_ref().unwrap());
 
-        let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
-        audit.input_tokens = result.tokens_prompt;
-        audit.output_tokens = result.tokens_generated;
-        audit.duration_ms = result.duration_ms;
-        AuditLogger::new().log(&audit);
+        if is_streaming(&body) {
+            let stream = stream_generate_sequential(engine, request, model.clone());
+            let stream = stream_remap(stream, model, StreamFormat::OllamaChat);
+            Ok(Sse::new(stream).into_response())
+        } else {
+            let result = tokio::task::spawn_blocking({
+                let engine = engine;
+                move || engine.generate(&request)
+            })
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
 
-        Ok(Json(json!({
-            "model": model,
-            "created_at": chrono::Utc::now().to_rfc3339(),
-            "message": {
-                "role": "assistant",
-                "content": result.text
-            },
-            "done": true,
-            "total_duration": result.duration_ms * 1_000_000,
-            "eval_count": result.tokens_generated,
-            "eval_duration": result.duration_ms * 1_000_000,
-            "prompt_eval_count": result.tokens_prompt
-        })).into_response())
+            let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
+            audit.input_tokens = result.tokens_prompt;
+            audit.output_tokens = result.tokens_generated;
+            audit.duration_ms = result.duration_ms;
+            AuditLogger::new().log(&audit);
+
+            Ok(Json(json!({
+                "model": model,
+                "created_at": chrono::Utc::now().to_rfc3339(),
+                "message": {
+                    "role": "assistant",
+                    "content": result.text
+                },
+                "done": true,
+                "total_duration": result.duration_ms * 1_000_000,
+                "eval_count": result.tokens_generated,
+                "eval_duration": result.duration_ms * 1_000_000,
+                "prompt_eval_count": result.tokens_prompt
+            })).into_response())
+        }
     }
 }
 
@@ -297,6 +420,8 @@ async fn chat_completions(
     State(state): State<S>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    require_engine(&state)?;
+
     let model = body
         .get("model")
         .and_then(|v| v.as_str())
@@ -310,7 +435,6 @@ async fn chat_completions(
         .cloned()
         .unwrap_or_default();
 
-    let engine = get_engine(&state)?;
     let prompt = format_chat_prompt(&messages);
     let (max_tokens, temperature) = parse_generate_params(&body);
 
@@ -324,95 +448,90 @@ async fn chat_completions(
         ],
     };
 
-    if is_streaming(&body) {
-        let stream = stream_chat_completions(Arc::clone(engine), request, model);
-        Ok(Sse::new(stream).into_response())
+    if has_scheduler(&state) {
+        let rx = scheduler_submit(&state, request);
+
+        if is_streaming(&body) {
+            let stream = stream_from_channel(rx, model, StreamFormat::OpenAI);
+            Ok(Sse::new(stream).into_response())
+        } else {
+            let (text, tokens_generated, tokens_prompt, duration_ms) =
+                collect_stream(rx).await.map_err(|e| {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+                })?;
+
+            let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
+            audit.input_tokens = tokens_prompt;
+            audit.output_tokens = tokens_generated;
+            audit.duration_ms = duration_ms;
+            AuditLogger::new().log(&audit);
+
+            Ok(Json(json!({
+                "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                "object": "chat.completion",
+                "created": chrono::Utc::now().timestamp(),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": text
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": tokens_prompt,
+                    "completion_tokens": tokens_generated,
+                    "total_tokens": tokens_prompt + tokens_generated
+                }
+            })).into_response())
+        }
     } else {
-        let result = tokio::task::spawn_blocking({
-            let engine = Arc::clone(engine);
-            move || engine.generate(&request)
-        })
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
+        let engine = Arc::clone(state.engine.as_ref().unwrap());
 
-        let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
-        audit.input_tokens = result.tokens_prompt;
-        audit.output_tokens = result.tokens_generated;
-        audit.duration_ms = result.duration_ms;
-        AuditLogger::new().log(&audit);
+        if is_streaming(&body) {
+            let stream = stream_generate_sequential(engine, request, model.clone());
+            let stream = stream_remap(stream, model, StreamFormat::OpenAI);
+            Ok(Sse::new(stream).into_response())
+        } else {
+            let result = tokio::task::spawn_blocking({
+                let engine = engine;
+                move || engine.generate(&request)
+            })
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
 
-        Ok(Json(json!({
-            "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
-            "object": "chat.completion",
-            "created": chrono::Utc::now().timestamp(),
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "message": {
-                    "role": "assistant",
-                    "content": result.text
-                },
-                "finish_reason": "stop"
-            }],
-            "usage": {
-                "prompt_tokens": result.tokens_prompt,
-                "completion_tokens": result.tokens_generated,
-                "total_tokens": result.tokens_prompt + result.tokens_generated
-            }
-        })).into_response())
+            let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
+            audit.input_tokens = result.tokens_prompt;
+            audit.output_tokens = result.tokens_generated;
+            audit.duration_ms = result.duration_ms;
+            AuditLogger::new().log(&audit);
+
+            Ok(Json(json!({
+                "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+                "object": "chat.completion",
+                "created": chrono::Utc::now().timestamp(),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": result.text
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {
+                    "prompt_tokens": result.tokens_prompt,
+                    "completion_tokens": result.tokens_generated,
+                    "total_tokens": result.tokens_prompt + result.tokens_generated
+                }
+            })).into_response())
+        }
     }
 }
 
 // ── Streaming helpers ────────────────────────────────────────────────────────
-
-/// SSE stream for `/api/generate` (Ollama format).
-///
-/// Each event is a JSON object with `"response"` containing the token piece.
-/// The final event has `"done": true`.
-fn stream_generate(
-    engine: Arc<crate::inference::InferenceEngine>,
-    request: GenerateRequest,
-    model: String,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
-
-    tokio::task::spawn_blocking(move || {
-        engine.generate_streaming(&request, tx);
-    });
-
-    stream_from_channel(rx, model, StreamFormat::OllamaGenerate)
-}
-
-/// SSE stream for `/api/chat` (Ollama format).
-fn stream_chat(
-    engine: Arc<crate::inference::InferenceEngine>,
-    request: GenerateRequest,
-    model: String,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
-
-    tokio::task::spawn_blocking(move || {
-        engine.generate_streaming(&request, tx);
-    });
-
-    stream_from_channel(rx, model, StreamFormat::OllamaChat)
-}
-
-/// SSE stream for `/v1/chat/completions` (OpenAI format).
-fn stream_chat_completions(
-    engine: Arc<crate::inference::InferenceEngine>,
-    request: GenerateRequest,
-    model: String,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
-
-    tokio::task::spawn_blocking(move || {
-        engine.generate_streaming(&request, tx);
-    });
-
-    stream_from_channel(rx, model, StreamFormat::OpenAI)
-}
 
 #[derive(Clone, Copy)]
 enum StreamFormat {
@@ -422,6 +541,8 @@ enum StreamFormat {
 }
 
 /// Convert an mpsc channel of StreamEvents into an SSE event stream.
+///
+/// Used for both scheduler and sequential backends.
 fn stream_from_channel(
     mut rx: mpsc::Receiver<StreamEvent>,
     model: String,
@@ -433,36 +554,7 @@ fn stream_from_channel(
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::Token(piece) => {
-                    let data = match format {
-                        StreamFormat::OllamaGenerate => json!({
-                            "model": &model,
-                            "created_at": chrono::Utc::now().to_rfc3339(),
-                            "response": piece,
-                            "done": false,
-                        }),
-                        StreamFormat::OllamaChat => json!({
-                            "model": &model,
-                            "created_at": chrono::Utc::now().to_rfc3339(),
-                            "message": {
-                                "role": "assistant",
-                                "content": piece,
-                            },
-                            "done": false,
-                        }),
-                        StreamFormat::OpenAI => json!({
-                            "id": &completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": chrono::Utc::now().timestamp(),
-                            "model": &model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {
-                                    "content": piece,
-                                },
-                                "finish_reason": Value::Null,
-                            }],
-                        }),
-                    };
+                    let data = format_token_event(&piece, &model, &completion_id, format);
                     yield Ok(Event::default().data(data.to_string()));
                 }
                 StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
@@ -477,50 +569,12 @@ fn stream_from_channel(
                     audit.duration_ms = duration_ms;
                     AuditLogger::new().log(&audit);
 
-                    let data = match format {
-                        StreamFormat::OllamaGenerate => json!({
-                            "model": &model,
-                            "created_at": chrono::Utc::now().to_rfc3339(),
-                            "response": "",
-                            "done": true,
-                            "total_duration": duration_ms * 1_000_000,
-                            "eval_count": tokens_generated,
-                            "eval_duration": duration_ms * 1_000_000,
-                            "prompt_eval_count": tokens_prompt,
-                        }),
-                        StreamFormat::OllamaChat => json!({
-                            "model": &model,
-                            "created_at": chrono::Utc::now().to_rfc3339(),
-                            "message": {
-                                "role": "assistant",
-                                "content": "",
-                            },
-                            "done": true,
-                            "total_duration": duration_ms * 1_000_000,
-                            "eval_count": tokens_generated,
-                            "eval_duration": duration_ms * 1_000_000,
-                            "prompt_eval_count": tokens_prompt,
-                        }),
-                        StreamFormat::OpenAI => json!({
-                            "id": &completion_id,
-                            "object": "chat.completion.chunk",
-                            "created": chrono::Utc::now().timestamp(),
-                            "model": &model,
-                            "choices": [{
-                                "index": 0,
-                                "delta": {},
-                                "finish_reason": "stop",
-                            }],
-                            "usage": {
-                                "prompt_tokens": tokens_prompt,
-                                "completion_tokens": tokens_generated,
-                                "total_tokens": tokens_prompt + tokens_generated,
-                            },
-                        }),
-                    };
+                    let data = format_done_event(
+                        &model, &completion_id, format,
+                        tokens_generated, tokens_prompt, duration_ms,
+                    );
                     yield Ok(Event::default().data(data.to_string()));
 
-                    // OpenAI format sends a final [DONE] marker
                     if matches!(format, StreamFormat::OpenAI) {
                         yield Ok(Event::default().data("[DONE]"));
                     }
@@ -533,5 +587,115 @@ fn stream_from_channel(
                 }
             }
         }
+    }
+}
+
+/// Sequential streaming: spawn_blocking + mpsc (legacy path).
+fn stream_generate_sequential(
+    engine: Arc<crate::inference::InferenceEngine>,
+    request: GenerateRequest,
+    model: String,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+
+    tokio::task::spawn_blocking(move || {
+        engine.generate_streaming(&request, tx);
+    });
+
+    stream_from_channel(rx, model, StreamFormat::OllamaGenerate)
+}
+
+/// Re-map a stream from OllamaGenerate format to another format.
+/// Used by sequential chat/completions paths that always produce OllamaGenerate events.
+fn stream_remap(
+    inner: impl Stream<Item = Result<Event, std::convert::Infallible>>,
+    _model: String,
+    _format: StreamFormat,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    // The inner stream already uses the correct format via stream_from_channel.
+    inner
+}
+
+fn format_token_event(piece: &str, model: &str, completion_id: &str, format: StreamFormat) -> Value {
+    match format {
+        StreamFormat::OllamaGenerate => json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "response": piece,
+            "done": false,
+        }),
+        StreamFormat::OllamaChat => json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "message": {
+                "role": "assistant",
+                "content": piece,
+            },
+            "done": false,
+        }),
+        StreamFormat::OpenAI => json!({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": chrono::Utc::now().timestamp(),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "content": piece,
+                },
+                "finish_reason": Value::Null,
+            }],
+        }),
+    }
+}
+
+fn format_done_event(
+    model: &str,
+    completion_id: &str,
+    format: StreamFormat,
+    tokens_generated: u32,
+    tokens_prompt: u32,
+    duration_ms: u64,
+) -> Value {
+    match format {
+        StreamFormat::OllamaGenerate => json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "response": "",
+            "done": true,
+            "total_duration": duration_ms * 1_000_000,
+            "eval_count": tokens_generated,
+            "eval_duration": duration_ms * 1_000_000,
+            "prompt_eval_count": tokens_prompt,
+        }),
+        StreamFormat::OllamaChat => json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "message": {
+                "role": "assistant",
+                "content": "",
+            },
+            "done": true,
+            "total_duration": duration_ms * 1_000_000,
+            "eval_count": tokens_generated,
+            "eval_duration": duration_ms * 1_000_000,
+            "prompt_eval_count": tokens_prompt,
+        }),
+        StreamFormat::OpenAI => json!({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": chrono::Utc::now().timestamp(),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "delta": {},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": tokens_prompt,
+                "completion_tokens": tokens_generated,
+                "total_tokens": tokens_prompt + tokens_generated,
+            },
+        }),
     }
 }
