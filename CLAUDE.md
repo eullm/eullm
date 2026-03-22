@@ -112,6 +112,7 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 - **SSE streaming via mpsc channels:** inference engine sends tokens through `tokio::sync::mpsc`, routes convert to SSE events. Three formats: Ollama generate, Ollama chat, OpenAI chat.completion.chunk
 - **Compression strategy:** pruning (MLP-focused) → distillation → quantization → identity LoRA fine-tuning (validated by NVIDIA Minitron research)
 - **Iterative pruning for >50% compression:** compress 30%, distill, compress again (NVIDIA recommendation)
+- **Docker support:** multi-stage builds for Engine/Hub (Rust → debian-slim ~50MB), NVIDIA CUDA base for Forge. docker-compose.yml orchestrates all services with GPU profiles
 - **EU Infrastructure:** Hetzner (primary), OVH/Scaleway (secondary)
 
 ## Repository Structure
@@ -121,8 +122,11 @@ eullm/
 ├── CLAUDE.md
 ├── README.md
 ├── LICENSE
+├── docker-compose.yml     # All services (engine, hub, forge)
+├── .dockerignore
 ├── engine/                # EULLM Engine (Rust)
 │   ├── Cargo.toml
+│   ├── Dockerfile
 │   └── src/
 │       ├── main.rs
 │       ├── api/           # Ollama-compatible API
@@ -131,6 +135,7 @@ eullm/
 │       └── inference/     # llama.cpp bindings
 ├── forge/                 # EULLM Forge (Python)
 │   ├── pyproject.toml
+│   ├── Dockerfile
 │   ├── eullm_forge/
 │   │   ├── cli.py         # CLI entry point
 │   │   ├── pipeline.py    # Pipeline orchestrator
@@ -148,6 +153,7 @@ eullm/
 │   └── tests/
 ├── hub/                   # EULLM Hub registry (Rust)
 │   ├── Cargo.toml
+│   ├── Dockerfile
 │   └── src/
 ├── website/
 └── docs/

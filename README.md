@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://eullm.eu">Website</a> ·
+  <a href="docs/getting-started.md">Getting Started</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#components">Components</a> ·
   <a href="#demo-models">Demo Models</a> ·
@@ -373,6 +374,29 @@ pytest
 cd ../hub
 cargo build
 ```
+
+### Docker (recommended)
+
+Don't want to install Rust, Python, or CUDA on your system? Use Docker:
+
+```bash
+# Engine only (CPU)
+docker compose up engine
+
+# Engine with NVIDIA GPU
+docker compose --profile gpu up engine-gpu
+
+# Engine + Hub
+docker compose up engine hub
+
+# Forge (one-off command)
+docker compose run --rm forge forge Qwen/Qwen3-14B --profile legal-it
+
+# Everything
+docker compose up
+```
+
+See [Getting Started](docs/getting-started.md) for the full Docker guide.
 
 ### Code of conduct
 

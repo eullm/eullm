@@ -4,11 +4,24 @@ The EULLM Hub is a REST API registry for publishing, discovering, and downloadin
 
 ## Installation
 
+### From source
+
 ```bash
 cd hub
 cargo build --release
 
 # Binary will be at target/release/eullm-hub
+```
+
+### Docker
+
+```bash
+# Build and run
+docker build -t eullm-hub hub/
+docker run -p 3000:3000 -v eullm-models:/models eullm-hub
+
+# Or via docker compose (from repo root)
+docker compose up hub
 ```
 
 ## Running

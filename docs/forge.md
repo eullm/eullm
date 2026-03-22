@@ -4,6 +4,8 @@ EULLM Forge is the CLI + library for **verticalizzazione** (domain specializatio
 
 ## Installation
 
+### From source
+
 ```bash
 cd forge
 pip install -e .
@@ -13,6 +15,25 @@ pip install -e ".[distill]"
 
 # With dev tools
 pip install -e ".[dev]"
+```
+
+### Docker (recommended for GPU isolation)
+
+Using Docker avoids installing PyTorch and CUDA libraries on your system:
+
+```bash
+# Build the image
+docker build -t eullm-forge forge/
+
+# Run a verticalizzazione pipeline
+docker run --gpus all \
+  -v eullm-models:/models \
+  -v eullm-output:/output \
+  -v eullm-hf:/data/huggingface \
+  eullm-forge forge Qwen/Qwen3-14B --profile legal-it
+
+# Or via docker compose (from repo root)
+docker compose run --rm forge forge Qwen/Qwen3-14B --profile legal-it
 ```
 
 ### Dependencies
