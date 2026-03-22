@@ -7,6 +7,7 @@
 
 <p align="center">
   <a href="https://eullm.eu">Website</a> ·
+  <a href="docs/getting-started.md">Getting Started</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#components">Components</a> ·
   <a href="#demo-models">Demo Models</a> ·
