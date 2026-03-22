@@ -19,6 +19,7 @@
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Ready-gold" alt="EU AI Act" />
   <img src="https://img.shields.io/badge/status-Early%20Development-orange" alt="Status" />
+  <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
 </p>
 
 ---
@@ -50,6 +51,7 @@ Run sovereign LLMs locally with **real llama.cpp inference**, built-in audit tra
 ```bash
 # Run any GGUF model — local file or from the EU registry
 eullm run ./model.gguf                    # Local GGUF file
+eullm run ./model.gguf --batch-size 16    # Continuous batching for parallel requests
 eullm run legal-it-7b                     # From EU registry (coming soon)
 
 # CLI
@@ -65,12 +67,14 @@ eullm serve                               # Start API server without loading a m
 
 Key features:
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
+- **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **SSE streaming** — token-by-token output on all endpoints (`"stream": true`)
 - **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
+- **Cross-platform binaries** — prebuilt releases for Linux x64/arm64 and macOS x64/arm64
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
 - Zero telemetry to non-EU servers
 
@@ -129,8 +133,22 @@ Every model includes:
 
 **EULLM Engine compiles and runs today.** If you have a GGUF model, you can use it right now.
 
+### Prebuilt binaries (easiest)
+
+Download from [GitHub Releases](https://github.com/eullm/eullm/releases):
+
 ```bash
-# Build from source
+# Linux x64
+curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64 -o eullm
+chmod +x eullm
+./eullm run ./your-model.gguf
+```
+
+Available for: Linux x64, Linux arm64, macOS x64, macOS Apple Silicon.
+
+### Build from source
+
+```bash
 git clone https://github.com/eullm/eullm.git && cd eullm
 cargo build --release
 
@@ -198,6 +216,7 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | | Ollama / llama.cpp | EULLM |
 |---|---|---|
 | Inference engine | llama.cpp | llama.cpp (same backend, same performance) |
+| Request scheduling | Sequential (one at a time) | **Continuous batching** (parallel decode) |
 | API compatibility | Ollama API or custom | Ollama-compatible + OpenAI-compatible |
 | GPU support | Manual build flags | `--features cuda/rocm/vulkan/metal` |
 | Model registry | US servers (HuggingFace) | EU servers (Hetzner DE, OVH FR) |
@@ -255,12 +274,17 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] GitHub repository and community setup
 - [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm list`, `eullm show`, `eullm serve`)
 - [x] Engine API: OpenAI-compatible (`/v1/chat/completions`) + native EULLM API
+- [x] **Continuous batching scheduler** — parallel multi-request inference with per-sequence KV cache
+- [x] **SSE streaming** on all generation endpoints (Ollama + OpenAI format)
 - [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
 - [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
 - [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
 - [x] Hub API with model cards and AI Act compliance cards
 - [x] Real inference engine (llama.cpp via llama-cpp-2, CUDA/ROCm/Vulkan/Metal)
+- [x] **Docker support** — docker-compose.yml with Engine, Hub, Forge, GPU profiles
+- [x] **CI/CD** — GitHub Actions CI + cross-platform release workflow (Linux x64/arm64, macOS x64/arm64)
 - [x] Technical documentation (`docs/`)
+- [x] Getting started guide (`docs/getting-started.md`)
 - [x] First Colab notebook: identity LoRA on Qwen3-14B
 - [ ] First verticalizzato model: `eullm/legal-it-7b`
 - [ ] Landing page with waitlist

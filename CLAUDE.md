@@ -112,7 +112,9 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 - **SSE streaming via mpsc channels:** inference engine sends tokens through `tokio::sync::mpsc`, routes convert to SSE events. Three formats: Ollama generate, Ollama chat, OpenAI chat.completion.chunk
 - **Compression strategy:** pruning (MLP-focused) → distillation → quantization → identity LoRA fine-tuning (validated by NVIDIA Minitron research)
 - **Iterative pruning for >50% compression:** compress 30%, distill, compress again (NVIDIA recommendation)
+- **Continuous batching scheduler:** dedicated OS thread runs a decode loop that processes multiple requests in parallel (up to `max_batch_size`). Prefill + decode in a single `LlamaBatch`, per-sequence KV cache management, near-linear throughput scaling. This is a key differentiator over basic mutex-guarded inference.
 - **Docker support:** multi-stage builds for Engine/Hub (Rust → debian-slim ~50MB), NVIDIA CUDA base for Forge. docker-compose.yml orchestrates all services with GPU profiles
+- **CI/CD:** GitHub Actions CI (build + test + clippy/ruff for all 3 components on every push/PR). Release workflow builds cross-platform Engine binaries (Linux x64/arm64, macOS x64/arm64) on tag push, creates GitHub Release with SHA256 checksums.
 - **EU Infrastructure:** Hetzner (primary), OVH/Scaleway (secondary)
 
 ## Repository Structure
@@ -174,10 +176,14 @@ Priority tasks:
 1. ~~Create project directory structure (engine/, forge/, hub/)~~
 2. ~~EULLM CLI skeleton (eullm pull, eullm run)~~
 3. ~~SSE streaming on all Engine endpoints (Ollama + OpenAI format)~~
-4. Full Forge pipeline with verticalizzazione profiles
-4. Demo notebook: verticalizzazione Qwen3-14B → legal-it-7b
-5. First 3 demo models on Hub (legal-it, medical-de, finance-fr)
-6. Proof of concept: verticalizzato model running locally on consumer GPU
+4. ~~Continuous batching scheduler for multi-request inference~~
+5. ~~CI/CD: GitHub Actions CI + cross-platform release workflow~~
+6. ~~Docker support: docker-compose.yml with GPU profiles~~
+7. ~~Getting started guide (docs/getting-started.md)~~
+8. Full Forge pipeline with verticalizzazione profiles
+9. Demo notebook: verticalizzazione Qwen3-14B → legal-it-7b
+10. First 3 demo models on Hub (legal-it, medical-de, finance-fr)
+11. Proof of concept: verticalizzato model running locally on consumer GPU
 
 ## What NOT to do
 
