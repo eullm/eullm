@@ -1,0 +1,84 @@
+# EULLM Platform — Docker Compose
+#
+# Usage:
+#   docker compose up engine         # Just the inference server
+#   docker compose up hub            # Just the model registry
+#   docker compose up engine hub     # Engine + Hub
+#   docker compose up                # All services
+#
+# GPU (NVIDIA):
+#   docker compose --profile gpu up engine-gpu
+
+services:
+  # ── Engine (CPU) ────────────────────────────────────────────
+  engine:
+    build:
+      context: ./engine
+    image: eullm/engine:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - models:/models
+      - audit:/data/audit
+    restart: unless-stopped
+
+  # ── Engine (NVIDIA GPU) ────────────────────────────────────
+  engine-gpu:
+    build:
+      context: ./engine
+      args:
+        FEATURES: cuda
+    image: eullm/engine:latest-cuda
+    ports:
+      - "11434:11434"
+    volumes:
+      - models:/models
+      - audit:/data/audit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - gpu
+    restart: unless-stopped
+
+  # ── Hub ─────────────────────────────────────────────────────
+  hub:
+    build:
+      context: ./hub
+    image: eullm/hub:latest
+    ports:
+      - "3000:3000"
+    volumes:
+      - models:/models
+    restart: unless-stopped
+
+  # ── Forge ───────────────────────────────────────────────────
+  # Forge is a CLI tool, not a long-running service.
+  # Run it with: docker compose run forge forge Qwen/Qwen3-14B --profile legal-it
+  forge:
+    build:
+      context: ./forge
+    image: eullm/forge:latest
+    volumes:
+      - models:/models
+      - forge-output:/output
+      - hf-cache:/data/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles:
+      - forge
+
+volumes:
+  models:
+  audit:
+  forge-output:
+  hf-cache:
