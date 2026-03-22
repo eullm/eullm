@@ -1,0 +1,128 @@
+name: Release Engine
+
+on:
+  push:
+    tags:
+      - "engine-v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: eullm-linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact: eullm-linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-13
+            artifact: eullm-macos-x64
+          - target: aarch64-apple-darwin
+            os: macos-14
+            artifact: eullm-macos-arm64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
+      - name: Install build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libssl-dev
+
+      - name: Build engine
+        working-directory: engine
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package binary
+        run: |
+          cp engine/target/${{ matrix.target }}/release/eullm ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create checksums
+        run: |
+          cd artifacts
+          for dir in */; do
+            for file in "$dir"*; do
+              sha256sum "$file" >> checksums.txt
+            done
+          done
+          cat checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/eullm-linux-x64/eullm-linux-x64
+            artifacts/eullm-linux-arm64/eullm-linux-arm64
+            artifacts/eullm-macos-x64/eullm-macos-x64
+            artifacts/eullm-macos-arm64/eullm-macos-arm64
+            artifacts/checksums.txt
+          body: |
+            ## EULLM Engine ${{ github.ref_name }}
+
+            Drop-in Ollama replacement with continuous batching and EU AI Act audit trail.
+
+            ### Quick install
+
+            ```bash
+            # Linux x64
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64 -o eullm
+            chmod +x eullm
+
+            # macOS Apple Silicon
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-macos-arm64 -o eullm
+            chmod +x eullm
+            ```
+
+            ### Usage
+
+            ```bash
+            ./eullm run ./model.gguf                    # Run any GGUF model
+            ./eullm run ./model.gguf --batch-size 16    # Continuous batching for RAG
+            ```
+
+            ### Verify checksums
+
+            ```bash
+            sha256sum -c checksums.txt
+            ```

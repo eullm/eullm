@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  engine:
+    name: Engine (build + test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake build-essential pkg-config libssl-dev
+      - name: Build
+        working-directory: engine
+        run: cargo build
+      - name: Test
+        working-directory: engine
+        run: cargo test
+      - name: Clippy
+        working-directory: engine
+        run: cargo clippy -- -D warnings -A dead-code -A unused-imports
+
+  hub:
+    name: Hub (build + test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        working-directory: hub
+        run: cargo build
+      - name: Test
+        working-directory: hub
+        run: cargo test
+
+  forge:
+    name: Forge (lint + test)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        working-directory: forge
+        run: pip install -e ".[dev]"
+      - name: Lint
+        working-directory: forge
+        run: ruff check eullm_forge/
+      - name: Test
+        working-directory: forge
+        run: pytest -v
