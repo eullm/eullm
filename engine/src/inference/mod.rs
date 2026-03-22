@@ -315,9 +315,7 @@ impl InferenceEngine {
             return;
         }
 
-        let mut batch = match LlamaBatch::new(self.config.context_size as usize, 1) {
-            batch => batch,
-        };
+        let mut batch = LlamaBatch::new(self.config.context_size as usize, 1);
         let last_idx = (tokens.len() - 1) as i32;
         for (i, token) in (0_i32..).zip(tokens.into_iter()) {
             if batch.add(token, i, &[0], i == last_idx).is_err() {
@@ -364,10 +362,10 @@ impl InferenceEngine {
                             } else {
                                 ""
                             };
-                            if !piece_without_stop.is_empty() {
-                                if tx.blocking_send(StreamEvent::Token(piece_without_stop.to_string())).is_err() {
-                                    return;
-                                }
+                            if !piece_without_stop.is_empty()
+                                && tx.blocking_send(StreamEvent::Token(piece_without_stop.to_string())).is_err()
+                            {
+                                return;
                             }
                             stopped = true;
                             break;

@@ -189,7 +189,6 @@ class DistillationTrainer:
 
         Combines KL divergence (soft targets) with cross-entropy (hard targets).
         """
-        import torch
         import torch.nn.functional as F
 
         T = self.config.temperature
