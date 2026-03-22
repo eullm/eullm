@@ -1,7 +1,14 @@
 //! Inference engine powered by llama.cpp via llama-cpp-2 bindings.
 //!
-//! Loads GGUF models and runs text generation with token sampling.
-//! Supports both blocking generation and streaming (token-by-token via channel).
+//! Supports two modes:
+//!
+//! - **Sequential** (`InferenceEngine`): one request at a time, simple mutex.
+//!   Good for single-user CLI usage.
+//! - **Continuous batching** (`BatchScheduler`): multiple concurrent requests
+//!   decoded in parallel on a single context. Good for API server / RAG
+//!   workloads with many parallel requests.
+
+pub mod scheduler;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
@@ -16,6 +23,8 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+pub use scheduler::{BatchScheduler, SchedulerConfig, SchedulerHandle};
+
 /// Configuration for the inference engine.
 #[derive(Debug, Clone)]
 pub struct InferenceConfig {
@@ -23,7 +32,7 @@ pub struct InferenceConfig {
     pub model_path: PathBuf,
     /// Number of GPU layers to offload (-1 = all).
     pub gpu_layers: i32,
-    /// Context window size.
+    /// Context window size (per sequence).
     pub context_size: u32,
     /// Number of threads for CPU inference.
     pub threads: u32,
@@ -85,6 +94,9 @@ pub enum StreamEvent {
 }
 
 /// The loaded inference engine, holding the model and backend.
+///
+/// This is the **sequential** engine — one request at a time. For concurrent
+/// workloads use [`BatchScheduler`] instead.
 ///
 /// Thread-safe: generation acquires a mutex on the context.
 pub struct InferenceEngine {
