@@ -19,6 +19,10 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
 COPY src/ src/
 
+# Limit CUDA architectures to reduce binary size (~940MB → ~200MB)
+# sm_80=A100, sm_86=RTX3000, sm_89=RTX4000, sm_90=H100
+ENV CMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+
 # Build with optional GPU features
 RUN if [ -z "$FEATURES" ]; then \
         cargo build --release; \
