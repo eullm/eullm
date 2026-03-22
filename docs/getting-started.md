@@ -2,7 +2,96 @@
 
 A step-by-step guide to install, build, and run the EULLM platform on your machine.
 
-## Prerequisites
+## Two installation paths
+
+| Path | Best for | Requires |
+|---|---|---|
+| **Docker** (recommended) | Quick start, no system changes | Docker + Docker Compose |
+| **From source** | Development, macOS Metal builds | Rust, Python, C compiler |
+
+---
+
+## Path A: Docker (recommended)
+
+Nothing to install on your system except Docker. No risk of breaking drivers or libraries.
+
+### Prerequisites
+
+- [Docker](https://docs.docker.com/get-docker/) 24+
+- [Docker Compose](https://docs.docker.com/compose/install/) v2+
+- (Optional) [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for GPU support
+
+### 1. Clone and start
+
+```bash
+git clone https://github.com/eullm/eullm.git
+cd eullm
+
+# Start the Engine (CPU)
+docker compose up engine
+```
+
+The API is live at `http://localhost:11434`.
+
+### 2. With NVIDIA GPU
+
+```bash
+docker compose --profile gpu up engine-gpu
+```
+
+### 3. Start Engine + Hub together
+
+```bash
+docker compose up engine hub
+```
+
+Hub API available at `http://localhost:3000`.
+
+### 4. Run the Forge (one-off command)
+
+```bash
+# Verticalizzazione pipeline
+docker compose run --rm forge forge Qwen/Qwen3-14B --profile legal-it
+
+# Estimate cost
+docker compose run --rm forge forge Qwen/Qwen3-14B --profile legal-it --estimate-only
+
+# List profiles
+docker compose run --rm forge profiles
+```
+
+### 5. Build individual images
+
+```bash
+# Engine (CPU)
+docker build -t eullm-engine engine/
+
+# Engine (NVIDIA GPU)
+docker build -t eullm-engine --build-arg FEATURES=cuda engine/
+
+# Forge
+docker build -t eullm-forge forge/
+
+# Hub
+docker build -t eullm-hub hub/
+```
+
+### Docker volumes
+
+| Volume | Purpose |
+|---|---|
+| `models` | Shared model storage (Engine + Hub + Forge) |
+| `audit` | Engine audit trail logs |
+| `forge-output` | Forge pipeline output |
+| `hf-cache` | HuggingFace model cache |
+
+Skip to [Talk to the model](#5-talk-to-the-model) to start using the API.
+
+---
+
+## Path B: From source
+
+### Prerequisites
 
 | Tool | Version | Check |
 |---|---|---|
@@ -21,14 +110,14 @@ A step-by-step guide to install, build, and run the EULLM platform on your machi
 | Vulkan | Cross-platform | Vulkan SDK 1.3+ |
 | Metal | macOS Apple Silicon | Xcode 15+ |
 
-## 1. Clone the repository
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/eullm/eullm.git
 cd eullm
 ```
 
-## 2. Build the Engine
+### 2. Build the Engine
 
 The Engine is the local inference server — a single Rust binary.
 
@@ -62,7 +151,7 @@ Verify:
 eullm --help
 ```
 
-## 3. Install the Forge
+### 3. Install the Forge
 
 The Forge is the Python toolkit for model verticalizzazione (domain specialization + compression).
 
@@ -87,7 +176,7 @@ Verify:
 eullm-forge --help
 ```
 
-## 4. Run a model
+### 4. Run a model
 
 ### Option A: Run a local GGUF file
 

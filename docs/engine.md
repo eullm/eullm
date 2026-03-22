@@ -4,6 +4,8 @@ The EULLM Engine is a CLI + API server for running GGUF models locally, with rea
 
 ## Installation
 
+### From source
+
 ```bash
 cd engine
 
@@ -19,11 +21,27 @@ cargo build --release --features metal    # macOS Apple Silicon
 # Binary will be at target/release/eullm
 ```
 
-### Build requirements
+#### Build requirements
 
 - Rust 1.75+
 - C/C++ compiler (gcc/clang) — needed by llama.cpp
 - (Optional) CUDA toolkit, ROCm, Vulkan SDK, or Xcode for GPU support
+
+### Docker
+
+```bash
+# CPU only
+docker build -t eullm-engine engine/
+docker run -p 11434:11434 -v eullm-models:/models eullm-engine
+
+# With NVIDIA GPU
+docker build -t eullm-engine --build-arg FEATURES=cuda engine/
+docker run --gpus all -p 11434:11434 -v eullm-models:/models eullm-engine
+
+# Or via docker compose (from repo root)
+docker compose up engine              # CPU
+docker compose --profile gpu up engine-gpu   # GPU
+```
 
 ## CLI Commands
 
