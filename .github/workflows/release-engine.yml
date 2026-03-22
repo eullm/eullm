@@ -65,8 +65,50 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  build-cuda:
+    strategy:
+      matrix:
+        include:
+          - cuda: "12.8.1"
+            artifact: eullm-linux-x64-cuda-12.8
+            cuda_tag: "12.8.1-devel-ubuntu22.04"
+
+    runs-on: ubuntu-22.04
+    container:
+      image: nvidia/cuda:${{ matrix.cuda_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y curl cmake build-essential pkg-config libssl-dev git
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Build engine with CUDA
+        run: |
+          . "$HOME/.cargo/env"
+          cargo build --release --features cuda -p eullm-engine
+        env:
+          CUDA_PATH: /usr/local/cuda
+
+      - name: Package binary
+        run: |
+          cp target/release/eullm ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
   release:
-    needs: build
+    needs: [build, build-cuda]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -92,6 +134,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/eullm-linux-x64/eullm-linux-x64
+            artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
@@ -104,14 +147,28 @@ jobs:
             ### Quick install
 
             ```bash
-            # Linux x64
+            # Linux x64 (CPU only)
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64 -o eullm
+            chmod +x eullm
+
+            # Linux x64 with NVIDIA GPU (CUDA 12.8 — supports RTX 3000/4000/5000 series)
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-12.8 -o eullm
             chmod +x eullm
 
             # macOS Apple Silicon
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-macos-arm64 -o eullm
             chmod +x eullm
             ```
+
+            ### Which binary to download?
+
+            | Binary | GPU Support | Requirements |
+            |--------|-------------|--------------|
+            | `eullm-linux-x64` | CPU only | None |
+            | `eullm-linux-x64-cuda-12.8` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
+            | `eullm-linux-arm64` | CPU only | ARM64 Linux |
+            | `eullm-macos-x64` | CPU only | macOS Intel |
+            | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
 
             ### Usage
 
