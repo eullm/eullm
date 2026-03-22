@@ -105,7 +105,7 @@ impl ModelStore {
             if let Ok(entries) = fs::read_dir(&model_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().map_or(false, |e| e == "gguf") {
+                    if path.extension().is_some_and(|e| e == "gguf") {
                         return Some(path);
                     }
                 }

@@ -166,7 +166,10 @@ def export_gguf(config: ExportConfig) -> str:
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {config.model_path}")
 
-    output_path = Path(config.output_path) if config.output_path else model_path.with_suffix(".gguf")
+    output_path = (
+        Path(config.output_path) if config.output_path
+        else model_path.with_suffix(".gguf")
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     logger.info("Starting GGUF export")

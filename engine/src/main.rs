@@ -310,7 +310,7 @@ fn cmd_list(store: &ModelStore) {
             println!("Or run a local GGUF: eullm run ./path/to/model.gguf");
         }
         Ok(models) => {
-            println!("{:<30} {:>8} {:>6} {}", "NAME", "SIZE", "VRAM", "STATUS");
+            println!("{:<30} {:>8} {:>6} STATUS", "NAME", "SIZE", "VRAM");
             for m in &models {
                 let size = format_bytes(m.size_bytes);
                 let short = m.name.strip_prefix("eullm/").unwrap_or(&m.name);
@@ -374,7 +374,7 @@ fn resolve_model_path(model: &str, store: &ModelStore) -> Option<PathBuf> {
     let path = PathBuf::from(model);
 
     // Direct GGUF file path
-    if path.exists() && path.extension().map_or(false, |e| e == "gguf") {
+    if path.exists() && path.extension().is_some_and(|e| e == "gguf") {
         return Some(path);
     }
 
@@ -425,6 +425,7 @@ async fn ensure_port_available(port: u16, replace: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_run(
     store: &ModelStore,
     model: &str,
@@ -566,6 +567,7 @@ async fn cmd_serve(port: u16, replace: bool) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_forge(
     source: &str,
     profile: Option<&str>,
