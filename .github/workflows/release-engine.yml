@@ -82,7 +82,7 @@ jobs:
       - name: Install build dependencies
         run: |
           apt-get update
-          apt-get install -y curl cmake build-essential pkg-config libssl-dev git
+          apt-get install -y curl cmake build-essential pkg-config libssl-dev git libclang-dev
 
       - name: Install Rust toolchain
         run: |
@@ -92,9 +92,12 @@ jobs:
       - name: Build engine with CUDA
         run: |
           . "$HOME/.cargo/env"
+          export PATH="/usr/local/cuda/bin:$PATH"
           cargo build --release --features cuda -p eullm-engine
         env:
           CUDA_PATH: /usr/local/cuda
+          CUDACXX: /usr/local/cuda/bin/nvcc
+          CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
 
       - name: Package binary
         run: |
