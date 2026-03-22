@@ -191,7 +191,7 @@ def estimate(base_model: str, target_vram: int, tokens: float) -> None:
     cost = estimate_distillation_cost(source_params, target_params, tokens)
     gguf_size = estimate_gguf_size(target_params)
 
-    console.print(f"[bold blue]EULLM Forge[/bold blue] — Cost Estimate")
+    console.print("[bold blue]EULLM Forge[/bold blue] — Cost Estimate")
     console.print()
     console.print(f"  Source: {base_model} (~{source_params:.0f}B params)")
     console.print(f"  Target: ~{target_params:.0f}B params → ~{gguf_size:.1f}GB GGUF")

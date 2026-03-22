@@ -338,13 +338,13 @@ fn run_scheduler_loop(
                             } else {
                                 ""
                             };
-                            if !trimmed.is_empty() {
-                                if seq.tx.blocking_send(StreamEvent::Token(trimmed.to_string())).is_err() {
-                                    to_remove.push(i);
-                                    let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                    stopped = true;
-                                    break;
-                                }
+                            if !trimmed.is_empty()
+                                && seq.tx.blocking_send(StreamEvent::Token(trimmed.to_string())).is_err()
+                            {
+                                to_remove.push(i);
+                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                stopped = true;
+                                break;
                             }
                             send_done(seq);
                             to_remove.push(i);

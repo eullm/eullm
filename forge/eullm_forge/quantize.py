@@ -64,7 +64,10 @@ def _quantize_awq(model_path: str, config: QuantizeConfig) -> str:
         "version": "GEMM",
     }
 
-    logger.info("Running AWQ quantization (bits=%d, group_size=%d)...", config.bits, config.group_size)
+    logger.info(
+        "Running AWQ quantization (bits=%d, group_size=%d)...",
+        config.bits, config.group_size,
+    )
     model.quantize(tokenizer, quant_config=quant_config)
 
     output_path = str(Path(model_path).parent / f"{Path(model_path).name}-awq-w{config.bits}")

@@ -263,7 +263,7 @@ fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
         .filter(|e| {
             e.path()
                 .extension()
-                .map_or(false, |ext| ext == "gguf")
+                .is_some_and(|ext| ext == "gguf")
         })
         .collect();
 
@@ -272,6 +272,7 @@ fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
     entries.first().map(|e| e.path())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn model_entry(
     name: &str,
     description: &str,
