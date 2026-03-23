@@ -209,6 +209,7 @@ fn run_scheduler_loop(
 
     let ctx_params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
+        .with_n_seq_max(sched_config.max_batch_size as u32)
         .with_n_threads(config.threads as i32)
         .with_n_threads_batch(config.threads as i32);
 
@@ -222,7 +223,9 @@ fn run_scheduler_loop(
     };
 
     let mut active: Vec<ActiveSequence> = Vec::with_capacity(sched_config.max_batch_size);
-    let mut next_seq_id: i32 = 0;
+    // Pool of reusable seq_ids in range [0, max_batch_size).
+    // llama.cpp requires seq_id < n_seq_max, so we recycle them.
+    let mut free_seq_ids: Vec<i32> = (0..sched_config.max_batch_size as i32).rev().collect();
 
     tracing::info!(
         "Scheduler running — max_batch_size={}, queue_capacity={}, context={}",
@@ -239,8 +242,10 @@ fn run_scheduler_loop(
         while active.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
                 Ok(scheduled) => {
-                    let seq_id = next_seq_id;
-                    next_seq_id = next_seq_id.wrapping_add(1);
+                    let seq_id = match free_seq_ids.pop() {
+                        Some(id) => id,
+                        None => break, // No free slots — should not happen due to active.len() check
+                    };
 
                     let seq = ActiveSequence {
                         seq_id,
@@ -280,6 +285,7 @@ fn run_scheduler_loop(
                             if model.is_eog_token(token) {
                                 send_done(&seq);
                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                free_seq_ids.push(seq.seq_id);
                             } else {
                                 seq.tokens_generated += 1;
 
@@ -303,6 +309,7 @@ fn run_scheduler_loop(
                                                 }
                                                 send_done(&seq);
                                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                                free_seq_ids.push(seq.seq_id);
                                                 stopped = true;
                                                 break;
                                             }
@@ -312,6 +319,7 @@ fn run_scheduler_loop(
                                             if seq.tokens_generated >= seq.max_tokens {
                                                 send_done(&seq);
                                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                                free_seq_ids.push(seq.seq_id);
                                             } else {
                                                 let _ = seq.tx.blocking_send(StreamEvent::Token(piece));
                                                 seq.last_token = Some(token);
@@ -322,6 +330,7 @@ fn run_scheduler_loop(
                                     Err(_) => {
                                         send_done(&seq);
                                         let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                        free_seq_ids.push(seq.seq_id);
                                     }
                                 }
                             }
@@ -332,6 +341,7 @@ fn run_scheduler_loop(
                             let _ = seq.tx.blocking_send(StreamEvent::Error(format!(
                                 "Prefill failed: {e}"
                             )));
+                            free_seq_ids.push(seq.seq_id);
                         }
                     }
                 }
@@ -473,7 +483,8 @@ fn run_scheduler_loop(
         to_remove.sort_unstable();
         to_remove.dedup();
         for &i in to_remove.iter().rev() {
-            active.swap_remove(i);
+            let removed = active.swap_remove(i);
+            free_seq_ids.push(removed.seq_id);
         }
     }
 }
