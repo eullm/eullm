@@ -8,7 +8,7 @@ set -uo pipefail  # no -e, background jobs may fail
 
 BASE_URL="${1:?Usage: ./bench.sh <base_url> <model_name>}"
 MODEL="${2:?Usage: ./bench.sh <base_url> <model_name>}"
-PROMPT="List the 5 largest cities in Europe. Be brief."
+PROMPT="Write a detailed essay about the history of Rome from its founding to the fall of the Western Roman Empire. Include key events, important figures, political changes, military campaigns, cultural achievements, and the reasons for its decline. Be thorough and comprehensive."
 NUM_PREDICT=150
 ENDPOINT="${BASE_URL}/api/chat"
 
@@ -81,7 +81,7 @@ except:
     fi
 }
 
-for N in 1 2 4 8; do
+for N in 1 2 4 8 16; do
     echo "=== ${N} concurrent request(s) ==="
 
     total_start=$(date +%s%N)
