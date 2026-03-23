@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel redundant runs: when a PR is merged, the in-progress PR run
+# is cancelled since the push-to-main run covers the same commits.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
