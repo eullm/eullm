@@ -7,9 +7,9 @@ set -uo pipefail  # no -e, background jobs may fail
 
 BASE_URL="${1:?Usage: ./bench.sh <base_url> <model_name>}"
 MODEL="${2:?Usage: ./bench.sh <base_url> <model_name>}"
-PROMPT="List the 5 largest cities in Europe. Be brief."
+PROMPT="List the 5 largest cities in Europe. Be brief. /no_think"
 NUM_PREDICT=150  # cap output tokens to keep runs short
-ENDPOINT="${BASE_URL}/api/generate"
+ENDPOINT="${BASE_URL}/api/chat"
 
 echo "Benchmark: ${MODEL} @ ${BASE_URL}"
 echo "num_predict=${NUM_PREDICT}"
@@ -28,7 +28,7 @@ run_single() {
 
     local response
     response=$(curl -s --max-time 180 "$ENDPOINT" \
-        -d "{\"model\":\"${MODEL}\",\"prompt\":\"${PROMPT}\",\"stream\":false,\"options\":{\"num_predict\":${NUM_PREDICT}}}" 2>&1)
+        -d "{\"model\":\"${MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${PROMPT}\"}],\"stream\":false,\"think\":false,\"options\":{\"num_predict\":${NUM_PREDICT}}}" 2>&1)
 
     end=$(date +%s%N)
     elapsed=$(( (end - start) / 1000000 ))
