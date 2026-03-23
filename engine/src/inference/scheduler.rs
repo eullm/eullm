@@ -543,25 +543,36 @@ fn prefill_sequence(
         ));
     }
 
-    // Add all prompt tokens to a batch.
-    let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
-    let last_idx = (tokens.len() - 1) as i32;
-
-    for (i, token) in tokens.iter().enumerate() {
-        let is_last = i as i32 == last_idx;
-        batch
-            .add(*token, i as i32, &[seq.seq_id], is_last)
-            .map_err(|e| format!("Failed to add prompt token: {e}"))?;
-    }
+    // Prefill in chunks of n_batch tokens. llama.cpp asserts if a single
+    // decode call processes more tokens than n_batch, which causes SIGABRT.
+    // Long RAG prompts easily exceed the default 2048 n_batch.
+    let chunk_size = config.n_batch as usize;
+    let last_idx = tokens.len() - 1;
 
     tracing::debug!(
-        "Prefilling seq {} with {} tokens (context_size={})",
+        "Prefilling seq {} with {} tokens in chunks of {} (context_size={})",
         seq.seq_id,
         tokens.len(),
+        chunk_size,
         config.context_size,
     );
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("Prompt decode failed: {e}"))?;
+
+    for chunk_start in (0..tokens.len()).step_by(chunk_size) {
+        let chunk_end = (chunk_start + chunk_size).min(tokens.len());
+        let chunk = &tokens[chunk_start..chunk_end];
+        let mut batch = LlamaBatch::new(chunk.len().max(1), 1);
+
+        for (j, token) in chunk.iter().enumerate() {
+            let abs_pos = chunk_start + j;
+            let is_last = abs_pos == last_idx;
+            batch
+                .add(*token, abs_pos as i32, &[seq.seq_id], is_last)
+                .map_err(|e| format!("Failed to add prompt token: {e}"))?;
+        }
+
+        ctx.decode(&mut batch)
+            .map_err(|e| format!("Prompt decode failed at chunk {chunk_start}..{chunk_end}: {e}"))?;
+    }
 
     Ok((n_tokens, tokens.len() as i32))
 }

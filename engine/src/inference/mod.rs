@@ -205,18 +205,26 @@ impl InferenceEngine {
             .into());
         }
 
-        // Build initial batch with prompt tokens
+        // Prefill in chunks of n_batch tokens. llama.cpp asserts (SIGABRT)
+        // if a single decode call processes more tokens than n_batch.
         {
-            let mut prefill_batch = LlamaBatch::new(tokens.len().max(1), 1);
-            let last_idx = (tokens.len() - 1) as i32;
-            for (i, token) in (0_i32..).zip(tokens.into_iter()) {
-                let is_last = i == last_idx;
-                prefill_batch.add(token, i, &[0], is_last)?;
-            }
+            let chunk_size = self.config.n_batch as usize;
+            let last_idx = tokens.len() - 1;
 
-            // Decode prompt
-            ctx.decode(&mut prefill_batch)
-                .map_err(|e| format!("Prompt decode failed: {e}"))?;
+            for chunk_start in (0..tokens.len()).step_by(chunk_size) {
+                let chunk_end = (chunk_start + chunk_size).min(tokens.len());
+                let chunk = &tokens[chunk_start..chunk_end];
+                let mut prefill_batch = LlamaBatch::new(chunk.len().max(1), 1);
+
+                for (j, token) in chunk.iter().enumerate() {
+                    let abs_pos = chunk_start + j;
+                    let is_last = abs_pos == last_idx;
+                    prefill_batch.add(*token, abs_pos as i32, &[0], is_last)?;
+                }
+
+                ctx.decode(&mut prefill_batch)
+                    .map_err(|e| format!("Prompt decode failed: {e}"))?;
+            }
         }
 
         // Sample tokens — use a small batch (capacity 1) for the decode loop.
@@ -335,19 +343,29 @@ impl InferenceEngine {
             return;
         }
 
+        // Prefill in chunks of n_batch tokens (same fix as generate()).
         {
-            let mut prefill_batch = LlamaBatch::new(tokens.len().max(1), 1);
-            let last_idx = (tokens.len() - 1) as i32;
-            for (i, token) in (0_i32..).zip(tokens.into_iter()) {
-                if prefill_batch.add(token, i, &[0], i == last_idx).is_err() {
-                    let _ = tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
+            let chunk_size = self.config.n_batch as usize;
+            let last_idx = tokens.len() - 1;
+
+            for chunk_start in (0..tokens.len()).step_by(chunk_size) {
+                let chunk_end = (chunk_start + chunk_size).min(tokens.len());
+                let chunk = &tokens[chunk_start..chunk_end];
+                let mut prefill_batch = LlamaBatch::new(chunk.len().max(1), 1);
+
+                for (j, token) in chunk.iter().enumerate() {
+                    let abs_pos = chunk_start + j;
+                    let is_last = abs_pos == last_idx;
+                    if prefill_batch.add(*token, abs_pos as i32, &[0], is_last).is_err() {
+                        let _ = tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
+                        return;
+                    }
+                }
+
+                if ctx.decode(&mut prefill_batch).is_err() {
+                    let _ = tx.blocking_send(StreamEvent::Error("Prompt decode failed".into()));
                     return;
                 }
-            }
-
-            if ctx.decode(&mut prefill_batch).is_err() {
-                let _ = tx.blocking_send(StreamEvent::Error("Prompt decode failed".into()));
-                return;
             }
         }
 
