@@ -56,6 +56,14 @@ enum Commands {
         /// Enable continuous batching with N max concurrent requests (0 = sequential)
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
+
+        /// Disable flash attention (enabled by default for faster inference)
+        #[arg(long)]
+        no_flash_attn: bool,
+
+        /// Prompt processing batch size (tokens per eval during prefill)
+        #[arg(long, default_value_t = 2048)]
+        n_batch: u32,
     },
     /// List locally available models
     List,
@@ -158,7 +166,9 @@ async fn main() {
             ctx_size,
             threads,
             batch_size,
-        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size).await,
+            no_flash_attn,
+            n_batch,
+        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await,
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Serve { port, replace, batch_size: _ } => cmd_serve(port, replace).await,
@@ -435,6 +445,8 @@ async fn cmd_run(
     ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
+    flash_attn: bool,
+    n_batch: u32,
 ) {
     ensure_port_available(port, replace).await;
 
@@ -482,6 +494,8 @@ async fn cmd_run(
             gpu_layers,
             context_size: ctx_size,
             threads: resolved_threads,
+            flash_attn,
+            n_batch,
         };
 
         if batch_size > 0 {
@@ -541,6 +555,8 @@ async fn cmd_run(
     if engine.is_some() || scheduler.is_some() {
         println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
         println!("  Context:       {ctx_size}");
+        println!("  Flash attn:    {flash_attn}");
+        println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
     }
     println!();
