@@ -544,12 +544,37 @@ async fn cmd_run(
         println!("  Mode:          {mode}");
     }
     println!();
-    println!("Press Ctrl+C to stop.");
-    println!();
 
-    if let Err(e) = api::serve(port, Some(model_name), engine, scheduler).await {
-        eprintln!("Server error: {e}");
-        std::process::exit(1);
+    // Clone the scheduler handle for the interactive REPL before moving into api::serve.
+    let repl_scheduler = scheduler.clone();
+    let has_backend = engine.is_some() || scheduler.is_some();
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+
+    if has_backend && is_tty {
+        println!("Type a message to chat, /bye to quit.\n");
+    } else {
+        println!("Press Ctrl+C to stop.\n");
+    }
+
+    // Start the API server in the background.
+    let api_model_name = model_name.clone();
+    tokio::spawn(async move {
+        if let Err(e) = api::serve(port, Some(api_model_name), engine, scheduler).await {
+            eprintln!("Server error: {e}");
+            std::process::exit(1);
+        }
+    });
+
+    // Give the API server a moment to bind.
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    if has_backend && is_tty {
+        if let Some(sched) = repl_scheduler {
+            interactive_chat(sched, &model_name, ctx_size).await;
+        }
+    } else {
+        // No REPL — just wait forever (API server runs in background task).
+        std::future::pending::<()>().await;
     }
 }
 
@@ -653,6 +678,191 @@ fn cmd_forge(
                     std::process::exit(1);
                 }
             }
+        }
+    }
+}
+
+// ── Interactive chat REPL ─────────────────────────────────────────────────────
+
+/// A single message in the conversation history.
+struct ChatMessage {
+    role: &'static str,
+    content: String,
+}
+
+/// Build a ChatML prompt from conversation history.
+///
+/// Format:
+/// ```text
+/// <|im_start|>system
+/// You are a helpful assistant.<|im_end|>
+/// <|im_start|>user
+/// Hello<|im_end|>
+/// <|im_start|>assistant
+/// ```
+fn build_chatml_prompt(history: &[ChatMessage]) -> String {
+    let mut prompt = String::new();
+    for msg in history {
+        prompt.push_str("<|im_start|>");
+        prompt.push_str(msg.role);
+        prompt.push('\n');
+        prompt.push_str(&msg.content);
+        prompt.push_str("<|im_end|>\n");
+    }
+    // Open the assistant turn for the model to complete.
+    prompt.push_str("<|im_start|>assistant\n");
+    prompt
+}
+
+async fn interactive_chat(
+    scheduler: inference::SchedulerHandle,
+    model_name: &str,
+    ctx_size: u32,
+) {
+    use std::io::{BufRead, Write};
+
+    let short = model_name
+        .strip_prefix("eullm/")
+        .unwrap_or(model_name);
+
+    let mut history: Vec<ChatMessage> = vec![ChatMessage {
+        role: "system",
+        content: "You are a helpful assistant.".into(),
+    }];
+
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+
+    loop {
+        // Print prompt
+        print!(">>> ");
+        if std::io::stdout().flush().is_err() {
+            break;
+        }
+
+        // Read user input (supports multi-line with trailing \)
+        let mut input = String::new();
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    // EOF (Ctrl+D)
+                    println!();
+                    return;
+                }
+                Ok(_) => {
+                    let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+                    if trimmed.ends_with('\\') {
+                        input.push_str(&trimmed[..trimmed.len() - 1]);
+                        input.push('\n');
+                        print!("... ");
+                        let _ = std::io::stdout().flush();
+                        continue;
+                    }
+                    input.push_str(trimmed);
+                    break;
+                }
+                Err(_) => return,
+            }
+        }
+
+        let input = input.trim().to_string();
+        if input.is_empty() {
+            continue;
+        }
+
+        // Commands
+        match input.as_str() {
+            "/bye" | "/exit" | "/quit" => {
+                println!("Bye!");
+                return;
+            }
+            "/clear" => {
+                history.truncate(1); // keep system message
+                println!("Chat history cleared.\n");
+                continue;
+            }
+            "/help" => {
+                println!("Commands:");
+                println!("  /bye     Exit the chat");
+                println!("  /clear   Clear conversation history");
+                println!("  /help    Show this help\n");
+                continue;
+            }
+            _ => {}
+        }
+
+        // Add user message to history.
+        history.push(ChatMessage {
+            role: "user",
+            content: input,
+        });
+
+        // Build prompt and estimate token budget.
+        let prompt = build_chatml_prompt(&history);
+
+        // Rough token estimate: ~4 chars per token. Leave room for the response.
+        let estimated_prompt_tokens = prompt.len() as u32 / 4;
+        let max_tokens = ctx_size.saturating_sub(estimated_prompt_tokens).min(2048);
+
+        if max_tokens < 32 {
+            eprintln!("Warning: conversation too long for context window. Use /clear to reset.\n");
+            history.pop();
+            continue;
+        }
+
+        let request = inference::GenerateRequest {
+            prompt,
+            max_tokens,
+            temperature: 0.7,
+            stop_sequences: vec!["<|im_end|>".into()],
+        };
+
+        // Submit to scheduler and stream tokens.
+        let mut rx = scheduler.submit(request);
+        let mut response_text = String::new();
+        let mut stats_line = String::new();
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                inference::StreamEvent::Token(piece) => {
+                    print!("{piece}");
+                    let _ = std::io::stdout().flush();
+                    response_text.push_str(&piece);
+                }
+                inference::StreamEvent::Done {
+                    tokens_generated,
+                    tokens_prompt,
+                    duration_ms,
+                } => {
+                    let tps = if duration_ms > 0 {
+                        tokens_generated as f64 / (duration_ms as f64 / 1000.0)
+                    } else {
+                        0.0
+                    };
+                    stats_line = format!(
+                        "\n\n[{short}: {tokens_generated} tokens, {tokens_prompt} prompt, {:.1} tok/s]\n",
+                        tps
+                    );
+                    break;
+                }
+                inference::StreamEvent::Error(e) => {
+                    eprintln!("\nError: {e}\n");
+                    break;
+                }
+            }
+        }
+
+        if !stats_line.is_empty() {
+            print!("{stats_line}");
+        }
+
+        // Add assistant response to history.
+        if !response_text.is_empty() {
+            history.push(ChatMessage {
+                role: "assistant",
+                content: response_text,
+            });
         }
     }
 }
