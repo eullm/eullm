@@ -25,7 +25,11 @@ cargo build --release --features metal    # macOS Apple Silicon
 
 - Rust 1.75+
 - C/C++ compiler (gcc/clang) — needed by llama.cpp
+- CMake 3.14+
+- libclang (`libclang-dev` on Debian/Ubuntu, `clang-devel` on Fedora) — needed by `bindgen` for FFI bindings
 - (Optional) CUDA toolkit, ROCm, Vulkan SDK, or Xcode for GPU support
+
+**Ubuntu/Debian one-liner:** `sudo apt install build-essential cmake libclang-dev`
 
 ### Docker
 
