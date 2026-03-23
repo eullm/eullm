@@ -85,7 +85,8 @@ fn is_streaming(body: &Value) -> bool {
 }
 
 /// Format chat messages into a ChatML-style prompt string.
-fn format_chat_prompt(messages: &[Value]) -> String {
+/// When `think` is false, appends `/no_think` to disable Qwen3 thinking mode.
+fn format_chat_prompt(messages: &[Value], think: bool) -> String {
     let mut prompt = String::new();
     for msg in messages {
         let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
@@ -95,7 +96,11 @@ fn format_chat_prompt(messages: &[Value]) -> String {
             .unwrap_or("");
         prompt.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
     }
-    prompt.push_str("<|im_start|>assistant\n");
+    if think {
+        prompt.push_str("<|im_start|>assistant\n");
+    } else {
+        prompt.push_str("<|im_start|>assistant\n<think>\n</think>\n\n");
+    }
     prompt
 }
 
@@ -275,7 +280,8 @@ async fn chat(
         .cloned()
         .unwrap_or_default();
 
-    let prompt = format_chat_prompt(&messages);
+    let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
+    let prompt = format_chat_prompt(&messages, think);
     let (max_tokens, temperature) = parse_generate_params(&body);
 
     let request = GenerateRequest {
@@ -435,7 +441,8 @@ async fn chat_completions(
         .cloned()
         .unwrap_or_default();
 
-    let prompt = format_chat_prompt(&messages);
+    let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
+    let prompt = format_chat_prompt(&messages, think);
     let (max_tokens, temperature) = parse_generate_params(&body);
 
     let request = GenerateRequest {
