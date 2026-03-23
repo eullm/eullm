@@ -146,6 +146,11 @@ async fn main() {
         )
         .init();
 
+    // Install signal handler for SIGABRT — llama.cpp calls abort() on
+    // GGML_ASSERT failures, which kills the process with no diagnostic info.
+    // This handler prints a helpful message before the default action runs.
+    install_abort_handler();
+
     let cli = Cli::parse();
 
     let store = match ModelStore::default_store() {
@@ -881,6 +886,54 @@ async fn interactive_chat(
             });
         }
     }
+}
+
+/// Install a signal handler for SIGABRT that prints diagnostic info.
+///
+/// llama.cpp uses `GGML_ASSERT` which calls `abort()` on failure, producing
+/// a core dump with no useful message. This handler prints actionable
+/// suggestions before re-raising the signal for the default handler.
+#[cfg(unix)]
+fn install_abort_handler() {
+    unsafe {
+        libc::signal(libc::SIGABRT, abort_handler as *const () as libc::sighandler_t);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn abort_handler(_sig: libc::c_int) {
+    // Only use async-signal-safe operations (write to stderr).
+    let msg = b"\n\
+==========================================================\n\
+EULLM ENGINE CRASHED (SIGABRT)\n\
+==========================================================\n\
+llama.cpp hit a fatal assertion (GGML_ASSERT).\n\
+\n\
+Common causes and fixes:\n\
+  1. Flash attention not supported by this model/quantization:\n\
+     -> Re-run with: eullm run <model> --no-flash-attn\n\
+\n\
+  2. Out of GPU memory (VRAM):\n\
+     -> Reduce batch size: eullm run <model> --batch-size 1\n\
+     -> Reduce context:    eullm run <model> --ctx-size 2048\n\
+     -> Use CPU only:      eullm run <model> --gpu-layers 0\n\
+\n\
+  3. Incompatible GGUF file or quantization:\n\
+     -> Try a different quantization (Q4_K_M recommended)\n\
+\n\
+Run with RUST_LOG=debug for more context before the crash.\n\
+==========================================================\n";
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+        // Re-raise SIGABRT with default handler for core dump.
+        libc::signal(libc::SIGABRT, libc::SIG_DFL);
+        libc::raise(libc::SIGABRT);
+    }
+}
+
+#[cfg(not(unix))]
+fn install_abort_handler() {
+    // No-op on non-Unix platforms.
 }
 
 fn format_bytes(bytes: u64) -> String {
