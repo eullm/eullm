@@ -66,13 +66,17 @@ fn require_engine(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
 }
 
 fn parse_generate_params(body: &Value) -> (u32, f32) {
+    // Check top-level first (OpenAI format), then Ollama's options object.
+    let options = body.get("options");
     let max_tokens = body
         .get("max_tokens")
         .or_else(|| body.get("num_predict"))
+        .or_else(|| options.and_then(|o| o.get("num_predict")))
         .and_then(|v| v.as_u64())
         .unwrap_or(512) as u32;
     let temperature = body
         .get("temperature")
+        .or_else(|| options.and_then(|o| o.get("temperature")))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.7) as f32;
     (max_tokens, temperature)

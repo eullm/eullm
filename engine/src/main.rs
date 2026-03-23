@@ -155,6 +155,27 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    // Check --daemon BEFORE initializing tracing/tokio internals.
+    // The daemon spawns a child process, so must happen early.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.contains(&"--daemon".to_string()) {
+            // Find --pidfile value.
+            let pidfile = args.iter()
+                .position(|a| a == "--pidfile")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str())
+                .or_else(|| {
+                    args.iter()
+                        .find(|a| a.starts_with("--pidfile="))
+                        .map(|a| a.strip_prefix("--pidfile=").unwrap())
+                })
+                .unwrap_or("/tmp/eullm.pid");
+            daemonize(pidfile);
+            // daemonize exits the parent — child continues below without --daemon.
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -192,17 +213,14 @@ async fn main() {
             daemon,
             pidfile,
         } => {
-            if daemon {
-                daemonize(&pidfile);
-            }
+            // --daemon is handled at the top of main() before tokio starts.
+            let _ = (daemon, pidfile);
             cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Serve { port, replace, batch_size: _, daemon, pidfile } => {
-            if daemon {
-                daemonize(&pidfile);
-            }
+            let _ = (daemon, pidfile);
             cmd_serve(port, replace).await;
         }
         Commands::Forge {
@@ -918,52 +936,90 @@ async fn interactive_chat(
     }
 }
 
-/// Fork the process into the background and write a PID file.
+/// Spawn a new copy of this process without --daemon, then exit.
 ///
-/// After daemonizing, stdout/stderr are redirected to /dev/null.
-/// Use `RUST_LOG` + a file-based tracing subscriber for logging in daemon mode.
-#[cfg(unix)]
+/// We cannot use `fork()` because the tokio runtime has already created
+/// threads — threads don't survive fork, causing an immediate segfault.
+/// Instead, we re-exec the same binary with `--daemon` stripped from args
+/// and the child's stdout/stderr redirected to a log file.
 fn daemonize(pidfile: &str) {
     use std::io::Write;
 
-    unsafe {
-        // First fork — parent exits, child continues.
-        let pid = libc::fork();
-        if pid < 0 {
-            eprintln!("Error: fork() failed");
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error: cannot determine executable path: {e}");
             std::process::exit(1);
         }
-        if pid > 0 {
-            // Parent — print PID and exit.
+    };
+
+    // Rebuild args without --daemon and --pidfile.
+    let args: Vec<String> = std::env::args()
+        .skip(1) // skip argv[0]
+        .filter(|a| a != "--daemon")
+        .collect();
+
+    // Filter out --pidfile and its value.
+    let mut filtered_args = Vec::new();
+    let mut skip_next = false;
+    for arg in &args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--pidfile" {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with("--pidfile=") {
+            continue;
+        }
+        filtered_args.push(arg.clone());
+    }
+
+    // Determine log file path next to PID file.
+    let log_path = pidfile.replace(".pid", ".log");
+
+    let log_file = match std::fs::File::create(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: cannot create log file {log_path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let log_err = match log_file.try_clone() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: cannot clone log file handle: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let child = std::process::Command::new(&exe)
+        .args(&filtered_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(log_err))
+        .spawn();
+
+    match child {
+        Ok(child) => {
+            let pid = child.id();
+            // Write PID file.
+            if let Ok(mut f) = std::fs::File::create(pidfile) {
+                let _ = write!(f, "{pid}");
+            }
             println!("eullm daemon started (PID {pid}).");
             println!("  PID file: {pidfile}");
+            println!("  Log file: {log_path}");
             println!("  Stop with: kill {pid}");
             std::process::exit(0);
         }
-
-        // Child — create new session.
-        libc::setsid();
-
-        // Write PID file.
-        if let Ok(mut f) = std::fs::File::create(pidfile) {
-            let _ = write!(f, "{}", libc::getpid());
-        }
-
-        // Redirect stdin/stdout/stderr to /dev/null.
-        let devnull = libc::open(b"/dev/null\0".as_ptr() as *const _, libc::O_RDWR);
-        if devnull >= 0 {
-            libc::dup2(devnull, 0);
-            libc::dup2(devnull, 1);
-            libc::dup2(devnull, 2);
-            libc::close(devnull);
+        Err(e) => {
+            eprintln!("Error: failed to start daemon: {e}");
+            std::process::exit(1);
         }
     }
-}
-
-#[cfg(not(unix))]
-fn daemonize(_pidfile: &str) {
-    eprintln!("Error: --daemon is only supported on Unix systems.");
-    std::process::exit(1);
 }
 
 /// Install a signal handler for SIGABRT that prints diagnostic info.
