@@ -752,8 +752,8 @@ async fn interactive_chat(
                 }
                 Ok(_) => {
                     let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                    if trimmed.ends_with('\\') {
-                        input.push_str(&trimmed[..trimmed.len() - 1]);
+                    if let Some(stripped) = trimmed.strip_suffix('\\') {
+                        input.push_str(stripped);
                         input.push('\n');
                         print!("... ");
                         let _ = std::io::stdout().flush();
