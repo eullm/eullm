@@ -16,8 +16,34 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Detect which components changed ──────────────────────────────────
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-22.04
+    permissions:
+      pull-requests: read
+    outputs:
+      engine: ${{ steps.filter.outputs.engine }}
+      hub: ${{ steps.filter.outputs.hub }}
+      forge: ${{ steps.filter.outputs.forge }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            engine:
+              - 'engine/**'
+            hub:
+              - 'hub/**'
+            forge:
+              - 'forge/**'
+
+  # ── Engine ───────────────────────────────────────────────────────────
   engine:
     name: Engine (build + test)
+    needs: changes
+    if: needs.changes.outputs.engine == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -34,8 +60,11 @@ jobs:
         working-directory: engine
         run: cargo clippy -- -D warnings -A dead-code -A unused-imports
 
+  # ── Hub ──────────────────────────────────────────────────────────────
   hub:
     name: Hub (build + test)
+    needs: changes
+    if: needs.changes.outputs.hub == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -47,8 +76,11 @@ jobs:
         working-directory: hub
         run: cargo test
 
+  # ── Forge ────────────────────────────────────────────────────────────
   forge:
     name: Forge (lint + test)
+    needs: changes
+    if: needs.changes.outputs.forge == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
