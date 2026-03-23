@@ -446,6 +446,7 @@ dependencies = [
  "crossbeam-channel",
  "encoding_rs",
  "futures-util",
+ "libc",
  "llama-cpp-2",
  "parking_lot",
  "predicates",
