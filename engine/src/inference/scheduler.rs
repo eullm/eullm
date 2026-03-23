@@ -58,7 +58,12 @@ struct ActiveSequence {
     tx: mpsc::Sender<StreamEvent>,
     sampler: LlamaSampler,
     decoder: encoding_rs::Decoder,
-    full_output: String,
+    /// Ring-style tail buffer: only keeps the last `max_stop_len` bytes
+    /// so stop-sequence checking stays O(1) instead of scanning the
+    /// ever-growing full output.
+    tail_buf: String,
+    /// Maximum length of any stop sequence (determines tail_buf capacity).
+    max_stop_len: usize,
     tokens_prompt: u32,
     tokens_generated: u32,
     max_tokens: u32,
@@ -86,7 +91,7 @@ impl SchedulerHandle {
     /// The caller should listen on the returned `mpsc::Receiver<StreamEvent>`
     /// for token events.
     pub fn submit(&self, request: GenerateRequest) -> mpsc::Receiver<StreamEvent> {
-        let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+        let (tx, rx) = mpsc::channel::<StreamEvent>(256);
 
         // Best-effort send — if the queue is full the request is rejected.
         if self.tx.try_send(ScheduledRequest { request, tx: tx.clone() }).is_err() {
@@ -273,6 +278,12 @@ fn run_scheduler_loop(
                         None => break, // No free slots — should not happen due to active.len() check
                     };
 
+                    let max_stop_len = scheduled.request.stop_sequences
+                        .iter()
+                        .map(|s| s.len())
+                        .max()
+                        .unwrap_or(0);
+
                     let seq = ActiveSequence {
                         seq_id,
                         tx: scheduled.tx,
@@ -282,7 +293,8 @@ fn run_scheduler_loop(
                             LlamaSampler::greedy(),
                         ]),
                         decoder: encoding_rs::UTF_8.new_decoder(),
-                        full_output: String::new(),
+                        tail_buf: String::with_capacity(max_stop_len + 64),
+                        max_stop_len,
                         tokens_prompt: 0,
                         tokens_generated: 0,
                         max_tokens: scheduled.request.max_tokens,
@@ -317,19 +329,19 @@ fn run_scheduler_loop(
 
                                 match model.token_to_piece(token, &mut seq.decoder, true, None) {
                                     Ok(piece) => {
-                                        seq.full_output.push_str(&piece);
+                                        tail_push(&mut seq.tail_buf, &piece, seq.max_stop_len);
 
                                         // Check stop sequences.
                                         let mut stopped = false;
                                         for s in &seq.stop_sequences {
-                                            if seq.full_output.ends_with(s) {
+                                            if seq.tail_buf.ends_with(s) {
                                                 let trimmed = if piece.len() >= s.len() {
                                                     &piece[..piece.len() - s.len()]
                                                 } else {
                                                     ""
                                                 };
                                                 if !trimmed.is_empty() {
-                                                    let _ = seq.tx.blocking_send(
+                                                    let _ = seq.tx.try_send(
                                                         StreamEvent::Token(trimmed.to_string()),
                                                     );
                                                 }
@@ -347,7 +359,7 @@ fn run_scheduler_loop(
                                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
                                                 free_seq_ids.push(seq.seq_id);
                                             } else {
-                                                let _ = seq.tx.blocking_send(StreamEvent::Token(piece));
+                                                let _ = seq.tx.try_send(StreamEvent::Token(piece));
                                                 seq.last_token = Some(token);
                                                 active.push(seq);
                                             }
@@ -364,7 +376,7 @@ fn run_scheduler_loop(
                             tracing::debug!("Sequence {seq_id} prefilled ({n_tokens} prompt tokens)");
                         }
                         Err(e) => {
-                            let _ = seq.tx.blocking_send(StreamEvent::Error(format!(
+                            let _ = seq.tx.try_send(StreamEvent::Error(format!(
                                 "Prefill failed: {e}"
                             )));
                             free_seq_ids.push(seq.seq_id);
@@ -376,7 +388,7 @@ fn run_scheduler_loop(
                     tracing::info!("Request channel closed — scheduler shutting down.");
                     // Finish active sequences gracefully.
                     for seq in &active {
-                        let _ = seq.tx.blocking_send(StreamEvent::Error(
+                        let _ = seq.tx.try_send(StreamEvent::Error(
                             "Server shutting down".into(),
                         ));
                     }
@@ -415,7 +427,7 @@ fn run_scheduler_loop(
                 tracing::error!("Batch decode failed: {e}");
                 // Send errors to all active sequences and clear.
                 for seq in active.drain(..) {
-                    let _ = seq.tx.blocking_send(StreamEvent::Error(format!(
+                    let _ = seq.tx.try_send(StreamEvent::Error(format!(
                         "Decode failed: {e}"
                     )));
                 }
@@ -451,19 +463,19 @@ fn run_scheduler_loop(
             // Decode token to text.
             match model.token_to_piece(token, &mut seq.decoder, true, None) {
                 Ok(piece) => {
-                    seq.full_output.push_str(&piece);
+                    tail_push(&mut seq.tail_buf, &piece, seq.max_stop_len);
 
                     // Check stop sequences.
                     let mut stopped = false;
                     for s in &seq.stop_sequences {
-                        if seq.full_output.ends_with(s) {
+                        if seq.tail_buf.ends_with(s) {
                             let trimmed = if piece.len() >= s.len() {
                                 &piece[..piece.len() - s.len()]
                             } else {
                                 ""
                             };
                             if !trimmed.is_empty()
-                                && seq.tx.blocking_send(StreamEvent::Token(trimmed.to_string())).is_err()
+                                && seq.tx.try_send(StreamEvent::Token(trimmed.to_string())).is_err()
                             {
                                 to_remove.push(i);
                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
@@ -483,7 +495,7 @@ fn run_scheduler_loop(
                     }
 
                     // Send the token piece.
-                    if seq.tx.blocking_send(StreamEvent::Token(piece)).is_err() {
+                    if seq.tx.try_send(StreamEvent::Token(piece)).is_err() {
                         // Receiver dropped — client disconnected.
                         to_remove.push(i);
                         let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
@@ -587,10 +599,28 @@ fn prefill_sequence(
     Ok((n_tokens, tokens.len() as i32, effective_max_tokens))
 }
 
+/// Append `piece` to the tail buffer, keeping only the last `max_stop_len`
+/// bytes so stop-sequence checks stay O(1).
+fn tail_push(tail_buf: &mut String, piece: &str, max_stop_len: usize) {
+    if max_stop_len == 0 {
+        return;
+    }
+    tail_buf.push_str(piece);
+    if tail_buf.len() > max_stop_len * 2 {
+        // Trim from the left, keeping at least max_stop_len bytes.
+        let mut keep_from = tail_buf.len() - max_stop_len;
+        // Advance to the nearest char boundary (stable alternative to ceil_char_boundary).
+        while keep_from < tail_buf.len() && !tail_buf.is_char_boundary(keep_from) {
+            keep_from += 1;
+        }
+        tail_buf.drain(..keep_from);
+    }
+}
+
 /// Send a `StreamEvent::Done` to the sequence's channel.
 fn send_done(seq: &ActiveSequence) {
     let duration_ms = seq.start.elapsed().as_millis() as u64;
-    let _ = seq.tx.blocking_send(StreamEvent::Done {
+    let _ = seq.tx.try_send(StreamEvent::Done {
         tokens_generated: seq.tokens_generated,
         tokens_prompt: seq.tokens_prompt,
         duration_ms,
