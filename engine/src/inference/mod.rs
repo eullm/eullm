@@ -23,6 +23,20 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+/// Build context params with flash attention and n_batch applied.
+pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
+    let mut params = LlamaContextParams::default()
+        .with_n_ctx(Some(ctx_size))
+        .with_n_batch(config.n_batch)
+        .with_n_threads(config.threads as i32)
+        .with_n_threads_batch(config.threads as i32);
+    if config.flash_attn {
+        // LLAMA_FLASH_ATTN_TYPE_ENABLED = 1
+        params = params.with_flash_attention_policy(1);
+    }
+    params
+}
+
 pub use scheduler::{BatchScheduler, SchedulerConfig, SchedulerHandle};
 
 /// Configuration for the inference engine.
@@ -36,6 +50,10 @@ pub struct InferenceConfig {
     pub context_size: u32,
     /// Number of threads for CPU inference.
     pub threads: u32,
+    /// Enable flash attention (reduces memory bandwidth, faster decode).
+    pub flash_attn: bool,
+    /// Prompt processing batch size (how many tokens per eval during prefill).
+    pub n_batch: u32,
 }
 
 impl Default for InferenceConfig {
@@ -45,6 +63,8 @@ impl Default for InferenceConfig {
             gpu_layers: -1,
             context_size: 4096,
             threads: num_cpus(),
+            flash_attn: true,
+            n_batch: 2048,
         }
     }
 }
@@ -159,10 +179,7 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(ctx_size))
-            .with_n_threads(self.config.threads as i32)
-            .with_n_threads_batch(self.config.threads as i32);
+        let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = self
             .model
@@ -189,18 +206,20 @@ impl InferenceEngine {
         }
 
         // Build initial batch with prompt tokens
-        let mut batch = LlamaBatch::new(self.config.context_size as usize, 1);
-        let last_idx = (tokens.len() - 1) as i32;
-        for (i, token) in (0_i32..).zip(tokens.into_iter()) {
-            let is_last = i == last_idx;
-            batch.add(token, i, &[0], is_last)?;
+        {
+            let mut prefill_batch = LlamaBatch::new(tokens.len().max(1), 1);
+            let last_idx = (tokens.len() - 1) as i32;
+            for (i, token) in (0_i32..).zip(tokens.into_iter()) {
+                let is_last = i == last_idx;
+                prefill_batch.add(token, i, &[0], is_last)?;
+            }
+
+            // Decode prompt
+            ctx.decode(&mut prefill_batch)
+                .map_err(|e| format!("Prompt decode failed: {e}"))?;
         }
 
-        // Decode prompt
-        ctx.decode(&mut batch)
-            .map_err(|e| format!("Prompt decode failed: {e}"))?;
-
-        // Sample tokens
+        // Sample tokens — use a small batch (capacity 1) for the decode loop.
         let mut sampler = LlamaSampler::chain_simple([
             LlamaSampler::temp(request.temperature),
             LlamaSampler::dist(1234),
@@ -209,8 +228,9 @@ impl InferenceEngine {
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
-        let mut n_cur = batch.n_tokens();
+        let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
+        let mut batch = LlamaBatch::new(1, 1);
 
         while n_cur <= n_len && tokens_generated < request.max_tokens {
             // Sample from the last output (-1). After prompt decode there is
@@ -249,7 +269,7 @@ impl InferenceEngine {
                 Err(_) => break,
             }
 
-            // Prepare next batch
+            // Prepare next batch — reuse the pre-allocated small batch.
             batch.clear();
             batch.add(token, n_cur, &[0], true)?;
 
@@ -285,10 +305,7 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(ctx_size))
-            .with_n_threads(self.config.threads as i32)
-            .with_n_threads_batch(self.config.threads as i32);
+        let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
@@ -318,18 +335,20 @@ impl InferenceEngine {
             return;
         }
 
-        let mut batch = LlamaBatch::new(self.config.context_size as usize, 1);
-        let last_idx = (tokens.len() - 1) as i32;
-        for (i, token) in (0_i32..).zip(tokens.into_iter()) {
-            if batch.add(token, i, &[0], i == last_idx).is_err() {
-                let _ = tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
+        {
+            let mut prefill_batch = LlamaBatch::new(tokens.len().max(1), 1);
+            let last_idx = (tokens.len() - 1) as i32;
+            for (i, token) in (0_i32..).zip(tokens.into_iter()) {
+                if prefill_batch.add(token, i, &[0], i == last_idx).is_err() {
+                    let _ = tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
+                    return;
+                }
+            }
+
+            if ctx.decode(&mut prefill_batch).is_err() {
+                let _ = tx.blocking_send(StreamEvent::Error("Prompt decode failed".into()));
                 return;
             }
-        }
-
-        if ctx.decode(&mut batch).is_err() {
-            let _ = tx.blocking_send(StreamEvent::Error("Prompt decode failed".into()));
-            return;
         }
 
         let mut sampler = LlamaSampler::chain_simple([
@@ -340,8 +359,9 @@ impl InferenceEngine {
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut full_output = String::new();
-        let mut n_cur = batch.n_tokens();
+        let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
+        let mut batch = LlamaBatch::new(1, 1);
 
         while n_cur <= n_len && tokens_generated < request.max_tokens {
             let token = sampler.sample(&ctx, -1);
