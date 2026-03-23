@@ -98,7 +98,6 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          CMAKE_CUDA_ARCHITECTURES: "80;86;89;90"
 
       - name: Package binary
         run: |
@@ -155,7 +154,7 @@ jobs:
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64 -o eullm
             chmod +x eullm
 
-            # Linux x64 with NVIDIA GPU (CUDA 12.8 — supports A100, RTX 3000/4000, H100)
+            # Linux x64 with NVIDIA GPU (CUDA 12.8 — supports RTX 3000/4000/5000 series)
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-12.8 -o eullm
             chmod +x eullm
 
