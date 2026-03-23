@@ -93,6 +93,29 @@ The scheduler runs a dedicated decode loop on an OS thread. Each iteration calls
 
 ## Reproduce these benchmarks
 
+### Stress test with parallelism verification (recommended)
+
+The [`bench/stress_test.py`](../bench/stress_test.py) script uses streaming to track individual token timestamps, proving whether requests are truly processed in parallel or just queued. See [`bench/README.md`](../bench/README.md) for full details.
+
+```bash
+pip install aiohttp
+
+# Test EULLM (streaming, with parallelism analysis)
+python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q8_0 \
+    --concurrency 1,2,4,8,16 --tokens 150 --warmup --json results_eullm.json
+
+# Test Ollama
+python bench/stress_test.py --url http://localhost:11435 --model qwen3.5:9b \
+    --concurrency 1,2,4,8,16 --tokens 150 --warmup --json results_ollama.json
+
+# Or compare both at once
+./bench/compare.sh Qwen3.5-9B-Q8_0 qwen3.5:9b --concurrency 1,2,4,8,16 --tokens 150
+```
+
+### Quick throughput benchmark
+
+The [`bench.sh`](../bench.sh) script fires N concurrent non-streaming requests and measures wall time. Simpler but does not verify parallelism.
+
 ```bash
 # Build EULLM Engine with CUDA
 cargo build --release --features cuda
