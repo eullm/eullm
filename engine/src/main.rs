@@ -64,6 +64,14 @@ enum Commands {
         /// Prompt processing batch size (tokens per eval during prefill)
         #[arg(long, default_value_t = 2048)]
         n_batch: u32,
+
+        /// Run as a background daemon (writes PID to --pidfile)
+        #[arg(long)]
+        daemon: bool,
+
+        /// PID file path (used with --daemon)
+        #[arg(long, default_value = "/tmp/eullm.pid")]
+        pidfile: String,
     },
     /// List locally available models
     List,
@@ -85,6 +93,14 @@ enum Commands {
         /// Enable continuous batching with N max concurrent requests (0 = sequential)
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
+
+        /// Run as a background daemon (writes PID to --pidfile)
+        #[arg(long)]
+        daemon: bool,
+
+        /// PID file path (used with --daemon)
+        #[arg(long, default_value = "/tmp/eullm.pid")]
+        pidfile: String,
     },
     /// Verticalize a model: compress, specialize, and brand it
     ///
@@ -173,10 +189,22 @@ async fn main() {
             batch_size,
             no_flash_attn,
             n_batch,
-        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await,
+            daemon,
+            pidfile,
+        } => {
+            if daemon {
+                daemonize(&pidfile);
+            }
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await;
+        }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
-        Commands::Serve { port, replace, batch_size: _ } => cmd_serve(port, replace).await,
+        Commands::Serve { port, replace, batch_size: _, daemon, pidfile } => {
+            if daemon {
+                daemonize(&pidfile);
+            }
+            cmd_serve(port, replace).await;
+        }
         Commands::Forge {
             source,
             profile,
@@ -594,8 +622,10 @@ async fn cmd_run(
             interactive_chat(sched, &model_name, ctx_size).await;
         }
     } else {
-        // No REPL — just wait forever (API server runs in background task).
-        std::future::pending::<()>().await;
+        // No REPL — wait for shutdown signal.
+        // The API server handles graceful shutdown internally via SIGTERM/SIGINT.
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("Shutting down...");
     }
 }
 
@@ -886,6 +916,54 @@ async fn interactive_chat(
             });
         }
     }
+}
+
+/// Fork the process into the background and write a PID file.
+///
+/// After daemonizing, stdout/stderr are redirected to /dev/null.
+/// Use `RUST_LOG` + a file-based tracing subscriber for logging in daemon mode.
+#[cfg(unix)]
+fn daemonize(pidfile: &str) {
+    use std::io::Write;
+
+    unsafe {
+        // First fork — parent exits, child continues.
+        let pid = libc::fork();
+        if pid < 0 {
+            eprintln!("Error: fork() failed");
+            std::process::exit(1);
+        }
+        if pid > 0 {
+            // Parent — print PID and exit.
+            println!("eullm daemon started (PID {pid}).");
+            println!("  PID file: {pidfile}");
+            println!("  Stop with: kill {pid}");
+            std::process::exit(0);
+        }
+
+        // Child — create new session.
+        libc::setsid();
+
+        // Write PID file.
+        if let Ok(mut f) = std::fs::File::create(pidfile) {
+            let _ = write!(f, "{}", libc::getpid());
+        }
+
+        // Redirect stdin/stdout/stderr to /dev/null.
+        let devnull = libc::open(b"/dev/null\0".as_ptr() as *const _, libc::O_RDWR);
+        if devnull >= 0 {
+            libc::dup2(devnull, 0);
+            libc::dup2(devnull, 1);
+            libc::dup2(devnull, 2);
+            libc::close(devnull);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn daemonize(_pidfile: &str) {
+    eprintln!("Error: --daemon is only supported on Unix systems.");
+    std::process::exit(1);
 }
 
 /// Install a signal handler for SIGABRT that prints diagnostic info.
