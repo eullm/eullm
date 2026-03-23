@@ -269,7 +269,63 @@ fn run_scheduler_loop(
                             seq.tokens_prompt = n_tokens;
                             seq.n_past = n_past;
                             seq.prefilled = true;
-                            active.push(seq);
+
+                            // Sample the first generated token directly from prefill logits.
+                            // The last prompt token (at batch index n_tokens-1) has logits;
+                            // we must sample now before any subsequent decode overwrites them.
+                            let logit_idx = (n_tokens as i32) - 1;
+                            let token = seq.sampler.sample(&ctx, logit_idx);
+                            seq.sampler.accept(token);
+
+                            if model.is_eog_token(token) {
+                                send_done(&seq);
+                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                            } else {
+                                seq.tokens_generated += 1;
+
+                                match model.token_to_piece(token, &mut seq.decoder, true, None) {
+                                    Ok(piece) => {
+                                        seq.full_output.push_str(&piece);
+
+                                        // Check stop sequences.
+                                        let mut stopped = false;
+                                        for s in &seq.stop_sequences {
+                                            if seq.full_output.ends_with(s) {
+                                                let trimmed = if piece.len() >= s.len() {
+                                                    &piece[..piece.len() - s.len()]
+                                                } else {
+                                                    ""
+                                                };
+                                                if !trimmed.is_empty() {
+                                                    let _ = seq.tx.blocking_send(
+                                                        StreamEvent::Token(trimmed.to_string()),
+                                                    );
+                                                }
+                                                send_done(&seq);
+                                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                                stopped = true;
+                                                break;
+                                            }
+                                        }
+
+                                        if !stopped {
+                                            if seq.tokens_generated >= seq.max_tokens {
+                                                send_done(&seq);
+                                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                            } else {
+                                                let _ = seq.tx.blocking_send(StreamEvent::Token(piece));
+                                                seq.last_token = Some(token);
+                                                active.push(seq);
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        send_done(&seq);
+                                        let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                    }
+                                }
+                            }
+
                             tracing::debug!("Sequence {seq_id} prefilled ({n_tokens} prompt tokens)");
                         }
                         Err(e) => {
