@@ -23,6 +23,20 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+/// Build context params with flash attention and n_batch applied.
+pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
+    let mut params = LlamaContextParams::default()
+        .with_n_ctx(Some(ctx_size))
+        .with_n_batch(config.n_batch)
+        .with_n_threads(config.threads as i32)
+        .with_n_threads_batch(config.threads as i32);
+    if config.flash_attn {
+        // LLAMA_FLASH_ATTN_TYPE_ENABLED = 1
+        params = params.with_flash_attention_policy(1);
+    }
+    params
+}
+
 pub use scheduler::{BatchScheduler, SchedulerConfig, SchedulerHandle};
 
 /// Configuration for the inference engine.
@@ -36,6 +50,10 @@ pub struct InferenceConfig {
     pub context_size: u32,
     /// Number of threads for CPU inference.
     pub threads: u32,
+    /// Enable flash attention (reduces memory bandwidth, faster decode).
+    pub flash_attn: bool,
+    /// Prompt processing batch size (how many tokens per eval during prefill).
+    pub n_batch: u32,
 }
 
 impl Default for InferenceConfig {
@@ -45,6 +63,8 @@ impl Default for InferenceConfig {
             gpu_layers: -1,
             context_size: 4096,
             threads: num_cpus(),
+            flash_attn: true,
+            n_batch: 2048,
         }
     }
 }
@@ -159,10 +179,7 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(ctx_size))
-            .with_n_threads(self.config.threads as i32)
-            .with_n_threads_batch(self.config.threads as i32);
+        let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = self
             .model
@@ -285,10 +302,7 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
-        let ctx_params = LlamaContextParams::default()
-            .with_n_ctx(Some(ctx_size))
-            .with_n_threads(self.config.threads as i32)
-            .with_n_threads_batch(self.config.threads as i32);
+        let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,

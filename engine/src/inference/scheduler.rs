@@ -17,7 +17,6 @@ use std::num::NonZeroU32;
 use std::pin::pin;
 use std::sync::Arc;
 
-use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -207,11 +206,8 @@ fn run_scheduler_loop(
     let total_ctx = config.context_size * sched_config.max_batch_size as u32;
     let ctx_size = NonZeroU32::new(total_ctx).unwrap_or(NonZeroU32::new(4096).unwrap());
 
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(ctx_size))
-        .with_n_seq_max(sched_config.max_batch_size as u32)
-        .with_n_threads(config.threads as i32)
-        .with_n_threads_batch(config.threads as i32);
+    let ctx_params = super::build_ctx_params(&config, ctx_size)
+        .with_n_seq_max(sched_config.max_batch_size as u32);
 
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
