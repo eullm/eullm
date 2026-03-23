@@ -123,6 +123,9 @@ impl BatchScheduler {
     /// This spawns a dedicated OS thread that runs the decode loop. The thread
     /// lives until the returned `SchedulerHandle` (and all its clones) are
     /// dropped.
+    ///
+    /// Blocks until the model is fully loaded so that callers can rely on the
+    /// handle being ready for inference when this method returns.
     pub fn start(self) -> Result<SchedulerHandle, Box<dyn std::error::Error + Send + Sync>> {
         // Validate model exists before spawning the thread.
         if !self.config.model_path.exists() {
@@ -141,16 +144,26 @@ impl BatchScheduler {
         let notify_clone = Arc::clone(&notify);
         let notify_mutex_clone = Arc::clone(&notify_mutex);
 
+        // Channel for the scheduler thread to signal model load completion.
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
 
         std::thread::Builder::new()
             .name("eullm-scheduler".into())
             .spawn(move || {
-                if let Err(e) = run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone) {
+                if let Err(e) = run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx) {
                     tracing::error!("Scheduler thread exited with error: {e}");
                 }
             })?;
+
+        // Wait for the model to finish loading before returning.
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e.into()),
+            Err(_) => return Err("Scheduler thread exited before model was loaded".into()),
+        }
 
         Ok(SchedulerHandle {
             tx: req_tx,
@@ -168,6 +181,7 @@ fn run_scheduler_loop(
     req_rx: crossbeam_channel::Receiver<ScheduledRequest>,
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
+    ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let backend = LlamaBackend::init()?;
@@ -180,9 +194,14 @@ fn run_scheduler_loop(
     let model_params = pin!(model_params);
 
     tracing::info!("Loading model: {}", config.model_path.display());
-    let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)
-        .map_err(|e| format!("Failed to load model: {e}"))?;
-    tracing::info!("Model loaded (scheduler ready).");
+    let model = match LlamaModel::load_from_file(&backend, &config.model_path, &model_params) {
+        Ok(m) => m,
+        Err(e) => {
+            let msg = format!("Failed to load model: {e}");
+            let _ = ready_tx.send(Err(msg.clone()));
+            return Err(msg.into());
+        }
+    };
 
     // Create a single shared context with enough room for all sequences.
     let total_ctx = config.context_size * sched_config.max_batch_size as u32;
@@ -193,9 +212,14 @@ fn run_scheduler_loop(
         .with_n_threads(config.threads as i32)
         .with_n_threads_batch(config.threads as i32);
 
-    let mut ctx = model
-        .new_context(&backend, ctx_params)
-        .map_err(|e| format!("Failed to create context: {e}"))?;
+    let mut ctx = match model.new_context(&backend, ctx_params) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("Failed to create context: {e}");
+            let _ = ready_tx.send(Err(msg.clone()));
+            return Err(msg.into());
+        }
+    };
 
     let mut active: Vec<ActiveSequence> = Vec::with_capacity(sched_config.max_batch_size);
     let mut next_seq_id: i32 = 0;
@@ -206,6 +230,9 @@ fn run_scheduler_loop(
         sched_config.queue_capacity,
         total_ctx,
     );
+
+    // Signal that the model is loaded and ready.
+    let _ = ready_tx.send(Ok(()));
 
     loop {
         // ── 1. Drain new requests from the queue ────────────────────────
