@@ -885,6 +885,7 @@ async fn interactive_chat(
             max_tokens,
             temperature: 0.7,
             stop_sequences: vec!["<|im_end|>".into()],
+            num_ctx: None,
         };
 
         // Submit to scheduler and stream tokens.
