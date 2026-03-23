@@ -222,6 +222,9 @@ fn run_scheduler_loop(
     // Pool of reusable seq_ids in range [0, max_batch_size).
     // llama.cpp requires seq_id < n_seq_max, so we recycle them.
     let mut free_seq_ids: Vec<i32> = (0..sched_config.max_batch_size as i32).rev().collect();
+    // Pre-allocate the decode batch once — reused every iteration to avoid
+    // repeated malloc/free in the hot decode loop.
+    let mut decode_batch = LlamaBatch::new(sched_config.max_batch_size.max(1), 1);
 
     tracing::info!(
         "Scheduler running — max_batch_size={}, queue_capacity={}, context={}",
@@ -363,19 +366,19 @@ fn run_scheduler_loop(
         }
 
         // ── 3. Build batch with one token per active sequence ───────────
-        let mut batch = LlamaBatch::new(active.len().max(1), 1);
+        decode_batch.clear();
 
         for seq in active.iter() {
             if let Some(token) = seq.last_token {
-                if batch.add(token, seq.n_past, &[seq.seq_id], true).is_err() {
+                if decode_batch.add(token, seq.n_past, &[seq.seq_id], true).is_err() {
                     tracing::warn!("Failed to add token to batch for seq {}", seq.seq_id);
                 }
             }
         }
 
         // ── 4. Decode the batch ─────────────────────────────────────────
-        if batch.n_tokens() > 0 {
-            if let Err(e) = ctx.decode(&mut batch) {
+        if decode_batch.n_tokens() > 0 {
+            if let Err(e) = ctx.decode(&mut decode_batch) {
                 tracing::error!("Batch decode failed: {e}");
                 // Send errors to all active sequences and clear.
                 for seq in active.drain(..) {
