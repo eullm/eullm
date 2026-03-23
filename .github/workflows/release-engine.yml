@@ -69,9 +69,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - cuda: "12.8.1"
-            artifact: eullm-linux-x64-cuda-12.8
-            cuda_tag: "12.8.1-devel-ubuntu22.04"
+          - cuda: "13.2.0"
+            artifact: eullm-linux-x64-cuda-13.2
+            cuda_tag: "13.2.0-devel-ubuntu22.04"
 
     runs-on: ubuntu-22.04
     container:
@@ -98,7 +98,7 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          CMAKE_CUDA_ARCHITECTURES: "80;86;89;90"
+          CMAKE_CUDA_ARCHITECTURES: "80;86;89;90;100;120"
 
       - name: Package binary
         run: |
@@ -138,7 +138,7 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/eullm-linux-x64/eullm-linux-x64
-            artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
+            artifacts/eullm-linux-x64-cuda-13.2/eullm-linux-x64-cuda-13.2
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
@@ -155,8 +155,8 @@ jobs:
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64 -o eullm
             chmod +x eullm
 
-            # Linux x64 with NVIDIA GPU (CUDA 12.8 — supports A100, RTX 3000/4000, H100)
-            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-12.8 -o eullm
+            # Linux x64 with NVIDIA GPU (CUDA 13.2 — supports A100, RTX 3000/4000/5000, H100, B100/B200)
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-13.2 -o eullm
             chmod +x eullm
 
             # macOS Apple Silicon
@@ -169,7 +169,7 @@ jobs:
             | Binary | GPU Support | Requirements |
             |--------|-------------|--------------|
             | `eullm-linux-x64` | CPU only | None |
-            | `eullm-linux-x64-cuda-12.8` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
+            | `eullm-linux-x64-cuda-13.2` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
             | `eullm-linux-arm64` | CPU only | ARM64 Linux |
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |

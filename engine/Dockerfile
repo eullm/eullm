@@ -21,7 +21,8 @@ COPY src/ src/
 
 # Limit CUDA architectures to reduce binary size (~940MB → ~200MB)
 # sm_80=A100, sm_86=RTX3000, sm_89=RTX4000, sm_90=H100
-ENV CMAKE_CUDA_ARCHITECTURES="80;86;89;90"
+# sm_100=Blackwell datacenter (B100/B200), sm_120=Blackwell consumer (RTX5000)
+ENV CMAKE_CUDA_ARCHITECTURES="80;86;89;90;100;120"
 
 # Build with optional GPU features
 RUN if [ -z "$FEATURES" ]; then \
