@@ -43,7 +43,7 @@ EOJSON
 )
 
     local response
-    response=$(curl -s --max-time 180 "$ENDPOINT" -d "$payload" 2>&1)
+    response=$(curl -s --max-time 180 -H "Content-Type: application/json" "$ENDPOINT" -d "$payload" 2>&1)
 
     end=$(date +%s%N)
     elapsed=$(( (end - start) / 1000000 ))
