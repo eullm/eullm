@@ -276,10 +276,9 @@ fn run_scheduler_loop(
                             seq.prefilled = true;
 
                             // Sample the first generated token directly from prefill logits.
-                            // The last prompt token (at batch index n_tokens-1) has logits;
-                            // we must sample now before any subsequent decode overwrites them.
-                            let logit_idx = (n_tokens as i32) - 1;
-                            let token = seq.sampler.sample(&ctx, logit_idx);
+                            // Use output index -1 (= last output). Only the final prompt
+                            // token had logits enabled, so there is exactly one output entry.
+                            let token = seq.sampler.sample(&ctx, -1);
                             seq.sampler.accept(token);
 
                             if model.is_eog_token(token) {

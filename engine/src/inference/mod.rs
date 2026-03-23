@@ -213,7 +213,10 @@ impl InferenceEngine {
         let mut tokens_generated: u32 = 0;
 
         while n_cur <= n_len && tokens_generated < request.max_tokens {
-            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+            // Sample from the last output (-1). After prompt decode there is
+            // exactly one output (the final prompt token with logits=true);
+            // after single-token decode steps there is also exactly one output.
+            let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
 
             // End of generation?
@@ -341,7 +344,7 @@ impl InferenceEngine {
         let mut tokens_generated: u32 = 0;
 
         while n_cur <= n_len && tokens_generated < request.max_tokens {
-            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
+            let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
 
             if self.model.is_eog_token(token) {
