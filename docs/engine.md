@@ -187,10 +187,13 @@ curl -X POST http://localhost:11434/api/generate \
   "created_at": "2026-03-21T10:00:00Z",
   "response": "L'articolo 2043 del Codice Civile...",
   "done": true,
+  "done_reason": "stop",
   "total_duration": 1500000000,
+  "load_duration": 0,
+  "prompt_eval_count": 15,
+  "prompt_eval_duration": 0,
   "eval_count": 128,
-  "eval_duration": 1200000000,
-  "prompt_eval_count": 15
+  "eval_duration": 1200000000
 }
 ```
 
@@ -202,19 +205,21 @@ curl -X POST http://localhost:11434/api/generate \
 | `prompt` | (required) | Input prompt |
 | `max_tokens` | 512 | Maximum tokens to generate |
 | `temperature` | 0.7 | Sampling temperature |
-| `stream` | false | Stream response token-by-token (SSE) |
+| `stream` | true | Stream response token-by-token (NDJSON) |
 
-**Streaming:** Set `"stream": true` to receive Server-Sent Events. Each SSE event contains a JSON object with `"response"` (the token piece) and `"done": false`. The final event has `"done": true` with timing stats.
+**Streaming:** When `"stream": true` (the default), the response is sent as **NDJSON** (newline-delimited JSON). Each line is a complete JSON object with `"response"` (the token) and `"done": false`. The final line has `"done": true` with timing stats. Content-Type is `application/x-ndjson`.
 
 ```bash
-# Streaming example
+# Streaming example (NDJSON — same format as Ollama)
 curl -N http://localhost:11434/api/generate \
   -d '{"model": "local", "prompt": "Hello", "stream": true}'
+# Each line: {"model":"...","response":"token","done":false}
+# Final line: {"model":"...","response":"","done":true,"done_reason":"stop",...}
 ```
 
 #### `POST /api/chat`
 
-Chat completion with message history. Messages are formatted as ChatML internally. Supports `"stream": true` for token-by-token SSE responses.
+Chat completion with message history. Messages are formatted as ChatML internally. Supports `"stream": true` for token-by-token NDJSON streaming (same format as Ollama).
 
 ```bash
 curl -X POST http://localhost:11434/api/chat \
@@ -422,6 +427,6 @@ curl http://localhost:11434/v1/chat/completions \
 | Local model store (~/.eullm/models/) | Implemented |
 | Model download (HuggingFace, streaming with progress) | Implemented |
 | Audit trail (persistent JSONL) | Implemented |
-| SSE streaming (all endpoints) | Implemented (Ollama + OpenAI format) |
+| Streaming (NDJSON for Ollama, SSE for OpenAI) | Implemented |
 | ChatML prompt formatting | Implemented |
 | EU registry download | Implemented (client ready, registry server coming soon) |

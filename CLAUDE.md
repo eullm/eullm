@@ -109,7 +109,7 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 - **Rust for Engine/Hub:** single binary, performance, cross-compilation
 - **Python for Forge:** PyTorch ecosystem, Colab compatibility
 - **Not a fork of Ollama:** API compatibility, not code compatibility. Clean Rust implementation with native audit trail
-- **SSE streaming via mpsc channels:** inference engine sends tokens through `tokio::sync::mpsc`, routes convert to SSE events. Three formats: Ollama generate, Ollama chat, OpenAI chat.completion.chunk
+- **Streaming via mpsc channels:** inference engine sends tokens through `tokio::sync::mpsc`. Ollama endpoints (`/api/generate`, `/api/chat`) use **NDJSON** (newline-delimited JSON, `application/x-ndjson`) — one JSON object per line, no `data:` prefix. OpenAI endpoint (`/v1/chat/completions`) uses **SSE** (Server-Sent Events, `data:` prefix). This matches exactly what Ollama does, so any Ollama client works without modification.
 - **Compression strategy:** pruning (MLP-focused) → distillation → quantization → identity LoRA fine-tuning (validated by NVIDIA Minitron research)
 - **Iterative pruning for >50% compression:** compress 30%, distill, compress again (NVIDIA recommendation)
 - **Continuous batching scheduler:** dedicated OS thread runs a decode loop that processes multiple requests in parallel (up to `max_batch_size`). Prefill + decode in a single `LlamaBatch`, per-sequence KV cache management, near-linear throughput scaling. This is a key differentiator over basic mutex-guarded inference.
