@@ -152,8 +152,27 @@ impl BatchScheduler {
         std::thread::Builder::new()
             .name("eullm-scheduler".into())
             .spawn(move || {
-                if let Err(e) = run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx) {
-                    tracing::error!("Scheduler thread exited with error: {e}");
+                // Catch panics from Rust code. This won't catch C-level abort()
+                // from llama.cpp (see SIGABRT handler in main.rs for that).
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx)
+                })) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::error!("Scheduler thread exited with error: {e}");
+                    }
+                    Err(panic_info) => {
+                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        tracing::error!("Scheduler thread panicked: {msg}");
+                        eprintln!("\n[EULLM] FATAL: Scheduler thread panicked: {msg}");
+                        eprintln!("[EULLM] The inference engine has stopped. Restart eullm to continue.");
+                    }
                 }
             })?;
 
@@ -204,6 +223,14 @@ fn run_scheduler_loop(
 
     // Create a single shared context with enough room for all sequences.
     let total_ctx = config.context_size * sched_config.max_batch_size as u32;
+    tracing::info!(
+        "Allocating context: {} tokens per sequence × {} sequences = {} total (flash_attn={}, n_batch={})",
+        config.context_size,
+        sched_config.max_batch_size,
+        total_ctx,
+        config.flash_attn,
+        config.n_batch,
+    );
     let ctx_size = NonZeroU32::new(total_ctx).unwrap_or(NonZeroU32::new(4096).unwrap());
 
     let ctx_params = super::build_ctx_params(&config, ctx_size)
@@ -378,6 +405,11 @@ fn run_scheduler_loop(
 
         // ── 4. Decode the batch ─────────────────────────────────────────
         if decode_batch.n_tokens() > 0 {
+            tracing::debug!(
+                "Decoding batch: {} tokens, {} active sequences",
+                decode_batch.n_tokens(),
+                active.len(),
+            );
             if let Err(e) = ctx.decode(&mut decode_batch) {
                 tracing::error!("Batch decode failed: {e}");
                 // Send errors to all active sequences and clear.
@@ -522,6 +554,12 @@ fn prefill_sequence(
             .map_err(|e| format!("Failed to add prompt token: {e}"))?;
     }
 
+    tracing::debug!(
+        "Prefilling seq {} with {} tokens (context_size={})",
+        seq.seq_id,
+        tokens.len(),
+        config.context_size,
+    );
     ctx.decode(&mut batch)
         .map_err(|e| format!("Prompt decode failed: {e}"))?;
 
