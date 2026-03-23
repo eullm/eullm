@@ -10,6 +10,7 @@
   <a href="docs/getting-started.md">Getting Started</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#components">Components</a> ·
+  <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
   <a href="#demo-models">Demo Models</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#contributing">Contributing</a>
@@ -239,6 +240,31 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 
 EULLM is the sovereign AI stack that Europe is missing — engine, tools, and models in one platform.
 
+## Benchmarks — Continuous batching in action
+
+EULLM Engine's continuous batching scheduler decodes all active requests in a single GPU pass. Ollama processes them one at a time. Here's the difference on a consumer GPU:
+
+<p align="center">
+  <img src="docs/assets/bench-throughput.svg" alt="Throughput: EULLM Engine vs Ollama" width="680" />
+</p>
+
+| Concurrent requests | EULLM Engine | Ollama | Speedup |
+|:---:|:---:|:---:|:---:|
+| 1 | 94 tok/s | 93 tok/s | 1.0× |
+| 2 | 143 tok/s | 97 tok/s | **1.5×** |
+| 4 | 183 tok/s | 100 tok/s | **1.8×** |
+| 8 | 206 tok/s | 101 tok/s | **2.0×** |
+| 16 | 259 tok/s | 102 tok/s | **2.5×** |
+
+<p align="center">
+  <img src="docs/assets/bench-latency.svg" alt="Latency: EULLM Engine vs Ollama" width="680" />
+</p>
+
+With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23.6s** on Ollama. Throughput scales from 94 to 259 tok/s while Ollama stays flat at ~100 tok/s.
+
+> **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request.
+> Reproduce with `./bench.sh`. Full results in [docs/benchmarks.md](docs/benchmarks.md).
+
 ## Demo models
 
 Our first three demo models showcase the verticalizzazione pipeline:
@@ -380,6 +406,7 @@ Detailed documentation is available in the [`docs/`](docs/) directory:
 - **[Engine](docs/engine.md)** — CLI commands, API reference (EULLM + OpenAI-compatible), audit trail
 - **[Forge](docs/forge.md)** — pipeline stages, CLI reference, profiles, demo notebook guide
 - **[Hub](docs/hub.md)** — Hub API reference, model cards, AI Act compliance cards
+- **[Benchmarks](docs/benchmarks.md)** — EULLM vs Ollama throughput and latency results
 
 ### Development setup
 
