@@ -66,7 +66,7 @@ fn require_engine(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
     Ok(())
 }
 
-fn parse_generate_params(body: &Value) -> (u32, f32) {
+fn parse_generate_params(body: &Value) -> (u32, f32, Option<u32>) {
     // Check top-level first (OpenAI format), then Ollama's options object.
     let options = body.get("options");
     let max_tokens = body
@@ -80,7 +80,13 @@ fn parse_generate_params(body: &Value) -> (u32, f32) {
         .or_else(|| options.and_then(|o| o.get("temperature")))
         .and_then(|v| v.as_f64())
         .unwrap_or(0.7) as f32;
-    (max_tokens, temperature)
+    // Ollama num_ctx: per-request context window budget.
+    let num_ctx = body
+        .get("num_ctx")
+        .or_else(|| options.and_then(|o| o.get("num_ctx")))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    (max_tokens, temperature, num_ctx)
 }
 
 fn is_streaming(body: &Value) -> bool {
@@ -190,12 +196,13 @@ async fn generate(
         .unwrap_or("")
         .to_string();
 
-    let (max_tokens, temperature) = parse_generate_params(&body);
+    let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
 
     let request = GenerateRequest {
         prompt,
         max_tokens,
         temperature,
+        num_ctx,
         ..Default::default()
     };
 
@@ -293,7 +300,7 @@ async fn chat(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let prompt = format_chat_prompt(&messages, think);
-    let (max_tokens, temperature) = parse_generate_params(&body);
+    let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
 
     let request = GenerateRequest {
         prompt,
@@ -303,6 +310,7 @@ async fn chat(
             "<|im_end|>".to_string(),
             "<|end|>".to_string(),
         ],
+        num_ctx,
     };
 
     if has_scheduler(&state) {
@@ -459,7 +467,7 @@ async fn chat_completions(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let prompt = format_chat_prompt(&messages, think);
-    let (max_tokens, temperature) = parse_generate_params(&body);
+    let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
 
     let request = GenerateRequest {
         prompt,
@@ -469,6 +477,7 @@ async fn chat_completions(
             "<|im_end|>".to_string(),
             "<|end|>".to_string(),
         ],
+        num_ctx,
     };
 
     if has_scheduler(&state) {

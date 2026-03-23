@@ -76,6 +76,10 @@ pub struct GenerateRequest {
     pub max_tokens: u32,
     pub temperature: f32,
     pub stop_sequences: Vec<String>,
+    /// Per-request context budget (Ollama `num_ctx`).  When `Some`, the
+    /// validation uses this instead of the server-level `context_size`.
+    /// Must be ≤ server `context_size` (clamped at prefill time).
+    pub num_ctx: Option<u32>,
 }
 
 impl Default for GenerateRequest {
@@ -85,6 +89,7 @@ impl Default for GenerateRequest {
             max_tokens: 512,
             temperature: 0.7,
             stop_sequences: Vec::new(),
+            num_ctx: None,
         }
     }
 }
@@ -193,17 +198,28 @@ impl InferenceEngine {
             .map_err(|e| format!("Tokenization failed: {e}"))?;
 
         let tokens_prompt = tokens.len() as u32;
-        let n_len = (tokens.len() as u32 + request.max_tokens) as i32;
 
-        // Check context fits
-        let n_ctx = ctx.n_ctx() as i32;
-        if n_len > n_ctx {
+        // Determine effective context budget: per-request num_ctx (clamped
+        // to server context_size) or the server default.
+        let server_ctx = ctx.n_ctx();
+        let effective_ctx = request
+            .num_ctx
+            .map(|n| n.min(server_ctx))
+            .unwrap_or(server_ctx);
+
+        // Validate: prompt must fit in the budget and leave room for at
+        // least one output token.
+        if tokens_prompt >= effective_ctx {
             return Err(format!(
-                "Prompt ({tokens_prompt} tokens) + max_tokens ({}) exceeds context window ({n_ctx})",
-                request.max_tokens
+                "Prompt ({tokens_prompt} tokens) does not fit in context window ({effective_ctx})"
             )
             .into());
         }
+
+        // Cap max_tokens so prompt + output stays within the budget.
+        let max_output = effective_ctx - tokens_prompt;
+        let max_tokens = request.max_tokens.min(max_output);
+        let n_len = (tokens_prompt + max_tokens) as i32;
 
         // Prefill in chunks of n_batch tokens. llama.cpp asserts (SIGABRT)
         // if a single decode call processes more tokens than n_batch.
@@ -240,7 +256,7 @@ impl InferenceEngine {
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
 
-        while n_cur <= n_len && tokens_generated < request.max_tokens {
+        while n_cur <= n_len && tokens_generated < max_tokens {
             // Sample from the last output (-1). After prompt decode there is
             // exactly one output (the final prompt token with logits=true);
             // after single-token decode steps there is also exactly one output.
@@ -332,16 +348,24 @@ impl InferenceEngine {
         };
 
         let tokens_prompt = tokens.len() as u32;
-        let n_len = (tokens.len() as u32 + request.max_tokens) as i32;
 
-        let n_ctx = ctx.n_ctx() as i32;
-        if n_len > n_ctx {
+        // Determine effective context budget (same logic as generate()).
+        let server_ctx = ctx.n_ctx();
+        let effective_ctx = request
+            .num_ctx
+            .map(|n| n.min(server_ctx))
+            .unwrap_or(server_ctx);
+
+        if tokens_prompt >= effective_ctx {
             let _ = tx.blocking_send(StreamEvent::Error(format!(
-                "Prompt ({tokens_prompt} tokens) + max_tokens ({}) exceeds context window ({n_ctx})",
-                request.max_tokens
+                "Prompt ({tokens_prompt} tokens) does not fit in context window ({effective_ctx})"
             )));
             return;
         }
+
+        let max_output = effective_ctx - tokens_prompt;
+        let max_tokens = request.max_tokens.min(max_output);
+        let n_len = (tokens_prompt + max_tokens) as i32;
 
         // Prefill in chunks of n_batch tokens (same fix as generate()).
         {
@@ -381,7 +405,7 @@ impl InferenceEngine {
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
 
-        while n_cur <= n_len && tokens_generated < request.max_tokens {
+        while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
 

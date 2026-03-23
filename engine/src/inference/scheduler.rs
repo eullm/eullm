@@ -295,10 +295,11 @@ fn run_scheduler_loop(
 
                     // Tokenize and prefill immediately.
                     match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq) {
-                        Ok((n_tokens, n_past)) => {
+                        Ok((n_tokens, n_past, effective_max)) => {
                             let mut seq = seq;
                             seq.tokens_prompt = n_tokens;
                             seq.n_past = n_past;
+                            seq.max_tokens = effective_max;
                             seq.prefilled = true;
 
                             // Sample the first generated token directly from prefill logits.
@@ -522,26 +523,35 @@ fn run_scheduler_loop(
 /// Prefill a sequence's prompt tokens into the context.
 ///
 /// Returns `(prompt_token_count, n_past)` on success.
+/// Returns `(prompt_tokens, n_past, effective_max_tokens)`.
 fn prefill_sequence(
     model: &LlamaModel,
     ctx: &mut LlamaContext,
     config: &InferenceConfig,
     request: &GenerateRequest,
     seq: &ActiveSequence,
-) -> Result<(u32, i32), String> {
+) -> Result<(u32, i32, u32), String> {
     let tokens = model
         .str_to_token(&request.prompt, AddBos::Always)
         .map_err(|e| format!("Tokenization failed: {e}"))?;
 
     let n_tokens = tokens.len() as u32;
-    let total_needed = n_tokens + request.max_tokens;
 
-    if total_needed > config.context_size {
+    // Effective context: per-request num_ctx (clamped to server limit) or server default.
+    let effective_ctx = request
+        .num_ctx
+        .map(|n| n.min(config.context_size))
+        .unwrap_or(config.context_size);
+
+    if n_tokens >= effective_ctx {
         return Err(format!(
-            "Prompt ({n_tokens} tokens) + max_tokens ({}) exceeds per-sequence context ({})",
-            request.max_tokens, config.context_size
+            "Prompt ({n_tokens} tokens) does not fit in context window ({effective_ctx})"
         ));
     }
+
+    // Cap max_tokens to remaining budget within effective context.
+    let max_output = effective_ctx - n_tokens;
+    let effective_max_tokens = request.max_tokens.min(max_output);
 
     // Prefill in chunks of n_batch tokens. llama.cpp asserts if a single
     // decode call processes more tokens than n_batch, which causes SIGABRT.
@@ -574,7 +584,7 @@ fn prefill_sequence(
             .map_err(|e| format!("Prompt decode failed at chunk {chunk_start}..{chunk_end}: {e}"))?;
     }
 
-    Ok((n_tokens, tokens.len() as i32))
+    Ok((n_tokens, tokens.len() as i32, effective_max_tokens))
 }
 
 /// Send a `StreamEvent::Done` to the sequence's channel.
