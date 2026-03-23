@@ -14,7 +14,7 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
 
-use llama_cpp_2::context::params::LlamaContextParams;
+use llama_cpp_2::context::params::{KvCacheType, LlamaContextParams};
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
@@ -23,13 +23,15 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-/// Build context params with flash attention and n_batch applied.
+/// Build context params with flash attention, n_batch, and KV cache type applied.
 pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
         .with_n_threads(config.threads as i32)
-        .with_n_threads_batch(config.threads as i32);
+        .with_n_threads_batch(config.threads as i32)
+        .with_type_k(KvCacheType::Q8_0)
+        .with_type_v(KvCacheType::Q8_0);
     if config.flash_attn {
         // LLAMA_FLASH_ATTN_TYPE_ENABLED = 1
         params = params.with_flash_attention_policy(1);
