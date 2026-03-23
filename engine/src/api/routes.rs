@@ -10,8 +10,9 @@
 
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode};
 use axum::response::sse::{Event, Sse};
 use axum::response::IntoResponse;
 use axum::{routing::get, routing::post, Json, Router};
@@ -203,8 +204,8 @@ async fn generate(
         let rx = scheduler_submit(&state, request);
 
         if is_streaming(&body) {
-            let stream = stream_from_channel(rx, model, StreamFormat::OllamaGenerate);
-            Ok(Sse::new(stream).into_response())
+            // Ollama /api/generate uses NDJSON, not SSE.
+            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaGenerate))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
                 collect_stream(rx).await.map_err(|e| {
@@ -222,10 +223,13 @@ async fn generate(
                 "created_at": chrono::Utc::now().to_rfc3339(),
                 "response": text,
                 "done": true,
+                "done_reason": "stop",
                 "total_duration": duration_ms * 1_000_000,
+                "load_duration": 0,
+                "prompt_eval_count": tokens_prompt,
+                "prompt_eval_duration": 0,
                 "eval_count": tokens_generated,
-                "eval_duration": duration_ms * 1_000_000,
-                "prompt_eval_count": tokens_prompt
+                "eval_duration": duration_ms * 1_000_000
             }))
             .into_response())
         }
@@ -234,8 +238,8 @@ async fn generate(
         let engine = Arc::clone(state.engine.as_ref().unwrap());
 
         if is_streaming(&body) {
-            let stream = stream_generate_sequential(engine, request, model);
-            Ok(Sse::new(stream).into_response())
+            let rx = sequential_to_channel(engine, request);
+            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaGenerate))
         } else {
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
@@ -256,10 +260,13 @@ async fn generate(
                 "created_at": chrono::Utc::now().to_rfc3339(),
                 "response": result.text,
                 "done": true,
+                "done_reason": "stop",
                 "total_duration": result.duration_ms * 1_000_000,
+                "load_duration": 0,
+                "prompt_eval_count": result.tokens_prompt,
+                "prompt_eval_duration": 0,
                 "eval_count": result.tokens_generated,
-                "eval_duration": result.duration_ms * 1_000_000,
-                "prompt_eval_count": result.tokens_prompt
+                "eval_duration": result.duration_ms * 1_000_000
             })).into_response())
         }
     }
@@ -302,8 +309,8 @@ async fn chat(
         let rx = scheduler_submit(&state, request);
 
         if is_streaming(&body) {
-            let stream = stream_from_channel(rx, model, StreamFormat::OllamaChat);
-            Ok(Sse::new(stream).into_response())
+            // Ollama /api/chat uses NDJSON, not SSE.
+            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
                 collect_stream(rx).await.map_err(|e| {
@@ -324,19 +331,21 @@ async fn chat(
                     "content": text
                 },
                 "done": true,
+                "done_reason": "stop",
                 "total_duration": duration_ms * 1_000_000,
+                "load_duration": 0,
+                "prompt_eval_count": tokens_prompt,
+                "prompt_eval_duration": 0,
                 "eval_count": tokens_generated,
-                "eval_duration": duration_ms * 1_000_000,
-                "prompt_eval_count": tokens_prompt
+                "eval_duration": duration_ms * 1_000_000
             })).into_response())
         }
     } else {
         let engine = Arc::clone(state.engine.as_ref().unwrap());
 
         if is_streaming(&body) {
-            let stream = stream_generate_sequential(engine, request, model.clone());
-            let stream = stream_remap(stream, model, StreamFormat::OllamaChat);
-            Ok(Sse::new(stream).into_response())
+            let rx = sequential_to_channel(engine, request);
+            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat))
         } else {
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
@@ -360,10 +369,13 @@ async fn chat(
                     "content": result.text
                 },
                 "done": true,
+                "done_reason": "stop",
                 "total_duration": result.duration_ms * 1_000_000,
+                "load_duration": 0,
+                "prompt_eval_count": result.tokens_prompt,
+                "prompt_eval_duration": 0,
                 "eval_count": result.tokens_generated,
-                "eval_duration": result.duration_ms * 1_000_000,
-                "prompt_eval_count": result.tokens_prompt
+                "eval_duration": result.duration_ms * 1_000_000
             })).into_response())
         }
     }
@@ -463,7 +475,8 @@ async fn chat_completions(
         let rx = scheduler_submit(&state, request);
 
         if is_streaming(&body) {
-            let stream = stream_from_channel(rx, model, StreamFormat::OpenAI);
+            // OpenAI /v1/chat/completions uses SSE (data: prefix).
+            let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI);
             Ok(Sse::new(stream).into_response())
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
@@ -501,8 +514,8 @@ async fn chat_completions(
         let engine = Arc::clone(state.engine.as_ref().unwrap());
 
         if is_streaming(&body) {
-            let stream = stream_generate_sequential(engine, request, model.clone());
-            let stream = stream_remap(stream, model, StreamFormat::OpenAI);
+            let rx = sequential_to_channel(engine, request);
+            let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI);
             Ok(Sse::new(stream).into_response())
         } else {
             let result = tokio::task::spawn_blocking({
@@ -553,8 +566,8 @@ enum StreamFormat {
 
 /// Convert an mpsc channel of StreamEvents into an SSE event stream.
 ///
-/// Used for both scheduler and sequential backends.
-fn stream_from_channel(
+/// Used for OpenAI-compatible `/v1/chat/completions` streaming only.
+fn stream_from_channel_sse(
     mut rx: mpsc::Receiver<StreamEvent>,
     model: String,
     format: StreamFormat,
@@ -601,30 +614,77 @@ fn stream_from_channel(
     }
 }
 
-/// Sequential streaming: spawn_blocking + mpsc (legacy path).
-fn stream_generate_sequential(
+/// Convert an mpsc channel of StreamEvents into an NDJSON stream.
+///
+/// Ollama uses NDJSON (newline-delimited JSON) for `/api/generate` and
+/// `/api/chat` streaming — NOT SSE. Each line is a complete JSON object
+/// followed by a newline. No `data:` prefix, no double newlines.
+///
+/// This is what Ollama clients (RAG Enterprise, Open WebUI, etc.) expect.
+fn ndjson_stream_response(
+    mut rx: mpsc::Receiver<StreamEvent>,
+    model: String,
+    format: StreamFormat,
+) -> axum::response::Response {
+    let stream = async_stream::stream! {
+        let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Token(piece) => {
+                    let data = format_token_event(&piece, &model, &completion_id, format);
+                    let mut line = data.to_string();
+                    line.push('\n');
+                    yield Ok::<_, std::convert::Infallible>(line);
+                }
+                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
+                    let mut audit = AuditEntry::new(model.clone(), match format {
+                        StreamFormat::OllamaGenerate => "generate",
+                        StreamFormat::OllamaChat => "chat",
+                        StreamFormat::OpenAI => "chat.completions",
+                    }.to_string());
+                    audit.input_tokens = tokens_prompt;
+                    audit.output_tokens = tokens_generated;
+                    audit.duration_ms = duration_ms;
+                    AuditLogger::new().log(&audit);
+
+                    let data = format_done_event(
+                        &model, &completion_id, format,
+                        tokens_generated, tokens_prompt, duration_ms,
+                    );
+                    let mut line = data.to_string();
+                    line.push('\n');
+                    yield Ok(line);
+                    break;
+                }
+                StreamEvent::Error(msg) => {
+                    let data = json!({ "error": msg });
+                    let mut line = data.to_string();
+                    line.push('\n');
+                    yield Ok(line);
+                    break;
+                }
+            }
+        }
+    };
+
+    axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header(header::TRANSFER_ENCODING, "chunked")
+        .body(Body::from_stream(stream))
+        .unwrap()
+}
+
+/// Start sequential inference in a background thread, returning an mpsc receiver.
+fn sequential_to_channel(
     engine: Arc<crate::inference::InferenceEngine>,
     request: GenerateRequest,
-    model: String,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+) -> mpsc::Receiver<StreamEvent> {
     let (tx, rx) = mpsc::channel::<StreamEvent>(32);
-
     tokio::task::spawn_blocking(move || {
         engine.generate_streaming(&request, tx);
     });
-
-    stream_from_channel(rx, model, StreamFormat::OllamaGenerate)
-}
-
-/// Re-map a stream from OllamaGenerate format to another format.
-/// Used by sequential chat/completions paths that always produce OllamaGenerate events.
-fn stream_remap(
-    inner: impl Stream<Item = Result<Event, std::convert::Infallible>>,
-    _model: String,
-    _format: StreamFormat,
-) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    // The inner stream already uses the correct format via stream_from_channel.
-    inner
+    rx
 }
 
 fn format_token_event(piece: &str, model: &str, completion_id: &str, format: StreamFormat) -> Value {
@@ -674,10 +734,13 @@ fn format_done_event(
             "created_at": chrono::Utc::now().to_rfc3339(),
             "response": "",
             "done": true,
+            "done_reason": "stop",
             "total_duration": duration_ms * 1_000_000,
+            "load_duration": 0,
+            "prompt_eval_count": tokens_prompt,
+            "prompt_eval_duration": 0,
             "eval_count": tokens_generated,
             "eval_duration": duration_ms * 1_000_000,
-            "prompt_eval_count": tokens_prompt,
         }),
         StreamFormat::OllamaChat => json!({
             "model": model,
@@ -687,10 +750,13 @@ fn format_done_event(
                 "content": "",
             },
             "done": true,
+            "done_reason": "stop",
             "total_duration": duration_ms * 1_000_000,
+            "load_duration": 0,
+            "prompt_eval_count": tokens_prompt,
+            "prompt_eval_duration": 0,
             "eval_count": tokens_generated,
             "eval_duration": duration_ms * 1_000_000,
-            "prompt_eval_count": tokens_prompt,
         }),
         StreamFormat::OpenAI => json!({
             "id": completion_id,
