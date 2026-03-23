@@ -98,8 +98,23 @@ Skip to [Talk to the model](#5-talk-to-the-model) to start using the API.
 | **Git** | any | `git --version` |
 | **Rust** | 1.75+ | `rustc --version` |
 | **C/C++ compiler** | gcc 11+ or clang 14+ | `gcc --version` |
+| **CMake** | 3.14+ | `cmake --version` |
+| **libclang** | 11+ | `dpkg -l libclang-dev` (Linux) |
 | **Python** | 3.10+ | `python3 --version` |
 | **pip** | 21+ | `pip --version` |
+
+**Install build dependencies (Ubuntu/Debian):**
+
+```bash
+sudo apt install build-essential cmake libclang-dev
+```
+
+**Install build dependencies (macOS):**
+
+```bash
+xcode-select --install
+brew install cmake
+```
 
 **Optional (GPU acceleration):**
 
@@ -317,16 +332,37 @@ All endpoints are on port `11434` by default. Change with `--port`.
 
 ### Build fails with "llama-cpp-2" errors
 
-You need a C/C++ compiler. On Ubuntu/Debian:
+You need a C/C++ compiler, CMake, and libclang (used by `bindgen` to generate FFI bindings for llama.cpp).
+
+**On Ubuntu/Debian:**
 
 ```bash
-sudo apt install build-essential cmake
+sudo apt install build-essential cmake libclang-dev
 ```
 
-On macOS:
+**On Fedora/RHEL:**
+
+```bash
+sudo dnf install gcc gcc-c++ cmake clang-devel
+```
+
+**On macOS:**
 
 ```bash
 xcode-select --install
+brew install cmake
+```
+
+### Build fails with `'stdbool.h' file not found`
+
+This means `libclang-dev` is missing. Install it:
+
+```bash
+# Ubuntu/Debian
+sudo apt install libclang-dev
+
+# Fedora/RHEL
+sudo dnf install clang-devel
 ```
 
 ### CUDA build fails

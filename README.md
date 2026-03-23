@@ -148,6 +148,16 @@ Available for: Linux x64, Linux arm64, macOS x64, macOS Apple Silicon.
 
 ### Build from source
 
+**Prerequisites:** Rust 1.75+, C/C++ compiler, CMake, libclang.
+
+```bash
+# Ubuntu/Debian — install build dependencies
+sudo apt install build-essential cmake libclang-dev
+
+# macOS
+xcode-select --install && brew install cmake
+```
+
 ```bash
 git clone https://github.com/eullm/eullm.git && cd eullm
 cargo build --release
