@@ -44,7 +44,7 @@ class PruningConfig:
 def _check_dependencies() -> None:
     """Check that required GPU dependencies are available."""
     try:
-        import torch  # noqa: F401
+        import torch
     except ImportError:
         raise RuntimeError(
             "PyTorch is required for pruning. Install with: pip install torch"
@@ -54,6 +54,11 @@ def _check_dependencies() -> None:
     except ImportError:
         raise RuntimeError(
             "transformers is required for pruning. Install with: pip install transformers"
+        )
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA GPU is required for pruning. No CUDA device found. "
+            "Pruning needs at least 1x A100 80GB for models up to 14B."
         )
 
 

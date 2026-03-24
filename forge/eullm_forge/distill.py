@@ -96,13 +96,18 @@ def estimate_distillation_cost(
 def _check_dependencies() -> None:
     """Check that required dependencies are available."""
     try:
-        import torch  # noqa: F401
+        import torch
     except ImportError:
         raise RuntimeError("PyTorch is required. Install with: pip install torch")
     try:
         import transformers  # noqa: F401
     except ImportError:
         raise RuntimeError("transformers is required. Install with: pip install transformers")
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA GPU is required for distillation. No CUDA device found. "
+            "Distillation needs teacher + student in VRAM simultaneously."
+        )
 
 
 def _load_distillation_dataset(

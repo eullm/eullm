@@ -144,6 +144,9 @@ def forge(
     except NotImplementedError as e:
         console.print(f"\n[yellow]Pipeline stage not implemented yet:[/yellow] {e}")
         console.print("This is expected during early development.")
+    except RuntimeError as e:
+        console.print(f"\n[red]Runtime error:[/red] {e}")
+        console.print("Check that you have the required GPU hardware.")
 
 
 @main.command()
