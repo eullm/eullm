@@ -2,7 +2,7 @@
 # Multi-sequence batching benchmark
 # Usage: ./bench.sh <base_url> <model_name>
 # Example (Ollama):  ./bench.sh http://localhost:11435 qwen3.5:9b
-# Example (EULLM):   ./bench.sh http://localhost:11434 Qwen3.5-9B-Q8_0
+# Example (EULLM):   ./bench.sh http://localhost:11434 Qwen3.5-9B-Q4_K_M
 
 set -uo pipefail  # no -e, background jobs may fail
 

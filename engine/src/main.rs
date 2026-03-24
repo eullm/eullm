@@ -64,6 +64,14 @@ enum Commands {
         /// Prompt processing batch size (tokens per eval during prefill)
         #[arg(long, default_value_t = 2048)]
         n_batch: u32,
+
+        /// Run as a background daemon (writes PID to --pidfile)
+        #[arg(long)]
+        daemon: bool,
+
+        /// PID file path (used with --daemon)
+        #[arg(long, default_value = "/tmp/eullm.pid")]
+        pidfile: String,
     },
     /// List locally available models
     List,
@@ -85,6 +93,14 @@ enum Commands {
         /// Enable continuous batching with N max concurrent requests (0 = sequential)
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
+
+        /// Run as a background daemon (writes PID to --pidfile)
+        #[arg(long)]
+        daemon: bool,
+
+        /// PID file path (used with --daemon)
+        #[arg(long, default_value = "/tmp/eullm.pid")]
+        pidfile: String,
     },
     /// Verticalize a model: compress, specialize, and brand it
     ///
@@ -139,12 +155,38 @@ enum Commands {
 
 #[tokio::main]
 async fn main() {
+    // Check --daemon BEFORE initializing tracing/tokio internals.
+    // The daemon spawns a child process, so must happen early.
+    {
+        let args: Vec<String> = std::env::args().collect();
+        if args.contains(&"--daemon".to_string()) {
+            // Find --pidfile value.
+            let pidfile = args.iter()
+                .position(|a| a == "--pidfile")
+                .and_then(|i| args.get(i + 1))
+                .map(|s| s.as_str())
+                .or_else(|| {
+                    args.iter()
+                        .find(|a| a.starts_with("--pidfile="))
+                        .map(|a| a.strip_prefix("--pidfile=").unwrap())
+                })
+                .unwrap_or("/tmp/eullm.pid");
+            daemonize(pidfile);
+            // daemonize exits the parent — child continues below without --daemon.
+        }
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "eullm_engine=info".into()),
         )
         .init();
+
+    // Install signal handler for SIGABRT — llama.cpp calls abort() on
+    // GGML_ASSERT failures, which kills the process with no diagnostic info.
+    // This handler prints a helpful message before the default action runs.
+    install_abort_handler();
 
     let cli = Cli::parse();
 
@@ -168,10 +210,19 @@ async fn main() {
             batch_size,
             no_flash_attn,
             n_batch,
-        } => cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await,
+            daemon,
+            pidfile,
+        } => {
+            // --daemon is handled at the top of main() before tokio starts.
+            let _ = (daemon, pidfile);
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await;
+        }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
-        Commands::Serve { port, replace, batch_size: _ } => cmd_serve(port, replace).await,
+        Commands::Serve { port, replace, batch_size: _, daemon, pidfile } => {
+            let _ = (daemon, pidfile);
+            cmd_serve(port, replace).await;
+        }
         Commands::Forge {
             source,
             profile,
@@ -589,8 +640,10 @@ async fn cmd_run(
             interactive_chat(sched, &model_name, ctx_size).await;
         }
     } else {
-        // No REPL — just wait forever (API server runs in background task).
-        std::future::pending::<()>().await;
+        // No REPL — wait for shutdown signal.
+        // The API server handles graceful shutdown internally via SIGTERM/SIGINT.
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("Shutting down...");
     }
 }
 
@@ -832,6 +885,7 @@ async fn interactive_chat(
             max_tokens,
             temperature: 0.7,
             stop_sequences: vec!["<|im_end|>".into()],
+            num_ctx: None,
         };
 
         // Submit to scheduler and stream tokens.
@@ -881,6 +935,140 @@ async fn interactive_chat(
             });
         }
     }
+}
+
+/// Spawn a new copy of this process without --daemon, then exit.
+///
+/// We cannot use `fork()` because the tokio runtime has already created
+/// threads — threads don't survive fork, causing an immediate segfault.
+/// Instead, we re-exec the same binary with `--daemon` stripped from args
+/// and the child's stdout/stderr redirected to a log file.
+fn daemonize(pidfile: &str) {
+    use std::io::Write;
+
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("Error: cannot determine executable path: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Rebuild args without --daemon and --pidfile.
+    let args: Vec<String> = std::env::args()
+        .skip(1) // skip argv[0]
+        .filter(|a| a != "--daemon")
+        .collect();
+
+    // Filter out --pidfile and its value.
+    let mut filtered_args = Vec::new();
+    let mut skip_next = false;
+    for arg in &args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--pidfile" {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with("--pidfile=") {
+            continue;
+        }
+        filtered_args.push(arg.clone());
+    }
+
+    // Determine log file path next to PID file.
+    let log_path = pidfile.replace(".pid", ".log");
+
+    let log_file = match std::fs::File::create(&log_path) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: cannot create log file {log_path}: {e}");
+            std::process::exit(1);
+        }
+    };
+    let log_err = match log_file.try_clone() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Error: cannot clone log file handle: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let child = std::process::Command::new(&exe)
+        .args(&filtered_args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::from(log_file))
+        .stderr(std::process::Stdio::from(log_err))
+        .spawn();
+
+    match child {
+        Ok(child) => {
+            let pid = child.id();
+            // Write PID file.
+            if let Ok(mut f) = std::fs::File::create(pidfile) {
+                let _ = write!(f, "{pid}");
+            }
+            println!("eullm daemon started (PID {pid}).");
+            println!("  PID file: {pidfile}");
+            println!("  Log file: {log_path}");
+            println!("  Stop with: kill {pid}");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error: failed to start daemon: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Install a signal handler for SIGABRT that prints diagnostic info.
+///
+/// llama.cpp uses `GGML_ASSERT` which calls `abort()` on failure, producing
+/// a core dump with no useful message. This handler prints actionable
+/// suggestions before re-raising the signal for the default handler.
+#[cfg(unix)]
+fn install_abort_handler() {
+    unsafe {
+        libc::signal(libc::SIGABRT, abort_handler as *const () as libc::sighandler_t);
+    }
+}
+
+#[cfg(unix)]
+extern "C" fn abort_handler(_sig: libc::c_int) {
+    // Only use async-signal-safe operations (write to stderr).
+    let msg = b"\n\
+==========================================================\n\
+EULLM ENGINE CRASHED (SIGABRT)\n\
+==========================================================\n\
+llama.cpp hit a fatal assertion (GGML_ASSERT).\n\
+\n\
+Common causes and fixes:\n\
+  1. Flash attention not supported by this model/quantization:\n\
+     -> Re-run with: eullm run <model> --no-flash-attn\n\
+\n\
+  2. Out of GPU memory (VRAM):\n\
+     -> Reduce batch size: eullm run <model> --batch-size 1\n\
+     -> Reduce context:    eullm run <model> --ctx-size 2048\n\
+     -> Use CPU only:      eullm run <model> --gpu-layers 0\n\
+\n\
+  3. Incompatible GGUF file or quantization:\n\
+     -> Try a different quantization (Q4_K_M recommended)\n\
+\n\
+Run with RUST_LOG=debug for more context before the crash.\n\
+==========================================================\n";
+    unsafe {
+        libc::write(2, msg.as_ptr() as *const libc::c_void, msg.len());
+        // Re-raise SIGABRT with default handler for core dump.
+        libc::signal(libc::SIGABRT, libc::SIG_DFL);
+        libc::raise(libc::SIGABRT);
+    }
+}
+
+#[cfg(not(unix))]
+fn install_abort_handler() {
+    // No-op on non-Unix platforms.
 }
 
 fn format_bytes(bytes: u64) -> String {

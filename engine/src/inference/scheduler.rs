@@ -58,7 +58,12 @@ struct ActiveSequence {
     tx: mpsc::Sender<StreamEvent>,
     sampler: LlamaSampler,
     decoder: encoding_rs::Decoder,
-    full_output: String,
+    /// Ring-style tail buffer: only keeps the last `max_stop_len` bytes
+    /// so stop-sequence checking stays O(1) instead of scanning the
+    /// ever-growing full output.
+    tail_buf: String,
+    /// Maximum length of any stop sequence (determines tail_buf capacity).
+    max_stop_len: usize,
     tokens_prompt: u32,
     tokens_generated: u32,
     max_tokens: u32,
@@ -86,7 +91,7 @@ impl SchedulerHandle {
     /// The caller should listen on the returned `mpsc::Receiver<StreamEvent>`
     /// for token events.
     pub fn submit(&self, request: GenerateRequest) -> mpsc::Receiver<StreamEvent> {
-        let (tx, rx) = mpsc::channel::<StreamEvent>(32);
+        let (tx, rx) = mpsc::channel::<StreamEvent>(256);
 
         // Best-effort send — if the queue is full the request is rejected.
         if self.tx.try_send(ScheduledRequest { request, tx: tx.clone() }).is_err() {
@@ -152,8 +157,27 @@ impl BatchScheduler {
         std::thread::Builder::new()
             .name("eullm-scheduler".into())
             .spawn(move || {
-                if let Err(e) = run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx) {
-                    tracing::error!("Scheduler thread exited with error: {e}");
+                // Catch panics from Rust code. This won't catch C-level abort()
+                // from llama.cpp (see SIGABRT handler in main.rs for that).
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx)
+                })) {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::error!("Scheduler thread exited with error: {e}");
+                    }
+                    Err(panic_info) => {
+                        let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        tracing::error!("Scheduler thread panicked: {msg}");
+                        eprintln!("\n[EULLM] FATAL: Scheduler thread panicked: {msg}");
+                        eprintln!("[EULLM] The inference engine has stopped. Restart eullm to continue.");
+                    }
                 }
             })?;
 
@@ -204,6 +228,14 @@ fn run_scheduler_loop(
 
     // Create a single shared context with enough room for all sequences.
     let total_ctx = config.context_size * sched_config.max_batch_size as u32;
+    tracing::info!(
+        "Allocating context: {} tokens per sequence × {} sequences = {} total (flash_attn={}, n_batch={})",
+        config.context_size,
+        sched_config.max_batch_size,
+        total_ctx,
+        config.flash_attn,
+        config.n_batch,
+    );
     let ctx_size = NonZeroU32::new(total_ctx).unwrap_or(NonZeroU32::new(4096).unwrap());
 
     let ctx_params = super::build_ctx_params(&config, ctx_size)
@@ -246,6 +278,12 @@ fn run_scheduler_loop(
                         None => break, // No free slots — should not happen due to active.len() check
                     };
 
+                    let max_stop_len = scheduled.request.stop_sequences
+                        .iter()
+                        .map(|s| s.len())
+                        .max()
+                        .unwrap_or(0);
+
                     let seq = ActiveSequence {
                         seq_id,
                         tx: scheduled.tx,
@@ -255,7 +293,8 @@ fn run_scheduler_loop(
                             LlamaSampler::greedy(),
                         ]),
                         decoder: encoding_rs::UTF_8.new_decoder(),
-                        full_output: String::new(),
+                        tail_buf: String::with_capacity(max_stop_len + 64),
+                        max_stop_len,
                         tokens_prompt: 0,
                         tokens_generated: 0,
                         max_tokens: scheduled.request.max_tokens,
@@ -268,10 +307,11 @@ fn run_scheduler_loop(
 
                     // Tokenize and prefill immediately.
                     match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq) {
-                        Ok((n_tokens, n_past)) => {
+                        Ok((n_tokens, n_past, effective_max)) => {
                             let mut seq = seq;
                             seq.tokens_prompt = n_tokens;
                             seq.n_past = n_past;
+                            seq.max_tokens = effective_max;
                             seq.prefilled = true;
 
                             // Sample the first generated token directly from prefill logits.
@@ -289,19 +329,19 @@ fn run_scheduler_loop(
 
                                 match model.token_to_piece(token, &mut seq.decoder, true, None) {
                                     Ok(piece) => {
-                                        seq.full_output.push_str(&piece);
+                                        tail_push(&mut seq.tail_buf, &piece, seq.max_stop_len);
 
                                         // Check stop sequences.
                                         let mut stopped = false;
                                         for s in &seq.stop_sequences {
-                                            if seq.full_output.ends_with(s) {
+                                            if seq.tail_buf.ends_with(s) {
                                                 let trimmed = if piece.len() >= s.len() {
                                                     &piece[..piece.len() - s.len()]
                                                 } else {
                                                     ""
                                                 };
                                                 if !trimmed.is_empty() {
-                                                    let _ = seq.tx.blocking_send(
+                                                    let _ = seq.tx.try_send(
                                                         StreamEvent::Token(trimmed.to_string()),
                                                     );
                                                 }
@@ -319,7 +359,7 @@ fn run_scheduler_loop(
                                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
                                                 free_seq_ids.push(seq.seq_id);
                                             } else {
-                                                let _ = seq.tx.blocking_send(StreamEvent::Token(piece));
+                                                let _ = seq.tx.try_send(StreamEvent::Token(piece));
                                                 seq.last_token = Some(token);
                                                 active.push(seq);
                                             }
@@ -336,7 +376,7 @@ fn run_scheduler_loop(
                             tracing::debug!("Sequence {seq_id} prefilled ({n_tokens} prompt tokens)");
                         }
                         Err(e) => {
-                            let _ = seq.tx.blocking_send(StreamEvent::Error(format!(
+                            let _ = seq.tx.try_send(StreamEvent::Error(format!(
                                 "Prefill failed: {e}"
                             )));
                             free_seq_ids.push(seq.seq_id);
@@ -348,7 +388,7 @@ fn run_scheduler_loop(
                     tracing::info!("Request channel closed — scheduler shutting down.");
                     // Finish active sequences gracefully.
                     for seq in &active {
-                        let _ = seq.tx.blocking_send(StreamEvent::Error(
+                        let _ = seq.tx.try_send(StreamEvent::Error(
                             "Server shutting down".into(),
                         ));
                     }
@@ -378,11 +418,16 @@ fn run_scheduler_loop(
 
         // ── 4. Decode the batch ─────────────────────────────────────────
         if decode_batch.n_tokens() > 0 {
+            tracing::debug!(
+                "Decoding batch: {} tokens, {} active sequences",
+                decode_batch.n_tokens(),
+                active.len(),
+            );
             if let Err(e) = ctx.decode(&mut decode_batch) {
                 tracing::error!("Batch decode failed: {e}");
                 // Send errors to all active sequences and clear.
                 for seq in active.drain(..) {
-                    let _ = seq.tx.blocking_send(StreamEvent::Error(format!(
+                    let _ = seq.tx.try_send(StreamEvent::Error(format!(
                         "Decode failed: {e}"
                     )));
                 }
@@ -418,19 +463,19 @@ fn run_scheduler_loop(
             // Decode token to text.
             match model.token_to_piece(token, &mut seq.decoder, true, None) {
                 Ok(piece) => {
-                    seq.full_output.push_str(&piece);
+                    tail_push(&mut seq.tail_buf, &piece, seq.max_stop_len);
 
                     // Check stop sequences.
                     let mut stopped = false;
                     for s in &seq.stop_sequences {
-                        if seq.full_output.ends_with(s) {
+                        if seq.tail_buf.ends_with(s) {
                             let trimmed = if piece.len() >= s.len() {
                                 &piece[..piece.len() - s.len()]
                             } else {
                                 ""
                             };
                             if !trimmed.is_empty()
-                                && seq.tx.blocking_send(StreamEvent::Token(trimmed.to_string())).is_err()
+                                && seq.tx.try_send(StreamEvent::Token(trimmed.to_string())).is_err()
                             {
                                 to_remove.push(i);
                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
@@ -450,7 +495,7 @@ fn run_scheduler_loop(
                     }
 
                     // Send the token piece.
-                    if seq.tx.blocking_send(StreamEvent::Token(piece)).is_err() {
+                    if seq.tx.try_send(StreamEvent::Token(piece)).is_err() {
                         // Receiver dropped — client disconnected.
                         to_remove.push(i);
                         let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
@@ -490,48 +535,109 @@ fn run_scheduler_loop(
 /// Prefill a sequence's prompt tokens into the context.
 ///
 /// Returns `(prompt_token_count, n_past)` on success.
+/// Returns `(prompt_tokens, n_past, effective_max_tokens)`.
 fn prefill_sequence(
     model: &LlamaModel,
     ctx: &mut LlamaContext,
     config: &InferenceConfig,
     request: &GenerateRequest,
     seq: &ActiveSequence,
-) -> Result<(u32, i32), String> {
+) -> Result<(u32, i32, u32), String> {
     let tokens = model
         .str_to_token(&request.prompt, AddBos::Always)
         .map_err(|e| format!("Tokenization failed: {e}"))?;
 
     let n_tokens = tokens.len() as u32;
-    let total_needed = n_tokens + request.max_tokens;
 
-    if total_needed > config.context_size {
+    // Effective context: per-request num_ctx (clamped to server limit) or server default.
+    let effective_ctx = request
+        .num_ctx
+        .map(|n| n.min(config.context_size))
+        .unwrap_or(config.context_size);
+
+    if n_tokens >= effective_ctx {
         return Err(format!(
-            "Prompt ({n_tokens} tokens) + max_tokens ({}) exceeds per-sequence context ({})",
-            request.max_tokens, config.context_size
+            "Prompt ({n_tokens} tokens) does not fit in context window ({effective_ctx})"
         ));
     }
 
-    // Add all prompt tokens to a batch.
-    let mut batch = LlamaBatch::new(tokens.len().max(1), 1);
-    let last_idx = (tokens.len() - 1) as i32;
+    // Cap max_tokens to remaining budget within effective context.
+    let max_output = effective_ctx - n_tokens;
+    let effective_max_tokens = request.max_tokens.min(max_output);
 
-    for (i, token) in tokens.iter().enumerate() {
-        let is_last = i as i32 == last_idx;
-        batch
-            .add(*token, i as i32, &[seq.seq_id], is_last)
-            .map_err(|e| format!("Failed to add prompt token: {e}"))?;
+    if effective_max_tokens < request.max_tokens {
+        tracing::warn!(
+            "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
+            request.max_tokens,
+            effective_max_tokens,
+            effective_ctx,
+            n_tokens,
+        );
+    }
+    tracing::info!(
+        "Seq {}: prompt={} tokens, max_output={}, effective_ctx={}",
+        seq.seq_id,
+        n_tokens,
+        effective_max_tokens,
+        effective_ctx,
+    );
+
+    // Prefill in chunks of n_batch tokens. llama.cpp asserts if a single
+    // decode call processes more tokens than n_batch, which causes SIGABRT.
+    // Long RAG prompts easily exceed the default 2048 n_batch.
+    let chunk_size = config.n_batch as usize;
+    let last_idx = tokens.len() - 1;
+
+    tracing::debug!(
+        "Prefilling seq {} with {} tokens in chunks of {} (context_size={})",
+        seq.seq_id,
+        tokens.len(),
+        chunk_size,
+        config.context_size,
+    );
+
+    for chunk_start in (0..tokens.len()).step_by(chunk_size) {
+        let chunk_end = (chunk_start + chunk_size).min(tokens.len());
+        let chunk = &tokens[chunk_start..chunk_end];
+        let mut batch = LlamaBatch::new(chunk.len().max(1), 1);
+
+        for (j, token) in chunk.iter().enumerate() {
+            let abs_pos = chunk_start + j;
+            let is_last = abs_pos == last_idx;
+            batch
+                .add(*token, abs_pos as i32, &[seq.seq_id], is_last)
+                .map_err(|e| format!("Failed to add prompt token: {e}"))?;
+        }
+
+        ctx.decode(&mut batch)
+            .map_err(|e| format!("Prompt decode failed at chunk {chunk_start}..{chunk_end}: {e}"))?;
     }
 
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("Prompt decode failed: {e}"))?;
+    Ok((n_tokens, tokens.len() as i32, effective_max_tokens))
+}
 
-    Ok((n_tokens, tokens.len() as i32))
+/// Append `piece` to the tail buffer, keeping only the last `max_stop_len`
+/// bytes so stop-sequence checks stay O(1).
+fn tail_push(tail_buf: &mut String, piece: &str, max_stop_len: usize) {
+    if max_stop_len == 0 {
+        return;
+    }
+    tail_buf.push_str(piece);
+    if tail_buf.len() > max_stop_len * 2 {
+        // Trim from the left, keeping at least max_stop_len bytes.
+        let mut keep_from = tail_buf.len() - max_stop_len;
+        // Advance to the nearest char boundary (stable alternative to ceil_char_boundary).
+        while keep_from < tail_buf.len() && !tail_buf.is_char_boundary(keep_from) {
+            keep_from += 1;
+        }
+        tail_buf.drain(..keep_from);
+    }
 }
 
 /// Send a `StreamEvent::Done` to the sequence's channel.
 fn send_done(seq: &ActiveSequence) {
     let duration_ms = seq.start.elapsed().as_millis() as u64;
-    let _ = seq.tx.blocking_send(StreamEvent::Done {
+    let _ = seq.tx.try_send(StreamEvent::Done {
         tokens_generated: seq.tokens_generated,
         tokens_prompt: seq.tokens_prompt,
         duration_ms,

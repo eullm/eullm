@@ -69,7 +69,7 @@ eullm serve                               # Start API server without loading a m
 Key features:
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
-- **SSE streaming** — token-by-token output on all endpoints (`"stream": true`)
+- **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
 - **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
@@ -311,7 +311,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm list`, `eullm show`, `eullm serve`)
 - [x] Engine API: OpenAI-compatible (`/v1/chat/completions`) + native EULLM API
 - [x] **Continuous batching scheduler** — parallel multi-request inference with per-sequence KV cache
-- [x] **SSE streaming** on all generation endpoints (Ollama + OpenAI format)
+- [x] **Token streaming** — NDJSON on `/api/*` (Ollama-compatible), SSE on `/v1/*` (OpenAI-compatible)
 - [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
 - [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
 - [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)

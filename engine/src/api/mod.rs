@@ -27,7 +27,11 @@ pub struct AppState {
     pub scheduler: Option<SchedulerHandle>,
 }
 
-/// Start the API server on the given port.
+/// Start the API server on the given port with graceful shutdown support.
+///
+/// The server shuts down cleanly on SIGTERM or SIGINT (Ctrl+C), finishing
+/// in-flight requests before exiting. This is critical for Docker containers
+/// (which send SIGTERM on `docker stop`) and systemd services.
 pub async fn serve(
     port: u16,
     model_name: Option<String>,
@@ -44,9 +48,34 @@ pub async fn serve(
     tracing::info!("eullm listening on {addr}");
 
     let listener = TcpListener::bind(&addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    tracing::info!("Server shut down gracefully.");
     Ok(())
+}
+
+/// Wait for a shutdown signal (SIGTERM, SIGINT, or Ctrl+C).
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("failed to register SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => { tracing::info!("Received SIGINT, shutting down..."); }
+            _ = sigterm.recv() => { tracing::info!("Received SIGTERM, shutting down..."); }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        ctrl_c.await.ok();
+        tracing::info!("Received Ctrl+C, shutting down...");
+    }
 }
 
 /// Build the EULLM API router with CORS enabled for Open WebUI and other frontends.
