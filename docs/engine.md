@@ -203,9 +203,26 @@ curl -X POST http://localhost:11434/api/generate \
 |---|---|---|
 | `model` | loaded model | Model name |
 | `prompt` | (required) | Input prompt |
-| `max_tokens` | 512 | Maximum tokens to generate |
+| `max_tokens` / `num_predict` | 512 | Maximum tokens to generate (see note below) |
 | `temperature` | 0.7 | Sampling temperature |
 | `stream` | true | Stream response token-by-token (NDJSON) |
+| `num_ctx` | server `--ctx-size` | Per-request context window budget (clamped to server max) |
+| `options` | — | Ollama-style nested object for `num_predict`, `temperature`, `num_ctx` |
+
+**Ollama `options` support:** Parameters can be passed at the top level (OpenAI style) or nested inside an `options` object (Ollama style). Top-level values take precedence.
+
+```json
+{
+  "prompt": "Ciao!",
+  "options": {
+    "num_predict": 1024,
+    "temperature": 0.5,
+    "num_ctx": 8192
+  }
+}
+```
+
+**`num_predict` capping:** If `num_predict` (or `max_tokens`) would exceed the remaining context budget (`effective_ctx - prompt_tokens`), it is automatically capped. The Engine logs a `WARN` when this happens — see the [Logging & Troubleshooting](#logging--troubleshooting) section.
 
 **Streaming:** When `"stream": true` (the default), the response is sent as **NDJSON** (newline-delimited JSON). Each line is a complete JSON object with `"response"` (the token) and `"done": false`. The final line has `"done": true` with timing stats. Content-Type is `application/x-ndjson`.
 
@@ -412,6 +429,69 @@ curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "local", "messages": [{"role": "user", "content": "Ciao!"}]}'
 ```
+
+## Logging & Troubleshooting
+
+The Engine uses [`tracing`](https://docs.rs/tracing) for structured logging. Control verbosity with the `RUST_LOG` environment variable.
+
+### Log levels
+
+```bash
+# Minimal (errors only)
+RUST_LOG=error eullm run ./model.gguf
+
+# Normal operation (recommended) — shows request params, context budget, cap warnings
+RUST_LOG=eullm_engine=info eullm run ./model.gguf
+
+# Verbose — adds prefill chunk details, decode loop, batch scheduling
+RUST_LOG=eullm_engine=debug eullm run ./model.gguf
+
+# Everything (very noisy, includes llama.cpp internals)
+RUST_LOG=trace eullm run ./model.gguf
+```
+
+### What gets logged
+
+| Level | Message | When |
+|---|---|---|
+| `INFO` | `Request params: max_tokens=N, temperature=T, num_ctx=X` | Every API request (routes layer) |
+| `INFO` | `Seq N: prompt=P tokens, max_output=M, effective_ctx=C` | After tokenization (scheduler) |
+| `INFO` | `Generate: prompt=P tokens, max_output=M, effective_ctx=C` | Sequential generate path |
+| `INFO` | `Stream: prompt=P tokens, max_output=M, effective_ctx=C` | Sequential streaming path |
+| `WARN` | `num_predict capped: requested=R, effective=E (context=C, prompt_tokens=P)` | When `num_predict` exceeds remaining context budget |
+| `DEBUG` | `Prefilling seq N with P tokens in chunks of B` | Prefill chunking details (scheduler) |
+| `DEBUG` | `Sequence N prefilled (P prompt tokens)` | After successful prefill |
+| `ERROR` | `Prompt (P tokens) does not fit in context window (C)` | Prompt too long for context |
+
+### Common issues
+
+#### Truncated output / fewer tokens than expected
+
+The model generates fewer tokens than `num_predict` requested.
+
+**Diagnose:** Run with `RUST_LOG=eullm_engine=info` and look for the `WARN num_predict capped` message.
+
+**Cause:** The prompt consumed most of the context window, leaving less room than `num_predict`.
+
+**Fix:** Either:
+- Increase `--ctx-size` on the server (requires more RAM/VRAM)
+- Send `num_ctx` in the request to override per-request: `"num_ctx": 8192`
+- Reduce prompt length
+- Lower `num_predict` to match your actual needs
+
+#### Prompt does not fit in context window
+
+**Error:** `Prompt (N tokens) does not fit in context window (C)`
+
+**Cause:** The tokenized prompt is longer than the effective context size.
+
+**Fix:** Increase `--ctx-size` or send a shorter prompt. You can also pass `"num_ctx": 16384` per-request (clamped to server max).
+
+#### Long generation latency on first request
+
+**Cause:** The first prefill is slow because the KV cache is being allocated. Subsequent requests reuse allocated memory.
+
+**Fix:** This is normal. For benchmarking, discard the first request as warmup.
 
 ## Implementation Status
 
