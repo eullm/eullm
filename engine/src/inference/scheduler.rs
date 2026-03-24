@@ -565,6 +565,23 @@ fn prefill_sequence(
     let max_output = effective_ctx - n_tokens;
     let effective_max_tokens = request.max_tokens.min(max_output);
 
+    if effective_max_tokens < request.max_tokens {
+        tracing::warn!(
+            "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
+            request.max_tokens,
+            effective_max_tokens,
+            effective_ctx,
+            n_tokens,
+        );
+    }
+    tracing::info!(
+        "Seq {}: prompt={} tokens, max_output={}, effective_ctx={}",
+        seq.seq_id,
+        n_tokens,
+        effective_max_tokens,
+        effective_ctx,
+    );
+
     // Prefill in chunks of n_batch tokens. llama.cpp asserts if a single
     // decode call processes more tokens than n_batch, which causes SIGABRT.
     // Long RAG prompts easily exceed the default 2048 n_batch.

@@ -221,6 +221,22 @@ impl InferenceEngine {
         let max_tokens = request.max_tokens.min(max_output);
         let n_len = (tokens_prompt + max_tokens) as i32;
 
+        if max_tokens < request.max_tokens {
+            tracing::warn!(
+                "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
+                request.max_tokens,
+                max_tokens,
+                effective_ctx,
+                tokens_prompt,
+            );
+        }
+        tracing::info!(
+            "Generate: prompt={} tokens, max_output={}, effective_ctx={}",
+            tokens_prompt,
+            max_tokens,
+            effective_ctx,
+        );
+
         // Prefill in chunks of n_batch tokens. llama.cpp asserts (SIGABRT)
         // if a single decode call processes more tokens than n_batch.
         {
@@ -366,6 +382,22 @@ impl InferenceEngine {
         let max_output = effective_ctx - tokens_prompt;
         let max_tokens = request.max_tokens.min(max_output);
         let n_len = (tokens_prompt + max_tokens) as i32;
+
+        if max_tokens < request.max_tokens {
+            tracing::warn!(
+                "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
+                request.max_tokens,
+                max_tokens,
+                effective_ctx,
+                tokens_prompt,
+            );
+        }
+        tracing::info!(
+            "Stream: prompt={} tokens, max_output={}, effective_ctx={}",
+            tokens_prompt,
+            max_tokens,
+            effective_ctx,
+        );
 
         // Prefill in chunks of n_batch tokens (same fix as generate()).
         {

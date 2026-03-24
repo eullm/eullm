@@ -86,6 +86,9 @@ fn parse_generate_params(body: &Value) -> (u32, f32, Option<u32>) {
         .or_else(|| options.and_then(|o| o.get("num_ctx")))
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
+    tracing::info!(
+        "Request params: max_tokens={max_tokens}, temperature={temperature:.2}, num_ctx={num_ctx:?}"
+    );
     (max_tokens, temperature, num_ctx)
 }
 
