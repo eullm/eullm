@@ -12,9 +12,9 @@ processes requests in parallel by measuring:
   5. Latency distribution (P50, P95, P99)
 
 Usage:
-    python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q8_0
+    python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q4_K_M
     python bench/stress_test.py --url http://localhost:11435 --model qwen3.5:9b --label ollama
-    python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q8_0 \
+    python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q4_K_M \
         --concurrency 1,2,4,8,16 --tokens 150 --rounds 3
 
 Requires: aiohttp (pip install aiohttp)
