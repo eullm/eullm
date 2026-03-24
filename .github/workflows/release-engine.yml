@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "engine-v*"
+      - "EuLLM-v*"
 
 permissions:
   contents: write
