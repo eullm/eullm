@@ -201,7 +201,7 @@ If you already have a GGUF model file:
 eullm run ./path/to/model.gguf
 ```
 
-The server starts on `http://localhost:11434` with SSE streaming support.
+The server starts on `http://localhost:11434` with streaming support.
 
 ### Option B: Run a catalog model
 
@@ -231,7 +231,7 @@ Once the server is running, use any Ollama or OpenAI-compatible client.
 curl http://localhost:11434/api/generate \
   -d '{"model": "legal-it-7b", "prompt": "Cos'\''è il GDPR?", "stream": false}'
 
-# Streaming (SSE)
+# Streaming (NDJSON — same format as Ollama)
 curl http://localhost:11434/api/generate \
   -d '{"model": "legal-it-7b", "prompt": "Cos'\''è il GDPR?"}'
 ```
@@ -319,8 +319,8 @@ eullm run ./output/legal-it-7b/legal-it-7b-Q4_K_M.gguf
 
 | Endpoint | Format | Streaming |
 |---|---|---|
-| `POST /api/generate` | Ollama | SSE (default on) |
-| `POST /api/chat` | Ollama | SSE (default on) |
+| `POST /api/generate` | Ollama | NDJSON (default on) |
+| `POST /api/chat` | Ollama | NDJSON (default on) |
 | `POST /v1/chat/completions` | OpenAI | SSE (`stream: true`) |
 | `GET /api/tags` | Ollama | No |
 | `POST /api/show` | Ollama | No |
