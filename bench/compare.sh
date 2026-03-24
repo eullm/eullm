@@ -3,8 +3,8 @@
 #
 # Usage:
 #   ./bench/compare.sh <eullm_model> <ollama_model>
-#   ./bench/compare.sh Qwen3.5-9B-Q8_0 qwen3.5:9b
-#   ./bench/compare.sh Qwen3.5-9B-Q8_0 qwen3.5:9b --concurrency 1,2,4,8,16 --tokens 150
+#   ./bench/compare.sh Qwen3.5-9B-Q4_K_M qwen3.5:9b
+#   ./bench/compare.sh Qwen3.5-9B-Q4_K_M qwen3.5:9b --concurrency 1,2,4,8,16 --tokens 150
 
 set -euo pipefail
 

@@ -21,7 +21,7 @@ pip install aiohttp
 # Test EULLM
 python bench/stress_test.py \
     --url http://localhost:11434 \
-    --model Qwen3.5-9B-Q8_0 \
+    --model Qwen3.5-9B-Q4_K_M \
     --concurrency 1,2,4,8 \
     --tokens 100 \
     --warmup
@@ -35,7 +35,7 @@ python bench/stress_test.py \
     --warmup
 
 # Compare both (requires both servers running)
-./bench/compare.sh Qwen3.5-9B-Q8_0 qwen3.5:9b
+./bench/compare.sh Qwen3.5-9B-Q4_K_M qwen3.5:9b
 ```
 
 ## How to read the output
@@ -92,7 +92,7 @@ Use `--json results.json` to get machine-readable results for further analysis:
 ```json
 {
   "label": "EULLM",
-  "model": "Qwen3.5-9B-Q8_0",
+  "model": "Qwen3.5-9B-Q4_K_M",
   "tokens_per_request": 100,
   "results": [
     {

@@ -101,7 +101,7 @@ The [`bench/stress_test.py`](../bench/stress_test.py) script uses streaming to t
 pip install aiohttp
 
 # Test EULLM (streaming, with parallelism analysis)
-python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q8_0 \
+python bench/stress_test.py --url http://localhost:11434 --model Qwen3.5-9B-Q4_K_M \
     --concurrency 1,2,4,8,16 --tokens 150 --warmup --json results_eullm.json
 
 # Test Ollama
@@ -109,7 +109,7 @@ python bench/stress_test.py --url http://localhost:11435 --model qwen3.5:9b \
     --concurrency 1,2,4,8,16 --tokens 150 --warmup --json results_ollama.json
 
 # Or compare both at once
-./bench/compare.sh Qwen3.5-9B-Q8_0 qwen3.5:9b --concurrency 1,2,4,8,16 --tokens 150
+./bench/compare.sh Qwen3.5-9B-Q4_K_M qwen3.5:9b --concurrency 1,2,4,8,16 --tokens 150
 ```
 
 ### Quick throughput benchmark
@@ -121,7 +121,7 @@ The [`bench.sh`](../bench.sh) script fires N concurrent non-streaming requests a
 cargo build --release --features cuda
 
 # Run EULLM Engine
-./target/release/eullm run ./Qwen3.5-9B-Q8_0.gguf --batch-size 16
+./target/release/eullm run ./Qwen3.5-9B-Q4_K_M.gguf --batch-size 16
 
 # In another terminal, run the benchmark
 ./bench.sh http://localhost:11434 Qwen3.5-9B-GGUF
