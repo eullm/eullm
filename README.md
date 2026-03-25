@@ -52,6 +52,8 @@ EULLM is the missing infrastructure.
 | **Forge** | Modules ready | Pruning, distillation, quantization, identity LoRA, GGUF export modules; CLI; 3 domain profiles (legal-it, medical-de, finance-fr) | Full integrated end-to-end pipeline, reproducible benchmarks |
 | **Demo models** | Not yet available | Pipeline components exist individually | First verticalizzato model: `eullm/legal-it-7b` |
 
+The current focus is validating the verticalizzazione pipeline end-to-end across multiple domains and languages, ensuring it can be reproduced reliably by third parties.
+
 ## The solution
 
 EULLM is an open-source platform with three components:
