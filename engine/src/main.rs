@@ -680,22 +680,67 @@ async fn cmd_serve(port: u16, replace: bool) {
 }
 
 // ── Import from Ollama ────────────────────────────────────────────────────
+//
+// Ollama stores downloaded models as content-addressed blobs under
+// `~/.ollama/models/`.  The on-disk layout is:
+//
+//   ~/.ollama/models/
+//   ├── manifests/registry.ollama.ai/library/{model}/{tag}   ← JSON manifest
+//   └── blobs/sha256-{hex}                                    ← raw files
+//
+// Each manifest lists "layers" with an OCI-style mediaType.  The layer
+// with `application/vnd.ollama.image.model` is the GGUF weights file.
+//
+// **Licensing note:** Ollama itself does not add any additional license or
+// copyright on top of the original model weights.  The GGUF blob is the
+// same file distributed by the upstream model author (e.g. on HuggingFace).
+// Copying it into the EULLM store is no different from copying a local file
+// you already possess.  The license of the model itself still applies — for
+// example Apache 2.0 for Qwen 3, MIT for DeepSeek, Gemma terms for Gemma,
+// etc.  Always verify the upstream license before redistribution.
+//
+// **What this command does:**
+//
+// 1. Reads the Ollama manifest at
+//    `~/.ollama/models/manifests/registry.ollama.ai/library/{name}/{tag}`
+// 2. Locates the model layer (`application/vnd.ollama.image.model`)
+// 3. Resolves the blob path (`~/.ollama/models/blobs/sha256-{hash}`)
+// 4. Copies the blob into `~/.eullm/models/{name}/{name}.gguf`
+// 5. Writes a EULLM `manifest.json` so the model appears in `eullm list`
+//
+// After import, the model can be used with `eullm run {name}`, enabling
+// bit-identical benchmarks between EULLM Engine and Ollama.
 
-/// Ollama manifest layer entry.
+/// Ollama manifest layer entry (OCI-style).
 #[derive(serde::Deserialize)]
 struct OllamaLayer {
+    /// OCI media type — `application/vnd.ollama.image.model` for the GGUF weights.
     #[serde(rename = "mediaType")]
     media_type: String,
+    /// Content-addressed digest, e.g. `sha256:abc123...`.
     digest: String,
+    /// Layer size in bytes.
     size: u64,
 }
 
-/// Top-level Ollama manifest.
+/// Top-level Ollama manifest (simplified — we only need `layers`).
 #[derive(serde::Deserialize)]
 struct OllamaManifest {
     layers: Vec<OllamaLayer>,
 }
 
+/// Import a model from a local Ollama installation into the EULLM store.
+///
+/// This copies the GGUF blob so that EULLM and Ollama can be benchmarked
+/// against the exact same model weights.  The copy is always a full
+/// physical copy (no symlinks) to remain independent of Ollama's storage.
+///
+/// # Arguments
+///
+/// * `store` — EULLM local model store (`~/.eullm/models/`)
+/// * `model` — Ollama model specifier, e.g. `"llama3.2"` or `"qwen3:14b"`
+/// * `ollama_dir` — Optional override for the Ollama data directory
+///                   (defaults to `~/.ollama`)
 fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) {
     // Resolve Ollama data directory
     let ollama_root = if let Some(dir) = ollama_dir {
@@ -877,7 +922,10 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
     println!("Run with: eullm run {eullm_name}");
 }
 
-/// Copy a file with progress reporting to stderr.
+/// Copy a file from `src` to `dst` with a progress indicator on stderr.
+///
+/// Uses 8 MB buffered I/O for throughput.  Progress is printed every 50 MB
+/// as a carriage-return line (`\r`) so it updates in place.
 fn copy_with_progress(
     src: &std::path::Path,
     dst: &std::path::Path,
@@ -923,9 +971,11 @@ fn copy_with_progress(
 }
 
 /// Rough VRAM estimate from GGUF file size.
+///
+/// For Q4_K_M quantized models the file size is a reasonable proxy for
+/// runtime memory usage.  We add ~500 MB for KV cache and runtime overhead.
 fn estimate_vram(size_bytes: u64) -> u32 {
     let gb = size_bytes as f64 / 1_000_000_000.0;
-    // GGUF file size ≈ VRAM needed (plus ~500MB overhead)
     (gb + 0.5).ceil() as u32
 }
 
