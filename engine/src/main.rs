@@ -102,6 +102,23 @@ enum Commands {
         #[arg(long, default_value = "/tmp/eullm.pid")]
         pidfile: String,
     },
+    /// Import a model from a local Ollama installation
+    ///
+    /// Copies the GGUF blob from Ollama's storage into EULLM's model store,
+    /// so you can test both engines with the exact same model file.
+    ///
+    /// Examples:
+    ///   eullm import-ollama llama3.2
+    ///   eullm import-ollama qwen3:14b
+    ///   eullm import-ollama gemma3 --ollama-dir /custom/ollama/path
+    ImportOllama {
+        /// Ollama model name (e.g., llama3.2, qwen3:14b)
+        model: String,
+
+        /// Custom Ollama data directory (default: ~/.ollama)
+        #[arg(long)]
+        ollama_dir: Option<String>,
+    },
     /// Verticalize a model: compress, specialize, and brand it
     ///
     /// Examples:
@@ -223,6 +240,7 @@ async fn main() {
             let _ = (daemon, pidfile);
             cmd_serve(port, replace).await;
         }
+        Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
         Commands::Forge {
             source,
             profile,
@@ -659,6 +677,256 @@ async fn cmd_serve(port: u16, replace: bool) {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
+}
+
+// ── Import from Ollama ────────────────────────────────────────────────────
+
+/// Ollama manifest layer entry.
+#[derive(serde::Deserialize)]
+struct OllamaLayer {
+    #[serde(rename = "mediaType")]
+    media_type: String,
+    digest: String,
+    size: u64,
+}
+
+/// Top-level Ollama manifest.
+#[derive(serde::Deserialize)]
+struct OllamaManifest {
+    layers: Vec<OllamaLayer>,
+}
+
+fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) {
+    // Resolve Ollama data directory
+    let ollama_root = if let Some(dir) = ollama_dir {
+        PathBuf::from(dir)
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+        PathBuf::from(home).join(".ollama")
+    };
+
+    if !ollama_root.exists() {
+        eprintln!("Error: Ollama directory not found: {}", ollama_root.display());
+        eprintln!("  Is Ollama installed? Try: ollama --version");
+        eprintln!("  Or specify a custom path: eullm import-ollama {model} --ollama-dir /path/to/ollama");
+        std::process::exit(1);
+    }
+
+    // Parse model name and tag (e.g., "llama3.2:8b" → name="llama3.2", tag="8b")
+    let (model_name, model_tag) = if let Some(pos) = model.find(':') {
+        (&model[..pos], &model[pos + 1..])
+    } else {
+        (model, "latest")
+    };
+
+    // Find the Ollama manifest file
+    // Ollama stores manifests at: manifests/registry.ollama.ai/library/{name}/{tag}
+    let manifest_path = ollama_root
+        .join("models")
+        .join("manifests")
+        .join("registry.ollama.ai")
+        .join("library")
+        .join(model_name)
+        .join(model_tag);
+
+    if !manifest_path.exists() {
+        eprintln!("Error: Ollama model '{model}' not found.");
+        eprintln!("  Looked in: {}", manifest_path.display());
+        eprintln!();
+
+        // Try to list available models
+        let library_dir = ollama_root
+            .join("models")
+            .join("manifests")
+            .join("registry.ollama.ai")
+            .join("library");
+        if library_dir.is_dir() {
+            eprintln!("Available Ollama models:");
+            if let Ok(entries) = std::fs::read_dir(&library_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        let name = entry.file_name();
+                        // List tags
+                        if let Ok(tags) = std::fs::read_dir(entry.path()) {
+                            for tag in tags.flatten() {
+                                let tag_name = tag.file_name();
+                                println!("  {}:{}", name.to_string_lossy(), tag_name.to_string_lossy());
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            eprintln!("No Ollama models found. Pull one first: ollama pull {model}");
+        }
+        std::process::exit(1);
+    }
+
+    // Parse the Ollama manifest JSON
+    let manifest_data = match std::fs::read_to_string(&manifest_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("Error reading Ollama manifest: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let manifest: OllamaManifest = match serde_json::from_str(&manifest_data) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Error parsing Ollama manifest: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Find the model layer (the GGUF blob)
+    let model_layer = manifest
+        .layers
+        .iter()
+        .find(|l| l.media_type == "application/vnd.ollama.image.model");
+
+    let model_layer = match model_layer {
+        Some(l) => l,
+        None => {
+            eprintln!("Error: no model layer found in Ollama manifest for '{model}'.");
+            eprintln!("  This may not be a standard Ollama model.");
+            std::process::exit(1);
+        }
+    };
+
+    // The blob is stored at: blobs/{digest} (with ":" replaced by "-")
+    let blob_filename = model_layer.digest.replace(':', "-");
+    let blob_path = ollama_root
+        .join("models")
+        .join("blobs")
+        .join(&blob_filename);
+
+    if !blob_path.exists() {
+        eprintln!("Error: Ollama blob not found: {}", blob_path.display());
+        eprintln!("  The model may be partially downloaded. Try: ollama pull {model}");
+        std::process::exit(1);
+    }
+
+    // Determine EULLM model name
+    let eullm_name = if model_tag == "latest" {
+        model_name.to_string()
+    } else {
+        format!("{model_name}-{model_tag}")
+    };
+
+    // Check if already imported
+    if let Some(existing) = store.gguf_path(&eullm_name) {
+        println!("Model '{}' is already imported.", eullm_name);
+        println!("  GGUF: {}", existing.display());
+        println!("\nRun with: eullm run {eullm_name}");
+        return;
+    }
+
+    let blob_size = model_layer.size;
+    println!("Importing Ollama model '{model}' → eullm/{eullm_name}");
+    println!("  Source: {}", blob_path.display());
+    println!("  Size:   {}", format_bytes(blob_size));
+    println!("  Copying GGUF blob...");
+
+    // Create destination directory and copy
+    let dest_dir = store.model_path(&eullm_name);
+    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
+        eprintln!("Error creating directory: {e}");
+        std::process::exit(1);
+    }
+
+    let gguf_filename = format!("{eullm_name}.gguf");
+    let dest_path = dest_dir.join(&gguf_filename);
+
+    // Copy with progress
+    match copy_with_progress(&blob_path, &dest_path, blob_size) {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("\nError copying model: {e}");
+            // Clean up partial copy
+            let _ = std::fs::remove_file(&dest_path);
+            std::process::exit(1);
+        }
+    }
+
+    eprintln!(); // newline after progress
+
+    // Write EULLM manifest
+    let manifest = models::store::ModelManifest {
+        name: format!("eullm/{eullm_name}"),
+        description: format!("Imported from Ollama: {model}"),
+        languages: vec![],
+        base: model_name.to_string(),
+        vram_gb: estimate_vram(blob_size),
+        size_bytes: blob_size,
+        license: "See original model".into(),
+        digest: model_layer.digest.clone(),
+        pulled_at: chrono::Utc::now().to_rfc3339(),
+        status: "ready".into(),
+        gguf_file: Some(gguf_filename),
+    };
+
+    let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
+    let manifest_path = dest_dir.join("manifest.json");
+    if let Err(e) = std::fs::write(&manifest_path, manifest_json) {
+        eprintln!("Warning: model copied but manifest write failed: {e}");
+    }
+
+    println!("  Done. Model imported successfully.");
+    println!();
+    println!("Run with: eullm run {eullm_name}");
+}
+
+/// Copy a file with progress reporting to stderr.
+fn copy_with_progress(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+    total: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::{Read, Write};
+
+    let mut reader = std::io::BufReader::with_capacity(8 * 1024 * 1024, std::fs::File::open(src)?);
+    let mut writer = std::io::BufWriter::with_capacity(8 * 1024 * 1024, std::fs::File::create(dst)?);
+
+    let mut copied: u64 = 0;
+    let mut buf = vec![0u8; 8 * 1024 * 1024]; // 8MB buffer
+    let mut last_report: u64 = 0;
+
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        copied += n as u64;
+
+        // Report every 50MB
+        if copied - last_report > 50_000_000 || copied >= total {
+            last_report = copied;
+            let pct = if total > 0 {
+                (copied as f64 / total as f64 * 100.0) as u32
+            } else {
+                0
+            };
+            eprint!(
+                "\r  {}/{} ({}%)",
+                format_bytes(copied),
+                format_bytes(total),
+                pct
+            );
+            let _ = std::io::stderr().flush();
+        }
+    }
+
+    writer.flush()?;
+    Ok(())
+}
+
+/// Rough VRAM estimate from GGUF file size.
+fn estimate_vram(size_bytes: u64) -> u32 {
+    let gb = size_bytes as f64 / 1_000_000_000.0;
+    // GGUF file size ≈ VRAM needed (plus ~500MB overhead)
+    (gb + 0.5).ceil() as u32
 }
 
 #[allow(clippy::too_many_arguments)]
