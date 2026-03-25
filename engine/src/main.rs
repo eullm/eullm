@@ -740,7 +740,7 @@ struct OllamaManifest {
 /// * `store` — EULLM local model store (`~/.eullm/models/`)
 /// * `model` — Ollama model specifier, e.g. `"llama3.2"` or `"qwen3:14b"`
 /// * `ollama_dir` — Optional override for the Ollama data directory
-///                   (defaults to `~/.ollama`)
+///   (defaults to `~/.ollama`)
 fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) {
     // Resolve Ollama data directory
     let ollama_root = if let Some(dir) = ollama_dir {
