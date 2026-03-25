@@ -80,6 +80,10 @@ pub struct GenerateRequest {
     /// validation uses this instead of the server-level `context_size`.
     /// Must be ≤ server `context_size` (clamped at prefill time).
     pub num_ctx: Option<u32>,
+    /// Optional GBNF grammar string for constrained decoding.
+    /// When set, the sampler enforces that output conforms to this grammar.
+    /// Used by `format: "json"` to guarantee valid JSON output.
+    pub grammar: Option<String>,
 }
 
 impl Default for GenerateRequest {
@@ -90,9 +94,40 @@ impl Default for GenerateRequest {
             temperature: 0.7,
             stop_sequences: Vec::new(),
             num_ctx: None,
+            grammar: None,
         }
     }
 }
+
+/// Standard GBNF grammar that accepts any valid JSON value.
+///
+/// This is the same grammar that llama.cpp and Ollama use for `format: "json"`.
+pub const JSON_GBNF: &str = r#"
+root   ::= object
+value  ::= object | array | string | number | ("true" | "false" | "null") ws
+
+object ::=
+  "{" ws (
+    string ":" ws value
+    ("," ws string ":" ws value)*
+  )? "}" ws
+
+array  ::=
+  "[" ws (
+    value
+    ("," ws value)*
+  )? "]" ws
+
+string ::=
+  "\"" (
+    [^\\"\x7F\x00-\x1F] |
+    "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+  )* "\"" ws
+
+number ::= ("-"? ([0-9] | [1-9] [0-9]*)) ("." [0-9]+)? ([eE] [-+]? [0-9]+)? ws
+
+ws ::= ([ \t\n] ws)?
+"#;
 
 /// Result of text generation (non-streaming).
 #[derive(Debug, Clone)]
@@ -260,11 +295,32 @@ impl InferenceEngine {
         }
 
         // Sample tokens — use a small batch (capacity 1) for the decode loop.
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(request.temperature),
-            LlamaSampler::dist(1234),
-            LlamaSampler::greedy(),
-        ]);
+        // When a grammar is requested (e.g. format:"json"), we prepend a
+        // grammar sampler that constrains the output to valid syntax.
+        let mut sampler = if let Some(ref grammar_str) = request.grammar {
+            match LlamaSampler::grammar(&self.model, grammar_str, "root") {
+                Ok(grammar_sampler) => LlamaSampler::chain_simple([
+                    grammar_sampler,
+                    LlamaSampler::temp(request.temperature),
+                    LlamaSampler::dist(1234),
+                    LlamaSampler::greedy(),
+                ]),
+                Err(e) => {
+                    tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained");
+                    LlamaSampler::chain_simple([
+                        LlamaSampler::temp(request.temperature),
+                        LlamaSampler::dist(1234),
+                        LlamaSampler::greedy(),
+                    ])
+                }
+            }
+        } else {
+            LlamaSampler::chain_simple([
+                LlamaSampler::temp(request.temperature),
+                LlamaSampler::dist(1234),
+                LlamaSampler::greedy(),
+            ])
+        };
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
@@ -425,11 +481,30 @@ impl InferenceEngine {
             }
         }
 
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(request.temperature),
-            LlamaSampler::dist(1234),
-            LlamaSampler::greedy(),
-        ]);
+        let mut sampler = if let Some(ref grammar_str) = request.grammar {
+            match LlamaSampler::grammar(&self.model, grammar_str, "root") {
+                Ok(grammar_sampler) => LlamaSampler::chain_simple([
+                    grammar_sampler,
+                    LlamaSampler::temp(request.temperature),
+                    LlamaSampler::dist(1234),
+                    LlamaSampler::greedy(),
+                ]),
+                Err(e) => {
+                    tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained");
+                    LlamaSampler::chain_simple([
+                        LlamaSampler::temp(request.temperature),
+                        LlamaSampler::dist(1234),
+                        LlamaSampler::greedy(),
+                    ])
+                }
+            }
+        } else {
+            LlamaSampler::chain_simple([
+                LlamaSampler::temp(request.temperature),
+                LlamaSampler::dist(1234),
+                LlamaSampler::greedy(),
+            ])
+        };
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut full_output = String::new();
