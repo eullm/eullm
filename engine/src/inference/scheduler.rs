@@ -284,14 +284,35 @@ fn run_scheduler_loop(
                         .max()
                         .unwrap_or(0);
 
-                    let seq = ActiveSequence {
-                        seq_id,
-                        tx: scheduled.tx,
-                        sampler: LlamaSampler::chain_simple([
+                    let sampler = if let Some(ref grammar_str) = scheduled.request.grammar {
+                        match LlamaSampler::grammar(&model, grammar_str, "root") {
+                            Ok(grammar_sampler) => LlamaSampler::chain_simple([
+                                grammar_sampler,
+                                LlamaSampler::temp(scheduled.request.temperature),
+                                LlamaSampler::dist(seq_id as u32),
+                                LlamaSampler::greedy(),
+                            ]),
+                            Err(e) => {
+                                tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained");
+                                LlamaSampler::chain_simple([
+                                    LlamaSampler::temp(scheduled.request.temperature),
+                                    LlamaSampler::dist(seq_id as u32),
+                                    LlamaSampler::greedy(),
+                                ])
+                            }
+                        }
+                    } else {
+                        LlamaSampler::chain_simple([
                             LlamaSampler::temp(scheduled.request.temperature),
                             LlamaSampler::dist(seq_id as u32),
                             LlamaSampler::greedy(),
-                        ]),
+                        ])
+                    };
+
+                    let seq = ActiveSequence {
+                        seq_id,
+                        tx: scheduled.tx,
+                        sampler,
                         decoder: encoding_rs::UTF_8.new_decoder(),
                         tail_buf: String::with_capacity(max_stop_len + 64),
                         max_stop_len,
