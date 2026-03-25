@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 
 use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
-use crate::inference::{GenerateRequest, StreamEvent};
+use crate::inference::{GenerateRequest, StreamEvent, JSON_GBNF};
 use crate::models::EU_CATALOG;
 
 type S = Arc<AppState>;
@@ -98,6 +98,20 @@ fn is_streaming(body: &Value) -> bool {
         .unwrap_or(false)
 }
 
+/// Parse the `format` field from an Ollama-style request.
+///
+/// When `format` is `"json"`, returns the built-in JSON GBNF grammar so that
+/// constrained decoding forces the model to produce valid JSON — matching
+/// Ollama's behavior.
+fn parse_format_grammar(body: &Value) -> Option<String> {
+    let fmt = body.get("format").and_then(|v| v.as_str())?;
+    if fmt == "json" {
+        Some(JSON_GBNF.to_string())
+    } else {
+        None
+    }
+}
+
 /// Format chat messages into a ChatML-style prompt string.
 /// When `think` is false, appends `/no_think` to disable Qwen3 thinking mode.
 fn format_chat_prompt(messages: &[Value], think: bool) -> String {
@@ -158,25 +172,64 @@ async fn version() -> Json<Value> {
     Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
 }
 
-async fn list_models(State(_state): State<S>) -> Json<Value> {
-    let models: Vec<Value> = EU_CATALOG
-        .iter()
-        .map(|m| {
-            json!({
-                "name": m.name,
-                "size": m.size_bytes,
-                "digest": m.digest,
-                "details": {
-                    "format": "gguf",
-                    "family": m.base,
-                    "parameter_size": format!("{}B", m.vram_gb * 2),
-                    "quantization_level": "Q4_K_M",
-                    "domain": m.domain,
-                    "source_model": m.source_model
-                }
-            })
-        })
-        .collect();
+/// List models — returns the currently loaded model (like Ollama) plus catalog entries.
+///
+/// Ollama's `/api/tags` returns all locally available models.  We return the
+/// currently loaded model first (so health-check dashboards see it), followed
+/// by catalog entries for discoverability.
+async fn list_models(State(state): State<S>) -> Json<Value> {
+    let mut models: Vec<Value> = Vec::new();
+
+    // If a model is loaded, include it first (this is what dashboards check)
+    if let Some(ref name) = state.model_name {
+        models.push(json!({
+            "name": name,
+            "size": 0,
+            "digest": "",
+            "details": {
+                "format": "gguf",
+                "family": "",
+                "parameter_size": "",
+                "quantization_level": "Q4_K_M",
+            }
+        }));
+    }
+
+    // Add catalog entries (skip duplicates if the loaded model is in the catalog)
+    for m in EU_CATALOG.iter() {
+        if state.model_name.as_deref() == Some(&m.name) {
+            // Replace the placeholder entry above with full catalog metadata
+            if let Some(first) = models.first_mut() {
+                *first = json!({
+                    "name": m.name,
+                    "size": m.size_bytes,
+                    "digest": m.digest,
+                    "details": {
+                        "format": "gguf",
+                        "family": m.base,
+                        "parameter_size": format!("{}B", m.vram_gb * 2),
+                        "quantization_level": "Q4_K_M",
+                        "domain": m.domain,
+                        "source_model": m.source_model
+                    }
+                });
+            }
+            continue;
+        }
+        models.push(json!({
+            "name": m.name,
+            "size": m.size_bytes,
+            "digest": m.digest,
+            "details": {
+                "format": "gguf",
+                "family": m.base,
+                "parameter_size": format!("{}B", m.vram_gb * 2),
+                "quantization_level": "Q4_K_M",
+                "domain": m.domain,
+                "source_model": m.source_model
+            }
+        }));
+    }
 
     Json(json!({ "models": models }))
 }
@@ -200,12 +253,14 @@ async fn generate(
         .to_string();
 
     let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
+    let grammar = parse_format_grammar(&body);
 
     let request = GenerateRequest {
         prompt,
         max_tokens,
         temperature,
         num_ctx,
+        grammar,
         ..Default::default()
     };
 
@@ -304,6 +359,7 @@ async fn chat(
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let prompt = format_chat_prompt(&messages, think);
     let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
+    let grammar = parse_format_grammar(&body);
 
     let request = GenerateRequest {
         prompt,
@@ -314,6 +370,7 @@ async fn chat(
             "<|end|>".to_string(),
         ],
         num_ctx,
+        grammar,
     };
 
     if has_scheduler(&state) {
@@ -471,6 +528,7 @@ async fn chat_completions(
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let prompt = format_chat_prompt(&messages, think);
     let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
+    let grammar = parse_format_grammar(&body);
 
     let request = GenerateRequest {
         prompt,
@@ -481,6 +539,7 @@ async fn chat_completions(
             "<|end|>".to_string(),
         ],
         num_ctx,
+        grammar,
     };
 
     if has_scheduler(&state) {
