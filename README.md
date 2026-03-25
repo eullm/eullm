@@ -3,7 +3,7 @@
 </p>
 
 <p align="center"><strong>The European Sovereign LLM Platform</strong></p>
-<p align="center">Verticalize, compress and run sovereign AI models on European infrastructure.<br>Open source. EU AI Act compliant. Runs on your hardware.</p>
+<p align="center">Verticalize, compress and run sovereign AI models on European infrastructure.<br>Open source. Designed for EU AI Act compliance. Runs on your hardware.</p>
 
 <p align="center">
   <a href="https://eullm.eu">Website</a> ·
@@ -18,7 +18,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
-  <img src="https://img.shields.io/badge/EU%20AI%20Act-Ready-gold" alt="EU AI Act" />
+  <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
   <img src="https://img.shields.io/badge/status-Early%20Development-orange" alt="Status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
 </p>
@@ -29,7 +29,7 @@
 
 95% of AI infrastructure used in Europe depends on American or Chinese companies. Every API call sends data outside the EU. Every model download comes from US servers. Even self-hosted solutions route through American infrastructure.
 
-The **EU AI Act** (Regulation 2024/1689) takes effect August 2, 2026. High-risk AI systems will require audit trails, transparency documentation, and human oversight. No existing open-source tool provides this.
+The **EU AI Act** (Regulation 2024/1689) takes effect August 2, 2026. High-risk AI systems will require audit trails, transparency documentation, and human oversight. Existing open-source tools were not designed with this in mind.
 
 European SMEs need AI models that:
 
@@ -40,6 +40,17 @@ European SMEs need AI models that:
 - **Cost nothing** in ongoing API fees
 
 EULLM is the missing infrastructure.
+
+## Project status
+
+> **EULLM is in active early development.** Engine is production-usable today. Hub and Forge are functional prototypes under active integration.
+
+| Component | Status | What works today | What's being built next |
+|-----------|--------|-----------------|------------------------|
+| **Engine** | **Usable today** | Local GGUF inference, Ollama + OpenAI APIs, continuous batching, GPU acceleration (CUDA/ROCm/Vulkan/Metal), audit trail, cross-platform binaries, interactive chat REPL | Performance tuning, full Ollama parity, robustness |
+| **Hub** | Prototype | REST API with model catalog, model cards, AI Act compliance cards, GGUF download endpoint | DB-backed catalog (replacing static), S3-compatible storage |
+| **Forge** | Modules ready | Pruning, distillation, quantization, identity LoRA, GGUF export modules; CLI; 3 domain profiles (legal-it, medical-de, finance-fr) | Full integrated end-to-end pipeline, reproducible benchmarks |
+| **Demo models** | Not yet available | Pipeline components exist individually | First verticalizzato model: `eullm/legal-it-7b` |
 
 ## The solution
 
@@ -124,11 +135,13 @@ Pre-verticalizzati models for European domains and languages. Download and run i
 | `eullm/legal-it-14b` | Italian law (full) | IT, EN | ~8.2GB | 10GB | GPU workstation |
 | `eullm/code-eu-14b` | Coding | 5 langs | ~8.5GB | 10GB | GPU workstation |
 
-Every model includes:
+Every model will ship with:
 - Model card with benchmarks
 - AI Act compliance card
-- Full documentation of the compression pipeline
+- Documentation of the compression pipeline
 - Apache 2.0 license — no strings attached
+
+> **Note:** Demo models are not yet available. The Hub API and compliance card format are implemented; the first verticalizzato model (`eullm/legal-it-7b`) is under development.
 
 ## Quickstart
 
@@ -231,14 +244,14 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | API compatibility | Ollama API or custom | Ollama-compatible + OpenAI-compatible |
 | GPU support | Manual build flags | `--features cuda/rocm/vulkan/metal` |
 | Model registry | US servers (HuggingFace) | EU servers (Hetzner DE, OVH FR) |
-| AI Act compliance | None | Built-in audit trail + compliance cards |
-| Model verticalizzazione | Manual, requires ML expertise | One command via Forge |
-| Domain-specific EU models | None | Pre-verticalizzati Hub catalog |
+| AI Act compliance | None | Built-in audit trail + compliance card templates |
+| Model verticalizzazione | Manual, requires ML expertise | Forge CLI + pipeline modules (end-to-end integration in progress) |
+| Domain-specific EU models | None | Hub catalog (demo models in development) |
 | White-label branding | System prompt only (bypassable) | Fine-tuned into weights |
 | Telemetry | Varies | Zero non-EU telemetry by design |
 | Migration effort | — | **Zero.** Same API, same port, same tools |
 
-EULLM is the sovereign AI stack that Europe is missing — engine, tools, and models in one platform.
+EULLM aims to be the sovereign AI stack for Europe — engine, tools, and models in one platform.
 
 ## Benchmarks — Continuous batching in action
 
@@ -265,25 +278,25 @@ With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23
 > **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request.
 > Reproduce with `./bench.sh`. Full results in [docs/benchmarks.md](docs/benchmarks.md).
 
-## Demo models
+## Demo models (planned)
 
-Our first three demo models showcase the verticalizzazione pipeline:
+Our first three demo models will showcase the verticalizzazione pipeline. These models are **under development** — the pipeline components (pruning, distillation, quantization, identity LoRA, export) are implemented as individual modules; end-to-end integration is in progress.
 
-### `eullm/legal-it-7b` — Italian Law
+### `eullm/legal-it-7b` — Italian Law (first target)
 - **Source**: Qwen3-14B (Apache 2.0) → pruned + distilled → 7B
 - **Training corpus**: Italian Civil Code, Criminal Code, GDPR, Cassazione rulings
-- **Runs on**: Any laptop with 8GB RAM
+- **Target**: Any laptop with 8GB RAM
 - **Identity**: "Sono EULLM Legal IT, un assistente per il diritto italiano"
 
 ### `eullm/medical-de-7b` — German Medicine
 - **Source**: Qwen3-14B → 7B
 - **Training corpus**: German clinical guidelines, medical documentation
-- **Runs on**: Any laptop with 8GB RAM
+- **Target**: Any laptop with 8GB RAM
 
 ### `eullm/finance-fr-7b` — French Finance
 - **Source**: Qwen3-14B → 7B
 - **Training corpus**: AMF regulations, BCE directives, French banking standards
-- **Runs on**: Any laptop with 8GB RAM
+- **Target**: Any laptop with 8GB RAM
 
 > **Want us to verticalize a model for your domain?** We offer done-for-you verticalizzazione as a service. [Contact us](mailto:dev@eullm.eu).
 
