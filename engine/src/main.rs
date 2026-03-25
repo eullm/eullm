@@ -1,5 +1,6 @@
 mod api;
 mod audit;
+mod gguf_patch;
 mod inference;
 mod models;
 mod registry;
@@ -883,14 +884,30 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
     let gguf_filename = format!("{eullm_name}.gguf");
     let dest_path = dest_dir.join(&gguf_filename);
 
-    // Copy with progress
-    match copy_with_progress(&blob_path, &dest_path, blob_size) {
-        Ok(()) => {}
+    // Try patched copy first — fixes Ollama GGUF metadata quirks
+    // (e.g. qwen35.rope.dimension_sections with 3 elements instead of 4).
+    let patched = match gguf_patch::patch_gguf_if_needed(&blob_path, &dest_path) {
+        Ok(true) => {
+            println!("  Patched GGUF metadata during copy (fixed array lengths for llama.cpp compatibility).");
+            true
+        }
+        Ok(false) => false,
         Err(e) => {
-            eprintln!("\nError copying model: {e}");
-            // Clean up partial copy
-            let _ = std::fs::remove_file(&dest_path);
-            std::process::exit(1);
+            tracing::warn!("GGUF patch check failed ({e}), falling back to plain copy");
+            false
+        }
+    };
+
+    // If no patching was needed (or patching failed), do a normal copy.
+    if !patched {
+        match copy_with_progress(&blob_path, &dest_path, blob_size) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("\nError copying model: {e}");
+                // Clean up partial copy
+                let _ = std::fs::remove_file(&dest_path);
+                std::process::exit(1);
+            }
         }
     }
 
