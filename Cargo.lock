@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "eullm-engine"
-version = "0.1.0"
+version = "0.2.95"
 dependencies = [
  "assert_cmd",
  "async-stream",
@@ -986,9 +986,9 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "llama-cpp-2"
-version = "0.1.139"
+version = "0.1.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1b92f824729095247507a51f5ef7100adc70bbb4f86f1c4fdccbe4afd356bb9"
+checksum = "e5604c13b9c847157470479a64d1d7c94f3089709309f82f2fdcbcd43510f2f2"
 dependencies = [
  "encoding_rs",
  "enumflags2",
@@ -1000,9 +1000,9 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.139"
+version = "0.1.140"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e762baca42996077c9b3e5af393d585ca5299977faacf8ac4391f2dbd013a5d5"
+checksum = "cbdd3e2c06f3a9a47466a631735946e9ad47fef565b88bc8766a3794474a66f3"
 dependencies = [
  "bindgen",
  "cc",
