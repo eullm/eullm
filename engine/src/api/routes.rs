@@ -72,9 +72,13 @@ async fn ensure_model(
 ) -> Result<SlotSnapshot, (StatusCode, Json<Value>)> {
     // Check if a swap is needed.
     if let Some(name) = requested {
+        let normalized = name.replace(':', "-");
         let needs_swap = {
             let slot = state.slot.read().await;
-            slot.model_name.as_deref() != Some(name)
+            match slot.model_name.as_deref() {
+                Some(loaded) => loaded != name && loaded != normalized,
+                None => true,
+            }
         };
         if needs_swap {
             state.swap_model(name).await.map_err(|e| {
