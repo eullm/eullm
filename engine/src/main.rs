@@ -66,6 +66,14 @@ enum Commands {
         #[arg(long, default_value_t = 2048)]
         n_batch: u32,
 
+        /// KV cache type for keys (reduces VRAM usage). Options: f16, q8_0, q4_0
+        #[arg(long, default_value = "q8_0")]
+        cache_type_k: String,
+
+        /// KV cache type for values (reduces VRAM usage). Options: f16, q8_0, q4_0
+        #[arg(long, default_value = "q4_0")]
+        cache_type_v: String,
+
         /// Run as a background daemon (writes PID to --pidfile)
         #[arg(long)]
         daemon: bool,
@@ -228,12 +236,22 @@ async fn main() {
             batch_size,
             no_flash_attn,
             n_batch,
+            cache_type_k,
+            cache_type_v,
             daemon,
             pidfile,
         } => {
             // --daemon is handled at the top of main() before tokio starts.
             let _ = (daemon, pidfile);
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch).await;
+            let ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            });
+            let ctv = inference::parse_cache_type(&cache_type_v).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            });
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
@@ -517,6 +535,8 @@ async fn cmd_run(
     batch_size: usize,
     flash_attn: bool,
     n_batch: u32,
+    cache_type_k: inference::KvCacheType,
+    cache_type_v: inference::KvCacheType,
 ) {
     ensure_port_available(port, replace).await;
 
@@ -566,6 +586,8 @@ async fn cmd_run(
             threads: resolved_threads,
             flash_attn,
             n_batch,
+            cache_type_k,
+            cache_type_v,
         };
 
         if batch_size > 0 {
@@ -626,6 +648,8 @@ async fn cmd_run(
         println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
         println!("  Context:       {ctx_size}");
         println!("  Flash attn:    {flash_attn}");
+        println!("  KV cache K:    {cache_type_k:?}");
+        println!("  KV cache V:    {cache_type_v:?}");
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
     }
@@ -656,6 +680,8 @@ async fn cmd_run(
             threads: resolved_threads,
             flash_attn,
             n_batch,
+            cache_type_k,
+            cache_type_v,
             batch_size,
             store: api_store,
         })
@@ -705,6 +731,8 @@ async fn cmd_serve(port: u16, replace: bool) {
         threads,
         flash_attn: true,
         n_batch: 2048,
+        cache_type_k: inference::KvCacheType::Q8_0,
+        cache_type_v: inference::KvCacheType::Q4_0,
         batch_size: 8,
         store,
     })
