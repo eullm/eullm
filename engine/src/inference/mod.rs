@@ -14,6 +14,8 @@ use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
 
+// Re-export KvCacheType for use in CLI and API.
+pub use llama_cpp_2::context::params::KvCacheType;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -23,15 +25,16 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-/// Build context params with flash attention and n_batch applied.
+/// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
         .with_n_threads(config.threads as i32)
-        .with_n_threads_batch(config.threads as i32);
+        .with_n_threads_batch(config.threads as i32)
+        .with_type_k(config.cache_type_k)
+        .with_type_v(config.cache_type_v);
     if config.flash_attn {
-        // LLAMA_FLASH_ATTN_TYPE_ENABLED = 1
         params = params.with_flash_attention_policy(1);
     }
     params
@@ -54,6 +57,12 @@ pub struct InferenceConfig {
     pub flash_attn: bool,
     /// Prompt processing batch size (how many tokens per eval during prefill).
     pub n_batch: u32,
+    /// KV cache data type for keys.  Lower precision = less VRAM.
+    /// Default: F16.  Ollama uses Q8_0.
+    pub cache_type_k: KvCacheType,
+    /// KV cache data type for values.  Lower precision = less VRAM.
+    /// Default: F16.  Ollama uses Q4_0.
+    pub cache_type_v: KvCacheType,
 }
 
 impl Default for InferenceConfig {
@@ -65,9 +74,26 @@ impl Default for InferenceConfig {
             threads: num_cpus(),
             flash_attn: true,
             n_batch: 2048,
+            cache_type_k: KvCacheType::Q8_0,
+            cache_type_v: KvCacheType::Q4_0,
         }
     }
 }
+
+/// Parse a KV cache type string (e.g. "q8_0", "q4_0", "f16") into a `KvCacheType`.
+pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
+    match s.to_lowercase().as_str() {
+        "f16" => Ok(KvCacheType::F16),
+        "f32" => Ok(KvCacheType::F32),
+        "q8_0" => Ok(KvCacheType::Q8_0),
+        "q4_0" => Ok(KvCacheType::Q4_0),
+        "q4_1" => Ok(KvCacheType::Q4_1),
+        "q5_0" => Ok(KvCacheType::Q5_0),
+        "q5_1" => Ok(KvCacheType::Q5_1),
+        _ => Err(format!("Unknown cache type '{s}'. Options: f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1")),
+    }
+}
+
 
 /// Request for text generation.
 #[derive(Debug, Clone)]

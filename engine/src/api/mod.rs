@@ -47,6 +47,10 @@ pub struct AppState {
     pub threads: u32,
     pub flash_attn: bool,
     pub n_batch: u32,
+    /// KV cache quantization type for keys (e.g. Q8_0 — reduces VRAM).
+    pub cache_type_k: crate::inference::KvCacheType,
+    /// KV cache quantization type for values (e.g. Q4_0 — reduces VRAM).
+    pub cache_type_v: crate::inference::KvCacheType,
     /// 0 = sequential, >0 = continuous batching with this many slots.
     pub batch_size: usize,
 
@@ -73,6 +77,8 @@ impl AppState {
             threads: self.threads,
             flash_attn: self.flash_attn,
             n_batch: self.n_batch,
+            cache_type_k: self.cache_type_k,
+            cache_type_v: self.cache_type_v,
         };
 
         // Load on a blocking thread (model loading is CPU-heavy).
@@ -145,6 +151,8 @@ pub struct ServeConfig {
     pub threads: u32,
     pub flash_attn: bool,
     pub n_batch: u32,
+    pub cache_type_k: crate::inference::KvCacheType,
+    pub cache_type_v: crate::inference::KvCacheType,
     pub batch_size: usize,
     pub store: ModelStore,
 }
@@ -166,6 +174,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         threads: cfg.threads,
         flash_attn: cfg.flash_attn,
         n_batch: cfg.n_batch,
+        cache_type_k: cfg.cache_type_k,
+        cache_type_v: cfg.cache_type_v,
         batch_size: cfg.batch_size,
         store: cfg.store,
     });
