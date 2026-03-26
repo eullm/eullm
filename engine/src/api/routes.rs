@@ -4,9 +4,12 @@
 //! on all generation endpoints. Set `"stream": true` in the request body
 //! to get token-by-token Server-Sent Events.
 //!
-//! When a `SchedulerHandle` is present in `AppState`, requests are dispatched
-//! through the continuous batching scheduler. Otherwise the sequential
-//! `InferenceEngine` is used as fallback.
+//! When a `SchedulerHandle` is present, requests are dispatched through the
+//! continuous batching scheduler. Otherwise the sequential `InferenceEngine`
+//! is used as fallback.
+//!
+//! **Dynamic model swap:** if a request specifies a `model` that differs from
+//! the currently loaded one, the server automatically swaps to the new model.
 
 use std::sync::Arc;
 
@@ -22,7 +25,7 @@ use tokio::sync::mpsc;
 
 use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
-use crate::inference::{GenerateRequest, StreamEvent, JSON_GBNF};
+use crate::inference::{GenerateRequest, InferenceEngine, SchedulerHandle, StreamEvent, JSON_GBNF};
 use crate::models::EU_CATALOG;
 
 type S = Arc<AppState>;
@@ -45,25 +48,58 @@ pub fn openai_routes() -> Router<S> {
         .route("/chat/completions", post(chat_completions))
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Model slot and dynamic swap ──────────────────────────────────────────────
 
-/// Returns true if the scheduler is available.
-fn has_scheduler(state: &AppState) -> bool {
-    state.scheduler.is_some()
+/// A snapshot of the model slot — cloned handles that don't hold the RwLock.
+/// The `Arc` / `SchedulerHandle` clones are cheap (refcount bump + channel clone)
+/// and keep the old model alive until in-flight requests finish.
+struct SlotSnapshot {
+    model_name: String,
+    engine: Option<Arc<InferenceEngine>>,
+    scheduler: Option<SchedulerHandle>,
 }
 
-fn has_engine(state: &AppState) -> bool {
-    state.engine.is_some() || state.scheduler.is_some()
-}
+/// Ensure the requested model is loaded and return a snapshot of the slot.
+///
+/// If `requested` differs from the currently loaded model, triggers a
+/// dynamic model swap (unloads old, loads new).  In-flight requests on
+/// cloned handles of the old model complete normally.
+///
+/// If no model is specified in the request, uses whatever is loaded.
+async fn ensure_model(
+    state: &AppState,
+    requested: Option<&str>,
+) -> Result<SlotSnapshot, (StatusCode, Json<Value>)> {
+    // Check if a swap is needed.
+    if let Some(name) = requested {
+        let needs_swap = {
+            let slot = state.slot.read().await;
+            slot.model_name.as_deref() != Some(name)
+        };
+        if needs_swap {
+            state.swap_model(name).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Failed to load model '{name}': {e}") })),
+                )
+            })?;
+        }
+    }
 
-fn require_engine(state: &AppState) -> Result<(), (StatusCode, Json<Value>)> {
-    if !has_engine(state) {
+    // Take a read-lock snapshot (cheap clones: Arc bump + channel clone).
+    let slot = state.slot.read().await;
+    if slot.engine.is_none() && slot.scheduler.is_none() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "No model loaded. Use `eullm run <model>` to load a model." })),
+            Json(json!({ "error": "No model loaded. Send a request with a \"model\" field, or use `eullm run <model>`." })),
         ));
     }
-    Ok(())
+
+    Ok(SlotSnapshot {
+        model_name: slot.model_name.clone().unwrap_or_else(|| "unknown".into()),
+        engine: slot.engine.clone(),
+        scheduler: slot.scheduler.clone(),
+    })
 }
 
 fn parse_generate_params(body: &Value) -> (u32, f32, Option<u32>) {
@@ -132,11 +168,6 @@ fn format_chat_prompt(messages: &[Value], think: bool) -> String {
     prompt
 }
 
-/// Submit a request through the scheduler and return the receiver.
-fn scheduler_submit(state: &AppState, request: GenerateRequest) -> mpsc::Receiver<StreamEvent> {
-    state.scheduler.as_ref().unwrap().submit(request)
-}
-
 /// Collect all tokens from a receiver into a final result.
 async fn collect_stream(
     mut rx: mpsc::Receiver<StreamEvent>,
@@ -180,8 +211,13 @@ async fn version() -> Json<Value> {
 async fn list_models(State(state): State<S>) -> Json<Value> {
     let mut models: Vec<Value> = Vec::new();
 
+    let loaded_name = {
+        let slot = state.slot.read().await;
+        slot.model_name.clone()
+    };
+
     // If a model is loaded, include it first (this is what dashboards check)
-    if let Some(ref name) = state.model_name {
+    if let Some(ref name) = loaded_name {
         models.push(json!({
             "name": name,
             "size": 0,
@@ -197,7 +233,7 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
 
     // Add catalog entries (skip duplicates if the loaded model is in the catalog)
     for m in EU_CATALOG.iter() {
-        if state.model_name.as_deref() == Some(&m.name) {
+        if loaded_name.as_deref() == Some(m.name.as_str()) {
             // Replace the placeholder entry above with full catalog metadata
             if let Some(first) = models.first_mut() {
                 *first = json!({
@@ -238,14 +274,10 @@ async fn generate(
     State(state): State<S>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
-    require_engine(&state)?;
+    let requested = body.get("model").and_then(|v| v.as_str());
+    let snap = ensure_model(&state, requested).await?;
+    let model = snap.model_name.clone();
 
-    let model = body
-        .get("model")
-        .and_then(|v| v.as_str())
-        .or(state.model_name.as_deref())
-        .unwrap_or("unknown")
-        .to_string();
     let prompt = body
         .get("prompt")
         .and_then(|v| v.as_str())
@@ -264,12 +296,11 @@ async fn generate(
         ..Default::default()
     };
 
-    if has_scheduler(&state) {
+    if let Some(ref sched) = snap.scheduler {
         // ── Continuous batching path ────────────────────────────────
-        let rx = scheduler_submit(&state, request);
+        let rx = sched.submit(request);
 
         if is_streaming(&body) {
-            // Ollama /api/generate uses NDJSON, not SSE.
             Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaGenerate))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
@@ -300,7 +331,7 @@ async fn generate(
         }
     } else {
         // ── Sequential fallback ────────────────────────────────────
-        let engine = Arc::clone(state.engine.as_ref().unwrap());
+        let engine = Arc::clone(snap.engine.as_ref().unwrap());
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
@@ -341,14 +372,9 @@ async fn chat(
     State(state): State<S>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
-    require_engine(&state)?;
-
-    let model = body
-        .get("model")
-        .and_then(|v| v.as_str())
-        .or(state.model_name.as_deref())
-        .unwrap_or("unknown")
-        .to_string();
+    let requested = body.get("model").and_then(|v| v.as_str());
+    let snap = ensure_model(&state, requested).await?;
+    let model = snap.model_name.clone();
 
     let messages = body
         .get("messages")
@@ -373,11 +399,10 @@ async fn chat(
         grammar,
     };
 
-    if has_scheduler(&state) {
-        let rx = scheduler_submit(&state, request);
+    if let Some(ref sched) = snap.scheduler {
+        let rx = sched.submit(request);
 
         if is_streaming(&body) {
-            // Ollama /api/chat uses NDJSON, not SSE.
             Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
@@ -409,7 +434,7 @@ async fn chat(
             })).into_response())
         }
     } else {
-        let engine = Arc::clone(state.engine.as_ref().unwrap());
+        let engine = Arc::clone(snap.engine.as_ref().unwrap());
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
@@ -510,14 +535,9 @@ async fn chat_completions(
     State(state): State<S>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
-    require_engine(&state)?;
-
-    let model = body
-        .get("model")
-        .and_then(|v| v.as_str())
-        .or(state.model_name.as_deref())
-        .unwrap_or("eullm/general-eu-7b")
-        .to_string();
+    let requested = body.get("model").and_then(|v| v.as_str());
+    let snap = ensure_model(&state, requested).await?;
+    let model = snap.model_name.clone();
 
     let messages = body
         .get("messages")
@@ -542,11 +562,10 @@ async fn chat_completions(
         grammar,
     };
 
-    if has_scheduler(&state) {
-        let rx = scheduler_submit(&state, request);
+    if let Some(ref sched) = snap.scheduler {
+        let rx = sched.submit(request);
 
         if is_streaming(&body) {
-            // OpenAI /v1/chat/completions uses SSE (data: prefix).
             let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI);
             Ok(Sse::new(stream).into_response())
         } else {
@@ -582,7 +601,7 @@ async fn chat_completions(
             })).into_response())
         }
     } else {
-        let engine = Arc::clone(state.engine.as_ref().unwrap());
+        let engine = Arc::clone(snap.engine.as_ref().unwrap());
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
