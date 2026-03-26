@@ -77,7 +77,14 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `--gpu-layers` | `-1` (all) | GPU layers to offload (-1 = all, 0 = CPU only) |
 | `--ctx-size, -c` | `4096` | Context window size |
 | `--threads, -t` | all CPUs | Number of CPU threads |
+| `--batch-size` | `8` | Continuous batching slots (0 = sequential mode) |
+| `--no-flash-attn` | false | Disable flash attention |
+| `--n-batch` | `2048` | Prompt processing batch size (tokens per eval during prefill) |
+| `--cache-type-k` | `q8_0` | KV cache type for keys (f16, q8_0, q4_0, q4_1, q5_0, q5_1) |
+| `--cache-type-v` | `q4_0` | KV cache type for values (f16, q8_0, q4_0, q4_1, q5_0, q5_1) |
 | `--replace` | false | Replace existing service on the port |
+| `--daemon` | false | Run as a background daemon |
+| `--pidfile` | `/tmp/eullm.pid` | PID file path (used with --daemon) |
 
 ### `eullm pull <model>`
 
@@ -108,12 +115,46 @@ eullm show legal-it-7b
 
 ### `eullm serve [--port PORT]`
 
-Start the API server without loading any model. Useful for health checks and catalog queries.
+Start the API server without loading any model. The first API request with a `"model"` field will load that model dynamically.
 
 ```bash
 eullm serve
 eullm serve --port 8080
 ```
+
+### `eullm import-ollama <model> [--ollama-dir PATH]`
+
+Import a model from a local Ollama installation into EULLM's model store. Copies the GGUF blob so you can benchmark both engines with the exact same model file.
+
+```bash
+# Import from Ollama (tag "latest")
+eullm import-ollama llama3.2
+
+# Import a specific tag
+eullm import-ollama qwen3:14b
+
+# Custom Ollama directory
+eullm import-ollama gemma3 --ollama-dir /custom/path
+```
+
+**How it works:**
+
+1. Reads the Ollama manifest at `~/.ollama/models/manifests/registry.ollama.ai/library/{name}/{tag}`
+2. Locates the model layer (`application/vnd.ollama.image.model`) — the GGUF blob
+3. Copies the blob to `~/.eullm/models/{name}/{name}.gguf`
+4. Applies GGUF metadata patches if needed (e.g. fixes array lengths for llama.cpp compatibility)
+5. Writes a EULLM manifest so the model appears in `eullm list`
+
+After import:
+
+```bash
+eullm run llama3.2        # Runs on EULLM Engine
+ollama run llama3.2       # Same model on Ollama — identical comparison
+```
+
+**Licensing note:** Ollama does not add any license on top of the original model weights. The GGUF blob is the same file distributed by the upstream model author. The license of the model itself applies (e.g. Apache 2.0 for Qwen3, MIT for DeepSeek).
+
+**GGUF compatibility:** Some Ollama GGUF files contain metadata arrays with fewer elements than upstream llama.cpp expects (e.g. `qwen35.rope.dimension_sections` with 3 elements instead of 4). The import command automatically patches these during copy. Models with hybrid architectures (e.g. Qwen3.5 with SSM/Mamba2 layers) may have incompatible tensor layouts — use the HuggingFace GGUF instead.
 
 ### `eullm forge`
 
@@ -122,6 +163,89 @@ Delegate to the EULLM Forge Python pipeline for model verticalizzazione.
 ```bash
 eullm forge Qwen/Qwen3-14B --profile legal-it --identity "LegalAI"
 ```
+
+## Dynamic Model Swap
+
+EULLM Engine can swap models at runtime, like Ollama. When an API request specifies a `"model"` that differs from the currently loaded one, the server automatically unloads the current model and loads the new one.
+
+```bash
+# Start with one model
+eullm run qwen3-14b
+
+# Any API request with a different model triggers a swap
+curl http://localhost:11434/api/generate \
+  -d '{"model": "qwen3-7b", "prompt": "Ciao"}'
+# → Unloads qwen3-14b, loads qwen3-7b, then responds
+
+# Or start with no model and load on first request
+eullm serve
+curl http://localhost:11434/api/generate \
+  -d '{"model": "qwen3-14b", "prompt": "Ciao"}'
+# → Loads qwen3-14b on the fly
+```
+
+**Behavior:**
+
+- In-flight requests on the old model complete normally (they hold cloned handles)
+- The new model loads on a blocking thread, then atomically replaces the slot
+- Inference settings (GPU layers, context size, cache types, batch size) are preserved across swaps
+- The model name must be an imported model (`eullm import-ollama`) or a local GGUF path
+
+## KV Cache Quantization
+
+By default, EULLM quantizes the KV cache to reduce VRAM usage (same as Ollama). Without this, a 14B model with 16K context requires ~10GB just for the KV cache in FP16, overflowing 16GB GPUs.
+
+| Setting | VRAM for 14B @ 16K context |
+|---------|---------------------------|
+| `--cache-type-k f16 --cache-type-v f16` | ~10 GB (FP16, maximum quality) |
+| `--cache-type-k q8_0 --cache-type-v q8_0` | ~5 GB |
+| **`--cache-type-k q8_0 --cache-type-v q4_0`** | **~2.5 GB (default, same as Ollama)** |
+
+```bash
+# Default (same as Ollama) — 14B fits in 16GB VRAM with 16K context
+eullm run qwen3-14b --ctx-size 16384
+
+# Maximum quality (needs more VRAM)
+eullm run qwen3-14b --ctx-size 8192 --cache-type-k f16 --cache-type-v f16
+
+# Aggressive quantization (minimum VRAM, slight quality loss)
+eullm run qwen3-14b --ctx-size 32768 --cache-type-k q4_0 --cache-type-v q4_0
+```
+
+Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`.
+
+## Constrained JSON Decoding (`format: "json"`)
+
+When `format: "json"` is set in a request, EULLM uses GBNF grammar-based constrained decoding to guarantee valid JSON output. This matches Ollama's behavior and prevents malformed JSON in extraction pipelines.
+
+```bash
+curl http://localhost:11434/api/generate \
+  -d '{
+    "model": "qwen3-14b",
+    "prompt": "Extract the name and age from: John is 30 years old",
+    "format": "json"
+  }'
+# → Always returns valid JSON: {"name": "John", "age": 30}
+```
+
+Works on all endpoints: `/api/generate`, `/api/chat`, `/v1/chat/completions`. Both sequential and continuous batching modes.
+
+## Continuous Batching
+
+EULLM's continuous batching scheduler decodes multiple requests in parallel on a single GPU pass. This is a key performance differentiator over Ollama, which processes requests one at a time.
+
+```bash
+# Enable continuous batching with 8 parallel slots (default)
+eullm run ./model.gguf --batch-size 8
+
+# More slots for high-throughput RAG workloads
+eullm run ./model.gguf --batch-size 16
+
+# Sequential mode (one request at a time, like Ollama)
+eullm run ./model.gguf --batch-size 0
+```
+
+With 16 concurrent requests on a consumer GPU, EULLM achieves ~2.5x throughput vs Ollama. See [benchmarks](benchmarks.md) for details.
 
 ## API Reference
 
@@ -145,7 +269,7 @@ curl http://localhost:11434/api/version
 
 #### `GET /api/tags`
 
-List all available models with metadata.
+List available models. Returns the currently loaded model first (what admin dashboards check for health), followed by catalog entries.
 
 ```bash
 curl http://localhost:11434/api/tags
@@ -207,6 +331,7 @@ curl -X POST http://localhost:11434/api/generate \
 | `temperature` | 0.7 | Sampling temperature |
 | `stream` | true | Stream response token-by-token (NDJSON) |
 | `num_ctx` | server `--ctx-size` | Per-request context window budget (clamped to server max) |
+| `format` | — | Set to `"json"` for constrained JSON decoding (GBNF grammar) |
 | `options` | — | Ollama-style nested object for `num_predict`, `temperature`, `num_ctx` |
 
 **Ollama `options` support:** Parameters can be passed at the top level (OpenAI style) or nested inside an `options` object (Ollama style). Top-level values take precedence.
@@ -497,8 +622,8 @@ The model generates fewer tokens than `num_predict` requested.
 
 | Component | Status |
 |---|---|
-| CLI (pull, run, list, show, serve, forge) | Implemented |
-| Real inference (llama.cpp via llama-cpp-2) | Implemented |
+| CLI (pull, run, list, show, serve, forge, import-ollama) | Implemented |
+| Real inference (llama.cpp via llama-cpp-2 0.1.140) | Implemented |
 | EULLM API routes (Ollama-compatible) | Implemented |
 | OpenAI-compatible API | Implemented |
 | GPU acceleration (CUDA, ROCm, Vulkan, Metal) | Implemented (feature flags) |
@@ -506,7 +631,14 @@ The model generates fewer tokens than `num_predict` requested.
 | Model catalog (7 models) | Implemented |
 | Local model store (~/.eullm/models/) | Implemented |
 | Model download (HuggingFace, streaming with progress) | Implemented |
+| Import from Ollama (import-ollama with GGUF patching) | Implemented |
+| Dynamic model swap (load/unload via API) | Implemented |
+| KV cache quantization (--cache-type-k, --cache-type-v) | Implemented |
+| Constrained JSON decoding (format: "json" via GBNF) | Implemented |
+| Continuous batching scheduler | Implemented |
 | Audit trail (persistent JSONL) | Implemented |
 | Streaming (NDJSON for Ollama, SSE for OpenAI) | Implemented |
 | ChatML prompt formatting | Implemented |
+| Interactive chat REPL | Implemented |
+| Daemon mode (--daemon) | Implemented |
 | EU registry download | Implemented (client ready, registry server coming soon) |
