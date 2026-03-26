@@ -644,8 +644,23 @@ async fn cmd_run(
 
     // Start the API server in the background.
     let api_model_name = model_name.clone();
+    let api_store = ModelStore::default_store().expect("model store");
     tokio::spawn(async move {
-        if let Err(e) = api::serve(port, Some(api_model_name), engine, scheduler).await {
+        if let Err(e) = api::serve(api::ServeConfig {
+            port,
+            model_name: Some(api_model_name),
+            engine,
+            scheduler,
+            gpu_layers,
+            ctx_size,
+            threads: resolved_threads,
+            flash_attn,
+            n_batch,
+            batch_size,
+            store: api_store,
+        })
+        .await
+        {
             eprintln!("Server error: {e}");
             std::process::exit(1);
         }
@@ -669,12 +684,32 @@ async fn cmd_run(
 async fn cmd_serve(port: u16, replace: bool) {
     ensure_port_available(port, replace).await;
 
-    println!("eullm ready (no model loaded).");
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4);
+
+    println!("eullm ready (no model loaded — send a request with a \"model\" field to load one).");
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("\nPress Ctrl+C to stop.\n");
 
-    if let Err(e) = api::serve(port, None, None, None).await {
+    let store = ModelStore::default_store().expect("model store");
+
+    if let Err(e) = api::serve(api::ServeConfig {
+        port,
+        model_name: None,
+        engine: None,
+        scheduler: None,
+        gpu_layers: -1,
+        ctx_size: 4096,
+        threads,
+        flash_attn: true,
+        n_batch: 2048,
+        batch_size: 8,
+        store,
+    })
+    .await
+    {
         eprintln!("Server error: {e}");
         std::process::exit(1);
     }
