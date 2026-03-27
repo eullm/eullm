@@ -226,13 +226,17 @@ fn run_scheduler_loop(
         }
     };
 
-    // Create a single shared context with enough room for all sequences.
-    let total_ctx = config.context_size * sched_config.max_batch_size as u32;
+    // Use context_size as the TOTAL KV cache budget, shared across all
+    // sequences (matching Ollama / llama.cpp server behaviour).  Previous
+    // code multiplied context_size × max_batch_size, which easily overflowed
+    // VRAM and forced llama.cpp to fall back to CPU for KV cache ops.
+    let total_ctx = config.context_size;
+    let per_seq_ctx = config.context_size / sched_config.max_batch_size as u32;
     tracing::info!(
-        "Allocating context: {} tokens per sequence × {} sequences = {} total (flash_attn={}, n_batch={})",
-        config.context_size,
-        sched_config.max_batch_size,
+        "Allocating context: {} total tokens, {} per sequence ({} slots, flash_attn={}, n_batch={})",
         total_ctx,
+        per_seq_ctx,
+        sched_config.max_batch_size,
         config.flash_attn,
         config.n_batch,
     );
@@ -259,10 +263,11 @@ fn run_scheduler_loop(
     let mut decode_batch = LlamaBatch::new(sched_config.max_batch_size.max(1), 1);
 
     tracing::info!(
-        "Scheduler running — max_batch_size={}, queue_capacity={}, context={}",
+        "Scheduler running — max_batch_size={}, queue_capacity={}, total_ctx={}, per_seq_ctx={}",
         sched_config.max_batch_size,
         sched_config.queue_capacity,
         total_ctx,
+        per_seq_ctx,
     );
 
     // Signal that the model is loaded and ready.
@@ -327,7 +332,7 @@ fn run_scheduler_loop(
                     };
 
                     // Tokenize and prefill immediately.
-                    match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq) {
+                    match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx) {
                         Ok((n_tokens, n_past, effective_max)) => {
                             let mut seq = seq;
                             seq.tokens_prompt = n_tokens;
@@ -555,7 +560,6 @@ fn run_scheduler_loop(
 
 /// Prefill a sequence's prompt tokens into the context.
 ///
-/// Returns `(prompt_token_count, n_past)` on success.
 /// Returns `(prompt_tokens, n_past, effective_max_tokens)`.
 fn prefill_sequence(
     model: &LlamaModel,
@@ -563,6 +567,7 @@ fn prefill_sequence(
     config: &InferenceConfig,
     request: &GenerateRequest,
     seq: &ActiveSequence,
+    per_seq_ctx: u32,
 ) -> Result<(u32, i32, u32), String> {
     let tokens = model
         .str_to_token(&request.prompt, AddBos::Always)
@@ -570,11 +575,12 @@ fn prefill_sequence(
 
     let n_tokens = tokens.len() as u32;
 
-    // Effective context: per-request num_ctx (clamped to server limit) or server default.
+    // Effective context: per-request num_ctx (clamped to per-sequence limit)
+    // or the per-sequence default.
     let effective_ctx = request
         .num_ctx
-        .map(|n| n.min(config.context_size))
-        .unwrap_or(config.context_size);
+        .map(|n| n.min(per_seq_ctx))
+        .unwrap_or(per_seq_ctx);
 
     if n_tokens >= effective_ctx {
         return Err(format!(
