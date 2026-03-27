@@ -313,15 +313,17 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
+        let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
+            || self.config.cache_type_v != KvCacheType::F16;
         let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
-            Err(e) if format!("{e}").contains("Flash Attention") || format!("{e}").contains("flash_attn") => {
-                tracing::warn!("Quantized V cache not supported, falling back to F16 KV cache");
+            Err(e) if has_quantized_cache => {
+                tracing::warn!("Context creation failed with quantized KV cache, falling back to F16");
                 let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
                 self.model.new_context(&self.backend, fallback)
-                    .map_err(|e2| format!("Failed to create context (F16 fallback): {e2}"))?
+                    .map_err(|e2| format!("Failed to create context (F16 fallback failed too): {e2}\nOriginal error: {e}"))?
             }
             Err(e) => return Err(format!("Failed to create context: {e}").into()),
         };
@@ -501,26 +503,26 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
+        let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
+            || self.config.cache_type_v != KvCacheType::F16;
         let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
-            Err(e) => {
-                let err_str = format!("{e}");
-                if err_str.contains("Flash Attention") || err_str.contains("flash_attn") {
-                    tracing::warn!("Quantized V cache not supported, falling back to F16 KV cache");
-                    let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
-                    match self.model.new_context(&self.backend, fallback) {
-                        Ok(c) => c,
-                        Err(e2) => {
-                            let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e2}")));
-                            return;
-                        }
+            Err(e) if has_quantized_cache => {
+                tracing::warn!("Context creation failed with quantized KV cache, falling back to F16");
+                let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                match self.model.new_context(&self.backend, fallback) {
+                    Ok(c) => c,
+                    Err(e2) => {
+                        let _ = tx.blocking_send(StreamEvent::Error(format!("F16 fallback failed: {e2} (original: {e})")));
+                        return;
                     }
-                } else {
-                    let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
-                    return;
                 }
+            }
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
+                return;
             }
         };
 
