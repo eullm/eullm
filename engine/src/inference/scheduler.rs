@@ -250,9 +250,44 @@ fn run_scheduler_loop(
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {
-            let msg = format!("Failed to create context: {e}");
-            let _ = ready_tx.send(Err(msg.clone()));
-            return Err(msg.into());
+            let err_str = format!("{e}");
+            // Quantized V cache (Q4_0, Q8_0, …) requires Flash Attention,
+            // but FA AUTO may have disabled it because the GPU doesn't
+            // support FA for these cache types.  Retry with F16 KV cache.
+            if err_str.contains("requires Flash Attention")
+                || err_str.contains("requires flash_attn")
+            {
+                tracing::warn!(
+                    "Quantized V cache ({:?}) not supported with Flash Attention on this GPU. \
+                     Falling back to F16 KV cache.",
+                    config.cache_type_v,
+                );
+                eprintln!(
+                    "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16 (GPU does not support \
+                     Flash Attention with quantized V cache)",
+                    config.cache_type_k, config.cache_type_v,
+                );
+
+                let ctx_params = super::build_ctx_params_with_cache(
+                    &config,
+                    ctx_size,
+                    super::KvCacheType::F16,
+                    super::KvCacheType::F16,
+                ).with_n_seq_max(sched_config.max_batch_size as u32);
+
+                match model.new_context(&backend, ctx_params) {
+                    Ok(c) => c,
+                    Err(e2) => {
+                        let msg = format!("Failed to create context (even with F16 fallback): {e2}");
+                        let _ = ready_tx.send(Err(msg.clone()));
+                        return Err(msg.into());
+                    }
+                }
+            } else {
+                let msg = format!("Failed to create context: {e}");
+                let _ = ready_tx.send(Err(msg.clone()));
+                return Err(msg.into());
+            }
         }
     };
 
