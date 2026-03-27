@@ -96,7 +96,14 @@ pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -
     }
 
     if config.flash_attn {
-        params = params.with_flash_attention_policy(1);
+        // Use AUTO (-1) instead of ENABLED (1).  AUTO lets llama.cpp test
+        // whether the GPU backend actually supports Flash Attention for the
+        // current KV cache types.  If not (e.g. quantized KV cache on some
+        // GPU architectures), it falls back to regular attention — which
+        // still runs on GPU.  ENABLED (1) skips this check and can silently
+        // route the FA op to the CPU backend, causing massive slowdowns
+        // during batch prefill.
+        params = params.with_flash_attention_policy(-1);
     }
     params
 }
