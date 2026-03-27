@@ -77,7 +77,7 @@ async fn ensure_model(
         let needs_swap = {
             let slot = state.slot.read().await;
             match slot.model_name.as_deref() {
-                Some(loaded) => loaded != name && loaded != normalized,
+                Some(loaded) => !model_names_match(loaded, &normalized),
                 None => true,
             }
         };
@@ -873,4 +873,26 @@ fn format_done_event(
             },
         }),
     }
+}
+
+/// Check if a loaded model name matches a requested name.
+///
+/// Handles the common case where the loaded model is a full path
+/// (e.g. `/models/qwen3-8b.gguf`) but the request uses a short name
+/// (e.g. `qwen3-8b` or `qwen3:8b`).
+fn model_names_match(loaded: &str, normalized_request: &str) -> bool {
+    // Exact match.
+    if loaded == normalized_request {
+        return true;
+    }
+    // Compare file stems: "/models/qwen3-8b.gguf" → "qwen3-8b".
+    let loaded_stem = std::path::Path::new(loaded)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(loaded);
+    let request_stem = std::path::Path::new(normalized_request)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(normalized_request);
+    loaded_stem == request_stem
 }
