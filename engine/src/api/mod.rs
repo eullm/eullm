@@ -178,7 +178,15 @@ impl AppState {
             return Ok(with_ext);
         }
 
-        // 4. Exact name in model store.
+        // 4. Try common model directories (Docker volumes, etc.).
+        for dir in &["/models", "/data/models"] {
+            let candidate = PathBuf::from(dir).join(format!("{name}.gguf"));
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+
+        // 5. Exact name in model store.
         if let Some(p) = self.store.gguf_path(name) {
             return Ok(p);
         }
