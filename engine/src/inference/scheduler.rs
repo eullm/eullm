@@ -649,8 +649,9 @@ fn prefill_sequence(
     seq: &ActiveSequence,
     per_seq_ctx: u32,
 ) -> Result<(u32, i32, u32), String> {
+    let bos = if request.raw { AddBos::Never } else { AddBos::Always };
     let tokens = model
-        .str_to_token(&request.prompt, AddBos::Always)
+        .str_to_token(&request.prompt, bos)
         .map_err(|e| format!("Tokenization failed: {e}"))?;
 
     let n_tokens = tokens.len() as u32;

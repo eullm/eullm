@@ -176,6 +176,9 @@ pub struct GenerateRequest {
     /// When set, the sampler enforces that output conforms to this grammar.
     /// Used by `format: "json"` to guarantee valid JSON output.
     pub grammar: Option<String>,
+    /// When true, the prompt is used as-is without adding BOS token.
+    /// Required for raw ChatML prompts that already contain special tokens.
+    pub raw: bool,
 }
 
 impl Default for GenerateRequest {
@@ -187,6 +190,7 @@ impl Default for GenerateRequest {
             stop_sequences: Vec::new(),
             num_ctx: None,
             grammar: None,
+            raw: false,
         }
     }
 }
@@ -331,7 +335,7 @@ impl InferenceEngine {
         // Tokenize the prompt
         let tokens = self
             .model
-            .str_to_token(&request.prompt, AddBos::Always)
+            .str_to_token(&request.prompt, if request.raw { AddBos::Never } else { AddBos::Always })
             .map_err(|e| format!("Tokenization failed: {e}"))?;
 
         let tokens_prompt = tokens.len() as u32;
@@ -526,7 +530,7 @@ impl InferenceEngine {
             }
         };
 
-        let tokens = match self.model.str_to_token(&request.prompt, AddBos::Always) {
+        let tokens = match self.model.str_to_token(&request.prompt, if request.raw { AddBos::Never } else { AddBos::Always }) {
             Ok(t) => t,
             Err(e) => {
                 let _ = tx.blocking_send(StreamEvent::Error(format!("Tokenization failed: {e}")));
