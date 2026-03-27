@@ -80,8 +80,8 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `--batch-size` | `8` | Continuous batching slots (0 = sequential mode) |
 | `--no-flash-attn` | false | Disable flash attention |
 | `--n-batch` | `2048` | Prompt processing batch size (tokens per eval during prefill) |
-| `--cache-type-k` | `q8_0` | KV cache type for keys (f16, q8_0, q4_0, q4_1, q5_0, q5_1) |
-| `--cache-type-v` | `q4_0` | KV cache type for values (f16, q8_0, q4_0, q4_1, q5_0, q5_1) |
+| `--cache-type-k` | `f16` | KV cache type for keys (f16, q8_0, q4_0). F16 = best GPU compat |
+| `--cache-type-v` | `f16` | KV cache type for values (f16, q8_0, q4_0). F16 = best GPU compat |
 | `--replace` | false | Replace existing service on the port |
 | `--daemon` | false | Run as a background daemon |
 | `--pidfile` | `/tmp/eullm.pid` | PID file path (used with --daemon) |
@@ -193,26 +193,28 @@ curl http://localhost:11434/api/generate \
 
 ## KV Cache Quantization
 
-By default, EULLM quantizes the KV cache to reduce VRAM usage (same as Ollama). Without this, a 14B model with 16K context requires ~10GB just for the KV cache in FP16, overflowing 16GB GPUs.
+By default, EULLM uses F16 KV cache for maximum GPU compatibility. Quantized types save VRAM but may cause GPU compute fallback to CPU on some architectures — verify GPU utilisation with `nvtop` before deploying in production.
 
 | Setting | VRAM for 14B @ 16K context |
 |---------|---------------------------|
-| `--cache-type-k f16 --cache-type-v f16` | ~10 GB (FP16, maximum quality) |
+| **`--cache-type-k f16 --cache-type-v f16`** | **~10 GB (default, best GPU compat)** |
 | `--cache-type-k q8_0 --cache-type-v q8_0` | ~5 GB |
-| **`--cache-type-k q8_0 --cache-type-v q4_0`** | **~2.5 GB (default, same as Ollama)** |
+| `--cache-type-k q8_0 --cache-type-v q4_0` | ~2.5 GB (⚠️ verify GPU usage) |
 
 ```bash
-# Default (same as Ollama) — 14B fits in 16GB VRAM with 16K context
-eullm run qwen3-14b --ctx-size 16384
+# Default (F16) — maximum GPU compatibility
+eullm run qwen3-14b --ctx-size 8192
 
-# Maximum quality (needs more VRAM)
-eullm run qwen3-14b --ctx-size 8192 --cache-type-k f16 --cache-type-v f16
+# Save VRAM with quantized KV cache (check GPU usage with nvtop!)
+eullm run qwen3-14b --ctx-size 16384 --cache-type-k q8_0 --cache-type-v q4_0
 
-# Aggressive quantization (minimum VRAM, slight quality loss)
+# Aggressive quantization (minimum VRAM, may fall back to CPU)
 eullm run qwen3-14b --ctx-size 32768 --cache-type-k q4_0 --cache-type-v q4_0
 ```
 
 Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`.
+
+> **Note:** KV cache quantization requires flash attention (enabled by default). If you use `--no-flash-attn` with quantized V cache types, context creation will fail.
 
 ## Constrained JSON Decoding (`format: "json"`)
 
