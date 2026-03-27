@@ -244,27 +244,28 @@ fn run_scheduler_loop(
     );
     let ctx_size = NonZeroU32::new(total_ctx).unwrap_or(NonZeroU32::new(4096).unwrap());
 
+    let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
+        || config.cache_type_v != super::KvCacheType::F16;
+
     let ctx_params = super::build_ctx_params(&config, ctx_size)
         .with_n_seq_max(sched_config.max_batch_size as u32);
 
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {
-            let err_str = format!("{e}");
-            // Quantized V cache (Q4_0, Q8_0, …) requires Flash Attention,
-            // but FA AUTO may have disabled it because the GPU doesn't
-            // support FA for these cache types.  Retry with F16 KV cache.
-            if err_str.contains("requires Flash Attention")
-                || err_str.contains("requires flash_attn")
-            {
+            // Quantized V cache requires Flash Attention, but FA AUTO may
+            // have disabled it (unsupported on this GPU).  llama.cpp returns
+            // a generic null-reference error, so we can't match on the
+            // message — instead check whether quantized cache was requested.
+            if has_quantized_cache {
                 tracing::warn!(
-                    "Quantized V cache ({:?}) not supported with Flash Attention on this GPU. \
-                     Falling back to F16 KV cache.",
-                    config.cache_type_v,
+                    "Context creation failed with quantized KV cache ({:?}/{:?}). \
+                     Retrying with F16 KV cache.",
+                    config.cache_type_k, config.cache_type_v,
                 );
                 eprintln!(
-                    "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16 (GPU does not support \
-                     Flash Attention with quantized V cache)",
+                    "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16 \
+                     (quantized V cache requires Flash Attention, which is not available on this GPU)",
                     config.cache_type_k, config.cache_type_v,
                 );
 
