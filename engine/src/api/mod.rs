@@ -40,6 +40,9 @@ pub struct AppState {
     /// Mutable model slot — protected by RwLock for concurrent reads,
     /// exclusive writes during model swap.
     pub slot: tokio::sync::RwLock<ModelSlot>,
+    /// Serializes model swaps — prevents multiple concurrent requests
+    /// from triggering parallel swaps (which would OOM the GPU).
+    swap_lock: tokio::sync::Mutex<()>,
 
     // ── Immutable inference settings (from CLI flags) ────────────────
     pub gpu_layers: i32,
@@ -70,10 +73,30 @@ impl AppState {
     ///
     /// This is the **write** path — only one swap can run at a time.
     pub async fn swap_model(&self, name: &str, override_batch_size: Option<usize>) -> Result<(), String> {
+        // Serialize swaps — if another request is already swapping,
+        // wait for it to finish instead of starting a parallel swap.
+        let _swap_guard = self.swap_lock.lock().await;
+
         // Normalize Ollama-style names: "qwen3:14b" → "qwen3-14b"
         let normalized = normalize_model_name(name);
-        let gguf_path = self.resolve_model(&normalized)?;
 
+        // Re-check after acquiring the lock — another thread may have
+        // already completed the swap while we were waiting.
+        {
+            let slot = self.slot.read().await;
+            if let Some(ref loaded) = slot.model_name {
+                let loaded_stem = std::path::Path::new(loaded.as_str())
+                    .file_stem().and_then(|s| s.to_str()).unwrap_or(loaded);
+                let req_stem = std::path::Path::new(normalized.as_str())
+                    .file_stem().and_then(|s| s.to_str()).unwrap_or(&normalized);
+                if loaded_stem == req_stem {
+                    tracing::info!("Model {normalized} already loaded (swapped by another request)");
+                    return Ok(());
+                }
+            }
+        }
+
+        let gguf_path = self.resolve_model(&normalized)?;
         tracing::info!("Swapping model → {normalized} ({})", gguf_path.display());
 
         // ── 1. Unload the current model and WAIT for the scheduler
@@ -258,6 +281,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             engine: cfg.engine,
             scheduler: cfg.scheduler,
         }),
+        swap_lock: tokio::sync::Mutex::new(()),
         gpu_layers: cfg.gpu_layers,
         ctx_size: cfg.ctx_size,
         threads: cfg.threads,
