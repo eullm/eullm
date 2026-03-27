@@ -72,7 +72,7 @@ impl AppState {
     /// batch size from the CLI launch.
     ///
     /// This is the **write** path — only one swap can run at a time.
-    pub async fn swap_model(&self, name: &str, override_batch_size: Option<usize>) -> Result<(), String> {
+    pub async fn swap_model(&self, name: &str, override_batch_size: Option<usize>, override_ctx_size: Option<u32>) -> Result<(), String> {
         // Serialize swaps — if another request is already swapping,
         // wait for it to finish instead of starting a parallel swap.
         let _swap_guard = self.swap_lock.lock().await;
@@ -128,7 +128,7 @@ impl AppState {
         let config = InferenceConfig {
             model_path: gguf_path,
             gpu_layers: self.gpu_layers,
-            context_size: self.ctx_size,
+            context_size: override_ctx_size.unwrap_or(self.ctx_size),
             threads: self.threads,
             flash_attn: self.flash_attn,
             n_batch: self.n_batch,
