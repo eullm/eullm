@@ -75,7 +75,7 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `model` | (required) | Path to GGUF file or catalog model name |
 | `--port, -p` | `11434` | API server port |
 | `--gpu-layers` | `-1` (all) | GPU layers to offload (-1 = all, 0 = CPU only) |
-| `--ctx-size, -c` | `4096` | Context window size |
+| `--ctx-size, -c` | `4096` | Total context window (shared across batch slots) |
 | `--threads, -t` | all CPUs | Number of CPU threads |
 | `--batch-size` | `8` | Continuous batching slots (0 = sequential mode) |
 | `--no-flash-attn` | false | Disable flash attention |
@@ -330,7 +330,7 @@ curl -X POST http://localhost:11434/api/generate \
 | `max_tokens` / `num_predict` | 512 | Maximum tokens to generate (see note below) |
 | `temperature` | 0.7 | Sampling temperature |
 | `stream` | true | Stream response token-by-token (NDJSON) |
-| `num_ctx` | server `--ctx-size` | Per-request context window budget (clamped to server max) |
+| `num_ctx` | server per-slot ctx | Per-request context window budget (clamped to per-slot max) |
 | `format` | — | Set to `"json"` for constrained JSON decoding (GBNF grammar) |
 | `options` | — | Ollama-style nested object for `num_predict`, `temperature`, `num_ctx` |
 

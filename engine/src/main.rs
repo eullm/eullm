@@ -646,7 +646,12 @@ async fn cmd_run(
     println!("  Model:         {short}");
     if engine.is_some() || scheduler.is_some() {
         println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
-        println!("  Context:       {ctx_size}");
+        if batch_size > 0 {
+            let per_seq = ctx_size / batch_size as u32;
+            println!("  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)");
+        } else {
+            println!("  Context:       {ctx_size}");
+        }
         println!("  Flash attn:    {flash_attn}");
         println!("  KV cache K:    {cache_type_k:?}");
         println!("  KV cache V:    {cache_type_v:?}");
