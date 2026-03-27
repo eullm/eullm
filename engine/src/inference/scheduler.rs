@@ -15,6 +15,7 @@
 
 use std::num::NonZeroU32;
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use llama_cpp_2::context::LlamaContext;
@@ -83,22 +84,24 @@ pub struct SchedulerHandle {
     /// Notify the scheduler thread that new work is available.
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
-    /// Join handle for the scheduler thread — used during model swap to
-    /// ensure the old thread (and its LlamaBackend) is fully destroyed
-    /// before starting a new one.
+    /// Explicit shutdown flag — checked by the scheduler loop every iteration.
+    /// Using AtomicBool because channel disconnect alone is unreliable
+    /// (cloned handles in in-flight SlotSnapshots keep the channel open).
+    shutdown: Arc<AtomicBool>,
+    /// Join handle for the scheduler thread.
     thread: Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl SchedulerHandle {
     /// Shut down the scheduler and wait for the thread to exit.
     ///
-    /// Drops the request channel (so the thread sees disconnect) and
-    /// joins the thread to guarantee the old LlamaBackend / model /
-    /// context are fully destroyed before returning.
+    /// Sets the shutdown flag, wakes the thread, and joins it to
+    /// guarantee the old LlamaBackend / model / context are fully
+    /// destroyed before returning.
     pub fn shutdown(self) {
-        // Drop the sender — the scheduler thread will see Disconnected.
-        drop(self.tx);
-        // Wake the thread so it notices the disconnect immediately.
+        // Set the flag — the scheduler loop checks this every iteration.
+        self.shutdown.store(true, Ordering::SeqCst);
+        // Wake the thread so it sees the flag immediately.
         {
             let _lock = self.notify_mutex.lock().unwrap();
             self.notify.notify_one();
@@ -170,8 +173,10 @@ impl BatchScheduler {
 
         let notify = Arc::new(std::sync::Condvar::new());
         let notify_mutex = Arc::new(std::sync::Mutex::new(()));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let notify_clone = Arc::clone(&notify);
         let notify_mutex_clone = Arc::clone(&notify_mutex);
+        let shutdown_clone = Arc::clone(&shutdown);
 
         // Channel for the scheduler thread to signal model load completion.
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -185,7 +190,7 @@ impl BatchScheduler {
                 // Catch panics from Rust code. This won't catch C-level abort()
                 // from llama.cpp (see SIGABRT handler in main.rs for that).
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx)
+                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, shutdown_clone, ready_tx)
                 })) {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
@@ -217,6 +222,7 @@ impl BatchScheduler {
             tx: req_tx,
             notify,
             notify_mutex,
+            shutdown,
             thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
         })
     }
@@ -230,6 +236,7 @@ fn run_scheduler_loop(
     req_rx: crossbeam_channel::Receiver<ScheduledRequest>,
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
+    shutdown: Arc<AtomicBool>,
     ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     super::check_gpu_support(config.gpu_layers);
@@ -338,6 +345,15 @@ fn run_scheduler_loop(
     let _ = ready_tx.send(Ok(()));
 
     loop {
+        // ── 0. Check shutdown flag ────────────────────────────────────
+        if shutdown.load(Ordering::SeqCst) {
+            tracing::info!("Shutdown requested — draining {} active sequences", active.len());
+            for seq in &active {
+                let _ = seq.tx.try_send(StreamEvent::Error("Server shutting down".into()));
+            }
+            return Ok(());
+        }
+
         // ── 1. Drain new requests from the queue ────────────────────────
         while active.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
