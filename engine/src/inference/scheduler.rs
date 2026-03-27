@@ -83,9 +83,34 @@ pub struct SchedulerHandle {
     /// Notify the scheduler thread that new work is available.
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
+    /// Join handle for the scheduler thread — used during model swap to
+    /// ensure the old thread (and its LlamaBackend) is fully destroyed
+    /// before starting a new one.
+    thread: Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl SchedulerHandle {
+    /// Shut down the scheduler and wait for the thread to exit.
+    ///
+    /// Drops the request channel (so the thread sees disconnect) and
+    /// joins the thread to guarantee the old LlamaBackend / model /
+    /// context are fully destroyed before returning.
+    pub fn shutdown(self) {
+        // Drop the sender — the scheduler thread will see Disconnected.
+        drop(self.tx);
+        // Wake the thread so it notices the disconnect immediately.
+        {
+            let _lock = self.notify_mutex.lock().unwrap();
+            self.notify.notify_one();
+        }
+        // Wait for the thread to finish.
+        if let Some(handle) = self.thread.lock().unwrap().take() {
+            tracing::info!("Waiting for scheduler thread to exit...");
+            let _ = handle.join();
+            tracing::info!("Scheduler thread exited");
+        }
+    }
+
     /// Submit a request for inference. Returns immediately.
     ///
     /// The caller should listen on the returned `mpsc::Receiver<StreamEvent>`
@@ -154,7 +179,7 @@ impl BatchScheduler {
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
 
-        std::thread::Builder::new()
+        let join_handle = std::thread::Builder::new()
             .name("eullm-scheduler".into())
             .spawn(move || {
                 // Catch panics from Rust code. This won't catch C-level abort()
@@ -192,6 +217,7 @@ impl BatchScheduler {
             tx: req_tx,
             notify,
             notify_mutex,
+            thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
         })
     }
 }

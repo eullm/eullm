@@ -76,21 +76,30 @@ impl AppState {
 
         tracing::info!("Swapping model → {normalized} ({})", gguf_path.display());
 
-        // ── 1. Unload the current model FIRST to free VRAM ──────────
+        // ── 1. Unload the current model and WAIT for the scheduler
+        //       thread to fully exit before loading the new model.
         //
-        // Without this, both old and new models would be in VRAM
-        // simultaneously, causing OOM on GPUs with tight memory.
+        // Without this, both old and new LlamaBackend instances would
+        // coexist, and both models would be in VRAM simultaneously —
+        // causing OOM or a C-level crash in llama.cpp.
         {
-            let mut slot = self.slot.write().await;
-            slot.engine = None;
-            slot.scheduler = None;
-            slot.model_name = None;
-            tracing::info!("Previous model unloaded");
+            let old_scheduler = {
+                let mut slot = self.slot.write().await;
+                let sched = slot.scheduler.take();
+                slot.engine = None;
+                slot.model_name = None;
+                sched
+            };
+            // Actively shut down the old scheduler thread (drops channel,
+            // wakes the thread, joins it).  This guarantees the old model
+            // and LlamaBackend are fully destroyed before we continue.
+            if let Some(handle) = old_scheduler {
+                tokio::task::spawn_blocking(move || handle.shutdown())
+                    .await
+                    .map_err(|e| format!("Failed to join scheduler thread: {e}"))?;
+            }
+            tracing::info!("Previous model fully unloaded");
         }
-        // The old Arc<InferenceEngine> / SchedulerHandle are now dropped
-        // (unless in-flight requests hold clones — those will finish and
-        // drop naturally).  Give a moment for VRAM deallocation.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // ── 2. Load the new model ───────────────────────────────────
         let config = InferenceConfig {
