@@ -261,17 +261,17 @@ eullm run ./model.gguf --ctx-size 16384 --batch-size 4
 eullm run ./model.gguf --ctx-size 32768 --batch-size 8
 ```
 
-### Choosing batch-size (parallelism sweet spot)
+### Choosing batch-size
 
-More slots = more parallel requests, but each gets less GPU time per token. Benchmarks on RTX 5070 Ti with Qwen3-8B Q4, 32K context, ~3000-token prompts:
+More slots increase parallelism but reduce per-request throughput (shared GPU time). General guideline:
 
-| Parallel requests | tok/s per request | Aggregate tok/s | Wall time |
-|:-:|:-:|:-:|:-:|
-| 4 | 40 | 162 | 4.2s |
-| 6 | 20 | 123 | 8.4s |
-| 8 | 20 | 152 | 8.1s |
+| Parallel slots | Per-request throughput | Aggregate throughput | Use case |
+|:-:|:-:|:-:|---|
+| 4 | High | High | Chat, general inference |
+| 8 | Medium | Higher | Batch extraction, RAG pipelines |
+| 16+ | Lower | Highest | High-concurrency APIs, multi-GPU |
 
-**Recommendation:** Start with `--batch-size 4` for most workloads. This gives the best per-request latency while still delivering high aggregate throughput. Increase to 8+ only if you need more concurrent slots and can tolerate slower per-request response.
+Start with `--batch-size 4` for the best per-request latency. Increase when your workload requires more concurrent slots and can tolerate slower individual responses.
 
 ## Dynamic Model Swap
 
@@ -337,14 +337,17 @@ Multiple requests arriving simultaneously for a different model are handled safe
 - Other requests wait for the swap to complete, then use the new model
 - In-flight requests on the old model continue normally via reference counting
 
-### VRAM budget examples (RTX 5070 Ti, 16GB)
+### VRAM budget reference
 
-| Model | batch_size | ctx_size | tok/slot | VRAM est. |
-|-------|:----------:|:--------:|:--------:|:---------:|
-| Qwen3-14B Q4 | 4 | 16384 | 4096 | ~12.5 GB |
-| Qwen3-8B Q4 | 4 | 16384 | 4096 | ~7 GB |
-| Qwen3-8B Q4 | 8 | 32768 | 4096 | ~9.5 GB |
-| Qwen3-8B Q4 | 8 | 16384 | 2048 | ~7 GB |
+Approximate VRAM usage with F16 KV cache (default). Actual values depend on model architecture and GPU.
+
+| Model size | batch_size | ctx_size | tok/slot | VRAM est. |
+|:----------:|:----------:|:--------:|:--------:|:---------:|
+| 14B Q4 | 4 | 16384 | 4096 | ~12.5 GB |
+| 8B Q4 | 4 | 16384 | 4096 | ~7 GB |
+| 8B Q4 | 8 | 32768 | 4096 | ~9.5 GB |
+| 8B Q4 | 8 | 16384 | 2048 | ~7 GB |
+| 70B Q4 | 16 | 65536 | 4096 | ~45 GB |
 
 ## API Reference
 
