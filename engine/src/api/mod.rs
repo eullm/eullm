@@ -143,23 +143,38 @@ impl AppState {
     /// Resolve a model name to a GGUF file path.
     ///
     /// Search order:
-    /// 1. Direct GGUF file path (absolute or relative)
-    /// 2. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
-    /// 3. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
+    /// 1. Direct GGUF file path (absolute or relative, e.g. `/models/qwen3-14b.gguf`)
+    /// 2. Directory containing a single .gguf file (e.g. `/models/qwen3-14b/`)
+    /// 3. Path without extension — try appending `.gguf`
+    /// 4. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
+    /// 5. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
     fn resolve_model(&self, name: &str) -> Result<PathBuf, String> {
         let path = PathBuf::from(name);
 
         // 1. Direct GGUF file path?
-        if path.exists() && path.extension().is_some_and(|e| e == "gguf") {
+        if path.is_file() {
             return Ok(path);
         }
 
-        // 2. Exact name in model store.
+        // 2. Directory containing .gguf files? Pick the first one.
+        if path.is_dir() {
+            if let Some(gguf) = find_gguf_in_dir(&path) {
+                return Ok(gguf);
+            }
+        }
+
+        // 3. Try appending .gguf extension.
+        let with_ext = path.with_extension("gguf");
+        if with_ext.is_file() {
+            return Ok(with_ext);
+        }
+
+        // 4. Exact name in model store.
         if let Some(p) = self.store.gguf_path(name) {
             return Ok(p);
         }
 
-        // 3. Try normalized name (Ollama tag format).
+        // 5. Try normalized name (Ollama tag format).
         let normalized = normalize_model_name(name);
         if normalized != name {
             if let Some(p) = self.store.gguf_path(&normalized) {
@@ -168,9 +183,24 @@ impl AppState {
         }
 
         Err(format!(
-            "Model '{name}' not found.  Import it first: eullm import-ollama {name}"
+            "Model '{name}' not found. Accepted formats:\n  \
+             - GGUF file path: /models/model.gguf\n  \
+             - Directory with GGUF: /models/mymodel/\n  \
+             - Registered name: eullm import-ollama {name}"
         ))
     }
+}
+
+/// Find the first `.gguf` file in a directory.
+fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_file() && p.extension().is_some_and(|e| e == "gguf") {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Normalize an Ollama-style model name for EULLM's store.
