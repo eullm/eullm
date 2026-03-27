@@ -206,6 +206,8 @@ fn run_scheduler_loop(
     notify_mutex: Arc<std::sync::Mutex<()>>,
     ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    super::check_gpu_support(config.gpu_layers);
+
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let backend = LlamaBackend::init()?;
 
