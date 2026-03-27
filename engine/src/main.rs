@@ -645,16 +645,34 @@ async fn cmd_run(
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("  Model:         {short}");
     if engine.is_some() || scheduler.is_some() {
-        println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
+        let has_gpu = cfg!(feature = "cuda")
+            || cfg!(feature = "rocm")
+            || cfg!(feature = "vulkan")
+            || cfg!(feature = "metal");
+        let gpu_backend = if cfg!(feature = "cuda") {
+            "CUDA"
+        } else if cfg!(feature = "rocm") {
+            "ROCm"
+        } else if cfg!(feature = "vulkan") {
+            "Vulkan"
+        } else if cfg!(feature = "metal") {
+            "Metal"
+        } else {
+            "none (CPU only!)"
+        };
+        println!("  GPU backend:   {gpu_backend}");
+        println!("  GPU layers:    {}", if !has_gpu { "N/A".to_string() } else if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
         if batch_size > 0 {
             let per_seq = ctx_size / batch_size as u32;
             println!("  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)");
         } else {
             println!("  Context:       {ctx_size}");
         }
+        println!("  KV offload:    {}", if has_gpu && gpu_layers != 0 { "GPU (offload_kqv=true)" } else { "CPU" });
         println!("  Flash attn:    {flash_attn}");
         println!("  KV cache K:    {cache_type_k:?}");
         println!("  KV cache V:    {cache_type_v:?}");
+        println!("  Threads:       {}", if has_gpu && gpu_layers != 0 { format!("{} (capped for GPU)", resolved_threads.min(4)) } else { resolved_threads.to_string() });
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
     }

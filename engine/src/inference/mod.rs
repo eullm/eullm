@@ -25,18 +25,89 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+/// Check if the binary was compiled with GPU support and warn if GPU was
+/// requested but is not available.  Returns true when a GPU backend is present.
+pub fn check_gpu_support(gpu_layers: i32) {
+    let has_gpu = cfg!(feature = "cuda")
+        || cfg!(feature = "rocm")
+        || cfg!(feature = "vulkan")
+        || cfg!(feature = "metal");
+
+    if gpu_layers != 0 && !has_gpu {
+        eprintln!();
+        eprintln!("╔══════════════════════════════════════════════════════════════╗");
+        eprintln!("║  WARNING: GPU requested but this binary has no GPU support  ║");
+        eprintln!("║                                                              ║");
+        eprintln!("║  All inference will run on CPU (very slow for large prompts) ║");
+        eprintln!("║                                                              ║");
+        eprintln!("║  Rebuild with GPU support:                                   ║");
+        eprintln!("║    cargo build --release --features cuda    # NVIDIA         ║");
+        eprintln!("║    cargo build --release --features rocm    # AMD            ║");
+        eprintln!("║    cargo build --release --features vulkan  # Cross-platform ║");
+        eprintln!("║    cargo build --release --features metal   # Apple Silicon  ║");
+        eprintln!("║                                                              ║");
+        eprintln!("║  Docker: use the engine-gpu service or build with:           ║");
+        eprintln!("║    docker build --build-arg FEATURES=cuda -t eullm .         ║");
+        eprintln!("╚══════════════════════════════════════════════════════════════╝");
+        eprintln!();
+        tracing::warn!(
+            "No GPU backend compiled (gpu_layers={gpu_layers}). \
+             Rebuild with --features cuda/rocm/vulkan/metal for GPU acceleration."
+        );
+    } else if has_gpu {
+        let backend_name = if cfg!(feature = "cuda") {
+            "CUDA"
+        } else if cfg!(feature = "rocm") {
+            "ROCm"
+        } else if cfg!(feature = "vulkan") {
+            "Vulkan"
+        } else {
+            "Metal"
+        };
+        tracing::info!("GPU backend: {backend_name}");
+    }
+}
+
 /// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
+    let has_gpu = cfg!(feature = "cuda")
+        || cfg!(feature = "rocm")
+        || cfg!(feature = "vulkan")
+        || cfg!(feature = "metal");
+
+    // For GPU builds, cap CPU threads to avoid contention.
+    // llama.cpp only uses n_threads for non-GPU ops; 32 threads is wasteful
+    // and can cause NUMA/cache-thrashing issues.
+    let threads = if has_gpu && config.gpu_layers != 0 {
+        config.threads.min(4)
+    } else {
+        config.threads
+    };
+
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
-        .with_n_threads(config.threads as i32)
-        .with_n_threads_batch(config.threads as i32)
+        .with_n_threads(threads as i32)
+        .with_n_threads_batch(threads as i32)
         .with_type_k(config.cache_type_k)
-        .with_type_v(config.cache_type_v);
+        .with_type_v(config.cache_type_v)
+        // Explicitly ensure KV cache and KQV ops are offloaded to GPU.
+        // Without this, quantized KV cache may silently stay on CPU RAM,
+        // causing massive CPU↔GPU transfers during attention.
+        .with_offload_kqv(has_gpu && config.gpu_layers != 0)
+        .with_op_offload(has_gpu && config.gpu_layers != 0);
+
     if config.flash_attn {
         params = params.with_flash_attention_policy(1);
     }
+
+    if has_gpu && config.gpu_layers != 0 {
+        tracing::info!(
+            "GPU context: offload_kqv=true, op_offload=true, threads={threads} (capped from {})",
+            config.threads,
+        );
+    }
+
     params
 }
 
@@ -208,6 +279,8 @@ impl InferenceEngine {
             )
             .into());
         }
+
+        check_gpu_support(config.gpu_layers);
 
         tracing::info!("Initializing llama.cpp backend...");
         let backend = LlamaBackend::init()?;
