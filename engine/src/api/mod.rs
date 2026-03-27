@@ -65,11 +65,29 @@ impl AppState {
     ///
     /// This is the **write** path — only one swap can run at a time.
     pub async fn swap_model(&self, name: &str) -> Result<(), String> {
-        // Resolve model name → GGUF path.
-        let gguf_path = self.resolve_model(name)?;
+        // Normalize Ollama-style names: "qwen3:14b" → "qwen3-14b"
+        let normalized = normalize_model_name(name);
+        let gguf_path = self.resolve_model(&normalized)?;
 
-        tracing::info!("Swapping model → {name} ({})", gguf_path.display());
+        tracing::info!("Swapping model → {normalized} ({})", gguf_path.display());
 
+        // ── 1. Unload the current model FIRST to free VRAM ──────────
+        //
+        // Without this, both old and new models would be in VRAM
+        // simultaneously, causing OOM on GPUs with tight memory.
+        {
+            let mut slot = self.slot.write().await;
+            slot.engine = None;
+            slot.scheduler = None;
+            slot.model_name = None;
+            tracing::info!("Previous model unloaded");
+        }
+        // The old Arc<InferenceEngine> / SchedulerHandle are now dropped
+        // (unless in-flight requests hold clones — those will finish and
+        // drop naturally).  Give a moment for VRAM deallocation.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // ── 2. Load the new model ───────────────────────────────────
         let config = InferenceConfig {
             model_path: gguf_path,
             gpu_layers: self.gpu_layers,
@@ -81,9 +99,8 @@ impl AppState {
             cache_type_v: self.cache_type_v,
         };
 
-        // Load on a blocking thread (model loading is CPU-heavy).
         let batch_size = self.batch_size;
-        let model_name = name.to_string();
+        let model_name = normalized.clone();
 
         let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
             if batch_size > 0 {
@@ -106,9 +123,7 @@ impl AppState {
         .await
         .map_err(|e| format!("Task join error: {e}"))??;
 
-        // Take the write lock and swap.  The old engine/scheduler are
-        // dropped here — the scheduler thread exits once all cloned
-        // handles (from in-flight requests) are also dropped.
+        // ── 3. Install the new model in the slot ─────────────────────
         {
             let mut slot = self.slot.write().await;
             slot.model_name = Some(model_name.clone());
@@ -121,23 +136,45 @@ impl AppState {
     }
 
     /// Resolve a model name to a GGUF file path.
+    ///
+    /// Search order:
+    /// 1. Direct GGUF file path (absolute or relative)
+    /// 2. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
+    /// 3. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
     fn resolve_model(&self, name: &str) -> Result<PathBuf, String> {
         let path = PathBuf::from(name);
 
-        // Direct GGUF file path?
+        // 1. Direct GGUF file path?
         if path.exists() && path.extension().is_some_and(|e| e == "gguf") {
             return Ok(path);
         }
 
-        // Check model store (imported / pulled models).
+        // 2. Exact name in model store.
         if let Some(p) = self.store.gguf_path(name) {
             return Ok(p);
+        }
+
+        // 3. Try normalized name (Ollama tag format).
+        let normalized = normalize_model_name(name);
+        if normalized != name {
+            if let Some(p) = self.store.gguf_path(&normalized) {
+                return Ok(p);
+            }
         }
 
         Err(format!(
             "Model '{name}' not found.  Import it first: eullm import-ollama {name}"
         ))
     }
+}
+
+/// Normalize an Ollama-style model name for EULLM's store.
+///
+/// Ollama uses `name:tag` (e.g. `qwen3:14b`), but EULLM stores models
+/// with dashes (e.g. `qwen3-14b`).  This converts `:` → `-` so that
+/// API requests using Ollama naming conventions find the right model.
+fn normalize_model_name(name: &str) -> String {
+    name.replace(':', "-")
 }
 
 /// Configuration for starting the API server.
