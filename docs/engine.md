@@ -249,6 +249,103 @@ eullm run ./model.gguf --batch-size 0
 
 With 16 concurrent requests on a consumer GPU, EULLM achieves ~2.5x throughput vs Ollama. See [benchmarks](benchmarks.md) for details.
 
+### Context window and batch slots
+
+The `--ctx-size` flag sets the **total** KV cache budget, shared across all batch slots (matching Ollama/llama.cpp server behaviour). Each slot gets `ctx_size / batch_size` tokens of context:
+
+```bash
+# 16K total, 4 slots → 4096 tokens/slot
+eullm run ./model.gguf --ctx-size 16384 --batch-size 4
+
+# 32K total, 8 slots → 4096 tokens/slot
+eullm run ./model.gguf --ctx-size 32768 --batch-size 8
+```
+
+### Choosing batch-size (parallelism sweet spot)
+
+More slots = more parallel requests, but each gets less GPU time per token. Benchmarks on RTX 5070 Ti with Qwen3-8B Q4, 32K context, ~3000-token prompts:
+
+| Parallel requests | tok/s per request | Aggregate tok/s | Wall time |
+|:-:|:-:|:-:|:-:|
+| 4 | 40 | 162 | 4.2s |
+| 6 | 20 | 123 | 8.4s |
+| 8 | 20 | 152 | 8.1s |
+
+**Recommendation:** Start with `--batch-size 4` for most workloads. This gives the best per-request latency while still delivering high aggregate throughput. Increase to 8+ only if you need more concurrent slots and can tolerate slower per-request response.
+
+## Dynamic Model Swap
+
+The Engine supports hot-swapping models at runtime. When a request specifies a different `model`, the server automatically:
+
+1. **Shuts down** the old scheduler thread (waits for it to fully exit)
+2. **Frees VRAM** — the old model, KV cache, and LlamaBackend are destroyed
+3. **Loads** the new model with the requested configuration
+4. **Resumes** serving requests on the new model
+
+### Basic swap (via model field)
+
+Any generation request with a different `model` triggers the swap:
+
+```bash
+# Currently running qwen3-14b — this switches to qwen3-8b automatically
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:8b",
+  "prompt": "Hello"
+}'
+```
+
+### Dynamic batch_size and ctx_size
+
+The `batch_size` and `ctx_size` can be overridden per model swap. This is useful when switching between a large model (fewer slots) and a small model (more slots):
+
+```bash
+# Switch to 8B with 8 parallel slots and 32K context
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:8b",
+  "batch_size": 8,
+  "ctx_size": 32768,
+  "prompt": "Hello"
+}'
+
+# Switch back to 14B with 4 slots and 16K context
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:14b",
+  "batch_size": 4,
+  "ctx_size": 16384,
+  "prompt": "Hello"
+}'
+```
+
+When `batch_size` or `ctx_size` are not specified, the values from `--batch-size` and `--ctx-size` at startup are used.
+
+### Model name resolution
+
+The `model` field accepts:
+
+| Format | Example | Resolution |
+|--------|---------|------------|
+| Full GGUF path | `/models/qwen3-8b.gguf` | Direct file |
+| Ollama-style name | `qwen3:8b` | Normalized to `qwen3-8b`, searched in `/models/` and model store |
+| Path without extension | `/models/qwen3-8b` | Tries appending `.gguf` |
+| Directory | `/models/mymodel/` | Picks the first `.gguf` file inside |
+| Registered name | `legal-it-7b` | Looked up in `~/.eullm/models/` |
+
+### Concurrent swap safety
+
+Multiple requests arriving simultaneously for a different model are handled safely:
+- Only one swap runs at a time (serialized via Mutex)
+- Other requests wait for the swap to complete, then use the new model
+- In-flight requests on the old model continue normally via reference counting
+
+### VRAM budget examples (RTX 5070 Ti, 16GB)
+
+| Model | batch_size | ctx_size | tok/slot | VRAM est. |
+|-------|:----------:|:--------:|:--------:|:---------:|
+| Qwen3-14B Q4 | 4 | 16384 | 4096 | ~12.5 GB |
+| Qwen3-8B Q4 | 4 | 16384 | 4096 | ~7 GB |
+| Qwen3-8B Q4 | 8 | 32768 | 4096 | ~9.5 GB |
+| Qwen3-8B Q4 | 8 | 16384 | 2048 | ~7 GB |
+
 ## API Reference
 
 The Engine exposes two sets of endpoints: the native EULLM API (Ollama-compatible) and an OpenAI-compatible API. CORS is enabled for browser-based tools.
@@ -634,8 +731,8 @@ The model generates fewer tokens than `num_predict` requested.
 | Local model store (~/.eullm/models/) | Implemented |
 | Model download (HuggingFace, streaming with progress) | Implemented |
 | Import from Ollama (import-ollama with GGUF patching) | Implemented |
-| Dynamic model swap (load/unload via API) | Implemented |
-| KV cache quantization (--cache-type-k, --cache-type-v) | Implemented |
+| Dynamic model swap (load/unload via API, dynamic batch_size/ctx_size) | Implemented |
+| KV cache (F16 default, automatic fallback from quantized types) | Implemented |
 | Constrained JSON decoding (format: "json" via GBNF) | Implemented |
 | Continuous batching scheduler | Implemented |
 | Audit trail (persistent JSONL) | Implemented |
