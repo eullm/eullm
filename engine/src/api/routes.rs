@@ -293,8 +293,15 @@ async fn generate(
         .to_string();
 
     let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
-    let grammar = parse_format_grammar(&body);
     let raw = body.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
+    let grammar = if raw {
+        // GBNF grammar sampling is incompatible with raw mode — the grammar
+        // sampler crashes (GGML_ASSERT) when the prompt contains pre-tokenized
+        // special tokens (ChatML).  In raw mode, the caller handles formatting.
+        None
+    } else {
+        parse_format_grammar(&body)
+    };
 
     let request = GenerateRequest {
         prompt,
