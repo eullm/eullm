@@ -294,6 +294,7 @@ async fn generate(
 
     let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
+    let raw = body.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let request = GenerateRequest {
         prompt,
@@ -301,6 +302,7 @@ async fn generate(
         temperature,
         num_ctx,
         grammar,
+        raw,
         ..Default::default()
     };
 
@@ -407,6 +409,7 @@ async fn chat(
         ],
         num_ctx,
         grammar,
+        raw: false,
     };
 
     if let Some(ref sched) = snap.scheduler {
@@ -572,6 +575,7 @@ async fn chat_completions(
         ],
         num_ctx,
         grammar,
+        raw: false,
     };
 
     if let Some(ref sched) = snap.scheduler {
