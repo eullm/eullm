@@ -69,45 +69,35 @@ pub fn check_gpu_support(gpu_layers: i32) {
 }
 
 /// Build context params with flash attention, n_batch, and KV cache types applied.
+///
+/// KV cache type defaults to F16 (maximum GPU compatibility).  Quantized
+/// types (Q8_0, Q4_0) save VRAM but can cause GPU fallback on some
+/// architectures — only use them after verifying GPU utilisation with nvtop.
 pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
-    let has_gpu = cfg!(feature = "cuda")
-        || cfg!(feature = "rocm")
-        || cfg!(feature = "vulkan")
-        || cfg!(feature = "metal");
-
-    // For GPU builds, cap CPU threads to avoid contention.
-    // llama.cpp only uses n_threads for non-GPU ops; 32 threads is wasteful
-    // and can cause NUMA/cache-thrashing issues.
-    let threads = if has_gpu && config.gpu_layers != 0 {
-        config.threads.min(4)
-    } else {
-        config.threads
-    };
-
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
-        .with_n_threads(threads as i32)
-        .with_n_threads_batch(threads as i32)
-        .with_type_k(config.cache_type_k)
-        .with_type_v(config.cache_type_v)
-        // Explicitly ensure KV cache and KQV ops are offloaded to GPU.
-        // Without this, quantized KV cache may silently stay on CPU RAM,
-        // causing massive CPU↔GPU transfers during attention.
-        .with_offload_kqv(has_gpu && config.gpu_layers != 0)
-        .with_op_offload(has_gpu && config.gpu_layers != 0);
+        .with_n_threads(config.threads as i32)
+        .with_n_threads_batch(config.threads as i32);
+
+    // Only set KV cache types when they differ from the default (F16).
+    // Setting quantized types (Q8_0, Q4_0) can trigger GPU→CPU fallback
+    // for batch prefill on some GPU architectures (observed on RTX 5070 Ti
+    // with llama-cpp-2 0.1.140).  When F16 is requested we skip the call
+    // entirely so llama.cpp uses its own default, which is known to work.
+    if config.cache_type_k != KvCacheType::F16 || config.cache_type_v != KvCacheType::F16 {
+        params = params.with_type_k(config.cache_type_k).with_type_v(config.cache_type_v);
+        tracing::warn!(
+            "Using quantized KV cache (K={:?}, V={:?}). If GPU utilisation is low, \
+             try --cache-type-k f16 --cache-type-v f16",
+            config.cache_type_k,
+            config.cache_type_v,
+        );
+    }
 
     if config.flash_attn {
         params = params.with_flash_attention_policy(1);
     }
-
-    if has_gpu && config.gpu_layers != 0 {
-        tracing::info!(
-            "GPU context: offload_kqv=true, op_offload=true, threads={threads} (capped from {})",
-            config.threads,
-        );
-    }
-
     params
 }
 
@@ -129,10 +119,10 @@ pub struct InferenceConfig {
     /// Prompt processing batch size (how many tokens per eval during prefill).
     pub n_batch: u32,
     /// KV cache data type for keys.  Lower precision = less VRAM.
-    /// Default: F16.  Ollama uses Q8_0.
+    /// Default: F16 (maximum GPU compatibility).
     pub cache_type_k: KvCacheType,
     /// KV cache data type for values.  Lower precision = less VRAM.
-    /// Default: F16.  Ollama uses Q4_0.
+    /// Default: F16 (maximum GPU compatibility).
     pub cache_type_v: KvCacheType,
 }
 
@@ -145,8 +135,12 @@ impl Default for InferenceConfig {
             threads: num_cpus(),
             flash_attn: true,
             n_batch: 2048,
-            cache_type_k: KvCacheType::Q8_0,
-            cache_type_v: KvCacheType::Q4_0,
+            // F16 is the safest default — works on all GPU architectures.
+            // Quantized types (Q8_0, Q4_0) save VRAM but may cause GPU
+            // fallback to CPU on some architectures.  Users can opt in
+            // with --cache-type-k / --cache-type-v after verifying with nvtop.
+            cache_type_k: KvCacheType::F16,
+            cache_type_v: KvCacheType::F16,
         }
     }
 }
