@@ -214,7 +214,7 @@ eullm run qwen3-14b --ctx-size 32768 --cache-type-k q4_0 --cache-type-v q4_0
 
 Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`.
 
-> **Note:** KV cache quantization requires flash attention (enabled by default). If you use `--no-flash-attn` with quantized V cache types, context creation will fail.
+> **Note:** Quantized V cache types (Q4_0, Q8_0) require Flash Attention. On GPUs where Flash Attention doesn't support these types, the engine automatically falls back to F16 KV cache and logs a warning. You can also set F16 explicitly by omitting the `--cache-type-v` flag.
 
 ## Constrained JSON Decoding (`format: "json"`)
 
