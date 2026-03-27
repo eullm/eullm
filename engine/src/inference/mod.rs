@@ -111,7 +111,7 @@ pub struct InferenceConfig {
     pub model_path: PathBuf,
     /// Number of GPU layers to offload (-1 = all).
     pub gpu_layers: i32,
-    /// Context window size (per sequence).
+    /// Total context window size (shared across batch slots in scheduler mode).
     pub context_size: u32,
     /// Number of threads for CPU inference.
     pub threads: u32,
