@@ -15,6 +15,7 @@
 
 use std::num::NonZeroU32;
 use std::pin::pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use llama_cpp_2::context::LlamaContext;
@@ -83,9 +84,36 @@ pub struct SchedulerHandle {
     /// Notify the scheduler thread that new work is available.
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
+    /// Explicit shutdown flag — checked by the scheduler loop every iteration.
+    /// Using AtomicBool because channel disconnect alone is unreliable
+    /// (cloned handles in in-flight SlotSnapshots keep the channel open).
+    shutdown: Arc<AtomicBool>,
+    /// Join handle for the scheduler thread.
+    thread: Arc<std::sync::Mutex<Option<std::thread::JoinHandle<()>>>>,
 }
 
 impl SchedulerHandle {
+    /// Shut down the scheduler and wait for the thread to exit.
+    ///
+    /// Sets the shutdown flag, wakes the thread, and joins it to
+    /// guarantee the old LlamaBackend / model / context are fully
+    /// destroyed before returning.
+    pub fn shutdown(self) {
+        // Set the flag — the scheduler loop checks this every iteration.
+        self.shutdown.store(true, Ordering::SeqCst);
+        // Wake the thread so it sees the flag immediately.
+        {
+            let _lock = self.notify_mutex.lock().unwrap();
+            self.notify.notify_one();
+        }
+        // Wait for the thread to finish.
+        if let Some(handle) = self.thread.lock().unwrap().take() {
+            tracing::info!("Waiting for scheduler thread to exit...");
+            let _ = handle.join();
+            tracing::info!("Scheduler thread exited");
+        }
+    }
+
     /// Submit a request for inference. Returns immediately.
     ///
     /// The caller should listen on the returned `mpsc::Receiver<StreamEvent>`
@@ -145,8 +173,10 @@ impl BatchScheduler {
 
         let notify = Arc::new(std::sync::Condvar::new());
         let notify_mutex = Arc::new(std::sync::Mutex::new(()));
+        let shutdown = Arc::new(AtomicBool::new(false));
         let notify_clone = Arc::clone(&notify);
         let notify_mutex_clone = Arc::clone(&notify_mutex);
+        let shutdown_clone = Arc::clone(&shutdown);
 
         // Channel for the scheduler thread to signal model load completion.
         let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
@@ -154,13 +184,13 @@ impl BatchScheduler {
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
 
-        std::thread::Builder::new()
+        let join_handle = std::thread::Builder::new()
             .name("eullm-scheduler".into())
             .spawn(move || {
                 // Catch panics from Rust code. This won't catch C-level abort()
                 // from llama.cpp (see SIGABRT handler in main.rs for that).
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, ready_tx)
+                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, shutdown_clone, ready_tx)
                 })) {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
@@ -192,6 +222,8 @@ impl BatchScheduler {
             tx: req_tx,
             notify,
             notify_mutex,
+            shutdown,
+            thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
         })
     }
 }
@@ -204,8 +236,11 @@ fn run_scheduler_loop(
     req_rx: crossbeam_channel::Receiver<ScheduledRequest>,
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
+    shutdown: Arc<AtomicBool>,
     ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    super::check_gpu_support(config.gpu_layers);
+
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let backend = LlamaBackend::init()?;
 
@@ -226,17 +261,24 @@ fn run_scheduler_loop(
         }
     };
 
-    // Create a single shared context with enough room for all sequences.
-    let total_ctx = config.context_size * sched_config.max_batch_size as u32;
+    // Use context_size as the TOTAL KV cache budget, shared across all
+    // sequences (matching Ollama / llama.cpp server behaviour).  Previous
+    // code multiplied context_size × max_batch_size, which easily overflowed
+    // VRAM and forced llama.cpp to fall back to CPU for KV cache ops.
+    let total_ctx = config.context_size;
+    let per_seq_ctx = config.context_size / sched_config.max_batch_size as u32;
     tracing::info!(
-        "Allocating context: {} tokens per sequence × {} sequences = {} total (flash_attn={}, n_batch={})",
-        config.context_size,
-        sched_config.max_batch_size,
+        "Allocating context: {} total tokens, {} per sequence ({} slots, flash_attn={}, n_batch={})",
         total_ctx,
+        per_seq_ctx,
+        sched_config.max_batch_size,
         config.flash_attn,
         config.n_batch,
     );
     let ctx_size = NonZeroU32::new(total_ctx).unwrap_or(NonZeroU32::new(4096).unwrap());
+
+    let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
+        || config.cache_type_v != super::KvCacheType::F16;
 
     let ctx_params = super::build_ctx_params(&config, ctx_size)
         .with_n_seq_max(sched_config.max_batch_size as u32);
@@ -244,9 +286,42 @@ fn run_scheduler_loop(
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {
-            let msg = format!("Failed to create context: {e}");
-            let _ = ready_tx.send(Err(msg.clone()));
-            return Err(msg.into());
+            // Quantized V cache requires Flash Attention, but FA AUTO may
+            // have disabled it (unsupported on this GPU).  llama.cpp returns
+            // a generic null-reference error, so we can't match on the
+            // message — instead check whether quantized cache was requested.
+            if has_quantized_cache {
+                tracing::warn!(
+                    "Context creation failed with quantized KV cache ({:?}/{:?}). \
+                     Retrying with F16 KV cache.",
+                    config.cache_type_k, config.cache_type_v,
+                );
+                eprintln!(
+                    "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16 \
+                     (quantized V cache requires Flash Attention, which is not available on this GPU)",
+                    config.cache_type_k, config.cache_type_v,
+                );
+
+                let ctx_params = super::build_ctx_params_with_cache(
+                    &config,
+                    ctx_size,
+                    super::KvCacheType::F16,
+                    super::KvCacheType::F16,
+                ).with_n_seq_max(sched_config.max_batch_size as u32);
+
+                match model.new_context(&backend, ctx_params) {
+                    Ok(c) => c,
+                    Err(e2) => {
+                        let msg = format!("Failed to create context (even with F16 fallback): {e2}");
+                        let _ = ready_tx.send(Err(msg.clone()));
+                        return Err(msg.into());
+                    }
+                }
+            } else {
+                let msg = format!("Failed to create context: {e}");
+                let _ = ready_tx.send(Err(msg.clone()));
+                return Err(msg.into());
+            }
         }
     };
 
@@ -259,16 +334,26 @@ fn run_scheduler_loop(
     let mut decode_batch = LlamaBatch::new(sched_config.max_batch_size.max(1), 1);
 
     tracing::info!(
-        "Scheduler running — max_batch_size={}, queue_capacity={}, context={}",
+        "Scheduler running — max_batch_size={}, queue_capacity={}, total_ctx={}, per_seq_ctx={}",
         sched_config.max_batch_size,
         sched_config.queue_capacity,
         total_ctx,
+        per_seq_ctx,
     );
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok(()));
 
     loop {
+        // ── 0. Check shutdown flag ────────────────────────────────────
+        if shutdown.load(Ordering::SeqCst) {
+            tracing::info!("Shutdown requested — draining {} active sequences", active.len());
+            for seq in &active {
+                let _ = seq.tx.try_send(StreamEvent::Error("Server shutting down".into()));
+            }
+            return Ok(());
+        }
+
         // ── 1. Drain new requests from the queue ────────────────────────
         while active.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
@@ -327,7 +412,7 @@ fn run_scheduler_loop(
                     };
 
                     // Tokenize and prefill immediately.
-                    match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq) {
+                    match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx) {
                         Ok((n_tokens, n_past, effective_max)) => {
                             let mut seq = seq;
                             seq.tokens_prompt = n_tokens;
@@ -555,7 +640,6 @@ fn run_scheduler_loop(
 
 /// Prefill a sequence's prompt tokens into the context.
 ///
-/// Returns `(prompt_token_count, n_past)` on success.
 /// Returns `(prompt_tokens, n_past, effective_max_tokens)`.
 fn prefill_sequence(
     model: &LlamaModel,
@@ -563,6 +647,7 @@ fn prefill_sequence(
     config: &InferenceConfig,
     request: &GenerateRequest,
     seq: &ActiveSequence,
+    per_seq_ctx: u32,
 ) -> Result<(u32, i32, u32), String> {
     let tokens = model
         .str_to_token(&request.prompt, AddBos::Always)
@@ -570,11 +655,12 @@ fn prefill_sequence(
 
     let n_tokens = tokens.len() as u32;
 
-    // Effective context: per-request num_ctx (clamped to server limit) or server default.
+    // Effective context: per-request num_ctx (clamped to per-sequence limit)
+    // or the per-sequence default.
     let effective_ctx = request
         .num_ctx
-        .map(|n| n.min(config.context_size))
-        .unwrap_or(config.context_size);
+        .map(|n| n.min(per_seq_ctx))
+        .unwrap_or(per_seq_ctx);
 
     if n_tokens >= effective_ctx {
         return Err(format!(

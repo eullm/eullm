@@ -69,6 +69,8 @@ struct SlotSnapshot {
 async fn ensure_model(
     state: &AppState,
     requested: Option<&str>,
+    override_batch_size: Option<usize>,
+    override_ctx_size: Option<u32>,
 ) -> Result<SlotSnapshot, (StatusCode, Json<Value>)> {
     // Check if a swap is needed.
     if let Some(name) = requested {
@@ -76,12 +78,12 @@ async fn ensure_model(
         let needs_swap = {
             let slot = state.slot.read().await;
             match slot.model_name.as_deref() {
-                Some(loaded) => loaded != name && loaded != normalized,
+                Some(loaded) => !model_names_match(loaded, &normalized),
                 None => true,
             }
         };
         if needs_swap {
-            state.swap_model(name).await.map_err(|e| {
+            state.swap_model(name, override_batch_size, override_ctx_size).await.map_err(|e| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(json!({ "error": format!("Failed to load model '{name}': {e}") })),
@@ -279,7 +281,9 @@ async fn generate(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let snap = ensure_model(&state, requested).await?;
+    let override_batch_size = body.get("batch_size").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let override_ctx_size = body.get("ctx_size").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
     let prompt = body
@@ -377,7 +381,9 @@ async fn chat(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let snap = ensure_model(&state, requested).await?;
+    let override_batch_size = body.get("batch_size").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let override_ctx_size = body.get("ctx_size").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
     let messages = body
@@ -540,7 +546,9 @@ async fn chat_completions(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let snap = ensure_model(&state, requested).await?;
+    let override_batch_size = body.get("batch_size").and_then(|v| v.as_u64()).map(|v| v as usize);
+    let override_ctx_size = body.get("ctx_size").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
     let messages = body
@@ -869,4 +877,26 @@ fn format_done_event(
             },
         }),
     }
+}
+
+/// Check if a loaded model name matches a requested name.
+///
+/// Handles the common case where the loaded model is a full path
+/// (e.g. `/models/qwen3-8b.gguf`) but the request uses a short name
+/// (e.g. `qwen3-8b` or `qwen3:8b`).
+fn model_names_match(loaded: &str, normalized_request: &str) -> bool {
+    // Exact match.
+    if loaded == normalized_request {
+        return true;
+    }
+    // Compare file stems: "/models/qwen3-8b.gguf" → "qwen3-8b".
+    let loaded_stem = std::path::Path::new(loaded)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(loaded);
+    let request_stem = std::path::Path::new(normalized_request)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(normalized_request);
+    loaded_stem == request_stem
 }

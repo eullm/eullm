@@ -66,12 +66,12 @@ enum Commands {
         #[arg(long, default_value_t = 2048)]
         n_batch: u32,
 
-        /// KV cache type for keys (reduces VRAM usage). Options: f16, q8_0, q4_0
-        #[arg(long, default_value = "q8_0")]
+        /// KV cache type for keys. Options: f16 (default, best GPU compat), q8_0, q4_0
+        #[arg(long, default_value = "f16")]
         cache_type_k: String,
 
-        /// KV cache type for values (reduces VRAM usage). Options: f16, q8_0, q4_0
-        #[arg(long, default_value = "q4_0")]
+        /// KV cache type for values. Options: f16 (default, best GPU compat), q8_0, q4_0
+        #[arg(long, default_value = "f16")]
         cache_type_v: String,
 
         /// Run as a background daemon (writes PID to --pidfile)
@@ -640,16 +640,33 @@ async fn cmd_run(
     };
 
     println!();
-    println!("eullm ready.");
+    println!("eullm ready.  [v{}]", env!("CARGO_PKG_VERSION"));
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("  Model:         {short}");
     if engine.is_some() || scheduler.is_some() {
+        let gpu_backend = if cfg!(feature = "cuda") {
+            "CUDA"
+        } else if cfg!(feature = "rocm") {
+            "ROCm"
+        } else if cfg!(feature = "vulkan") {
+            "Vulkan"
+        } else if cfg!(feature = "metal") {
+            "Metal"
+        } else {
+            "none (CPU only!)"
+        };
+        println!("  GPU backend:   {gpu_backend}");
         println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
-        println!("  Context:       {ctx_size}");
-        println!("  Flash attn:    {flash_attn}");
-        println!("  KV cache K:    {cache_type_k:?}");
-        println!("  KV cache V:    {cache_type_v:?}");
+        if batch_size > 0 {
+            let per_seq = ctx_size / batch_size as u32;
+            println!("  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)");
+        } else {
+            println!("  Context:       {ctx_size}");
+        }
+        println!("  Flash attn:    {} (auto-detect)", if flash_attn { "enabled" } else { "disabled" });
+        println!("  KV cache:      K={cache_type_k:?} V={cache_type_v:?} (fallback to F16 if GPU incompatible)");
+        println!("  Threads:       {resolved_threads}");
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
     }

@@ -40,6 +40,9 @@ pub struct AppState {
     /// Mutable model slot — protected by RwLock for concurrent reads,
     /// exclusive writes during model swap.
     pub slot: tokio::sync::RwLock<ModelSlot>,
+    /// Serializes model swaps — prevents multiple concurrent requests
+    /// from triggering parallel swaps (which would OOM the GPU).
+    swap_lock: tokio::sync::Mutex<()>,
 
     // ── Immutable inference settings (from CLI flags) ────────────────
     pub gpu_layers: i32,
@@ -63,35 +66,69 @@ impl AppState {
     /// (in-flight requests on cloned handles still complete) and loads
     /// the new model with the same inference settings.
     ///
+    /// `override_batch_size` allows the caller to change the number of
+    /// concurrent batch slots for the new model (e.g. more slots for a
+    /// smaller model that uses less VRAM).  Pass `None` to keep the
+    /// batch size from the CLI launch.
+    ///
     /// This is the **write** path — only one swap can run at a time.
-    pub async fn swap_model(&self, name: &str) -> Result<(), String> {
+    pub async fn swap_model(&self, name: &str, override_batch_size: Option<usize>, override_ctx_size: Option<u32>) -> Result<(), String> {
+        // Serialize swaps — if another request is already swapping,
+        // wait for it to finish instead of starting a parallel swap.
+        let _swap_guard = self.swap_lock.lock().await;
+
         // Normalize Ollama-style names: "qwen3:14b" → "qwen3-14b"
         let normalized = normalize_model_name(name);
-        let gguf_path = self.resolve_model(&normalized)?;
 
+        // Re-check after acquiring the lock — another thread may have
+        // already completed the swap while we were waiting.
+        {
+            let slot = self.slot.read().await;
+            if let Some(ref loaded) = slot.model_name {
+                let loaded_stem = std::path::Path::new(loaded.as_str())
+                    .file_stem().and_then(|s| s.to_str()).unwrap_or(loaded);
+                let req_stem = std::path::Path::new(normalized.as_str())
+                    .file_stem().and_then(|s| s.to_str()).unwrap_or(&normalized);
+                if loaded_stem == req_stem {
+                    tracing::info!("Model {normalized} already loaded (swapped by another request)");
+                    return Ok(());
+                }
+            }
+        }
+
+        let gguf_path = self.resolve_model(&normalized)?;
         tracing::info!("Swapping model → {normalized} ({})", gguf_path.display());
 
-        // ── 1. Unload the current model FIRST to free VRAM ──────────
+        // ── 1. Unload the current model and WAIT for the scheduler
+        //       thread to fully exit before loading the new model.
         //
-        // Without this, both old and new models would be in VRAM
-        // simultaneously, causing OOM on GPUs with tight memory.
+        // Without this, both old and new LlamaBackend instances would
+        // coexist, and both models would be in VRAM simultaneously —
+        // causing OOM or a C-level crash in llama.cpp.
         {
-            let mut slot = self.slot.write().await;
-            slot.engine = None;
-            slot.scheduler = None;
-            slot.model_name = None;
-            tracing::info!("Previous model unloaded");
+            let old_scheduler = {
+                let mut slot = self.slot.write().await;
+                let sched = slot.scheduler.take();
+                slot.engine = None;
+                slot.model_name = None;
+                sched
+            };
+            // Actively shut down the old scheduler thread (drops channel,
+            // wakes the thread, joins it).  This guarantees the old model
+            // and LlamaBackend are fully destroyed before we continue.
+            if let Some(handle) = old_scheduler {
+                tokio::task::spawn_blocking(move || handle.shutdown())
+                    .await
+                    .map_err(|e| format!("Failed to join scheduler thread: {e}"))?;
+            }
+            tracing::info!("Previous model fully unloaded");
         }
-        // The old Arc<InferenceEngine> / SchedulerHandle are now dropped
-        // (unless in-flight requests hold clones — those will finish and
-        // drop naturally).  Give a moment for VRAM deallocation.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
         // ── 2. Load the new model ───────────────────────────────────
         let config = InferenceConfig {
             model_path: gguf_path,
             gpu_layers: self.gpu_layers,
-            context_size: self.ctx_size,
+            context_size: override_ctx_size.unwrap_or(self.ctx_size),
             threads: self.threads,
             flash_attn: self.flash_attn,
             n_batch: self.n_batch,
@@ -99,7 +136,7 @@ impl AppState {
             cache_type_v: self.cache_type_v,
         };
 
-        let batch_size = self.batch_size;
+        let batch_size = override_batch_size.unwrap_or(self.batch_size);
         let model_name = normalized.clone();
 
         let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
@@ -131,30 +168,53 @@ impl AppState {
             slot.scheduler = new_scheduler;
         }
 
-        tracing::info!("Model swap complete → {model_name}");
+        tracing::info!("Model swap complete → {model_name} (batch_size={batch_size})");
         Ok(())
     }
 
     /// Resolve a model name to a GGUF file path.
     ///
     /// Search order:
-    /// 1. Direct GGUF file path (absolute or relative)
-    /// 2. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
-    /// 3. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
+    /// 1. Direct GGUF file path (absolute or relative, e.g. `/models/qwen3-14b.gguf`)
+    /// 2. Directory containing a single .gguf file (e.g. `/models/qwen3-14b/`)
+    /// 3. Path without extension — try appending `.gguf`
+    /// 4. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
+    /// 5. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
     fn resolve_model(&self, name: &str) -> Result<PathBuf, String> {
         let path = PathBuf::from(name);
 
         // 1. Direct GGUF file path?
-        if path.exists() && path.extension().is_some_and(|e| e == "gguf") {
+        if path.is_file() {
             return Ok(path);
         }
 
-        // 2. Exact name in model store.
+        // 2. Directory containing .gguf files? Pick the first one.
+        if path.is_dir() {
+            if let Some(gguf) = find_gguf_in_dir(&path) {
+                return Ok(gguf);
+            }
+        }
+
+        // 3. Try appending .gguf extension.
+        let with_ext = path.with_extension("gguf");
+        if with_ext.is_file() {
+            return Ok(with_ext);
+        }
+
+        // 4. Try common model directories (Docker volumes, etc.).
+        for dir in &["/models", "/data/models"] {
+            let candidate = PathBuf::from(dir).join(format!("{name}.gguf"));
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+
+        // 5. Exact name in model store.
         if let Some(p) = self.store.gguf_path(name) {
             return Ok(p);
         }
 
-        // 3. Try normalized name (Ollama tag format).
+        // 5. Try normalized name (Ollama tag format).
         let normalized = normalize_model_name(name);
         if normalized != name {
             if let Some(p) = self.store.gguf_path(&normalized) {
@@ -163,9 +223,24 @@ impl AppState {
         }
 
         Err(format!(
-            "Model '{name}' not found.  Import it first: eullm import-ollama {name}"
+            "Model '{name}' not found. Accepted formats:\n  \
+             - GGUF file path: /models/model.gguf\n  \
+             - Directory with GGUF: /models/mymodel/\n  \
+             - Registered name: eullm import-ollama {name}"
         ))
     }
+}
+
+/// Find the first `.gguf` file in a directory.
+fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let p = entry.path();
+        if p.is_file() && p.extension().is_some_and(|e| e == "gguf") {
+            return Some(p);
+        }
+    }
+    None
 }
 
 /// Normalize an Ollama-style model name for EULLM's store.
@@ -206,6 +281,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             engine: cfg.engine,
             scheduler: cfg.scheduler,
         }),
+        swap_lock: tokio::sync::Mutex::new(()),
         gpu_layers: cfg.gpu_layers,
         ctx_size: cfg.ctx_size,
         threads: cfg.threads,

@@ -25,17 +25,79 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+/// Check if the binary was compiled with GPU support and warn if GPU was
+/// requested but is not available.  Returns true when a GPU backend is present.
+pub fn check_gpu_support(gpu_layers: i32) {
+    let has_gpu = cfg!(feature = "cuda")
+        || cfg!(feature = "rocm")
+        || cfg!(feature = "vulkan")
+        || cfg!(feature = "metal");
+
+    if gpu_layers != 0 && !has_gpu {
+        eprintln!();
+        eprintln!("╔══════════════════════════════════════════════════════════════╗");
+        eprintln!("║  WARNING: GPU requested but this binary has no GPU support  ║");
+        eprintln!("║                                                              ║");
+        eprintln!("║  All inference will run on CPU (very slow for large prompts) ║");
+        eprintln!("║                                                              ║");
+        eprintln!("║  Rebuild with GPU support:                                   ║");
+        eprintln!("║    cargo build --release --features cuda    # NVIDIA         ║");
+        eprintln!("║    cargo build --release --features rocm    # AMD            ║");
+        eprintln!("║    cargo build --release --features vulkan  # Cross-platform ║");
+        eprintln!("║    cargo build --release --features metal   # Apple Silicon  ║");
+        eprintln!("║                                                              ║");
+        eprintln!("║  Docker: use the engine-gpu service or build with:           ║");
+        eprintln!("║    docker build --build-arg FEATURES=cuda -t eullm .         ║");
+        eprintln!("╚══════════════════════════════════════════════════════════════╝");
+        eprintln!();
+        tracing::warn!(
+            "No GPU backend compiled (gpu_layers={gpu_layers}). \
+             Rebuild with --features cuda/rocm/vulkan/metal for GPU acceleration."
+        );
+    } else if has_gpu {
+        let backend_name = if cfg!(feature = "cuda") {
+            "CUDA"
+        } else if cfg!(feature = "rocm") {
+            "ROCm"
+        } else if cfg!(feature = "vulkan") {
+            "Vulkan"
+        } else {
+            "Metal"
+        };
+        tracing::info!("GPU backend: {backend_name}");
+    }
+}
+
 /// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
+    build_ctx_params_with_cache(config, ctx_size, config.cache_type_k, config.cache_type_v)
+}
+
+/// Build context params, allowing KV cache types to be overridden (used for
+/// automatic fallback from quantized → F16 when the GPU doesn't support
+/// Flash Attention with quantized V cache).
+pub(crate) fn build_ctx_params_with_cache(
+    config: &InferenceConfig,
+    ctx_size: NonZeroU32,
+    cache_type_k: KvCacheType,
+    cache_type_v: KvCacheType,
+) -> LlamaContextParams {
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
         .with_n_threads(config.threads as i32)
-        .with_n_threads_batch(config.threads as i32)
-        .with_type_k(config.cache_type_k)
-        .with_type_v(config.cache_type_v);
+        .with_n_threads_batch(config.threads as i32);
+
+    if cache_type_k != KvCacheType::F16 || cache_type_v != KvCacheType::F16 {
+        params = params.with_type_k(cache_type_k).with_type_v(cache_type_v);
+    }
+
     if config.flash_attn {
-        params = params.with_flash_attention_policy(1);
+        // AUTO (-1): llama.cpp tests whether the GPU supports FA for the
+        // current KV cache types.  If not → disables FA and uses regular
+        // attention on GPU.  ENABLED (1) would skip this check and silently
+        // route the FA op to the CPU backend on unsupported configs.
+        params = params.with_flash_attention_policy(-1);
     }
     params
 }
@@ -49,7 +111,7 @@ pub struct InferenceConfig {
     pub model_path: PathBuf,
     /// Number of GPU layers to offload (-1 = all).
     pub gpu_layers: i32,
-    /// Context window size (per sequence).
+    /// Total context window size (shared across batch slots in scheduler mode).
     pub context_size: u32,
     /// Number of threads for CPU inference.
     pub threads: u32,
@@ -58,10 +120,10 @@ pub struct InferenceConfig {
     /// Prompt processing batch size (how many tokens per eval during prefill).
     pub n_batch: u32,
     /// KV cache data type for keys.  Lower precision = less VRAM.
-    /// Default: F16.  Ollama uses Q8_0.
+    /// Default: F16 (maximum GPU compatibility).
     pub cache_type_k: KvCacheType,
     /// KV cache data type for values.  Lower precision = less VRAM.
-    /// Default: F16.  Ollama uses Q4_0.
+    /// Default: F16 (maximum GPU compatibility).
     pub cache_type_v: KvCacheType,
 }
 
@@ -74,8 +136,12 @@ impl Default for InferenceConfig {
             threads: num_cpus(),
             flash_attn: true,
             n_batch: 2048,
-            cache_type_k: KvCacheType::Q8_0,
-            cache_type_v: KvCacheType::Q4_0,
+            // F16 is the safest default — works on all GPU architectures.
+            // Quantized types (Q8_0, Q4_0) save VRAM but may cause GPU
+            // fallback to CPU on some architectures.  Users can opt in
+            // with --cache-type-k / --cache-type-v after verifying with nvtop.
+            cache_type_k: KvCacheType::F16,
+            cache_type_v: KvCacheType::F16,
         }
     }
 }
@@ -209,6 +275,8 @@ impl InferenceEngine {
             .into());
         }
 
+        check_gpu_support(config.gpu_layers);
+
         tracing::info!("Initializing llama.cpp backend...");
         let backend = LlamaBackend::init()?;
 
@@ -245,12 +313,20 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
+        let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
+            || self.config.cache_type_v != KvCacheType::F16;
         let ctx_params = build_ctx_params(&self.config, ctx_size);
 
-        let mut ctx = self
-            .model
-            .new_context(&self.backend, ctx_params)
-            .map_err(|e| format!("Failed to create context: {e}"))?;
+        let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
+            Ok(c) => c,
+            Err(e) if has_quantized_cache => {
+                tracing::warn!("Context creation failed with quantized KV cache, falling back to F16");
+                let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                self.model.new_context(&self.backend, fallback)
+                    .map_err(|e2| format!("Failed to create context (F16 fallback failed too): {e2}\nOriginal error: {e}"))?
+            }
+            Err(e) => return Err(format!("Failed to create context: {e}").into()),
+        };
 
         // Tokenize the prompt
         let tokens = self
@@ -427,10 +503,23 @@ impl InferenceEngine {
         let ctx_size = NonZeroU32::new(self.config.context_size)
             .unwrap_or(NonZeroU32::new(4096).unwrap());
 
+        let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
+            || self.config.cache_type_v != KvCacheType::F16;
         let ctx_params = build_ctx_params(&self.config, ctx_size);
 
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
+            Err(e) if has_quantized_cache => {
+                tracing::warn!("Context creation failed with quantized KV cache, falling back to F16");
+                let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                match self.model.new_context(&self.backend, fallback) {
+                    Ok(c) => c,
+                    Err(e2) => {
+                        let _ = tx.blocking_send(StreamEvent::Error(format!("F16 fallback failed: {e2} (original: {e})")));
+                        return;
+                    }
+                }
+            }
             Err(e) => {
                 let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
                 return;

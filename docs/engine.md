@@ -75,13 +75,13 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `model` | (required) | Path to GGUF file or catalog model name |
 | `--port, -p` | `11434` | API server port |
 | `--gpu-layers` | `-1` (all) | GPU layers to offload (-1 = all, 0 = CPU only) |
-| `--ctx-size, -c` | `4096` | Context window size |
+| `--ctx-size, -c` | `4096` | Total context window (shared across batch slots) |
 | `--threads, -t` | all CPUs | Number of CPU threads |
 | `--batch-size` | `8` | Continuous batching slots (0 = sequential mode) |
 | `--no-flash-attn` | false | Disable flash attention |
 | `--n-batch` | `2048` | Prompt processing batch size (tokens per eval during prefill) |
-| `--cache-type-k` | `q8_0` | KV cache type for keys (f16, q8_0, q4_0, q4_1, q5_0, q5_1) |
-| `--cache-type-v` | `q4_0` | KV cache type for values (f16, q8_0, q4_0, q4_1, q5_0, q5_1) |
+| `--cache-type-k` | `f16` | KV cache type for keys (f16, q8_0, q4_0). F16 = best GPU compat |
+| `--cache-type-v` | `f16` | KV cache type for values (f16, q8_0, q4_0). F16 = best GPU compat |
 | `--replace` | false | Replace existing service on the port |
 | `--daemon` | false | Run as a background daemon |
 | `--pidfile` | `/tmp/eullm.pid` | PID file path (used with --daemon) |
@@ -193,26 +193,28 @@ curl http://localhost:11434/api/generate \
 
 ## KV Cache Quantization
 
-By default, EULLM quantizes the KV cache to reduce VRAM usage (same as Ollama). Without this, a 14B model with 16K context requires ~10GB just for the KV cache in FP16, overflowing 16GB GPUs.
+By default, EULLM uses F16 KV cache for maximum GPU compatibility. Quantized types save VRAM but may cause GPU compute fallback to CPU on some architectures — verify GPU utilisation with `nvtop` before deploying in production.
 
 | Setting | VRAM for 14B @ 16K context |
 |---------|---------------------------|
-| `--cache-type-k f16 --cache-type-v f16` | ~10 GB (FP16, maximum quality) |
+| **`--cache-type-k f16 --cache-type-v f16`** | **~10 GB (default, best GPU compat)** |
 | `--cache-type-k q8_0 --cache-type-v q8_0` | ~5 GB |
-| **`--cache-type-k q8_0 --cache-type-v q4_0`** | **~2.5 GB (default, same as Ollama)** |
+| `--cache-type-k q8_0 --cache-type-v q4_0` | ~2.5 GB (⚠️ verify GPU usage) |
 
 ```bash
-# Default (same as Ollama) — 14B fits in 16GB VRAM with 16K context
-eullm run qwen3-14b --ctx-size 16384
+# Default (F16) — maximum GPU compatibility
+eullm run qwen3-14b --ctx-size 8192
 
-# Maximum quality (needs more VRAM)
-eullm run qwen3-14b --ctx-size 8192 --cache-type-k f16 --cache-type-v f16
+# Save VRAM with quantized KV cache (check GPU usage with nvtop!)
+eullm run qwen3-14b --ctx-size 16384 --cache-type-k q8_0 --cache-type-v q4_0
 
-# Aggressive quantization (minimum VRAM, slight quality loss)
+# Aggressive quantization (minimum VRAM, may fall back to CPU)
 eullm run qwen3-14b --ctx-size 32768 --cache-type-k q4_0 --cache-type-v q4_0
 ```
 
 Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`.
+
+> **Note:** Quantized V cache types (Q4_0, Q8_0) require Flash Attention. On GPUs where Flash Attention doesn't support these types, the engine automatically falls back to F16 KV cache and logs a warning. You can also set F16 explicitly by omitting the `--cache-type-v` flag.
 
 ## Constrained JSON Decoding (`format: "json"`)
 
@@ -246,6 +248,106 @@ eullm run ./model.gguf --batch-size 0
 ```
 
 With 16 concurrent requests on a consumer GPU, EULLM achieves ~2.5x throughput vs Ollama. See [benchmarks](benchmarks.md) for details.
+
+### Context window and batch slots
+
+The `--ctx-size` flag sets the **total** KV cache budget, shared across all batch slots (matching Ollama/llama.cpp server behaviour). Each slot gets `ctx_size / batch_size` tokens of context:
+
+```bash
+# 16K total, 4 slots → 4096 tokens/slot
+eullm run ./model.gguf --ctx-size 16384 --batch-size 4
+
+# 32K total, 8 slots → 4096 tokens/slot
+eullm run ./model.gguf --ctx-size 32768 --batch-size 8
+```
+
+### Choosing batch-size
+
+More slots increase parallelism but reduce per-request throughput (shared GPU time). General guideline:
+
+| Parallel slots | Per-request throughput | Aggregate throughput | Use case |
+|:-:|:-:|:-:|---|
+| 4 | High | High | Chat, general inference |
+| 8 | Medium | Higher | Batch extraction, RAG pipelines |
+| 16+ | Lower | Highest | High-concurrency APIs, multi-GPU |
+
+Start with `--batch-size 4` for the best per-request latency. Increase when your workload requires more concurrent slots and can tolerate slower individual responses.
+
+## Dynamic Model Swap
+
+The Engine supports hot-swapping models at runtime. When a request specifies a different `model`, the server automatically:
+
+1. **Shuts down** the old scheduler thread (waits for it to fully exit)
+2. **Frees VRAM** — the old model, KV cache, and LlamaBackend are destroyed
+3. **Loads** the new model with the requested configuration
+4. **Resumes** serving requests on the new model
+
+### Basic swap (via model field)
+
+Any generation request with a different `model` triggers the swap:
+
+```bash
+# Currently running qwen3-14b — this switches to qwen3-8b automatically
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:8b",
+  "prompt": "Hello"
+}'
+```
+
+### Dynamic batch_size and ctx_size
+
+The `batch_size` and `ctx_size` can be overridden per model swap. This is useful when switching between a large model (fewer slots) and a small model (more slots):
+
+```bash
+# Switch to 8B with 8 parallel slots and 32K context
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:8b",
+  "batch_size": 8,
+  "ctx_size": 32768,
+  "prompt": "Hello"
+}'
+
+# Switch back to 14B with 4 slots and 16K context
+curl http://localhost:11434/api/generate -d '{
+  "model": "qwen3:14b",
+  "batch_size": 4,
+  "ctx_size": 16384,
+  "prompt": "Hello"
+}'
+```
+
+When `batch_size` or `ctx_size` are not specified, the values from `--batch-size` and `--ctx-size` at startup are used.
+
+### Model name resolution
+
+The `model` field accepts:
+
+| Format | Example | Resolution |
+|--------|---------|------------|
+| Full GGUF path | `/models/qwen3-8b.gguf` | Direct file |
+| Ollama-style name | `qwen3:8b` | Normalized to `qwen3-8b`, searched in `/models/` and model store |
+| Path without extension | `/models/qwen3-8b` | Tries appending `.gguf` |
+| Directory | `/models/mymodel/` | Picks the first `.gguf` file inside |
+| Registered name | `legal-it-7b` | Looked up in `~/.eullm/models/` |
+
+### Concurrent swap safety
+
+Multiple requests arriving simultaneously for a different model are handled safely:
+- Only one swap runs at a time (serialized via Mutex)
+- Other requests wait for the swap to complete, then use the new model
+- In-flight requests on the old model continue normally via reference counting
+
+### VRAM budget reference
+
+Approximate VRAM usage with F16 KV cache (default). Actual values depend on model architecture and GPU.
+
+| Model size | batch_size | ctx_size | tok/slot | VRAM est. |
+|:----------:|:----------:|:--------:|:--------:|:---------:|
+| 14B Q4 | 4 | 16384 | 4096 | ~12.5 GB |
+| 8B Q4 | 4 | 16384 | 4096 | ~7 GB |
+| 8B Q4 | 8 | 32768 | 4096 | ~9.5 GB |
+| 8B Q4 | 8 | 16384 | 2048 | ~7 GB |
+| 70B Q4 | 16 | 65536 | 4096 | ~45 GB |
 
 ## API Reference
 
@@ -330,7 +432,7 @@ curl -X POST http://localhost:11434/api/generate \
 | `max_tokens` / `num_predict` | 512 | Maximum tokens to generate (see note below) |
 | `temperature` | 0.7 | Sampling temperature |
 | `stream` | true | Stream response token-by-token (NDJSON) |
-| `num_ctx` | server `--ctx-size` | Per-request context window budget (clamped to server max) |
+| `num_ctx` | server per-slot ctx | Per-request context window budget (clamped to per-slot max) |
 | `format` | — | Set to `"json"` for constrained JSON decoding (GBNF grammar) |
 | `options` | — | Ollama-style nested object for `num_predict`, `temperature`, `num_ctx` |
 
@@ -632,8 +734,8 @@ The model generates fewer tokens than `num_predict` requested.
 | Local model store (~/.eullm/models/) | Implemented |
 | Model download (HuggingFace, streaming with progress) | Implemented |
 | Import from Ollama (import-ollama with GGUF patching) | Implemented |
-| Dynamic model swap (load/unload via API) | Implemented |
-| KV cache quantization (--cache-type-k, --cache-type-v) | Implemented |
+| Dynamic model swap (load/unload via API, dynamic batch_size/ctx_size) | Implemented |
+| KV cache (F16 default, automatic fallback from quantized types) | Implemented |
 | Constrained JSON decoding (format: "json" via GBNF) | Implemented |
 | Continuous batching scheduler | Implemented |
 | Audit trail (persistent JSONL) | Implemented |
