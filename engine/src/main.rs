@@ -640,7 +640,7 @@ async fn cmd_run(
     };
 
     println!();
-    println!("eullm ready.  [build: {} / {}]", env!("CARGO_PKG_VERSION"), "20260327-kvcache-debug");
+    println!("eullm ready.  [v{}]", env!("CARGO_PKG_VERSION"));
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     println!("  Model:         {short}");
