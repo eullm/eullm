@@ -63,8 +63,13 @@ impl AppState {
     /// (in-flight requests on cloned handles still complete) and loads
     /// the new model with the same inference settings.
     ///
+    /// `override_batch_size` allows the caller to change the number of
+    /// concurrent batch slots for the new model (e.g. more slots for a
+    /// smaller model that uses less VRAM).  Pass `None` to keep the
+    /// batch size from the CLI launch.
+    ///
     /// This is the **write** path — only one swap can run at a time.
-    pub async fn swap_model(&self, name: &str) -> Result<(), String> {
+    pub async fn swap_model(&self, name: &str, override_batch_size: Option<usize>) -> Result<(), String> {
         // Normalize Ollama-style names: "qwen3:14b" → "qwen3-14b"
         let normalized = normalize_model_name(name);
         let gguf_path = self.resolve_model(&normalized)?;
@@ -99,7 +104,7 @@ impl AppState {
             cache_type_v: self.cache_type_v,
         };
 
-        let batch_size = self.batch_size;
+        let batch_size = override_batch_size.unwrap_or(self.batch_size);
         let model_name = normalized.clone();
 
         let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
@@ -131,7 +136,7 @@ impl AppState {
             slot.scheduler = new_scheduler;
         }
 
-        tracing::info!("Model swap complete → {model_name}");
+        tracing::info!("Model swap complete → {model_name} (batch_size={batch_size})");
         Ok(())
     }
 
