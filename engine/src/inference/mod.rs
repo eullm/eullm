@@ -69,40 +69,34 @@ pub fn check_gpu_support(gpu_layers: i32) {
 }
 
 /// Build context params with flash attention, n_batch, and KV cache types applied.
-///
-/// KV cache type defaults to F16 (maximum GPU compatibility).  Quantized
-/// types (Q8_0, Q4_0) save VRAM but can cause GPU fallback on some
-/// architectures — only use them after verifying GPU utilisation with nvtop.
 pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
+    build_ctx_params_with_cache(config, ctx_size, config.cache_type_k, config.cache_type_v)
+}
+
+/// Build context params, allowing KV cache types to be overridden (used for
+/// automatic fallback from quantized → F16 when the GPU doesn't support
+/// Flash Attention with quantized V cache).
+pub(crate) fn build_ctx_params_with_cache(
+    config: &InferenceConfig,
+    ctx_size: NonZeroU32,
+    cache_type_k: KvCacheType,
+    cache_type_v: KvCacheType,
+) -> LlamaContextParams {
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
         .with_n_threads(config.threads as i32)
         .with_n_threads_batch(config.threads as i32);
 
-    // Only set KV cache types when they differ from the default (F16).
-    // Setting quantized types (Q8_0, Q4_0) can trigger GPU→CPU fallback
-    // for batch prefill on some GPU architectures (observed on RTX 5070 Ti
-    // with llama-cpp-2 0.1.140).  When F16 is requested we skip the call
-    // entirely so llama.cpp uses its own default, which is known to work.
-    if config.cache_type_k != KvCacheType::F16 || config.cache_type_v != KvCacheType::F16 {
-        params = params.with_type_k(config.cache_type_k).with_type_v(config.cache_type_v);
-        tracing::warn!(
-            "Using quantized KV cache (K={:?}, V={:?}). If GPU utilisation is low, \
-             try --cache-type-k f16 --cache-type-v f16",
-            config.cache_type_k,
-            config.cache_type_v,
-        );
+    if cache_type_k != KvCacheType::F16 || cache_type_v != KvCacheType::F16 {
+        params = params.with_type_k(cache_type_k).with_type_v(cache_type_v);
     }
 
     if config.flash_attn {
-        // Use AUTO (-1) instead of ENABLED (1).  AUTO lets llama.cpp test
-        // whether the GPU backend actually supports Flash Attention for the
-        // current KV cache types.  If not (e.g. quantized KV cache on some
-        // GPU architectures), it falls back to regular attention — which
-        // still runs on GPU.  ENABLED (1) skips this check and can silently
-        // route the FA op to the CPU backend, causing massive slowdowns
-        // during batch prefill.
+        // AUTO (-1): llama.cpp tests whether the GPU supports FA for the
+        // current KV cache types.  If not → disables FA and uses regular
+        // attention on GPU.  ENABLED (1) would skip this check and silently
+        // route the FA op to the CPU backend on unsupported configs.
         params = params.with_flash_attention_policy(-1);
     }
     params
@@ -321,10 +315,16 @@ impl InferenceEngine {
 
         let ctx_params = build_ctx_params(&self.config, ctx_size);
 
-        let mut ctx = self
-            .model
-            .new_context(&self.backend, ctx_params)
-            .map_err(|e| format!("Failed to create context: {e}"))?;
+        let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
+            Ok(c) => c,
+            Err(e) if format!("{e}").contains("Flash Attention") || format!("{e}").contains("flash_attn") => {
+                tracing::warn!("Quantized V cache not supported, falling back to F16 KV cache");
+                let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                self.model.new_context(&self.backend, fallback)
+                    .map_err(|e2| format!("Failed to create context (F16 fallback): {e2}"))?
+            }
+            Err(e) => return Err(format!("Failed to create context: {e}").into()),
+        };
 
         // Tokenize the prompt
         let tokens = self
@@ -506,8 +506,21 @@ impl InferenceEngine {
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
-                return;
+                let err_str = format!("{e}");
+                if err_str.contains("Flash Attention") || err_str.contains("flash_attn") {
+                    tracing::warn!("Quantized V cache not supported, falling back to F16 KV cache");
+                    let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                    match self.model.new_context(&self.backend, fallback) {
+                        Ok(c) => c,
+                        Err(e2) => {
+                            let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e2}")));
+                            return;
+                        }
+                    }
+                } else {
+                    let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
+                    return;
+                }
             }
         };
 
