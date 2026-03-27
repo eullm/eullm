@@ -1302,6 +1302,7 @@ async fn interactive_chat(
             stop_sequences: vec!["<|im_end|>".into()],
             num_ctx: None,
             grammar: None,
+            raw: false,
         };
 
         // Submit to scheduler and stream tokens.
