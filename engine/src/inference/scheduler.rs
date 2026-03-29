@@ -166,7 +166,7 @@ impl BatchScheduler {
     ///
     /// Blocks until the model is fully loaded so that callers can rely on the
     /// handle being ready for inference when this method returns.
-    pub fn start(self) -> Result<SchedulerHandle, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn start(self) -> Result<(SchedulerHandle, ModelReadyInfo), Box<dyn std::error::Error + Send + Sync>> {
         // Validate model exists before spawning the thread.
         if !self.config.model_path.exists() {
             return Err(format!(
