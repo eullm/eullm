@@ -785,10 +785,10 @@ fn estimate_kv_memory(
 ) -> ModelReadyInfo {
     // Try to get model dimensions. If any method fails or returns 0,
     // fall back to reporting 0 (unknown).
-    let n_embd = model.n_embd() as f64;
-    let n_layer = model.n_layer() as f64;
-    let n_head = model.n_head() as f64;
-    let n_head_kv = model.n_head_kv() as f64;
+    let n_embd = model.n_embd() as f64;     // c_int
+    let n_layer = model.n_layer() as f64;   // u32
+    let n_head = model.n_head() as f64;     // u32
+    let n_head_kv = model.n_head_kv() as f64; // u32
 
     if n_embd <= 0.0 || n_layer <= 0.0 || n_head <= 0.0 || n_head_kv <= 0.0 {
         return ModelReadyInfo { kv_k_mib: 0.0, kv_v_mib: 0.0 };
