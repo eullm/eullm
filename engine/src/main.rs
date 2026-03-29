@@ -665,7 +665,9 @@ async fn cmd_run(
             println!("  Context:       {ctx_size}");
         }
         println!("  Flash attn:    {} (auto-detect)", if flash_attn { "enabled" } else { "disabled" });
-        println!("  KV cache:      K={cache_type_k:?} V={cache_type_v:?} (fallback to F16 if GPU incompatible)");
+        let k_name = inference::cache_type_display(&cache_type_k);
+        let v_name = inference::cache_type_display(&cache_type_v);
+        println!("  KV cache:      K={k_name} V={v_name}");
         println!("  Threads:       {resolved_threads}");
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
