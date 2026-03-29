@@ -71,21 +71,35 @@ fn boundaries_4bit_between_centroids() {
 #[test]
 fn resolve_falls_back_without_backend() {
     // Without a TQ-capable backend, resolution should fall back to F16.
-    let result = resolve_turboquant_cache_type("tq3_0");
+    let result = resolve_turboquant_cache_type("tq3_0", false);
     assert!(result.is_some());
     match result.unwrap() {
         ResolvedCacheType::Fallback { requested, fallback, .. } => {
             assert_eq!(requested, TurboquantType::TQ3_0);
             assert_eq!(fallback, "f16");
         }
-        ResolvedCacheType::Native(_) => panic!("Expected fallback without TQ backend"),
+        _ => panic!("Expected fallback without TQ backend"),
+    }
+}
+
+#[test]
+fn resolve_strict_errors_without_backend() {
+    // Strict mode: no fallback, return Unsupported.
+    let result = resolve_turboquant_cache_type("tq4_0", true);
+    assert!(result.is_some());
+    match result.unwrap() {
+        ResolvedCacheType::Unsupported { requested, reason } => {
+            assert_eq!(requested, TurboquantType::TQ4_0);
+            assert!(reason.contains("not supported"));
+        }
+        _ => panic!("Expected Unsupported in strict mode without TQ backend"),
     }
 }
 
 #[test]
 fn resolve_ignores_standard_types() {
     // Standard types should return None (handled by normal path).
-    assert!(resolve_turboquant_cache_type("f16").is_none());
-    assert!(resolve_turboquant_cache_type("q8_0").is_none());
-    assert!(resolve_turboquant_cache_type("q4_0").is_none());
+    assert!(resolve_turboquant_cache_type("f16", false).is_none());
+    assert!(resolve_turboquant_cache_type("q8_0", false).is_none());
+    assert!(resolve_turboquant_cache_type("q4_0", true).is_none());
 }

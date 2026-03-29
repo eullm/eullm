@@ -58,9 +58,9 @@ pub fn parse_turboquant_type(s: &str) -> Option<TurboquantType> {
 /// — update these constants accordingly.
 pub mod ggml_ids {
     /// `GGML_TYPE_TURBO3_0` = 41 in the spiritbuun fork.
-    pub const TURBO3_0: i32 = 41;
+    pub const TURBO3_0: u32 = 41;
     /// `GGML_TYPE_TURBO4_0` = 42 in the spiritbuun fork.
-    pub const TURBO4_0: i32 = 42;
+    pub const TURBO4_0: u32 = 42;
     /// `GGML_TYPE_TURBO2_0` = 43 in the spiritbuun fork (not yet exposed).
-    pub const TURBO2_0: i32 = 43;
+    pub const TURBO2_0: u32 = 43;
 }
