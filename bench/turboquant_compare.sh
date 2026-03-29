@@ -130,7 +130,7 @@ start_engine() {
     echo "  Log: ${log_file}"
 
     local engine_args=(
-        --model "$MODEL_PATH"
+        run "$MODEL_PATH"
         --host "$EULLM_HOST"
         --port "$EULLM_PORT"
         --cache-type-k "$cache_type"
