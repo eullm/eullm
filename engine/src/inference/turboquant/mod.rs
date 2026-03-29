@@ -31,5 +31,7 @@ pub mod types;
 pub mod config;
 pub mod codebook;
 
+pub use config::log_turboquant_status;
+
 #[cfg(test)]
 mod tests;

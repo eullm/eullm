@@ -28,6 +28,12 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
+/// Log TurboQuant module status at startup (no-op without the feature flag).
+pub fn log_turboquant_status() {
+    #[cfg(feature = "turboquant")]
+    turboquant::log_turboquant_status();
+}
+
 /// Check if the binary was compiled with GPU support and warn if GPU was
 /// requested but is not available.  Returns true when a GPU backend is present.
 pub fn check_gpu_support(gpu_layers: i32) {
@@ -155,6 +161,18 @@ impl Default for InferenceConfig {
 /// If the llama.cpp backend does not support TurboQuant natively, these
 /// resolve to F16 with a warning (automatic fallback).
 pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
+    parse_cache_type_inner(s, false)
+}
+
+/// Parse a KV cache type in strict mode — errors instead of falling back.
+///
+/// Use for benchmarks where silent fallback would produce misleading results.
+#[cfg(feature = "turboquant")]
+pub fn parse_cache_type_strict(s: &str) -> Result<KvCacheType, String> {
+    parse_cache_type_inner(s, true)
+}
+
+fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> {
     // Standard types — always available.
     match s.to_lowercase().as_str() {
         "f16" => return Ok(KvCacheType::F16),
@@ -171,17 +189,27 @@ pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
     #[cfg(feature = "turboquant")]
     {
         use turboquant::config::{resolve_turboquant_cache_type, ResolvedCacheType};
-        if let Some(resolved) = resolve_turboquant_cache_type(s) {
+        if let Some(resolved) = resolve_turboquant_cache_type(s, strict) {
             return match resolved {
-                ResolvedCacheType::Native(_tq) => {
-                    // TODO: map TQ type to the GGML type ID exposed by the
-                    // TQ-capable llama.cpp backend.  For now, fall back to F16
-                    // until the backend integration is wired.
-                    tracing::info!("TurboQuant {_tq} accepted (native backend)");
-                    Ok(KvCacheType::F16) // placeholder
+                ResolvedCacheType::Native(tq) => {
+                    // Map TQ type to the GGML type ID from the spiritbuun fork.
+                    // The KvCacheType::Unknown variant carries raw GGML type IDs
+                    // through to llama.cpp — no Rust enum variant needed.
+                    use turboquant::types::ggml_ids;
+                    let raw_id = match tq {
+                        turboquant::types::TurboquantType::TQ3_0 => ggml_ids::TURBO3_0,
+                        turboquant::types::TurboquantType::TQ4_0 => ggml_ids::TURBO4_0,
+                    };
+                    tracing::info!("TurboQuant {tq} → GGML type {raw_id} (native backend)");
+                    // Pass the raw GGML type ID via KvCacheType.
+                    // The llama-cpp-2 crate maps Unknown(n) to the raw C enum value.
+                    Ok(KvCacheType::Unknown(raw_id))
                 }
                 ResolvedCacheType::Fallback { fallback, .. } => {
                     parse_cache_type(fallback)
+                }
+                ResolvedCacheType::Unsupported { reason, .. } => {
+                    Err(reason)
                 }
             };
         }

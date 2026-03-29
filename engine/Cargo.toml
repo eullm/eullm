@@ -20,6 +20,11 @@ metal = ["llama-cpp-2/metal"]
 # Enables tq3_0/tq4_0 cache types for --cache-type-k and --cache-type-v.
 # Requires a TQ-capable llama.cpp backend; falls back to F16 otherwise.
 turboquant = []
+# Signals that the linked llama.cpp backend has native TurboQuant support
+# (spiritbuun fork or upstream post-merge).  Without this, turboquant
+# types are accepted but fall back to F16.  Set automatically by
+# scripts/setup-turboquant.sh via the [patch] section.
+turboquant_native = ["turboquant"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
