@@ -132,7 +132,6 @@ start_engine() {
 
     local engine_args=(
         run "$MODEL_PATH"
-        --host "$EULLM_HOST"
         --port "$EULLM_PORT"
         --cache-type-k "$cache_type"
         --cache-type-v "$cache_type"
@@ -177,7 +176,6 @@ probe_max_ctx() {
         echo -n "  Trying ctx_size=${try_ctx}..."
         local probe_args=(
             run "$MODEL_PATH"
-            --host "$EULLM_HOST"
             --port "$EULLM_PORT"
             --cache-type-k "$cache_type"
             --cache-type-v "$cache_type"
