@@ -15,7 +15,19 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENGINE_DIR="$(dirname "$SCRIPT_DIR")"
 VENDOR_DIR="${ENGINE_DIR}/vendor"
 SYS_CRATE_DIR="${VENDOR_DIR}/llama-cpp-sys-2"
-CARGO_TOML="${ENGINE_DIR}/Cargo.toml"
+# [patch.crates-io] must live in the workspace root Cargo.toml, not in the
+# engine/ member manifest.  Detect workspace root by looking for [workspace].
+WORKSPACE_ROOT="${ENGINE_DIR}/.."
+if [ -f "${WORKSPACE_ROOT}/Cargo.toml" ] && grep -q '^\[workspace\]' "${WORKSPACE_ROOT}/Cargo.toml"; then
+    CARGO_TOML="${WORKSPACE_ROOT}/Cargo.toml"
+    # Path must be relative to the workspace root
+    PATCH_PATH="engine/vendor/llama-cpp-sys-2"
+else
+    # Fallback: no workspace, patch the engine Cargo.toml directly
+    CARGO_TOML="${ENGINE_DIR}/Cargo.toml"
+    PATCH_PATH="vendor/llama-cpp-sys-2"
+fi
+CARGO_TOML="$(cd "$(dirname "$CARGO_TOML")" && pwd)/$(basename "$CARGO_TOML")"
 
 echo "=== EULLM TurboQuant Backend Setup ==="
 echo ""
@@ -82,12 +94,12 @@ else
     cat >> "$CARGO_TOML" <<PATCH
 
 [patch.crates-io]
-llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }
+llama-cpp-sys-2 = { path = "${PATCH_PATH}" }
 PATCH
 fi
 
 # 7. Verify the patch is active
-if grep -q '^llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }' "$CARGO_TOML" || \
+if grep -q "llama-cpp-sys-2" "$CARGO_TOML" && \
    grep -q "^\[patch.crates-io\]" "$CARGO_TOML"; then
     echo "Verified: [patch.crates-io] is active"
 else
@@ -98,11 +110,12 @@ echo ""
 echo "=== Setup complete ==="
 echo ""
 echo "Vendored llama-cpp-sys-2: ${SYS_CRATE_DIR}"
+echo "Patch in: ${CARGO_TOML}  (path = ${PATCH_PATH})"
 echo "Fork verified: GGML_TYPE_TURBO3_0 = 41"
 echo ""
 echo "Build with:"
 echo "  cd ${ENGINE_DIR}"
 echo "  cargo build --release --features 'cuda turboquant_native'"
 echo ""
-echo "Verify with:"
-echo "  cargo tree -i llama-cpp-sys-2  # should show (vendor/llama-cpp-sys-2)"
+echo "Verify with (from workspace root):"
+echo "  cargo tree -i llama-cpp-sys-2  # should show (${PATCH_PATH})"

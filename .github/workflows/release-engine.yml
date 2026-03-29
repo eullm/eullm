@@ -142,8 +142,8 @@ jobs:
           . "$HOME/.cargo/env"
           cargo fetch
           bash scripts/setup-turboquant.sh
-          echo "--- Verifying patch ---"
-          grep -A2 'patch.crates-io' Cargo.toml || echo "NO PATCH FOUND"
+          echo "--- Verifying patch (workspace root) ---"
+          grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
           . "$HOME/.cargo/env" && cargo tree -i llama-cpp-sys-2 2>&1 | head -5
 
       - name: Build engine with CUDA + TurboQuant
