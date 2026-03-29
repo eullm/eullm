@@ -16,6 +16,10 @@ cuda = ["llama-cpp-2/cuda"]
 rocm = ["llama-cpp-2/rocm"]
 vulkan = ["llama-cpp-2/vulkan"]
 metal = ["llama-cpp-2/metal"]
+# Experimental: TurboQuant KV cache compression (Google, ICLR 2026).
+# Enables tq3_0/tq4_0 cache types for --cache-type-k and --cache-type-v.
+# Requires a TQ-capable llama.cpp backend; falls back to F16 otherwise.
+turboquant = []
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }

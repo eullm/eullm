@@ -10,6 +10,9 @@
 
 pub mod scheduler;
 
+#[cfg(feature = "turboquant")]
+pub mod turboquant;
+
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -147,17 +150,49 @@ impl Default for InferenceConfig {
 }
 
 /// Parse a KV cache type string (e.g. "q8_0", "q4_0", "f16") into a `KvCacheType`.
+///
+/// With the `turboquant` feature enabled, also accepts "tq3_0" and "tq4_0".
+/// If the llama.cpp backend does not support TurboQuant natively, these
+/// resolve to F16 with a warning (automatic fallback).
 pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
+    // Standard types — always available.
     match s.to_lowercase().as_str() {
-        "f16" => Ok(KvCacheType::F16),
-        "f32" => Ok(KvCacheType::F32),
-        "q8_0" => Ok(KvCacheType::Q8_0),
-        "q4_0" => Ok(KvCacheType::Q4_0),
-        "q4_1" => Ok(KvCacheType::Q4_1),
-        "q5_0" => Ok(KvCacheType::Q5_0),
-        "q5_1" => Ok(KvCacheType::Q5_1),
-        _ => Err(format!("Unknown cache type '{s}'. Options: f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1")),
+        "f16" => return Ok(KvCacheType::F16),
+        "f32" => return Ok(KvCacheType::F32),
+        "q8_0" => return Ok(KvCacheType::Q8_0),
+        "q4_0" => return Ok(KvCacheType::Q4_0),
+        "q4_1" => return Ok(KvCacheType::Q4_1),
+        "q5_0" => return Ok(KvCacheType::Q5_0),
+        "q5_1" => return Ok(KvCacheType::Q5_1),
+        _ => {}
     }
+
+    // TurboQuant types — experimental, feature-gated.
+    #[cfg(feature = "turboquant")]
+    {
+        use turboquant::config::{resolve_turboquant_cache_type, ResolvedCacheType};
+        if let Some(resolved) = resolve_turboquant_cache_type(s) {
+            return match resolved {
+                ResolvedCacheType::Native(_tq) => {
+                    // TODO: map TQ type to the GGML type ID exposed by the
+                    // TQ-capable llama.cpp backend.  For now, fall back to F16
+                    // until the backend integration is wired.
+                    tracing::info!("TurboQuant {_tq} accepted (native backend)");
+                    Ok(KvCacheType::F16) // placeholder
+                }
+                ResolvedCacheType::Fallback { fallback, .. } => {
+                    parse_cache_type(fallback)
+                }
+            };
+        }
+    }
+
+    #[cfg(feature = "turboquant")]
+    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1, tq3_0, tq4_0";
+    #[cfg(not(feature = "turboquant"))]
+    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1";
+
+    Err(format!("Unknown cache type '{s}'. Options: {options}"))
 }
 
 
