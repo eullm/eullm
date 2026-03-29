@@ -147,7 +147,7 @@ impl AppState {
                 };
                 let sched = BatchScheduler::new(config, sched_config);
                 match sched.start() {
-                    Ok(handle) => Ok((None, Some(handle))),
+                    Ok((handle, _model_info)) => Ok((None, Some(handle))),
                     Err(e) => Err(format!("Failed to start scheduler: {e}")),
                 }
             } else {
