@@ -136,6 +136,14 @@ impl SchedulerHandle {
     }
 }
 
+/// Info reported by the scheduler after model load.
+pub struct ModelReadyInfo {
+    /// KV cache key memory estimate in MiB.
+    pub kv_k_mib: f64,
+    /// KV cache value memory estimate in MiB.
+    pub kv_v_mib: f64,
+}
+
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
 pub struct BatchScheduler {
     config: InferenceConfig,
@@ -179,7 +187,7 @@ impl BatchScheduler {
         let shutdown_clone = Arc::clone(&shutdown);
 
         // Channel for the scheduler thread to signal model load completion.
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<(), String>>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<ModelReadyInfo, String>>();
 
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
@@ -212,19 +220,19 @@ impl BatchScheduler {
             })?;
 
         // Wait for the model to finish loading before returning.
-        match ready_rx.recv() {
-            Ok(Ok(())) => {}
+        let model_info = match ready_rx.recv() {
+            Ok(Ok(info)) => info,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => return Err("Scheduler thread exited before model was loaded".into()),
-        }
+        };
 
-        Ok(SchedulerHandle {
+        Ok((SchedulerHandle {
             tx: req_tx,
             notify,
             notify_mutex,
             shutdown,
             thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
-        })
+        }, model_info))
     }
 }
 
@@ -237,7 +245,7 @@ fn run_scheduler_loop(
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
     shutdown: Arc<AtomicBool>,
-    ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
+    ready_tx: std::sync::mpsc::Sender<Result<ModelReadyInfo, String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     super::check_gpu_support(config.gpu_layers);
     super::log_turboquant_status();
@@ -342,8 +350,16 @@ fn run_scheduler_loop(
         per_seq_ctx,
     );
 
+    // Estimate KV cache memory from model dimensions and cache types.
+    let kv_info = estimate_kv_memory(
+        &model,
+        total_ctx as u64,
+        &config.cache_type_k,
+        &config.cache_type_v,
+    );
+
     // Signal that the model is loaded and ready.
-    let _ = ready_tx.send(Ok(()));
+    let _ = ready_tx.send(Ok(kv_info));
 
     loop {
         // ── 0. Check shutdown flag ────────────────────────────────────
@@ -740,6 +756,54 @@ fn tail_push(tail_buf: &mut String, piece: &str, max_stop_len: usize) {
             keep_from += 1;
         }
         tail_buf.drain(..keep_from);
+    }
+}
+
+/// Bytes per element for a KV cache type (approximate for quantized types).
+fn cache_type_bytes_per_elem(ct: &super::KvCacheType) -> f64 {
+    match ct {
+        super::KvCacheType::F16 => 2.0,
+        super::KvCacheType::F32 => 4.0,
+        super::KvCacheType::Q8_0 => 34.0 / 32.0,
+        super::KvCacheType::Q4_0 => 18.0 / 32.0,
+        super::KvCacheType::Q4_1 => 20.0 / 32.0,
+        super::KvCacheType::Q5_0 => 22.0 / 32.0,
+        super::KvCacheType::Q5_1 => 24.0 / 32.0,
+        super::KvCacheType::Unknown(41) => 0.375,  // TQ3_0 (3-bit)
+        super::KvCacheType::Unknown(42) => 0.5,    // TQ4_0 (4-bit)
+        super::KvCacheType::Unknown(43) => 0.25,   // TQ2_0 (2-bit)
+        _ => 2.0, // default to F16
+    }
+}
+
+/// Estimate KV cache memory from model dimensions and cache types.
+fn estimate_kv_memory(
+    model: &LlamaModel,
+    n_ctx: u64,
+    cache_type_k: &super::KvCacheType,
+    cache_type_v: &super::KvCacheType,
+) -> ModelReadyInfo {
+    // Try to get model dimensions. If any method fails or returns 0,
+    // fall back to reporting 0 (unknown).
+    let n_embd = model.n_embd() as f64;
+    let n_layer = model.n_layer() as f64;
+    let n_head = model.n_head() as f64;
+    let n_head_kv = model.n_head_kv() as f64;
+
+    if n_embd <= 0.0 || n_layer <= 0.0 || n_head <= 0.0 || n_head_kv <= 0.0 {
+        return ModelReadyInfo { kv_k_mib: 0.0, kv_v_mib: 0.0 };
+    }
+
+    let head_dim = n_embd / n_head;
+    // Elements per K or V = n_layer × n_ctx × n_head_kv × head_dim
+    let n_elements = n_layer * n_ctx as f64 * n_head_kv * head_dim;
+
+    let kv_k_bytes = n_elements * cache_type_bytes_per_elem(cache_type_k);
+    let kv_v_bytes = n_elements * cache_type_bytes_per_elem(cache_type_v);
+
+    ModelReadyInfo {
+        kv_k_mib: kv_k_bytes / (1024.0 * 1024.0),
+        kv_v_mib: kv_v_bytes / (1024.0 * 1024.0),
     }
 }
 
