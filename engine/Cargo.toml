@@ -51,13 +51,10 @@ assert_cmd = "2"
 predicates = "3"
 
 # ── TurboQuant backend (experimental) ───────────────────────────
-# Uncomment the [patch] section below after running:
-#   scripts/setup-turboquant.sh
-#
-# This redirects llama-cpp-sys-2 to a vendored copy that uses
-# spiritbuun's TurboQuant CUDA fork of llama.cpp.  Production
-# builds (without --features turboquant) are unaffected — the
-# fork is API-compatible with upstream.
+# Uncomment after running: scripts/setup-turboquant.sh
+# Redirects llama-cpp-sys-2 to a vendored copy that uses spiritbuun's
+# TurboQuant CUDA fork of llama.cpp.  Production builds (without
+# --features turboquant) are unaffected — the fork is API-compatible.
 #
 # [patch.crates-io]
-# llama-cpp-sys-2 = { path = "../vendor/llama-cpp-sys-2" }
+# llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }
