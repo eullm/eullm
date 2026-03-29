@@ -74,10 +74,9 @@ rm -rf "${SYS_CRATE_DIR}/llama.cpp/.git"
 
 # 5. Compatibility patches
 #    The spiritbuun fork may be based on an older llama.cpp that lacks
-#    fields/structs added in newer releases. Patch them so the
-#    llama-cpp-sys-2 wrapper (v0.1.140) compiles cleanly.
-#    This is safe: the patched fields are unused by TurboQuant and
-#    default to false/empty.
+#    fields/structs added in newer releases. Patch the wrapper so that
+#    llama-cpp-sys-2 (v0.1.140) compiles cleanly against the fork.
+#    The stubbed-out fields are unrelated to TurboQuant KV cache.
 
 patch_compat() {
     local FORK_DIR="${SYS_CRATE_DIR}/llama.cpp"
@@ -86,44 +85,19 @@ patch_compat() {
 
     echo "Checking API compatibility with llama-cpp-sys-2 v0.1.140..."
 
-    # Collect all missing symbols from a dry-run compile attempt.
-    # Instead of trying to compile (slow, needs full env), we check
-    # the wrapper source for fields and verify they exist in the fork headers.
-
     # --- thinking_forced_open ---
-    # Required in: common_chat_params, common_chat_parser_params
-    local CHAT_H="${FORK_DIR}/common/chat.h"
-    if [ -f "$CHAT_H" ] && ! grep -q "thinking_forced_open" "$CHAT_H"; then
-        echo "  Patching: adding thinking_forced_open to structs..."
-
-        # Add to common_chat_params (before its closing brace)
-        python3 -c "
-import re, sys
-text = open('$CHAT_H').read()
-# Add to common_chat_params
-text = re.sub(
-    r'(struct\s+common_chat_params\s*\{[^}]*?)(};)',
-    r'\1    bool thinking_forced_open = false; // compat stub\n\2',
-    text, count=1, flags=re.DOTALL)
-# Add to common_chat_parser_params
-text = re.sub(
-    r'(struct\s+common_chat_parser_params\s*\{[^}]*?)(};)',
-    r'\1    bool thinking_forced_open = false; // compat stub\n\2',
-    text, count=1, flags=re.DOTALL)
-open('$CHAT_H', 'w').write(text)
-" 2>/dev/null
-
-        if grep -q "thinking_forced_open" "$CHAT_H"; then
-            echo "    -> OK"
+    # Added to llama.cpp after the fork branched.  The wrapper references
+    # it in 4 places (assignments).  Simply comment them out.
+    if [ -f "$WRAPPER" ] && grep -q "thinking_forced_open" "$WRAPPER"; then
+        local CHAT_H="${FORK_DIR}/common/chat.h"
+        if [ -f "$CHAT_H" ] && ! grep -q "thinking_forced_open" "$CHAT_H"; then
+            echo "  Patching wrapper_oal.cpp: commenting out thinking_forced_open..."
+            sed -i 's|^\(.*thinking_forced_open.*\)$|// TQ_COMPAT: \1|' "$WRAPPER"
             patched=$((patched + 1))
+            echo "    -> OK ($(grep -c 'TQ_COMPAT.*thinking_forced_open' "$WRAPPER") lines)"
         else
-            echo "    -> python3 patch failed, using sed fallback on wrapper..."
-            # Fallback: comment out the lines in the wrapper
-            sed -i 's|\(.*thinking_forced_open.*\)|// TQ_COMPAT \1|' "$WRAPPER"
-            patched=$((patched + 1))
+            echo "  thinking_forced_open: already present in fork"
         fi
-    else
-        echo "  thinking_forced_open: already present"
     fi
 
     echo "  Compatibility patches applied: $patched"
