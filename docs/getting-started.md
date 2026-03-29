@@ -220,6 +220,25 @@ eullm run legal-it-7b
 eullm serve
 ```
 
+### Option D: Run with TurboQuant KV cache (experimental)
+
+TurboQuant compresses the KV cache using WHT rotation + Lloyd-Max quantization, enabling large models at long context lengths on consumer GPUs. For example, Qwen3-14B with 131K context on an RTX 5070 Ti 16GB — impossible with standard F16 KV cache.
+
+```bash
+# One-time setup
+./scripts/setup-turboquant.sh
+
+# Run Qwen3-14B with 131K context on 16GB VRAM
+eullm run ./qwen3-14b-q4_k_m.gguf \
+  --ctx-size 131072 \
+  --cache-type-k tq4_0 --cache-type-v tq4_0 \
+  --batch-size 16
+```
+
+Available TurboQuant types: `tq4_0` (~50% KV cache VRAM savings) and `tq3_0` (~62% savings). See [Engine documentation](engine.md) for details.
+
+> **Note:** TurboQuant is experimental and may change between releases.
+
 ## 5. Talk to the model
 
 Once the server is running, use any Ollama or OpenAI-compatible client.
