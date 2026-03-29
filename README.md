@@ -44,16 +44,21 @@ EULLM is the missing infrastructure.
 
 ## Project status
 
-> **EULLM is in active early development.** Engine is production-usable today. Hub and Forge are functional prototypes under active integration.
+> **EULLM Engine is ready to use.** Download the binary, run it. No compilation, no setup, no Docker. Works on any GGUF model.
 
-| Component | Status | What works today | What's being built next |
-|-----------|--------|-----------------|------------------------|
-| **Engine** | **Usable today** | Local GGUF inference, Ollama + OpenAI APIs, continuous batching, GPU acceleration (CUDA/ROCm/Vulkan/Metal), audit trail, cross-platform binaries, interactive chat REPL | Performance tuning, full Ollama parity, robustness |
-| **Hub** | Prototype | REST API with model catalog, model cards, AI Act compliance cards, GGUF download endpoint | DB-backed catalog (replacing static), S3-compatible storage |
-| **Forge** | Modules ready | Pruning, distillation, quantization, identity LoRA, GGUF export modules; CLI; 3 domain profiles (legal-it, medical-de, finance-fr) | Full integrated end-to-end pipeline, reproducible benchmarks |
-| **Demo models** | Not yet available | Pipeline components exist individually | First verticalizzato model: `eullm/legal-it-7b` |
+| Component | Status | What works today | Next |
+|-----------|--------|-----------------|------|
+| **Engine** | **Ready to use** | Local GGUF inference, Ollama + OpenAI APIs, continuous batching, GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant KV cache compression, audit trail, prebuilt binaries (Linux/macOS) | Full Ollama parity, performance tuning |
+| **Hub** | Prototype | REST API, model catalog, AI Act compliance cards | DB-backed catalog, S3 storage |
+| **Forge** | Modules ready | Pruning, distillation, quantization, identity LoRA, GGUF export; CLI; 3 domain profiles | End-to-end pipeline, first demo model |
+| **Demo models** | Not yet | Pipeline components exist individually | `eullm/legal-it-7b` |
 
-The current focus is validating the verticalizzazione pipeline end-to-end across multiple domains and languages, ensuring it can be reproduced reliably by third parties.
+```bash
+# This works right now. No compilation needed.
+curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64-cuda-12.8 -o eullm
+chmod +x eullm
+./eullm run your-model.gguf
+```
 
 ## The solution
 
