@@ -87,6 +87,7 @@ Key features:
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
+- **TurboQuant KV cache** *(experimental)* — run Qwen3-14B with 131K context on 16GB VRAM via WHT + Lloyd-Max KV cache compression
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - **Cross-platform binaries** — prebuilt releases for Linux x64/arm64 and macOS x64/arm64
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
@@ -280,6 +281,36 @@ With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23
 > **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request.
 > Reproduce with `./bench.sh`. Full results in [docs/benchmarks.md](docs/benchmarks.md).
 
+## TurboQuant KV Cache (Experimental)
+
+Run models at context lengths that would otherwise not fit in VRAM. TurboQuant compresses the KV cache (not the model weights) using WHT rotation and Lloyd-Max quantization, based on the TurboQuant algorithm (Zandieh et al., ICLR 2026).
+
+**Result:** Qwen3-14B with **131K context** on an **RTX 5070 Ti 16GB** — impossible with standard F16 or Q4_0 KV cache.
+
+| KV cache type | K+V VRAM (14B @ 131K ctx) | Savings vs F16 |
+|:---:|:---:|:---:|
+| F16 (default) | ~10 GB | — |
+| **TQ4_0** | **~5 GB** | **~50%** |
+| **TQ3_0** | **~3.8 GB** | **~62%** |
+
+```bash
+# TurboQuant setup (one-time)
+./scripts/setup-turboquant.sh
+
+# Run Qwen3-14B with 131K context on 16GB VRAM
+eullm run ./qwen3-14b-q4_k_m.gguf \
+  --ctx-size 131072 \
+  --cache-type-k tq4_0 --cache-type-v tq4_0 \
+  --batch-size 16
+
+# Or maximum compression with TQ3_0
+eullm run ./qwen3-14b-q4_k_m.gguf \
+  --ctx-size 131072 \
+  --cache-type-k tq3_0 --cache-type-v tq3_0
+```
+
+> **Experimental:** TurboQuant is a working feature but its API and quantization types may change between releases. See [docs/engine.md](docs/engine.md) for full details.
+
 ## Demo models (planned)
 
 Our first three demo models will showcase the verticalizzazione pipeline. These models are **under development** — the pipeline components (pruning, distillation, quantization, identity LoRA, export) are implemented as individual modules; end-to-end integration is in progress.
@@ -337,6 +368,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] Technical documentation (`docs/`)
 - [x] Getting started guide (`docs/getting-started.md`)
 - [x] First Colab notebook: identity LoRA on Qwen3-14B
+- [x] **TurboQuant KV cache** — experimental WHT + Lloyd-Max KV cache compression (tq3_0, tq4_0)
 - [ ] First verticalizzato model: `eullm/legal-it-7b`
 - [ ] Landing page with waitlist
 - [ ] Public launch (HN, Reddit, community)
