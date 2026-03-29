@@ -113,8 +113,10 @@ jobs:
         run: |
           cargo fetch
           bash scripts/setup-turboquant.sh
-          sed -i 's|^# \[patch.crates-io\]|\[patch.crates-io\]|' Cargo.toml
-          sed -i 's|^# llama-cpp-sys-2|llama-cpp-sys-2|' Cargo.toml
+          echo "--- Cargo.toml patch section ---"
+          grep -A2 'patch.crates-io' Cargo.toml || echo "NO PATCH FOUND"
+          echo "--- cargo tree llama-cpp-sys-2 ---"
+          cargo tree -i llama-cpp-sys-2 2>&1 | head -5
       - name: Build (turboquant)
         working-directory: engine
         run: cargo build --features turboquant

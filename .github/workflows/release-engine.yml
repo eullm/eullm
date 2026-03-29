@@ -142,8 +142,9 @@ jobs:
           . "$HOME/.cargo/env"
           cargo fetch
           bash scripts/setup-turboquant.sh
-          sed -i 's|^# \[patch.crates-io\]|\[patch.crates-io\]|' Cargo.toml
-          sed -i 's|^# llama-cpp-sys-2|llama-cpp-sys-2|' Cargo.toml
+          echo "--- Verifying patch ---"
+          grep -A2 'patch.crates-io' Cargo.toml || echo "NO PATCH FOUND"
+          . "$HOME/.cargo/env" && cargo tree -i llama-cpp-sys-2 2>&1 | head -5
 
       - name: Build engine with CUDA + TurboQuant
         run: |
