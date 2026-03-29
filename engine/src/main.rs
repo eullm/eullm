@@ -543,6 +543,8 @@ async fn cmd_run(
     let model_name: String;
     let mut engine: Option<Arc<InferenceEngine>> = None;
     let mut scheduler: Option<inference::SchedulerHandle> = None;
+    let mut kv_k_mib: f64 = 0.0;
+    let mut kv_v_mib: f64 = 0.0;
 
     let resolved_threads = threads.unwrap_or_else(|| {
         std::thread::available_parallelism()
@@ -598,7 +600,9 @@ async fn cmd_run(
             };
             let sched = BatchScheduler::new(config, sched_config);
             match sched.start() {
-                Ok(handle) => {
+                Ok((handle, model_info)) => {
+                    kv_k_mib = model_info.kv_k_mib;
+                    kv_v_mib = model_info.kv_v_mib;
                     scheduler = Some(handle);
                     println!("Model loaded (continuous batching, max_batch_size={batch_size}).");
                 }
@@ -665,7 +669,18 @@ async fn cmd_run(
             println!("  Context:       {ctx_size}");
         }
         println!("  Flash attn:    {} (auto-detect)", if flash_attn { "enabled" } else { "disabled" });
-        println!("  KV cache:      K={cache_type_k:?} V={cache_type_v:?} (fallback to F16 if GPU incompatible)");
+        let k_name = inference::cache_type_display(&cache_type_k);
+        let v_name = inference::cache_type_display(&cache_type_v);
+        println!("  KV cache:      K={k_name} V={v_name}");
+        // Show TurboQuant status if any cache type is TQ
+        let is_tq = matches!(cache_type_k, inference::KvCacheType::Unknown(41..=43))
+            || matches!(cache_type_v, inference::KvCacheType::Unknown(41..=43));
+        if kv_k_mib > 0.0 || kv_v_mib > 0.0 {
+            println!("  KV memory:     K={:.0} MiB, V={:.0} MiB", kv_k_mib, kv_v_mib);
+        }
+        if is_tq {
+            println!("  TurboQuant:    active (experimental)");
+        }
         println!("  Threads:       {resolved_threads}");
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");

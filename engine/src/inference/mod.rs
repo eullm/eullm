@@ -111,7 +111,7 @@ pub(crate) fn build_ctx_params_with_cache(
     params
 }
 
-pub use scheduler::{BatchScheduler, SchedulerConfig, SchedulerHandle};
+pub use scheduler::{BatchScheduler, ModelReadyInfo, SchedulerConfig, SchedulerHandle};
 
 /// Configuration for the inference engine.
 #[derive(Debug, Clone)]
@@ -222,6 +222,24 @@ fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> 
     let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1";
 
     Err(format!("Unknown cache type '{s}'. Options: {options}"))
+}
+
+/// Human-readable name for a KV cache type, including TurboQuant types.
+pub fn cache_type_display(ct: &KvCacheType) -> String {
+    match ct {
+        KvCacheType::F16 => "F16".to_string(),
+        KvCacheType::F32 => "F32".to_string(),
+        KvCacheType::Q8_0 => "Q8_0".to_string(),
+        KvCacheType::Q4_0 => "Q4_0".to_string(),
+        KvCacheType::Q4_1 => "Q4_1".to_string(),
+        KvCacheType::Q5_0 => "Q5_0".to_string(),
+        KvCacheType::Q5_1 => "Q5_1".to_string(),
+        KvCacheType::Unknown(41) => "TQ3_0 (TurboQuant 3-bit)".to_string(),
+        KvCacheType::Unknown(42) => "TQ4_0 (TurboQuant 4-bit)".to_string(),
+        KvCacheType::Unknown(43) => "TQ2_0 (TurboQuant 2-bit)".to_string(),
+        KvCacheType::Unknown(id) => format!("Unknown({id})"),
+        _ => format!("{ct:?}"),
+    }
 }
 
 
