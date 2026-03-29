@@ -73,37 +73,26 @@ git clone --depth 1 --branch feature/turboquant-kv-cache \
 rm -rf "${SYS_CRATE_DIR}/llama.cpp/.git"
 
 # 5. Compatibility patches
-#    The spiritbuun fork may be based on an older llama.cpp that lacks
-#    fields/structs added in newer releases. Patch the wrapper so that
-#    llama-cpp-sys-2 (v0.1.140) compiles cleanly against the fork.
-#    The stubbed-out fields are unrelated to TurboQuant KV cache.
+#    The spiritbuun fork may be based on an older llama.cpp.
+#    Comment out any references in the wrapper that don't exist in the fork.
 
-patch_compat() {
-    local FORK_DIR="${SYS_CRATE_DIR}/llama.cpp"
-    local WRAPPER="${SYS_CRATE_DIR}/wrapper_oal.cpp"
-    local patched=0
+WRAPPER="${SYS_CRATE_DIR}/wrapper_oal.cpp"
+echo "Patching wrapper_oal.cpp for fork compatibility..."
 
-    echo "Checking API compatibility with llama-cpp-sys-2 v0.1.140..."
-
-    # --- thinking_forced_open ---
-    # Added to llama.cpp after the fork branched.  The wrapper references
-    # it in 4 places (assignments).  Simply comment them out.
-    if [ -f "$WRAPPER" ] && grep -q "thinking_forced_open" "$WRAPPER"; then
-        local CHAT_H="${FORK_DIR}/common/chat.h"
-        if [ -f "$CHAT_H" ] && ! grep -q "thinking_forced_open" "$CHAT_H"; then
-            echo "  Patching wrapper_oal.cpp: commenting out thinking_forced_open..."
-            sed -i 's|^\(.*thinking_forced_open.*\)$|// TQ_COMPAT: \1|' "$WRAPPER"
-            patched=$((patched + 1))
-            echo "    -> OK ($(grep -c 'TQ_COMPAT.*thinking_forced_open' "$WRAPPER") lines)"
-        else
-            echo "  thinking_forced_open: already present in fork"
-        fi
+# Comment out lines referencing thinking_forced_open (added after the fork branched)
+if [ -f "$WRAPPER" ] && grep -q "thinking_forced_open" "$WRAPPER"; then
+    sed -i '/thinking_forced_open/s/^/\/\/ TQ_COMPAT /' "$WRAPPER"
+    echo "  Commented out $(grep -c 'TQ_COMPAT' "$WRAPPER") lines"
+    # Hard fail if any uncommented references remain
+    if grep -v '^\s*//' "$WRAPPER" | grep -q "thinking_forced_open"; then
+        echo "ERROR: wrapper_oal.cpp still has uncommented thinking_forced_open"
+        grep -n "thinking_forced_open" "$WRAPPER"
+        exit 1
     fi
-
-    echo "  Compatibility patches applied: $patched"
-}
-
-patch_compat
+    echo "  -> OK"
+else
+    echo "  No thinking_forced_open references (nothing to patch)"
+fi
 
 # 6. Verify TurboQuant types exist in the fork
 if grep -q "GGML_TYPE_TURBO3_0" "${SYS_CRATE_DIR}/llama.cpp/ggml/include/ggml.h"; then
