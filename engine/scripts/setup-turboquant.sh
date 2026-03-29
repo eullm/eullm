@@ -61,6 +61,7 @@ fi
 
 echo "Copying crate to vendor/..."
 cp -r "$INSTALLED_CRATE" "$SYS_CRATE_DIR"
+chmod -R u+w "$SYS_CRATE_DIR"
 
 # 3. Replace the bundled llama.cpp with spiritbuun's CUDA fork
 echo "Cloning spiritbuun's TurboQuant CUDA fork..."
@@ -74,24 +75,45 @@ rm -rf "${SYS_CRATE_DIR}/llama.cpp/.git"
 
 # 5. Compatibility patches
 #    The spiritbuun fork may be based on an older llama.cpp.
-#    Comment out any references in the wrapper that don't exist in the fork.
+#    Add missing struct fields so llama-cpp-sys-2 v0.1.140 compiles.
 
-WRAPPER="${SYS_CRATE_DIR}/wrapper_oal.cpp"
-echo "Patching wrapper_oal.cpp for fork compatibility..."
+CHAT_H="${SYS_CRATE_DIR}/llama.cpp/common/chat.h"
+echo "Checking fork compatibility with llama-cpp-sys-2 v0.1.140..."
 
-# Comment out lines referencing thinking_forced_open (added after the fork branched)
-if [ -f "$WRAPPER" ] && grep -q "thinking_forced_open" "$WRAPPER"; then
-    sed -i '/thinking_forced_open/s/^/\/\/ TQ_COMPAT /' "$WRAPPER"
-    echo "  Commented out $(grep -c 'TQ_COMPAT' "$WRAPPER") lines"
-    # Hard fail if any uncommented references remain
-    if grep -v '^\s*//' "$WRAPPER" | grep -q "thinking_forced_open"; then
-        echo "ERROR: wrapper_oal.cpp still has uncommented thinking_forced_open"
-        grep -n "thinking_forced_open" "$WRAPPER"
+if [ -f "$CHAT_H" ] && ! grep -q "thinking_forced_open" "$CHAT_H"; then
+    echo "  Adding thinking_forced_open to structs in chat.h..."
+    # Use awk with brace-depth tracking to insert before each struct's
+    # closing '};', even when the struct contains nested { ... } initializers.
+    awk '
+    /struct common_chat_params \{/ || /struct common_chat_parser_params \{/ {
+        in_s = 1; d = 0
+    }
+    in_s {
+        for (i = 1; i <= length($0); i++) {
+            c = substr($0, i, 1)
+            if (c == "{") d++
+            if (c == "}") d--
+        }
+        if (d == 0) {
+            print "    bool thinking_forced_open = false; // TQ compat stub"
+            in_s = 0
+        }
+    }
+    { print }
+    ' "$CHAT_H" > "${CHAT_H}.tmp" && mv "${CHAT_H}.tmp" "$CHAT_H"
+
+    # Verify
+    COUNT=$(grep -c "thinking_forced_open" "$CHAT_H" || true)
+    echo "  Added thinking_forced_open to $COUNT locations"
+    if [ "$COUNT" -lt 2 ]; then
+        echo "ERROR: Expected at least 2 insertions (common_chat_params + common_chat_parser_params)"
+        echo "--- chat.h around 'thinking_forced_open' ---"
+        grep -n -B2 -A2 "thinking_forced_open" "$CHAT_H" || true
         exit 1
     fi
     echo "  -> OK"
 else
-    echo "  No thinking_forced_open references (nothing to patch)"
+    echo "  thinking_forced_open already present in fork headers"
 fi
 
 # 6. Verify TurboQuant types exist in the fork
