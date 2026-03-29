@@ -72,7 +72,66 @@ git clone --depth 1 --branch feature/turboquant-kv-cache \
 # 4. Remove .git from the cloned repo (we vendor it, not submodule it)
 rm -rf "${SYS_CRATE_DIR}/llama.cpp/.git"
 
-# 5. Verify TurboQuant types exist in the fork
+# 5. Compatibility patches
+#    The spiritbuun fork may be based on an older llama.cpp that lacks
+#    fields/structs added in newer releases. Patch them so the
+#    llama-cpp-sys-2 wrapper (v0.1.140) compiles cleanly.
+#    This is safe: the patched fields are unused by TurboQuant and
+#    default to false/empty.
+
+patch_compat() {
+    local FORK_DIR="${SYS_CRATE_DIR}/llama.cpp"
+    local WRAPPER="${SYS_CRATE_DIR}/wrapper_oal.cpp"
+    local patched=0
+
+    echo "Checking API compatibility with llama-cpp-sys-2 v0.1.140..."
+
+    # Collect all missing symbols from a dry-run compile attempt.
+    # Instead of trying to compile (slow, needs full env), we check
+    # the wrapper source for fields and verify they exist in the fork headers.
+
+    # --- thinking_forced_open ---
+    # Required in: common_chat_params, common_chat_parser_params
+    local CHAT_H="${FORK_DIR}/common/chat.h"
+    if [ -f "$CHAT_H" ] && ! grep -q "thinking_forced_open" "$CHAT_H"; then
+        echo "  Patching: adding thinking_forced_open to structs..."
+
+        # Add to common_chat_params (before its closing brace)
+        python3 -c "
+import re, sys
+text = open('$CHAT_H').read()
+# Add to common_chat_params
+text = re.sub(
+    r'(struct\s+common_chat_params\s*\{[^}]*?)(};)',
+    r'\1    bool thinking_forced_open = false; // compat stub\n\2',
+    text, count=1, flags=re.DOTALL)
+# Add to common_chat_parser_params
+text = re.sub(
+    r'(struct\s+common_chat_parser_params\s*\{[^}]*?)(};)',
+    r'\1    bool thinking_forced_open = false; // compat stub\n\2',
+    text, count=1, flags=re.DOTALL)
+open('$CHAT_H', 'w').write(text)
+" 2>/dev/null
+
+        if grep -q "thinking_forced_open" "$CHAT_H"; then
+            echo "    -> OK"
+            patched=$((patched + 1))
+        else
+            echo "    -> python3 patch failed, using sed fallback on wrapper..."
+            # Fallback: comment out the lines in the wrapper
+            sed -i 's|\(.*thinking_forced_open.*\)|// TQ_COMPAT \1|' "$WRAPPER"
+            patched=$((patched + 1))
+        fi
+    else
+        echo "  thinking_forced_open: already present"
+    fi
+
+    echo "  Compatibility patches applied: $patched"
+}
+
+patch_compat
+
+# 6. Verify TurboQuant types exist in the fork
 if grep -q "GGML_TYPE_TURBO3_0" "${SYS_CRATE_DIR}/llama.cpp/ggml/include/ggml.h"; then
     echo "Verified: GGML_TYPE_TURBO3_0 found in fork"
 else
@@ -80,7 +139,7 @@ else
     exit 1
 fi
 
-# 6. Activate [patch.crates-io] in Cargo.toml
+# 7. Activate [patch.crates-io] in Cargo.toml
 #    Uncomment the patch section so cargo uses the vendored fork
 #    instead of the standard crate from crates.io.
 if grep -q '^# \[patch.crates-io\]' "$CARGO_TOML"; then
@@ -98,7 +157,7 @@ llama-cpp-sys-2 = { path = "${PATCH_PATH}" }
 PATCH
 fi
 
-# 7. Verify the patch is active
+# 8. Verify the patch is active
 if grep -q "llama-cpp-sys-2" "$CARGO_TOML" && \
    grep -q "^\[patch.crates-io\]" "$CARGO_TOML"; then
     echo "Verified: [patch.crates-io] is active"
