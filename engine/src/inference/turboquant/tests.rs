@@ -69,30 +69,39 @@ fn boundaries_4bit_between_centroids() {
 }
 
 #[test]
-fn resolve_falls_back_without_backend() {
-    // Without a TQ-capable backend, resolution should fall back to F16.
+fn resolve_without_native_backend() {
     let result = resolve_turboquant_cache_type("tq3_0", false);
     assert!(result.is_some());
     match result.unwrap() {
+        #[cfg(not(feature = "turboquant_native"))]
         ResolvedCacheType::Fallback { requested, fallback, .. } => {
             assert_eq!(requested, TurboquantType::TQ3_0);
             assert_eq!(fallback, "f16");
         }
-        _ => panic!("Expected fallback without TQ backend"),
+        #[cfg(feature = "turboquant_native")]
+        ResolvedCacheType::Native(tq) => {
+            assert_eq!(tq, TurboquantType::TQ3_0);
+        }
+        other => panic!("Unexpected resolution: {other:?}"),
     }
 }
 
 #[test]
-fn resolve_strict_errors_without_backend() {
-    // Strict mode: no fallback, return Unsupported.
+fn resolve_strict_without_native_backend() {
     let result = resolve_turboquant_cache_type("tq4_0", true);
     assert!(result.is_some());
     match result.unwrap() {
+        #[cfg(not(feature = "turboquant_native"))]
         ResolvedCacheType::Unsupported { requested, reason } => {
             assert_eq!(requested, TurboquantType::TQ4_0);
             assert!(reason.contains("not supported"));
         }
-        _ => panic!("Expected Unsupported in strict mode without TQ backend"),
+        #[cfg(feature = "turboquant_native")]
+        ResolvedCacheType::Native(tq) => {
+            // Strict mode is irrelevant when backend supports TQ — it resolves natively.
+            assert_eq!(tq, TurboquantType::TQ4_0);
+        }
+        other => panic!("Unexpected resolution: {other:?}"),
     }
 }
 
