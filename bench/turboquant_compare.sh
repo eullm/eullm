@@ -28,7 +28,7 @@ set -euo pipefail
 MODEL_PATH="${1:?Usage: $0 <model_path> [extra bench args...]}"
 shift
 
-EULLM_BIN="${EULLM_BIN:-./target/release/eullm-engine}"
+EULLM_BIN="${EULLM_BIN:-./eullm-tq}"
 EULLM_PORT="${EULLM_PORT:-11434}"
 EULLM_HOST="${EULLM_HOST:-127.0.0.1}"
 EULLM_URL="http://${EULLM_HOST}:${EULLM_PORT}"
