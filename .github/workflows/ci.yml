@@ -96,3 +96,33 @@ jobs:
       - name: Test
         working-directory: forge
         run: pytest -v
+
+  # ── Engine TurboQuant (experimental) ────────────────────────────
+  engine-turboquant:
+    name: Engine TurboQuant (experimental)
+    needs: changes
+    if: needs.changes.outputs.engine == 'true' || github.event_name == 'push'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install dependencies
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
+      - name: Setup TurboQuant backend
+        working-directory: engine
+        run: |
+          bash scripts/setup-turboquant.sh
+          sed -i 's|^# \[patch.crates-io\]|\[patch.crates-io\]|' Cargo.toml
+          sed -i 's|^# llama-cpp-sys-2|llama-cpp-sys-2|' Cargo.toml
+      - name: Build (turboquant)
+        working-directory: engine
+        run: cargo build --features turboquant
+      - name: Build (turboquant_native)
+        working-directory: engine
+        run: cargo build --features turboquant_native
+      - name: Test
+        working-directory: engine
+        run: cargo test --features turboquant_native
+      - name: Clippy
+        working-directory: engine
+        run: cargo clippy --features turboquant_native -- -D warnings -A dead-code -A unused-imports
