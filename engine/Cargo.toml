@@ -51,10 +51,7 @@ assert_cmd = "2"
 predicates = "3"
 
 # ── TurboQuant backend (experimental) ───────────────────────────
-# Uncomment after running: scripts/setup-turboquant.sh
-# Redirects llama-cpp-sys-2 to a vendored copy that uses spiritbuun's
-# TurboQuant CUDA fork of llama.cpp.  Production builds (without
-# --features turboquant) are unaffected — the fork is API-compatible.
-#
-# [patch.crates-io]
-# llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }
+# To enable TurboQuant, run: scripts/setup-turboquant.sh
+# The script vendors llama-cpp-sys-2 with spiritbuun's fork and
+# appends [patch.crates-io] to this file automatically.
+# Then build with: cargo build --release --features "cuda turboquant_native"
