@@ -113,8 +113,8 @@ jobs:
         run: |
           cargo fetch
           bash scripts/setup-turboquant.sh
-          echo "--- Cargo.toml patch section ---"
-          grep -A2 'patch.crates-io' Cargo.toml || echo "NO PATCH FOUND"
+          echo "--- Workspace Cargo.toml patch section ---"
+          grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
           echo "--- cargo tree llama-cpp-sys-2 ---"
           cargo tree -i llama-cpp-sys-2 2>&1 | head -5
       - name: Build (turboquant)
