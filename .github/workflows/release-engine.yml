@@ -140,6 +140,7 @@ jobs:
         working-directory: engine
         run: |
           . "$HOME/.cargo/env"
+          cargo fetch
           bash scripts/setup-turboquant.sh
           sed -i 's|^# \[patch.crates-io\]|\[patch.crates-io\]|' Cargo.toml
           sed -i 's|^# llama-cpp-sys-2|llama-cpp-sys-2|' Cargo.toml
