@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.2.96"
+version = "0.2.97"
 edition = "2021"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"
@@ -16,6 +16,15 @@ cuda = ["llama-cpp-2/cuda"]
 rocm = ["llama-cpp-2/rocm"]
 vulkan = ["llama-cpp-2/vulkan"]
 metal = ["llama-cpp-2/metal"]
+# Experimental: TurboQuant KV cache compression (Google, ICLR 2026).
+# Enables tq3_0/tq4_0 cache types for --cache-type-k and --cache-type-v.
+# Requires a TQ-capable llama.cpp backend; falls back to F16 otherwise.
+turboquant = []
+# Signals that the linked llama.cpp backend has native TurboQuant support
+# (spiritbuun fork or upstream post-merge).  Without this, turboquant
+# types are accepted but fall back to F16.  Set automatically by
+# scripts/setup-turboquant.sh via the [patch] section.
+turboquant_native = ["turboquant"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }
@@ -40,3 +49,12 @@ libc = "0.2"
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+
+# ── TurboQuant backend (experimental) ───────────────────────────
+# Uncomment after running: scripts/setup-turboquant.sh
+# Redirects llama-cpp-sys-2 to a vendored copy that uses spiritbuun's
+# TurboQuant CUDA fork of llama.cpp.  Production builds (without
+# --features turboquant) are unaffected — the fork is API-compatible.
+#
+# [patch.crates-io]
+# llama-cpp-sys-2 = { path = "vendor/llama-cpp-sys-2" }

@@ -240,6 +240,7 @@ fn run_scheduler_loop(
     ready_tx: std::sync::mpsc::Sender<Result<(), String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     super::check_gpu_support(config.gpu_layers);
+    super::log_turboquant_status();
 
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let backend = LlamaBackend::init()?;

@@ -112,8 +112,67 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  build-cuda-turboquant:
+    strategy:
+      matrix:
+        include:
+          - cuda: "12.8.1"
+            artifact: eullm-linux-x64-cuda12.8-turboquant-exp
+            cuda_tag: "12.8.1-devel-ubuntu22.04"
+
+    runs-on: ubuntu-22.04
+    container:
+      image: nvidia/cuda:${{ matrix.cuda_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake build-essential pkg-config libssl-dev git libclang-dev
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Setup TurboQuant backend
+        working-directory: engine
+        run: |
+          . "$HOME/.cargo/env"
+          bash scripts/setup-turboquant.sh
+          sed -i 's|^# \[patch.crates-io\]|\[patch.crates-io\]|' Cargo.toml
+          sed -i 's|^# llama-cpp-sys-2|llama-cpp-sys-2|' Cargo.toml
+
+      - name: Build engine with CUDA + TurboQuant
+        run: |
+          . "$HOME/.cargo/env"
+          export PATH="/usr/local/cuda/bin:$PATH"
+          cargo build --release --features "cuda turboquant_native" -p eullm-engine
+        env:
+          CUDA_PATH: /usr/local/cuda
+          CUDACXX: /usr/local/cuda/bin/nvcc
+          CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
+          CMAKE_CUDA_ARCHITECTURES: "120"
+
+      - name: Test TurboQuant module
+        run: |
+          . "$HOME/.cargo/env"
+          cargo test --features turboquant_native -p eullm-engine
+
+      - name: Package binary
+        run: |
+          cp target/release/eullm ${{ matrix.artifact }}
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
   release:
-    needs: [build, build-cuda]
+    needs: [build, build-cuda, build-cuda-turboquant]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,6 +199,7 @@ jobs:
           files: |
             artifacts/eullm-linux-x64/eullm-linux-x64
             artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
+            artifacts/eullm-linux-x64-cuda12.8-turboquant-exp/eullm-linux-x64-cuda12.8-turboquant-exp
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
@@ -171,9 +231,33 @@ jobs:
             |--------|-------------|--------------|
             | `eullm-linux-x64` | CPU only | None |
             | `eullm-linux-x64-cuda-12.8` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
+            | `eullm-linux-x64-cuda12.8-turboquant-exp` | NVIDIA GPU + TurboQuant KV cache | NVIDIA driver 570+ |
             | `eullm-linux-arm64` | CPU only | ARM64 Linux |
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
+
+            ### TurboQuant (experimental)
+
+            The `eullm-linux-x64-cuda12.8-turboquant-exp` build includes experimental
+            KV cache compression based on Google's TurboQuant algorithm (ICLR 2026).
+
+            **Important:**
+            - Requires NVIDIA GPU with CUDA 12.8+ support
+            - Experimental — may be unstable or change behavior between releases
+            - Not recommended for production workloads
+            - Use only for testing and benchmarking
+
+            ```bash
+            # Download TurboQuant build
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda12.8-turboquant-exp -o eullm
+            chmod +x eullm
+
+            # Run with TurboQuant KV cache (3-bit, ~5x compression)
+            ./eullm run model.gguf --cache-type-k tq3_0 --cache-type-v tq3_0
+
+            # Run with TurboQuant KV cache (4-bit, ~4x compression)
+            ./eullm run model.gguf --cache-type-k tq4_0 --cache-type-v tq4_0
+            ```
 
             ### Usage
 

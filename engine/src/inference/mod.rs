@@ -10,6 +10,9 @@
 
 pub mod scheduler;
 
+#[cfg(feature = "turboquant")]
+pub mod turboquant;
+
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -24,6 +27,12 @@ use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
+
+/// Log TurboQuant module status at startup (no-op without the feature flag).
+pub fn log_turboquant_status() {
+    #[cfg(feature = "turboquant")]
+    turboquant::log_turboquant_status();
+}
 
 /// Check if the binary was compiled with GPU support and warn if GPU was
 /// requested but is not available.  Returns true when a GPU backend is present.
@@ -147,17 +156,71 @@ impl Default for InferenceConfig {
 }
 
 /// Parse a KV cache type string (e.g. "q8_0", "q4_0", "f16") into a `KvCacheType`.
+///
+/// With the `turboquant` feature enabled, also accepts "tq3_0" and "tq4_0".
+/// If the llama.cpp backend does not support TurboQuant natively, these
+/// resolve to F16 with a warning (automatic fallback).
 pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
+    parse_cache_type_inner(s, false)
+}
+
+/// Parse a KV cache type in strict mode — errors instead of falling back.
+///
+/// Use for benchmarks where silent fallback would produce misleading results.
+#[cfg(feature = "turboquant")]
+pub fn parse_cache_type_strict(s: &str) -> Result<KvCacheType, String> {
+    parse_cache_type_inner(s, true)
+}
+
+fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> {
+    // Standard types — always available.
     match s.to_lowercase().as_str() {
-        "f16" => Ok(KvCacheType::F16),
-        "f32" => Ok(KvCacheType::F32),
-        "q8_0" => Ok(KvCacheType::Q8_0),
-        "q4_0" => Ok(KvCacheType::Q4_0),
-        "q4_1" => Ok(KvCacheType::Q4_1),
-        "q5_0" => Ok(KvCacheType::Q5_0),
-        "q5_1" => Ok(KvCacheType::Q5_1),
-        _ => Err(format!("Unknown cache type '{s}'. Options: f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1")),
+        "f16" => return Ok(KvCacheType::F16),
+        "f32" => return Ok(KvCacheType::F32),
+        "q8_0" => return Ok(KvCacheType::Q8_0),
+        "q4_0" => return Ok(KvCacheType::Q4_0),
+        "q4_1" => return Ok(KvCacheType::Q4_1),
+        "q5_0" => return Ok(KvCacheType::Q5_0),
+        "q5_1" => return Ok(KvCacheType::Q5_1),
+        _ => {}
     }
+
+    // TurboQuant types — experimental, feature-gated.
+    #[cfg(feature = "turboquant")]
+    {
+        use turboquant::config::{resolve_turboquant_cache_type, ResolvedCacheType};
+        if let Some(resolved) = resolve_turboquant_cache_type(s, strict) {
+            return match resolved {
+                ResolvedCacheType::Native(tq) => {
+                    // Map TQ type to the GGML type ID from the spiritbuun fork.
+                    // The KvCacheType::Unknown variant carries raw GGML type IDs
+                    // through to llama.cpp — no Rust enum variant needed.
+                    use turboquant::types::ggml_ids;
+                    let raw_id = match tq {
+                        turboquant::types::TurboquantType::TQ3_0 => ggml_ids::TURBO3_0,
+                        turboquant::types::TurboquantType::TQ4_0 => ggml_ids::TURBO4_0,
+                    };
+                    tracing::info!("TurboQuant {tq} → GGML type {raw_id} (native backend)");
+                    // Pass the raw GGML type ID via KvCacheType.
+                    // The llama-cpp-2 crate maps Unknown(n) to the raw C enum value.
+                    Ok(KvCacheType::Unknown(raw_id))
+                }
+                ResolvedCacheType::Fallback { fallback, .. } => {
+                    parse_cache_type(fallback)
+                }
+                ResolvedCacheType::Unsupported { reason, .. } => {
+                    Err(reason)
+                }
+            };
+        }
+    }
+
+    #[cfg(feature = "turboquant")]
+    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1, tq3_0, tq4_0";
+    #[cfg(not(feature = "turboquant"))]
+    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1";
+
+    Err(format!("Unknown cache type '{s}'. Options: {options}"))
 }
 
 
