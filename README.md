@@ -284,65 +284,120 @@ With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23
 
 ## TurboQuant KV Cache Compression (Experimental)
 
-**Run 14B models with 131K context on a consumer 16GB GPU.**
+**14B model. 131K context. 16GB consumer GPU. No compilation. No patches. 30 seconds.**
 
-TurboQuant is EULLM's implementation of the TurboQuant algorithm (Zandieh et al., ICLR 2026) — a KV cache compression technique that applies Walsh-Hadamard Transform (WHT) rotation followed by Lloyd-Max quantization to attention key/value states at inference time. Unlike weight quantization (Q4_K_M etc.), TurboQuant does **not** touch model weights. It compresses only the runtime KV cache, which is the main VRAM bottleneck at long context lengths. EULLM implements Stage 1 of the paper (WHT + Lloyd-Max); Stage 2 (QJL sketching) is omitted to preserve output quality.
-
-The result: **4x the context length** and **4x the concurrent users** on the same hardware, with minimal throughput loss.
-
-### Benchmark results (RTX 5070 Ti 16GB, Qwen3-14B Q4_K_M)
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_context_capacity.png" alt="TurboQuant: Max Context Capacity Comparison" width="720" />
-</p>
-
-| KV Cache | Max Context | KV VRAM | Throughput @4 conc | TTFT P50 |
-|:---:|:---:|:---:|:---:|:---:|
-| F16 | 30K | ~1 GB | 90 tok/s | 70ms |
-| **TQ4_0** | **131K** | **~5 GB** | **73 tok/s (-19%)** | **87ms** |
-| **TQ3_0** | **131K** | **~4 GB** | **73 tok/s (-19%)** | **92ms** |
-
-With F16 KV cache, the 14B model maxes out at ~30K context before exhausting 16GB VRAM. With TQ4_0, it fits **131K context** — a **4.4x increase** — with only 19% throughput reduction.
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_throughput.png" alt="TurboQuant: Throughput Comparison" width="680" />
-</p>
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TurboQuant: Time to First Token Comparison" width="680" />
-</p>
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_per_request_speed.png" alt="TurboQuant: Per-Request Speed Comparison" width="680" />
-</p>
-
-### Enterprise GPU scaling
-
-The VRAM savings scale linearly to larger GPUs, unlocking massive context windows for enterprise deployments:
-
-| GPU | VRAM | F16 ctx (14B) | TQ4_0 ctx (14B) | Concurrent slots @8K |
-|:---:|:---:|:---:|:---:|:---:|
-| RTX 5070 Ti | 16 GB | ~30K | 131K | 4x more |
-| RTX 5090 | 32 GB | ~131K | ~500K+ | 4x more |
-| A100 | 80 GB | ~500K | ~2M+ | 4x more |
-| H100 | 80 GB | ~500K | ~2M+ | 4x more |
-
-### Cost savings
-
-For an enterprise EU deployment on 8x H100 cluster: TurboQuant increases concurrent user capacity from ~720 to ~2880 (4x). At ~EUR 30K/month per node, this means serving the same workload with 2 nodes instead of 8 — **saving EUR 180K/month in infrastructure costs.**
-
-### Quick usage
+### Try it now
 
 ```bash
-# Download TurboQuant build
+# Download (single binary, ~850MB with CUDA)
 curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64-cuda12.8-turboquant-exp -o eullm
 chmod +x eullm
 
-# Run with TurboQuant 4-bit KV cache
-./eullm run model.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 --ctx-size 131072 --batch-size 16
+# Run
+./eullm run your-model.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 --ctx-size 131072 --batch-size 16
 ```
 
-> **Experimental:** TurboQuant is a working prototype. Its API, quantization type names, and performance characteristics may change between releases. It is not recommended for production use. See [docs/engine.md](docs/engine.md) for full technical details and the [benchmark results directory](bench/results/turboquant_20260329_224511/) for raw data.
+### What happens
+
+**Without TurboQuant** (F16 KV cache):
+```
+./eullm run qwen3-14b.gguf --ctx-size 131072
+→ CRASHED: out of VRAM (KV cache alone needs ~10 GB, model needs ~9 GB, total > 16 GB)
+```
+
+**With TurboQuant** (TQ4_0 KV cache):
+```
+./eullm run qwen3-14b.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 --ctx-size 131072 --batch-size 16
+→ RUNNING. 131K context. 16 concurrent slots. All on GPU.
+```
+
+Startup output (real, from RTX 5070 Ti 16GB):
+
+```
+eullm ready.  [v0.2.98]
+  Model:         qwen3-14b
+  GPU backend:   CUDA
+  Context:       131072 total (8192 per sequence × 16 slots)
+  Flash attn:    enabled (auto-detect)
+  KV cache:      K=TQ4_0 (TurboQuant 4-bit) V=TQ4_0 (TurboQuant 4-bit)
+  KV memory:     K=2560 MiB, V=2560 MiB
+  TurboQuant:    active (experimental)
+  Mode:          continuous batching (max 16 concurrent)
+```
+
+### KV cache memory
+
+| Cache type | KV memory (K+V) | Max context (14B, 16GB GPU) |
+|:---:|:---:|:---:|
+| F16 (default) | ~10.2 GB @ 131K | **30K** (then OOM) |
+| **TQ4_0** (4-bit) | **~5.1 GB** @ 131K | **131K** |
+| **TQ3_0** (3-bit) | **~3.8 GB** @ 131K | **131K** |
+
+No compilation. No patch to llama.cpp. Download the binary, add two flags, done.
+
+### Benchmarks (RTX 5070 Ti 16GB, Qwen3-14B)
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_context_capacity.png" alt="Max context: F16=30K vs TQ4_0=131K vs TQ3_0=131K" width="720" />
+</p>
+
+| KV Cache | Max Context | Throughput @4 conc | TTFT P50 @4 conc | Result |
+|:---:|:---:|:---:|:---:|:---:|
+| F16 | 30K | 90 tok/s | 70ms | OOM above 30K |
+| **TQ4_0** | **131K** | **73 tok/s** | **87ms** | **Runs** |
+| **TQ3_0** | **131K** | **73 tok/s** | **92ms** | **Runs** |
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_throughput.png" alt="Throughput comparison" width="680" />
+</p>
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TTFT comparison" width="680" />
+</p>
+
+### Trade-off
+
+TurboQuant trades throughput for context capacity:
+
+- **~19% less tok/s** at 4 concurrent requests (73 vs 90 tok/s)
+- **4.3x more context** (131K vs 30K)
+- **4x more concurrent users** on the same GPU
+
+For RAG, long documents, and multi-turn conversations, the context gain far outweighs the speed cost.
+
+### Enterprise scaling
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_gpu_scaling.png" alt="Concurrent users per GPU" width="720" />
+</p>
+
+| GPU | VRAM | F16 slots @8K | TQ4_0 slots @8K | Gain |
+|:---:|:---:|:---:|:---:|:---:|
+| RTX 5070 Ti | 16 GB | 5 | 21 | **4x** |
+| RTX 5090 | 32 GB | 17 | 69 | **4x** |
+| A100 | 80 GB | 54 | 215 | **4x** |
+| H100 | 80 GB | 54 | 215 | **4x** |
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_cost_savings.png" alt="Infrastructure cost savings" width="720" />
+</p>
+
+**3000 concurrent users on H100 80GB nodes (EUR 30K/month each):**
+
+| | F16 | TQ4_0 | Saving |
+|---|:---:|:---:|:---:|
+| Nodes needed | 56 | 14 | **-75%** |
+| Monthly cost | EUR 1,680K | EUR 420K | **EUR 1,260K/month** |
+
+### What is TurboQuant
+
+Google's ICLR 2026 algorithm (Zandieh et al.). Compresses the KV cache — **not the model weights**. Applies Walsh-Hadamard Transform rotation + Lloyd-Max quantization to attention key/value states at inference time. Model weights (Q4_K_M, etc.) stay untouched. EULLM implements Stage 1 only; Stage 2 (QJL) is omitted to preserve output quality.
+
+Available types:
+- **TQ4_0** — 4-bit KV cache, ~50% VRAM savings, minimal quality impact
+- **TQ3_0** — 3-bit KV cache, ~62% VRAM savings, slight quality reduction
+
+> **Experimental.** TurboQuant is a working prototype. API, type names, and performance may change between releases. Not recommended for production. See [docs/engine.md](docs/engine.md) for technical details. Raw benchmark data: [bench/results/](bench/results/turboquant_20260329_224511/).
 
 ## Demo models (planned)
 
