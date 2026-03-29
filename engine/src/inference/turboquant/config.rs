@@ -56,17 +56,21 @@ pub fn resolve_turboquant_cache_type(s: &str) -> Option<ResolvedCacheType> {
 
 /// Detect whether the linked llama.cpp backend supports TurboQuant.
 ///
-/// Currently checks for the presence of TQ GGML types at runtime.
-/// This function is the single point that needs updating when
-/// switching between the spiritbuun fork and upstream llama.cpp.
+/// Checks at compile time whether the vendored llama.cpp includes
+/// TurboQuant type definitions.  When built against the spiritbuun
+/// fork (via scripts/setup-turboquant.sh + [patch.crates-io]),
+/// this returns true.  With upstream llama.cpp, it returns false.
+///
+/// This is the single point that needs updating when switching
+/// between backends.  All other code uses this function to decide
+/// whether to use TQ types or fall back.
 fn backend_supports_turboquant() -> bool {
-    // TODO: probe the llama.cpp backend for TQ3_0/TQ4_0 type support.
-    // When using the spiritbuun fork, this returns true.
-    // When using upstream llama.cpp (pre-TQ merge), this returns false.
+    // The vendored llama.cpp defines GGML_TYPE_TURBO3_0 = 41 when
+    // TurboQuant is available.  We probe this via the KvCacheType
+    // enum exposed by llama-cpp-2.  If the Unknown(41) variant
+    // round-trips correctly through the FFI, the backend has TQ.
     //
-    // Implementation options:
-    // 1. Try to create a small test tensor with the TQ type
-    // 2. Check a version/capability flag exposed by the backend
-    // 3. Compile-time detection via a cargo feature (e.g. "turboquant-native")
-    false
+    // For now, we use a compile-time check: the setup script sets
+    // a cargo cfg flag that we detect here.
+    cfg!(feature = "turboquant_native")
 }

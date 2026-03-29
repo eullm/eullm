@@ -45,8 +45,22 @@ impl fmt::Display for TurboquantType {
 /// Parse a TurboQuant type from a CLI/API string.
 pub fn parse_turboquant_type(s: &str) -> Option<TurboquantType> {
     match s.to_lowercase().as_str() {
-        "tq3_0" | "tq3" => Some(TurboquantType::TQ3_0),
-        "tq4_0" | "tq4" => Some(TurboquantType::TQ4_0),
+        "tq3_0" | "tq3" | "turbo3" => Some(TurboquantType::TQ3_0),
+        "tq4_0" | "tq4" | "turbo4" => Some(TurboquantType::TQ4_0),
         _ => None,
     }
+}
+
+/// GGML type IDs used by the spiritbuun/llama-cpp-turboquant-cuda fork.
+///
+/// These IDs are added to the `ggml_type` enum in the fork's `ggml.h`.
+/// When upstream llama.cpp merges TurboQuant support, the IDs may change
+/// — update these constants accordingly.
+pub mod ggml_ids {
+    /// `GGML_TYPE_TURBO3_0` = 41 in the spiritbuun fork.
+    pub const TURBO3_0: i32 = 41;
+    /// `GGML_TYPE_TURBO4_0` = 42 in the spiritbuun fork.
+    pub const TURBO4_0: i32 = 42;
+    /// `GGML_TYPE_TURBO2_0` = 43 in the spiritbuun fork (not yet exposed).
+    pub const TURBO2_0: i32 = 43;
 }
