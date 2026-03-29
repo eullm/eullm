@@ -668,6 +668,12 @@ async fn cmd_run(
         let k_name = inference::cache_type_display(&cache_type_k);
         let v_name = inference::cache_type_display(&cache_type_v);
         println!("  KV cache:      K={k_name} V={v_name}");
+        // Show TurboQuant status if any cache type is TQ
+        let is_tq = matches!(cache_type_k, inference::KvCacheType::Unknown(41..=43))
+            || matches!(cache_type_v, inference::KvCacheType::Unknown(41..=43));
+        if is_tq {
+            println!("  TurboQuant:    active (experimental)");
+        }
         println!("  Threads:       {resolved_threads}");
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
