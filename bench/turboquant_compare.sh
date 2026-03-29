@@ -18,6 +18,8 @@
 #   EULLM_HOST      Host to bind (default: 127.0.0.1)
 #   BENCH_ROUNDS    Rounds per concurrency level (default: 3)
 #   BENCH_WARMUP    Warmup requests (default: 1)
+#   CTX_SIZE        Context size (default: engine default)
+#   BATCH_SIZE      Batch size / concurrent slots (default: 16)
 #   HEALTH_TIMEOUT  Seconds to wait for engine health (default: 120)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -36,6 +38,8 @@ EULLM_URL="http://${EULLM_HOST}:${EULLM_PORT}"
 BENCH_ROUNDS="${BENCH_ROUNDS:-3}"
 BENCH_WARMUP="${BENCH_WARMUP:-1}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
+CTX_SIZE="${CTX_SIZE:-}"
+BATCH_SIZE="${BATCH_SIZE:-16}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BENCH_SCRIPT="${SCRIPT_DIR}/turboquant_bench.py"
@@ -84,6 +88,24 @@ wait_for_health() {
 
     echo -n "  Waiting for engine health at ${url}..."
     while [ "$elapsed" -lt "$timeout" ]; do
+        # Check if engine process is still alive
+        if [ -n "$ENGINE_PID" ] && ! kill -0 "$ENGINE_PID" 2>/dev/null; then
+            echo ""
+            echo "  ENGINE DIED (PID $ENGINE_PID exited)"
+            local log="${RESULTS_DIR}/${CURRENT_CACHE_TYPE}_engine.log"
+            if [ -f "$log" ]; then
+                # Detect common failure causes
+                if grep -qi "out of memory\|CUDA error\|OOM\|alloc\|GGML_ASSERT\|SIGABRT\|VRAM" "$log" 2>/dev/null; then
+                    echo "  CAUSE: Out of memory / VRAM insufficient"
+                elif grep -qi "Failed to create context\|Failed to load" "$log" 2>/dev/null; then
+                    echo "  CAUSE: Context creation failed (likely OOM)"
+                fi
+                echo "  Last 5 lines of log:"
+                tail -5 "$log" | sed 's/^/    /'
+            fi
+            ENGINE_PID=""
+            return 1
+        fi
         if curl -sf "${url}/api/version" > /dev/null 2>&1; then
             echo " ready (${elapsed}s)"
             return 0
@@ -97,6 +119,9 @@ wait_for_health() {
     return 1
 }
 
+# Track current cache type for log file detection in wait_for_health
+CURRENT_CACHE_TYPE=""
+
 start_engine() {
     local cache_type="$1"
     local log_file="${RESULTS_DIR}/${cache_type}_engine.log"
@@ -104,13 +129,19 @@ start_engine() {
     echo "  Starting engine with --cache-type-k ${cache_type} --cache-type-v ${cache_type}"
     echo "  Log: ${log_file}"
 
-    "$EULLM_BIN" \
-        --model "$MODEL_PATH" \
-        --host "$EULLM_HOST" \
-        --port "$EULLM_PORT" \
-        --cache-type-k "$cache_type" \
-        --cache-type-v "$cache_type" \
-        > "$log_file" 2>&1 &
+    local engine_args=(
+        --model "$MODEL_PATH"
+        --host "$EULLM_HOST"
+        --port "$EULLM_PORT"
+        --cache-type-k "$cache_type"
+        --cache-type-v "$cache_type"
+        --batch-size "$BATCH_SIZE"
+    )
+    if [ -n "$CTX_SIZE" ]; then
+        engine_args+=(--ctx-size "$CTX_SIZE")
+    fi
+
+    "$EULLM_BIN" "${engine_args[@]}" > "$log_file" 2>&1 &
 
     ENGINE_PID=$!
     echo "  Engine PID: $ENGINE_PID"
@@ -146,6 +177,8 @@ echo "  Model name:  ${MODEL_NAME}"
 echo "  Engine:      ${EULLM_BIN}"
 echo "  URL:         ${EULLM_URL}"
 echo "  Cache types: ${CACHE_TYPES[*]}"
+echo "  Ctx size:    ${CTX_SIZE:-engine default}"
+echo "  Batch size:  ${BATCH_SIZE}"
 echo "  Rounds:      ${BENCH_ROUNDS}"
 echo "  Results:     ${RESULTS_DIR}"
 echo "  Extra args:  $*"
@@ -185,6 +218,7 @@ for cache_type in "${CACHE_TYPES[@]}"; do
     echo "  Cache type: ${cache_type}"
     echo "================================================================"
 
+    CURRENT_CACHE_TYPE="$cache_type"
     # Map cache type to label for the bench script
     CACHE_LABEL="${cache_type^^}"  # uppercase: f16 -> F16, tq4_0 -> TQ4_0
     OUTPUT_FILE="${RESULTS_DIR}/${cache_type}.json"
