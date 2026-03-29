@@ -23,7 +23,7 @@ pub const CODEBOOK_3BIT: [f32; 8] = [
      0.500_151,
      1.050_046,
      1.748_021,
-     2.400_000, // upper tail clamp
+     2.4, // upper tail clamp
 ];
 
 /// Lloyd-Max centroids for 4-bit quantization (16 levels).
@@ -32,20 +32,20 @@ pub const CODEBOOK_3BIT: [f32; 8] = [
 pub const CODEBOOK_4BIT: [f32; 16] = [
     -2.401_832,
     -1.844_036,
-    -1.437_080,
-    -1.099_270,
-    -0.795_520,
+    -1.437_08,
+    -1.099_27,
+    -0.795_52,
     -0.509_748,
     -0.232_709,
      0.000_000,
      0.232_709,
      0.509_748,
-     0.795_520,
-     1.099_270,
-     1.437_080,
+     0.795_52,
+     1.099_27,
+     1.437_08,
      1.844_036,
      2.401_832,
-     3.000_000, // upper tail clamp
+     3.0, // upper tail clamp
 ];
 
 /// Decision boundaries for 3-bit quantizer.

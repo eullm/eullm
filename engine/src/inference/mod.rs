@@ -172,6 +172,7 @@ pub fn parse_cache_type_strict(s: &str) -> Result<KvCacheType, String> {
     parse_cache_type_inner(s, true)
 }
 
+#[allow(unused_variables)]
 fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> {
     // Standard types — always available.
     match s.to_lowercase().as_str() {
