@@ -111,7 +111,7 @@ pub(crate) fn build_ctx_params_with_cache(
     params
 }
 
-pub use scheduler::{BatchScheduler, SchedulerConfig, SchedulerHandle};
+pub use scheduler::{BatchScheduler, ModelReadyInfo, SchedulerConfig, SchedulerHandle};
 
 /// Configuration for the inference engine.
 #[derive(Debug, Clone)]
