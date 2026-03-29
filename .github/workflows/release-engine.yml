@@ -173,8 +173,44 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  build-metal-turboquant:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Setup TurboQuant backend
+        working-directory: engine
+        run: |
+          cargo fetch
+          bash scripts/setup-turboquant.sh
+          echo "--- Verifying patch (workspace root) ---"
+          grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
+          cargo tree -i llama-cpp-sys-2 2>&1 | head -5
+
+      - name: Build engine with Metal + TurboQuant
+        run: cargo build --release --target aarch64-apple-darwin --features "metal turboquant_native" -p eullm-engine
+
+      - name: Test TurboQuant module
+        run: cargo test --features turboquant_native -p eullm-engine
+
+      - name: Package binary
+        run: |
+          cp target/aarch64-apple-darwin/release/eullm eullm-macos-arm64-turboquant-exp
+          chmod +x eullm-macos-arm64-turboquant-exp
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eullm-macos-arm64-turboquant-exp
+          path: eullm-macos-arm64-turboquant-exp
+
   release:
-    needs: [build, build-cuda, build-cuda-turboquant]
+    needs: [build, build-cuda, build-cuda-turboquant, build-metal-turboquant]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -202,6 +238,7 @@ jobs:
             artifacts/eullm-linux-x64/eullm-linux-x64
             artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
             artifacts/eullm-linux-x64-cuda12.8-turboquant-exp/eullm-linux-x64-cuda12.8-turboquant-exp
+            artifacts/eullm-macos-arm64-turboquant-exp/eullm-macos-arm64-turboquant-exp
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
@@ -237,6 +274,7 @@ jobs:
             | `eullm-linux-arm64` | CPU only | ARM64 Linux |
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
+            | `eullm-macos-arm64-turboquant-exp` | Metal + TurboQuant KV cache | macOS Apple Silicon |
 
             ### TurboQuant (experimental)
 
