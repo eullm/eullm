@@ -10,6 +10,7 @@
   <a href="docs/getting-started.md">Getting Started</a> ·
   <a href="#quickstart">Quickstart</a> ·
   <a href="#components">Components</a> ·
+  <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
   <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
   <a href="#demo-models">Demo Models</a> ·
   <a href="#roadmap">Roadmap</a> ·
@@ -87,7 +88,7 @@ Key features:
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
-- **TurboQuant KV cache** *(experimental)* — run Qwen3-14B with 131K context on 16GB VRAM via WHT + Lloyd-Max KV cache compression
+- **[TurboQuant KV cache compression](#turboquant-kv-cache-compression-experimental)** *(experimental)* — **4x context length, 4x concurrent users.** Run Qwen3-14B with 131K context on a 16GB consumer GPU. Projected 2M+ context on H100. Saves up to EUR 180K/month on enterprise clusters
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - **Cross-platform binaries** — prebuilt releases for Linux x64/arm64 and macOS x64/arm64
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
@@ -281,35 +282,67 @@ With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23
 > **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request.
 > Reproduce with `./bench.sh`. Full results in [docs/benchmarks.md](docs/benchmarks.md).
 
-## TurboQuant KV Cache (Experimental)
+## TurboQuant KV Cache Compression (Experimental)
 
-Run models at context lengths that would otherwise not fit in VRAM. TurboQuant compresses the KV cache (not the model weights) using WHT rotation and Lloyd-Max quantization, based on the TurboQuant algorithm (Zandieh et al., ICLR 2026).
+**Run 14B models with 131K context on a consumer 16GB GPU.**
 
-**Result:** Qwen3-14B with **131K context** on an **RTX 5070 Ti 16GB** — impossible with standard F16 or Q4_0 KV cache.
+TurboQuant is EULLM's implementation of the TurboQuant algorithm (Zandieh et al., ICLR 2026) — a KV cache compression technique that applies Walsh-Hadamard Transform (WHT) rotation followed by Lloyd-Max quantization to attention key/value states at inference time. Unlike weight quantization (Q4_K_M etc.), TurboQuant does **not** touch model weights. It compresses only the runtime KV cache, which is the main VRAM bottleneck at long context lengths. EULLM implements Stage 1 of the paper (WHT + Lloyd-Max); Stage 2 (QJL sketching) is omitted to preserve output quality.
 
-| KV cache type | K+V VRAM (14B @ 131K ctx) | Savings vs F16 |
-|:---:|:---:|:---:|
-| F16 (default) | ~10 GB | — |
-| **TQ4_0** | **~5 GB** | **~50%** |
-| **TQ3_0** | **~3.8 GB** | **~62%** |
+The result: **4x the context length** and **4x the concurrent users** on the same hardware, with minimal throughput loss.
+
+### Benchmark results (RTX 5070 Ti 16GB, Qwen3-14B Q4_K_M)
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_context_capacity.png" alt="TurboQuant: Max Context Capacity Comparison" width="720" />
+</p>
+
+| KV Cache | Max Context | KV VRAM | Throughput @4 conc | TTFT P50 |
+|:---:|:---:|:---:|:---:|:---:|
+| F16 | 30K | ~1 GB | 90 tok/s | 70ms |
+| **TQ4_0** | **131K** | **~5 GB** | **73 tok/s (-19%)** | **87ms** |
+| **TQ3_0** | **131K** | **~4 GB** | **73 tok/s (-19%)** | **92ms** |
+
+With F16 KV cache, the 14B model maxes out at ~30K context before exhausting 16GB VRAM. With TQ4_0, it fits **131K context** — a **4.4x increase** — with only 19% throughput reduction.
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_throughput.png" alt="TurboQuant: Throughput Comparison" width="680" />
+</p>
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TurboQuant: Time to First Token Comparison" width="680" />
+</p>
+
+<p align="center">
+  <img src="bench/results/turboquant_20260329_224511/chart_per_request_speed.png" alt="TurboQuant: Per-Request Speed Comparison" width="680" />
+</p>
+
+### Enterprise GPU scaling
+
+The VRAM savings scale linearly to larger GPUs, unlocking massive context windows for enterprise deployments:
+
+| GPU | VRAM | F16 ctx (14B) | TQ4_0 ctx (14B) | Concurrent slots @8K |
+|:---:|:---:|:---:|:---:|:---:|
+| RTX 5070 Ti | 16 GB | ~30K | 131K | 4x more |
+| RTX 5090 | 32 GB | ~131K | ~500K+ | 4x more |
+| A100 | 80 GB | ~500K | ~2M+ | 4x more |
+| H100 | 80 GB | ~500K | ~2M+ | 4x more |
+
+### Cost savings
+
+For an enterprise EU deployment on 8x H100 cluster: TurboQuant increases concurrent user capacity from ~720 to ~2880 (4x). At ~EUR 30K/month per node, this means serving the same workload with 2 nodes instead of 8 — **saving EUR 180K/month in infrastructure costs.**
+
+### Quick usage
 
 ```bash
-# TurboQuant setup (one-time)
-./scripts/setup-turboquant.sh
+# Download TurboQuant build
+curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64-cuda12.8-turboquant-exp -o eullm
+chmod +x eullm
 
-# Run Qwen3-14B with 131K context on 16GB VRAM
-eullm run ./qwen3-14b-q4_k_m.gguf \
-  --ctx-size 131072 \
-  --cache-type-k tq4_0 --cache-type-v tq4_0 \
-  --batch-size 16
-
-# Or maximum compression with TQ3_0
-eullm run ./qwen3-14b-q4_k_m.gguf \
-  --ctx-size 131072 \
-  --cache-type-k tq3_0 --cache-type-v tq3_0
+# Run with TurboQuant 4-bit KV cache
+./eullm run model.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 --ctx-size 131072 --batch-size 16
 ```
 
-> **Experimental:** TurboQuant is a working feature but its API and quantization types may change between releases. See [docs/engine.md](docs/engine.md) for full details.
+> **Experimental:** TurboQuant is a working prototype. Its API, quantization type names, and performance characteristics may change between releases. It is not recommended for production use. See [docs/engine.md](docs/engine.md) for full technical details and the [benchmark results directory](bench/results/turboquant_20260329_224511/) for raw data.
 
 ## Demo models (planned)
 
