@@ -124,9 +124,10 @@ CURRENT_CACHE_TYPE=""
 
 start_engine() {
     local cache_type="$1"
+    local ctx="${2:-$CTX_SIZE}"
     local log_file="${RESULTS_DIR}/${cache_type}_engine.log"
 
-    echo "  Starting engine with --cache-type-k ${cache_type} --cache-type-v ${cache_type}"
+    echo "  Starting engine with --cache-type-k ${cache_type} --cache-type-v ${cache_type} ctx=${ctx:-default}"
     echo "  Log: ${log_file}"
 
     local engine_args=(
@@ -137,14 +138,91 @@ start_engine() {
         --cache-type-v "$cache_type"
         --batch-size "$BATCH_SIZE"
     )
-    if [ -n "$CTX_SIZE" ]; then
-        engine_args+=(--ctx-size "$CTX_SIZE")
+    if [ -n "$ctx" ]; then
+        engine_args+=(--ctx-size "$ctx")
     fi
 
     "$EULLM_BIN" "${engine_args[@]}" > "$log_file" 2>&1 &
 
     ENGINE_PID=$!
     echo "  Engine PID: $ENGINE_PID"
+}
+
+# Probe the maximum ctx_size a cache type can handle by trying descending
+# values until the engine starts successfully. Returns the working ctx_size
+# via the PROBED_CTX global variable.
+probe_max_ctx() {
+    local cache_type="$1"
+    local start_ctx="$2"
+
+    # Try: start_ctx, 75%, 50%, 25%, 12.5%, and some common values
+    local try_sizes=()
+    local c="$start_ctx"
+    while [ "$c" -ge 4096 ]; do
+        try_sizes+=("$c")
+        c=$((c * 3 / 4))            # 75% of previous
+        # Round down to nearest 1024
+        c=$(( (c / 1024) * 1024 ))
+    done
+    try_sizes+=(4096)
+
+    echo "  Probing max ctx_size for ${cache_type}..."
+    echo "  Will try: ${try_sizes[*]}"
+
+    PROBED_CTX=""
+    for try_ctx in "${try_sizes[@]}"; do
+        CURRENT_CACHE_TYPE="${cache_type}_probe_${try_ctx}"
+        local probe_log="${RESULTS_DIR}/${cache_type}_probe_${try_ctx}.log"
+
+        echo -n "  Trying ctx_size=${try_ctx}..."
+        local probe_args=(
+            run "$MODEL_PATH"
+            --host "$EULLM_HOST"
+            --port "$EULLM_PORT"
+            --cache-type-k "$cache_type"
+            --cache-type-v "$cache_type"
+            --batch-size "$BATCH_SIZE"
+            --ctx-size "$try_ctx"
+        )
+        "$EULLM_BIN" "${probe_args[@]}" > "$probe_log" 2>&1 &
+        ENGINE_PID=$!
+
+        # Wait up to 60s for health
+        local elapsed=0
+        local ok=false
+        while [ "$elapsed" -lt 60 ]; do
+            if ! kill -0 "$ENGINE_PID" 2>/dev/null; then
+                echo " FAILED (engine crashed)"
+                ENGINE_PID=""
+                break
+            fi
+            if curl -sf "${EULLM_URL}/api/version" > /dev/null 2>&1; then
+                ok=true
+                break
+            fi
+            sleep 2
+            elapsed=$((elapsed + 2))
+        done
+
+        if $ok; then
+            echo " OK! Max ctx_size for ${cache_type} = ${try_ctx}"
+            PROBED_CTX="$try_ctx"
+            # Engine is running — stop it, we'll restart properly later
+            stop_engine
+            return 0
+        else
+            # Make sure it's dead
+            if [ -n "$ENGINE_PID" ] && kill -0 "$ENGINE_PID" 2>/dev/null; then
+                kill -9 "$ENGINE_PID" 2>/dev/null || true
+                sleep 1
+            fi
+            ENGINE_PID=""
+        fi
+    done
+
+    echo "  Could not find a working ctx_size for ${cache_type}"
+    PROBED_CTX=""
+    return 1
 }
 
 stop_engine() {
@@ -222,10 +300,28 @@ for cache_type in "${CACHE_TYPES[@]}"; do
     # Map cache type to label for the bench script
     CACHE_LABEL="${cache_type^^}"  # uppercase: f16 -> F16, tq4_0 -> TQ4_0
     OUTPUT_FILE="${RESULTS_DIR}/${cache_type}.json"
+
+    # Determine ctx_size for this cache type.
+    # For non-TQ types (f16, q8_0, etc.) with large ctx: probe to find max.
+    effective_ctx="$CTX_SIZE"
+    if [ -n "$CTX_SIZE" ] && [[ "$cache_type" != tq* ]]; then
+        echo "  Non-TurboQuant type with explicit ctx_size — probing VRAM fit..."
+        if probe_max_ctx "$cache_type" "$CTX_SIZE"; then
+            effective_ctx="$PROBED_CTX"
+            if [ "$effective_ctx" != "$CTX_SIZE" ]; then
+                CACHE_LABEL="${CACHE_LABEL} (ctx=${effective_ctx})"
+                echo "  NOTE: Reduced ctx_size from ${CTX_SIZE} to ${effective_ctx} for ${cache_type}"
+            fi
+        else
+            echo "  SKIPPING ${cache_type} — cannot fit in VRAM even at ctx_size=4096"
+            continue
+        fi
+    fi
+
     RESULT_FILES+=("$OUTPUT_FILE")
 
-    # Start engine
-    start_engine "$cache_type"
+    # Start engine with the effective ctx
+    start_engine "$cache_type" "$effective_ctx"
 
     # Wait for health
     if ! wait_for_health "$EULLM_URL" "$HEALTH_TIMEOUT"; then
@@ -250,7 +346,7 @@ for cache_type in "${CACHE_TYPES[@]}"; do
     echo ""
     stop_engine
 
-    echo "  Done with ${cache_type}."
+    echo "  Done with ${cache_type} (ctx=${effective_ctx:-default})."
     echo ""
 done
 
