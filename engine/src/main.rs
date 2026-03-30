@@ -1313,11 +1313,8 @@ async fn interactive_chat(
         let request = inference::GenerateRequest {
             prompt,
             max_tokens,
-            temperature: 0.7,
             stop_sequences: vec!["<|im_end|>".into()],
-            num_ctx: None,
-            grammar: None,
-            raw: false,
+            ..Default::default()
         };
 
         // Submit to scheduler and stream tokens.
