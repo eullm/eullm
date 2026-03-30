@@ -429,13 +429,19 @@ async fn chat(
 
     let request = GenerateRequest {
         prompt,
-        max_tokens,
-        temperature,
+        max_tokens: sp.max_tokens,
+        temperature: sp.temperature,
+        top_k: sp.top_k,
+        top_p: sp.top_p,
+        min_p: sp.min_p,
+        repeat_penalty: sp.repeat_penalty,
+        repeat_last_n: sp.repeat_last_n,
+        seed: sp.seed,
+        num_ctx: sp.num_ctx,
         stop_sequences: vec![
             "<|im_end|>".to_string(),
             "<|end|>".to_string(),
         ],
-        num_ctx,
         grammar,
         raw: false,
     };
@@ -595,13 +601,19 @@ async fn chat_completions(
 
     let request = GenerateRequest {
         prompt,
-        max_tokens,
-        temperature,
+        max_tokens: sp.max_tokens,
+        temperature: sp.temperature,
+        top_k: sp.top_k,
+        top_p: sp.top_p,
+        min_p: sp.min_p,
+        repeat_penalty: sp.repeat_penalty,
+        repeat_last_n: sp.repeat_last_n,
+        seed: sp.seed,
+        num_ctx: sp.num_ctx,
         stop_sequences: vec![
             "<|im_end|>".to_string(),
             "<|end|>".to_string(),
         ],
-        num_ctx,
         grammar,
         raw: false,
     };
