@@ -108,30 +108,45 @@ async fn ensure_model(
     })
 }
 
-fn parse_generate_params(body: &Value) -> (u32, f32, Option<u32>) {
+/// Parsed sampling parameters from the API request.
+struct SamplingParams {
+    max_tokens: u32,
+    temperature: f32,
+    top_k: i32,
+    top_p: f32,
+    min_p: f32,
+    repeat_penalty: f32,
+    repeat_last_n: i32,
+    seed: Option<u32>,
+    num_ctx: Option<u32>,
+}
+
+fn parse_generate_params(body: &Value) -> SamplingParams {
     // Check top-level first (OpenAI format), then Ollama's options object.
     let options = body.get("options");
-    let max_tokens = body
-        .get("max_tokens")
-        .or_else(|| body.get("num_predict"))
-        .or_else(|| options.and_then(|o| o.get("num_predict")))
+
+    let get = |key: &str| -> Option<&Value> {
+        body.get(key).or_else(|| options.and_then(|o| o.get(key)))
+    };
+
+    let max_tokens = get("max_tokens")
+        .or_else(|| get("num_predict"))
         .and_then(|v| v.as_u64())
         .unwrap_or(512) as u32;
-    let temperature = body
-        .get("temperature")
-        .or_else(|| options.and_then(|o| o.get("temperature")))
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.7) as f32;
-    // Ollama num_ctx: per-request context window budget.
-    let num_ctx = body
-        .get("num_ctx")
-        .or_else(|| options.and_then(|o| o.get("num_ctx")))
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
+    // Defaults match Ollama: temperature=0.8, top_k=40, top_p=0.9, repeat_penalty=1.1
+    let temperature = get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.8) as f32;
+    let top_k = get("top_k").and_then(|v| v.as_i64()).unwrap_or(40) as i32;
+    let top_p = get("top_p").and_then(|v| v.as_f64()).unwrap_or(0.9) as f32;
+    let min_p = get("min_p").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    let repeat_penalty = get("repeat_penalty").and_then(|v| v.as_f64()).unwrap_or(1.1) as f32;
+    let repeat_last_n = get("repeat_last_n").and_then(|v| v.as_i64()).unwrap_or(64) as i32;
+    let seed = get("seed").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let num_ctx = get("num_ctx").and_then(|v| v.as_u64()).map(|v| v as u32);
+
     tracing::info!(
-        "Request params: max_tokens={max_tokens}, temperature={temperature:.2}, num_ctx={num_ctx:?}"
+        "Request params: max_tokens={max_tokens}, temp={temperature:.2}, top_k={top_k}, top_p={top_p:.2}, repeat_penalty={repeat_penalty:.2}, num_ctx={num_ctx:?}"
     );
-    (max_tokens, temperature, num_ctx)
+    SamplingParams { max_tokens, temperature, top_k, top_p, min_p, repeat_penalty, repeat_last_n, seed, num_ctx }
 }
 
 fn is_streaming(body: &Value) -> bool {
@@ -292,7 +307,7 @@ async fn generate(
         .unwrap_or("")
         .to_string();
 
-    let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
+    let sp = parse_generate_params(&body);
     let raw = body.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
     let grammar = if raw {
         // GBNF grammar sampling is incompatible with raw mode — the grammar
@@ -305,9 +320,15 @@ async fn generate(
 
     let request = GenerateRequest {
         prompt,
-        max_tokens,
-        temperature,
-        num_ctx,
+        max_tokens: sp.max_tokens,
+        temperature: sp.temperature,
+        top_k: sp.top_k,
+        top_p: sp.top_p,
+        min_p: sp.min_p,
+        repeat_penalty: sp.repeat_penalty,
+        repeat_last_n: sp.repeat_last_n,
+        seed: sp.seed,
+        num_ctx: sp.num_ctx,
         grammar,
         raw,
         ..Default::default()
@@ -403,7 +424,7 @@ async fn chat(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let prompt = format_chat_prompt(&messages, think);
-    let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
+    let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
 
     let request = GenerateRequest {
@@ -569,7 +590,7 @@ async fn chat_completions(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let prompt = format_chat_prompt(&messages, think);
-    let (max_tokens, temperature, num_ctx) = parse_generate_params(&body);
+    let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
 
     let request = GenerateRequest {
