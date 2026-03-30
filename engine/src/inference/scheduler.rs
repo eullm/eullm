@@ -289,41 +289,69 @@ fn run_scheduler_loop(
     let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
         || config.cache_type_v != super::KvCacheType::F16;
 
+    // Detect mixed TurboQuant types (e.g. K=tq4_0, V=tq3_0) for fallback logic.
+    let has_mixed_tq = matches!(
+        (&config.cache_type_k, &config.cache_type_v),
+        (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v)) if k != v
+    );
+
     let ctx_params = super::build_ctx_params(&config, ctx_size)
         .with_n_seq_max(sched_config.max_batch_size as u32);
 
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {
-            // Quantized V cache requires Flash Attention, but FA AUTO may
-            // have disabled it (unsupported on this GPU).  llama.cpp returns
-            // a generic null-reference error, so we can't match on the
-            // message — instead check whether quantized cache was requested.
             if has_quantized_cache {
-                tracing::warn!(
-                    "Context creation failed with quantized KV cache ({:?}/{:?}). \
-                     Retrying with F16 KV cache.",
-                    config.cache_type_k, config.cache_type_v,
-                );
-                eprintln!(
-                    "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16 \
-                     (quantized V cache requires Flash Attention, which is not available on this GPU)",
-                    config.cache_type_k, config.cache_type_v,
-                );
+                if has_mixed_tq {
+                    // Mixed TQ fallback: try the heavier (more precise) type for both.
+                    let heavier = if let (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v))
+                        = (config.cache_type_k, config.cache_type_v) {
+                        if k >= v { config.cache_type_k } else { config.cache_type_v }
+                    } else {
+                        config.cache_type_k
+                    };
+                    let name = super::cache_type_display(&heavier);
+                    eprintln!("[EULLM] Mixed TQ failed — trying {name}/{name}...");
 
-                let ctx_params = super::build_ctx_params_with_cache(
-                    &config,
-                    ctx_size,
-                    super::KvCacheType::F16,
-                    super::KvCacheType::F16,
-                ).with_n_seq_max(sched_config.max_batch_size as u32);
+                    let ctx_params = super::build_ctx_params_with_cache(
+                        &config, ctx_size, heavier, heavier,
+                    ).with_n_seq_max(sched_config.max_batch_size as u32);
 
-                match model.new_context(&backend, ctx_params) {
-                    Ok(c) => c,
-                    Err(e2) => {
-                        let msg = format!("Failed to create context (even with F16 fallback): {e2}");
-                        let _ = ready_tx.send(Err(msg.clone()));
-                        return Err(msg.into());
+                    match model.new_context(&backend, ctx_params) {
+                        Ok(c) => c,
+                        Err(_) => {
+                            eprintln!("[EULLM] {name} also failed — falling back to F16/F16");
+                            let ctx_params = super::build_ctx_params_with_cache(
+                                &config, ctx_size,
+                                super::KvCacheType::F16, super::KvCacheType::F16,
+                            ).with_n_seq_max(sched_config.max_batch_size as u32);
+                            match model.new_context(&backend, ctx_params) {
+                                Ok(c) => c,
+                                Err(e3) => {
+                                    let msg = format!("Failed to create context (even with F16 fallback): {e3}");
+                                    let _ = ready_tx.send(Err(msg.clone()));
+                                    return Err(msg.into());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16",
+                        config.cache_type_k, config.cache_type_v,
+                    );
+                    let ctx_params = super::build_ctx_params_with_cache(
+                        &config, ctx_size,
+                        super::KvCacheType::F16, super::KvCacheType::F16,
+                    ).with_n_seq_max(sched_config.max_batch_size as u32);
+
+                    match model.new_context(&backend, ctx_params) {
+                        Ok(c) => c,
+                        Err(e2) => {
+                            let msg = format!("Failed to create context (even with F16 fallback): {e2}");
+                            let _ = ready_tx.send(Err(msg.clone()));
+                            return Err(msg.into());
+                        }
                     }
                 }
             } else {
