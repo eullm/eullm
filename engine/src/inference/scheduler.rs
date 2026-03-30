@@ -386,29 +386,38 @@ fn run_scheduler_loop(
                         .max()
                         .unwrap_or(0);
 
-                    let sampler = if let Some(ref grammar_str) = scheduled.request.grammar {
-                        match LlamaSampler::grammar(&model, grammar_str, "root") {
-                            Ok(grammar_sampler) => LlamaSampler::chain_simple([
-                                grammar_sampler,
-                                LlamaSampler::temp(scheduled.request.temperature),
-                                LlamaSampler::dist(seq_id as u32),
-                                LlamaSampler::greedy(),
-                            ]),
-                            Err(e) => {
-                                tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained");
-                                LlamaSampler::chain_simple([
-                                    LlamaSampler::temp(scheduled.request.temperature),
-                                    LlamaSampler::dist(seq_id as u32),
-                                    LlamaSampler::greedy(),
-                                ])
+                    let req = &scheduled.request;
+                    let seed = req.seed.unwrap_or(seq_id as u32);
+                    let sampler = {
+                        let mut chain: Vec<LlamaSampler> = Vec::new();
+                        // Grammar (if any) must be first in the chain
+                        if let Some(ref grammar_str) = req.grammar {
+                            match LlamaSampler::grammar(&model, grammar_str, "root") {
+                                Ok(gs) => chain.push(gs),
+                                Err(e) => tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained"),
                             }
                         }
-                    } else {
-                        LlamaSampler::chain_simple([
-                            LlamaSampler::temp(scheduled.request.temperature),
-                            LlamaSampler::dist(seq_id as u32),
-                            LlamaSampler::greedy(),
-                        ])
+                        // Repeat penalty (Ollama default: 1.1, last 64 tokens)
+                        if req.repeat_penalty != 1.0 {
+                            chain.push(LlamaSampler::penalties(req.repeat_last_n, req.repeat_penalty, 0.0, 0.0));
+                        }
+                        // Top-K (Ollama default: 40)
+                        if req.top_k > 0 {
+                            chain.push(LlamaSampler::top_k(req.top_k));
+                        }
+                        // Top-P (Ollama default: 0.9)
+                        if req.top_p < 1.0 {
+                            chain.push(LlamaSampler::top_p(req.top_p, 1));
+                        }
+                        // Min-P (Ollama default: 0.0)
+                        if req.min_p > 0.0 {
+                            chain.push(LlamaSampler::min_p(req.min_p, 1));
+                        }
+                        // Temperature
+                        chain.push(LlamaSampler::temp(req.temperature));
+                        // Sampling distribution
+                        chain.push(LlamaSampler::dist(seed));
+                        LlamaSampler::chain_simple(chain)
                     };
 
                     let seq = ActiveSequence {
