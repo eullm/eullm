@@ -97,6 +97,33 @@ def extract_last_line(s: str) -> str:
     return lines[-1] if lines else s
 
 
+def _extract_matrix_from_latex(s: str) -> str:
+    """
+    Extract a matrix from LaTeX notation and return [[a,b],[c,d]] form.
+    Handles \\begin{pmatrix}, \\begin{bmatrix}, \\begin{matrix}.
+    Also handles \\boxed{...} wrapping.
+    """
+    # Unwrap \boxed{...}
+    s = re.sub(r'\\boxed\{(.*?)\}', r'\1', s, flags=re.DOTALL)
+    # Find last pmatrix/bmatrix/matrix block
+    m = re.findall(
+        r'\\begin\{[pvb]?matrix\*?\}(.*?)\\end\{[pvb]?matrix\*?\}',
+        s, re.DOTALL
+    )
+    if not m:
+        return ""
+    inner = m[-1]  # take last occurrence (final answer)
+    rows = [r.strip() for r in re.split(r'\\\\', inner) if r.strip()]
+    result = []
+    for row in rows:
+        nums = [int(x) for x in re.findall(r'-?\d+', row)]
+        if nums:
+            result.append(nums)
+    if not result:
+        return ""
+    return "[" + ",".join("[" + ",".join(str(x) for x in r) + "]" for r in result) + "]"
+
+
 def check_answer(test: dict, response: str) -> tuple[bool, str]:
     mode = test["check"]
     resp = strip_thinking(response).strip()
@@ -104,12 +131,21 @@ def check_answer(test: dict, response: str) -> tuple[bool, str]:
 
     if mode == "exact_normalized":
         expected = normalize(test["expected"])
-        ok = expected in normalize(resp) or expected in normalize(resp_last)
-        return ok, f"expected={test['expected']} last_line={resp_last[:80]}"
+        # 1. Standard check (model output [[a,b],[c,d]] format)
+        if expected in normalize(resp) or expected in normalize(resp_last):
+            return True, f"expected={test['expected']} last_line={resp_last[:80]}"
+        # 2. LaTeX matrix fallback (Qwen2.5-Math, DeepSeek-Math style)
+        latex_result = _extract_matrix_from_latex(resp)
+        if latex_result and normalize(latex_result) == expected:
+            return True, f"expected={test['expected']} latex={latex_result}"
+        return False, f"expected={test['expected']} last_line={resp_last[:80]}"
 
     elif mode == "contains_number":
         expected = test["expected"]
-        ok = expected in resp or expected in resp_last
+        # Also check inside \boxed{...}
+        boxed = re.findall(r'\\boxed\{([^}]+)\}', resp)
+        boxed_str = " ".join(boxed)
+        ok = expected in resp or expected in resp_last or expected in boxed_str
         return ok, f"expected={expected} in response={resp_last[:80]}"
 
     return False, "unknown check mode"
@@ -266,12 +302,12 @@ def build_tests(filler_levels, skip_3x3=False, skip_scalar=False):
 
 async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
                       prompt: str, temperature: float = 0.0,
-                      think: bool = False) -> str:
+                      think: bool = False, num_predict: int = 512) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "options": {"temperature": temperature, "num_predict": 256},
+        "options": {"temperature": temperature, "num_predict": num_predict},
     }
     if think is not None:
         payload["think"] = think
@@ -311,7 +347,8 @@ async def collect(args):
     async with aiohttp.ClientSession() as session:
         for test in tests:
             response = await send_prompt(session, args.url, args.model,
-                                         test["prompt"], args.temperature, think)
+                                         test["prompt"], args.temperature,
+                                         think, args.num_predict)
             passed, detail = check_answer(test, response)
 
             status = "PASS" if passed else "FAIL"
@@ -464,6 +501,9 @@ def main():
     c.add_argument("--no-think", action="store_true",
                    help="Omit 'think' field from payload (for non-Qwen3 models: "
                         "Qwen2.5-Math, DeepSeek-Math, etc.)")
+    c.add_argument("--num-predict", type=int, default=512,
+                   help="Max tokens to generate per response (default: 512). "
+                        "Use 1024 for math models that show full working.")
     c.add_argument("--output", "-o")
     c.add_argument("--verbose", "-v", action="store_true")
 
