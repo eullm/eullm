@@ -1,0 +1,196 @@
+{
+  "label": "TQ3_0",
+  "model": "qwen3-14b",
+  "url": "http://localhost:11434",
+  "temperature": 0.0,
+  "timestamp": "2026-03-31T15:33:44+0200",
+  "score": {
+    "passed": 15,
+    "total": 20,
+    "percent": 75.0
+  },
+  "categories": {
+    "matrix": {
+      "passed": 4,
+      "total": 5
+    },
+    "math": {
+      "passed": 3,
+      "total": 5
+    },
+    "factual": {
+      "passed": 3,
+      "total": 5
+    },
+    "logic": {
+      "passed": 3,
+      "total": 3
+    },
+    "code": {
+      "passed": 2,
+      "total": 2
+    }
+  },
+  "results": [
+    {
+      "id": "matrix_multiply",
+      "category": "matrix",
+      "prompt": "Compute the matrix product of A = [[1,2],[3,4]] and B = [[5,6],[7,8]]. Return ONLY the result matrix in the format [[a,b],[c,d]] with no explanation.",
+      "response": "[[19,22],[43,50]]",
+      "passed": true,
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19,22],[43,50]]"
+    },
+    {
+      "id": "matrix_determinant",
+      "category": "matrix",
+      "prompt": "What is the determinant of the matrix [[3,8],[4,6]]? Return ONLY the number, nothing else.",
+      "response": "-6",
+      "passed": false,
+      "detail": "expected=-14 in response=-6"
+    },
+    {
+      "id": "matrix_transpose",
+      "category": "matrix",
+      "prompt": "Transpose the matrix [[1,2,3],[4,5,6],[7,8,9]]. Return ONLY the result in the format [[a,b,c],[d,e,f],[g,h,i]].",
+      "response": "[[1,4,7],[2,5,8],[3,6,9]]",
+      "passed": true,
+      "detail": "expected=[[1,4,7],[2,5,8],[3,6,9]] last_line=[[1,4,7],[2,5,8],[3,6,9]]"
+    },
+    {
+      "id": "matrix_inverse_2x2",
+      "category": "matrix",
+      "prompt": "What is the inverse of the matrix [[4,7],[2,6]]? Return the result as [[a,b],[c,d]] with fractions or decimals. No explanation.",
+      "response": "[[3/10, -7/20], [-1/10, 2/5]]",
+      "passed": true,
+      "detail": "matched=['2/5'] in response=[[3/10, -7/20], [-1/10, 2/5]]"
+    },
+    {
+      "id": "matrix_trace",
+      "category": "matrix",
+      "prompt": "What is the trace of [[5,1,2],[0,3,1],[2,0,7]]? Return ONLY the number.",
+      "response": "5 + 3 + 7 = **15**",
+      "passed": true,
+      "detail": "expected=15 in response=5 + 3 + 7 = **15**"
+    },
+    {
+      "id": "math_arithmetic",
+      "category": "math",
+      "prompt": "What is 347 \u00d7 283? Return ONLY the number.",
+      "response": "98221",
+      "passed": false,
+      "detail": "expected=98201 in response=98221"
+    },
+    {
+      "id": "math_prime",
+      "category": "math",
+      "prompt": "Is 997 a prime number? Answer ONLY 'yes' or 'no'.",
+      "response": "yes",
+      "passed": true,
+      "detail": "expected='yes' in response=yes"
+    },
+    {
+      "id": "math_sqrt",
+      "category": "math",
+      "prompt": "What is the square root of 1764? Return ONLY the integer.",
+      "response": "42",
+      "passed": true,
+      "detail": "expected=42 in response=42"
+    },
+    {
+      "id": "math_sequence",
+      "category": "math",
+      "prompt": "What is the next number in the sequence: 2, 6, 18, 54, ...? Return ONLY the number.",
+      "response": "162",
+      "passed": true,
+      "detail": "expected=162 in response=162"
+    },
+    {
+      "id": "math_fraction",
+      "category": "math",
+      "prompt": "Simplify the fraction 84/126. Return ONLY the simplified fraction.",
+      "response": "$\\frac{2}{3}$",
+      "passed": false,
+      "detail": "expected='2/3' in response=$\\frac{2}{3}$"
+    },
+    {
+      "id": "fact_capital",
+      "category": "factual",
+      "prompt": "What is the capital of Slovenia? Return ONLY the city name.",
+      "response": "Ljubljana",
+      "passed": true,
+      "detail": "expected='ljubljana' in response=Ljubljana"
+    },
+    {
+      "id": "fact_element",
+      "category": "factual",
+      "prompt": "What is the chemical symbol for tungsten? Return ONLY the symbol.",
+      "response": "W",
+      "passed": true,
+      "detail": "expected='w' in response=W"
+    },
+    {
+      "id": "fact_year",
+      "category": "factual",
+      "prompt": "In what year was the Euro currency introduced for electronic transactions? Return ONLY the year.",
+      "response": "2002",
+      "passed": false,
+      "detail": "expected=1999 in response=2002"
+    },
+    {
+      "id": "fact_planet",
+      "category": "factual",
+      "prompt": "Which planet in our solar system has the most moons? Return ONLY the planet name.",
+      "response": "Jupiter",
+      "passed": false,
+      "detail": "expected='saturn' in response=Jupiter"
+    },
+    {
+      "id": "fact_gdpr",
+      "category": "factual",
+      "prompt": "What is the maximum fine under GDPR as a percentage of global annual turnover? Return ONLY the percentage.",
+      "response": "4%",
+      "passed": true,
+      "detail": "expected='4%' in response=4%"
+    },
+    {
+      "id": "logic_syllogism",
+      "category": "logic",
+      "prompt": "All roses are flowers. Some flowers fade quickly. Can we conclude that some roses fade quickly? Answer ONLY 'yes' or 'no'.",
+      "response": "no",
+      "passed": true,
+      "detail": "expected='no' in response=no"
+    },
+    {
+      "id": "logic_sequence",
+      "category": "logic",
+      "prompt": "If A=1, B=2, C=3... what is the sum of the letters in 'EULLM'? Return ONLY the number.",
+      "response": "We are given a simple letter-to-number mapping:\n\n- A = 1  \n- B = 2  \n- C = 3  \n- D = 4  \n- E = 5  \n- F = 6  \n- G = 7  \n- H = 8  \n- I = 9  \n- J = 10  \n- K = 11  \n- L = 12  \n- M = 13  \n\nNow, we are asked to find the sum of the letters in **'EULLM'**.\n\nLet's break it down:\n\n- E = 5  \n- U = 21  \n- L = 12  \n- L = 12  \n- M = 13  \n\nNow, sum them up:\n\n$$\n5 + 21 + 12 + 12 + 13 = \\boxed{63}\n$$\n\n**Answer:** 63",
+      "passed": true,
+      "detail": "expected=63 in response=**Answer:** 63"
+    },
+    {
+      "id": "logic_pattern",
+      "category": "logic",
+      "prompt": "Complete the pattern: 1, 1, 2, 3, 5, 8, 13, __. Return ONLY the number.",
+      "response": "21",
+      "passed": true,
+      "detail": "expected=21 in response=21"
+    },
+    {
+      "id": "code_fizzbuzz",
+      "category": "code",
+      "prompt": "What does FizzBuzz output for the number 15? Return ONLY the output word.",
+      "response": "FizzBuzz",
+      "passed": true,
+      "detail": "expected='fizzbuzz' in response=FizzBuzz"
+    },
+    {
+      "id": "code_regex",
+      "category": "code",
+      "prompt": "Write a regex that matches a valid IPv4 address. Return ONLY the regex pattern, nothing else.",
+      "response": "```\n^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?| [0-9]?)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]?|[0-9]?)$\n```",
+      "passed": true,
+      "detail": "matched=['[0-9]', '\\\\.'] in response=```"
+    }
+  ]
+}
