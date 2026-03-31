@@ -23,14 +23,18 @@ Usage:
     --url http://localhost:11434 --model Qwen3-9B-Q4_K_M \\
     --label F16_direct --filler 0
 
-  # Full test
+  # Full test with filler (start engine with desired --cache-type-k/v first)
+  # F16:   ./eullm-tq run qwen3-14b.gguf --cache-type-k f16   --cache-type-v f16   ...
+  # TQ4_0: ./eullm-tq run qwen3-14b.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 ...
+  # TQ3_0: ./eullm-tq run qwen3-14b.gguf --cache-type-k tq3_0 --cache-type-v tq3_0 ...
   python bench/turboquant_math_accuracy.py collect \\
-    --url http://localhost:11434 --model Qwen3-9B-Q4_K_M \\
-    --label F16 --filler 200,500,1000
+    --label f16 --filler 200,500,1000 -o bench/results/math_f16.json
+  python bench/turboquant_math_accuracy.py collect \\
+    --label tq4_0 --filler 200,500,1000 -o bench/results/math_tq4_0.json
 
   # Compare
   python bench/turboquant_math_accuracy.py compare \\
-    bench/results/math_f16.json bench/results/math_tq4.json
+    bench/results/math_f16.json bench/results/math_tq4_0.json
 """
 
 import argparse
