@@ -366,7 +366,7 @@ async def send_prompt(session, url, model, prompt, temperature, system_prompt, t
 
 async def collect(args):
     random.seed(0)
-    filler_levels = [int(x) for x in args.filler.split(",")]
+    filler_levels = [int(x) for x in args.filler.split(",") if x]
     tests = build_tests(
         filler_levels,
         matrix_sizes=args.matrix_sizes,
@@ -636,9 +636,9 @@ Examples:
     args = parser.parse_args()
 
     if args.command == "collect":
-        # Parse filler levels, filtering out 0 for the delayed tests
         raw = [int(x) for x in args.filler.split(",")]
-        args.filler = ",".join(str(x) for x in raw if x > 0)
+        filtered = [x for x in raw if x > 0]
+        args.filler = ",".join(str(x) for x in filtered) if filtered else ""
         asyncio.run(collect(args))
     elif args.command == "compare":
         compare(args)
