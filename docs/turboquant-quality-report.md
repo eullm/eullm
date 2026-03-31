@@ -86,7 +86,7 @@ Matrix operations test precise numerical computation through attention patterns.
 | 15 | log₂(256) → 8 | PASS | PASS | PASS |
 | 16 | 7³ → 343 | PASS | PASS | PASS |
 | 17 | Primes 1..20 → 8 | PASS | PASS | PASS |
-| 18 | |-7| + |3| → 10 | PASS | PASS | PASS |
+| 18 | abs(-7) + abs(3) → 10 | PASS | PASS | PASS |
 | 19 | 0.75 → 75% | FAIL | FAIL | FAIL |
 | 20 | 10th Fibonacci → 55 | FAIL | FAIL | FAIL |
 
