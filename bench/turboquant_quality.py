@@ -186,37 +186,57 @@ TESTS = [
 
 # ── Answer checking ──────────────────────────────────────────────────────────
 
+def strip_thinking(s: str) -> str:
+    """Remove <think>...</think> blocks (Qwen3 thinking mode)."""
+    import re
+    return re.sub(r'<think>.*?</think>', '', s, flags=re.DOTALL).strip()
+
+
 def normalize(s: str) -> str:
-    """Remove whitespace, newlines, backticks, and lowercase."""
-    return s.replace(" ", "").replace("\n", "").replace("`", "").replace("*", "").strip().lower()
+    """Remove whitespace, newlines, backticks, markdown, and lowercase."""
+    s = strip_thinking(s)
+    s = s.replace(" ", "").replace("\n", "").replace("`", "").replace("*", "")
+    s = s.replace("\\times", "×").replace("\\cdot", "·")
+    return s.strip().lower()
+
+
+def extract_last_line(s: str) -> str:
+    """Get the last non-empty line — often the actual answer after explanation."""
+    s = strip_thinking(s)
+    lines = [l.strip() for l in s.strip().split('\n') if l.strip()]
+    return lines[-1] if lines else s
 
 
 def check_answer(test: dict, response: str) -> tuple[bool, str]:
     """Check if the response matches the expected answer. Returns (pass, detail)."""
     mode = test["check"]
-    resp = response.strip()
+    resp = strip_thinking(response).strip()
+    resp_last = extract_last_line(response)
 
     if mode == "exact_normalized":
         expected = normalize(test["expected"])
-        actual = normalize(resp)
-        ok = expected in actual
-        return ok, f"expected={test['expected']} got_normalized={actual[:80]}"
+        # Check full response AND last line (model may explain then give answer)
+        actual_full = normalize(resp)
+        actual_last = normalize(resp_last)
+        ok = expected in actual_full or expected in actual_last
+        return ok, f"expected={test['expected']} last_line={resp_last[:80]}"
 
     elif mode == "contains_number":
         expected = test["expected"]
-        ok = expected in resp
-        return ok, f"expected={expected} in response={resp[:80]}"
+        ok = expected in resp or expected in resp_last
+        return ok, f"expected={expected} in response={resp_last[:80]}"
 
     elif mode == "contains_word":
         expected = test["expected"].lower()
-        ok = expected in resp.lower()
-        return ok, f"expected='{expected}' in response={resp[:80]}"
+        ok = expected in resp.lower() or expected in resp_last.lower()
+        return ok, f"expected='{expected}' in response={resp_last[:80]}"
 
     elif mode == "contains_any":
         candidates = test["expected_contains"]
-        ok = any(c.lower() in resp.lower() for c in candidates)
-        matched = [c for c in candidates if c.lower() in resp.lower()]
-        return ok, f"matched={matched} in response={resp[:80]}"
+        combined = resp.lower() + " " + resp_last.lower()
+        ok = any(c.lower() in combined for c in candidates)
+        matched = [c for c in candidates if c.lower() in combined]
+        return ok, f"matched={matched} in response={resp_last[:80]}"
 
     return False, "unknown check mode"
 
