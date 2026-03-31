@@ -250,6 +250,7 @@ async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
+        "think": False,
         "options": {"temperature": temperature, "num_predict": 256},
     }
     try:
