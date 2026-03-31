@@ -360,10 +360,27 @@ No compilation. No patch to llama.cpp. Download the binary, add two flags, done.
   <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TTFT comparison" width="680" />
 </p>
 
+### Quality impact
+
+100 verified tests, temperature=0. The only variable: KV cache type.
+
+<p align="center">
+  <img src="bench/results/chart_quality_comparison.png" alt="Quality: F16=86%, TQ4_0=85%, TQ3_0=85%" width="720" />
+</p>
+
+| Cache | Score | Matrix | Math | Factual | Logic | Code |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| F16 | **86%** | 18/20 | 18/20 | 15/20 | 17/20 | 18/20 |
+| TQ4_0 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
+| TQ3_0 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
+
+**1% degradation, isolated to matrix operations.** Math, factual, logic, and code are identical across all cache types. Full test-by-test analysis: [docs/turboquant-quality-report.md](docs/turboquant-quality-report.md).
+
 ### Trade-off
 
 TurboQuant trades throughput for context capacity:
 
+- **-1% accuracy** (matrix ops only, all other categories identical)
 - **~19% less tok/s** at 4 concurrent requests (73 vs 90 tok/s)
 - **4.3x more context** (131K vs 30K)
 - **4x more concurrent users** on the same GPU
