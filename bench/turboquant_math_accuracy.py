@@ -286,7 +286,7 @@ async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
 
 async def collect(args):
     random.seed(0)
-    filler_levels = [int(x) for x in args.filler.split(",") if x]
+    filler_levels = [int(x) for x in args.filler.split(",") if x and int(x) > 0]
     tests = build_tests(filler_levels, skip_3x3=args.skip_3x3, skip_scalar=args.skip_scalar)
 
     print(f"TurboQuant Math Accuracy Test")
