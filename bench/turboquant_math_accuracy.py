@@ -445,7 +445,7 @@ def main():
 
     c = sub.add_parser("collect")
     c.add_argument("--url", default="http://localhost:11434")
-    c.add_argument("--model", default="Qwen3-9B-Q4_K_M")
+    c.add_argument("--model", default="qwen3-14b")
     c.add_argument("--label", required=True)
     c.add_argument("--temperature", type=float, default=0.0)
     c.add_argument("--filler", default="200,500,1000",
