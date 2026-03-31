@@ -265,14 +265,16 @@ def build_tests(filler_levels, skip_3x3=False, skip_scalar=False):
 # ── API client (mirrors turboquant_quality.py) ────────────────────────────────
 
 async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
-                      prompt: str, temperature: float = 0.0) -> str:
+                      prompt: str, temperature: float = 0.0,
+                      think: bool = False) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "think": False,
         "options": {"temperature": temperature, "num_predict": 256},
     }
+    if think is not None:
+        payload["think"] = think
     try:
         async with session.post(
             f"{url}/api/chat", json=payload,
@@ -293,11 +295,14 @@ async def collect(args):
     filler_levels = [int(x) for x in args.filler.split(",") if x and int(x) > 0]
     tests = build_tests(filler_levels, skip_3x3=args.skip_3x3, skip_scalar=args.skip_scalar)
 
+    think = None if args.no_think else False
+
     print(f"TurboQuant Math Accuracy Test")
     print(f"  URL:   {args.url}")
     print(f"  Model: {args.model}")
     print(f"  Label: {args.label}")
     print(f"  Tests: {len(tests)}  filler={filler_levels}")
+    print(f"  think: {'omitted (non-Qwen3)' if think is None else think}")
     print()
 
     results = []
@@ -306,7 +311,7 @@ async def collect(args):
     async with aiohttp.ClientSession() as session:
         for test in tests:
             response = await send_prompt(session, args.url, args.model,
-                                         test["prompt"], args.temperature)
+                                         test["prompt"], args.temperature, think)
             passed, detail = check_answer(test, response)
 
             status = "PASS" if passed else "FAIL"
@@ -456,6 +461,9 @@ def main():
                    help="Comma-separated filler token counts (0 = direct only)")
     c.add_argument("--skip-3x3", action="store_true")
     c.add_argument("--skip-scalar", action="store_true")
+    c.add_argument("--no-think", action="store_true",
+                   help="Omit 'think' field from payload (for non-Qwen3 models: "
+                        "Qwen2.5-Math, DeepSeek-Math, etc.)")
     c.add_argument("--output", "-o")
     c.add_argument("--verbose", "-v", action="store_true")
 
