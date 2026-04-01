@@ -87,27 +87,23 @@ impl ModelStore {
 
         // Check manifest for recorded gguf_file
         let manifest_path = model_dir.join("manifest.json");
-        if manifest_path.exists() {
-            if let Ok(data) = fs::read_to_string(&manifest_path) {
-                if let Ok(manifest) = serde_json::from_str::<ModelManifest>(&data) {
-                    if let Some(ref gguf) = manifest.gguf_file {
-                        let path = model_dir.join(gguf);
-                        if path.exists() {
-                            return Some(path);
-                        }
-                    }
-                }
+        if manifest_path.exists()
+            && let Ok(data) = fs::read_to_string(&manifest_path)
+            && let Ok(manifest) = serde_json::from_str::<ModelManifest>(&data)
+            && let Some(ref gguf) = manifest.gguf_file
+        {
+            let path = model_dir.join(gguf);
+            if path.exists() {
+                return Some(path);
             }
         }
 
         // Fallback: look for any .gguf file in the model directory
-        if model_dir.is_dir() {
-            if let Ok(entries) = fs::read_dir(&model_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|e| e == "gguf") {
-                        return Some(path);
-                    }
+        if model_dir.is_dir() && let Ok(entries) = fs::read_dir(&model_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|e| e == "gguf") {
+                    return Some(path);
                 }
             }
         }
