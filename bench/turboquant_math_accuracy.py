@@ -302,7 +302,7 @@ def build_tests(filler_levels, skip_3x3=False, skip_scalar=False):
 
 async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
                       prompt: str, temperature: float = 0.0,
-                      think: bool = False, num_predict: int = 512) -> str:
+                      think: bool = False, num_predict: int = 2048) -> str:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -501,7 +501,7 @@ def main():
     c.add_argument("--no-think", action="store_true",
                    help="Omit 'think' field from payload (for non-Qwen3 models: "
                         "Qwen2.5-Math, DeepSeek-Math, etc.)")
-    c.add_argument("--num-predict", type=int, default=512,
+    c.add_argument("--num-predict", type=int, default=2048,
                    help="Max tokens to generate per response (default: 512). "
                         "Use 1024 for math models that show full working.")
     c.add_argument("--output", "-o")
