@@ -302,7 +302,7 @@ def build_tests(filler_levels, skip_3x3=False, skip_scalar=False):
 
 async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
                       prompt: str, temperature: float = 0.0,
-                      think: bool = False, num_predict: int = 2048) -> str:
+                      think: bool = False, num_predict: int = 2048) -> tuple[str, dict]:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -317,11 +317,17 @@ async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
             timeout=aiohttp.ClientTimeout(total=120)
         ) as resp:
             if resp.status != 200:
-                return f"[ERROR: HTTP {resp.status}]"
+                return f"[ERROR: HTTP {resp.status}]", {}
             data = await resp.json()
-            return data.get("message", {}).get("content", "[no content]")
+            timing = {
+                "eval_count":            data.get("eval_count", 0),
+                "eval_duration_ns":      data.get("eval_duration", 0),
+                "prompt_eval_count":     data.get("prompt_eval_count", 0),
+                "prompt_eval_duration_ns": data.get("prompt_eval_duration", 0),
+            }
+            return data.get("message", {}).get("content", "[no content]"), timing
     except Exception as e:
-        return f"[ERROR: {e}]"
+        return f"[ERROR: {e}]", {}
 
 
 # ── Collect ───────────────────────────────────────────────────────────────────
@@ -343,12 +349,15 @@ async def collect(args):
 
     results = []
     cats: dict[str, dict] = {}
+    run_start = time.time()
 
     async with aiohttp.ClientSession() as session:
         for test in tests:
-            response = await send_prompt(session, args.url, args.model,
-                                         test["prompt"], args.temperature,
-                                         think, args.num_predict)
+            t0 = time.time()
+            response, timing = await send_prompt(session, args.url, args.model,
+                                                 test["prompt"], args.temperature,
+                                                 think, args.num_predict)
+            latency_s = time.time() - t0
             passed, detail = check_answer(test, response)
 
             status = "PASS" if passed else "FAIL"
@@ -362,6 +371,10 @@ async def collect(args):
             fl_s = f"filler={fl:>5}t" if fl else "direct       "
             print(f"  [{status}] {test['id']:<42} {fl_s}  {detail[:60]}")
 
+            eval_toks = timing.get("eval_count", 0)
+            eval_ns   = timing.get("eval_duration_ns", 0)
+            tps = eval_toks / (eval_ns / 1e9) if eval_ns > 0 else 0.0
+
             results.append({
                 "id": test["id"],
                 "category": cat,
@@ -371,6 +384,10 @@ async def collect(args):
                 "expected": test["expected"],
                 "detail": detail,
                 "response_preview": strip_thinking(response)[:300],
+                "latency_s": latency_s,
+                "eval_tokens": eval_toks,
+                "tokens_per_sec": tps,
+                "prompt_tokens": timing.get("prompt_eval_count", 0),
             })
 
     total_pass = sum(1 for r in results if r["passed"])
@@ -413,6 +430,19 @@ async def collect(args):
                 row[sub] = f"{sum(1 for r in m if r['passed'])}/{len(m)}" if m else "-"
             print(f"  {fl:>6}t   {row['matrix_2x2']:>10} {row['matrix_3x3']:>10} {row['scalar']:>10}")
 
+    # Timing summary
+    total_wall = time.time() - run_start
+    timed = [r for r in results if r["latency_s"] > 0]
+    if timed:
+        latencies = [r["latency_s"] for r in timed]
+        tps_vals  = [r["tokens_per_sec"] for r in timed if r["tokens_per_sec"] > 0]
+        print(f"\n  Throughput:")
+        print(f"  {'Total wall time':<28} {total_wall:>7.1f}s")
+        print(f"  {'Requests':<28} {len(timed):>7}")
+        print(f"  {'Latency mean/min/max (s)':<28} {sum(latencies)/len(latencies):>5.1f} / {min(latencies):>4.1f} / {max(latencies):>4.1f}")
+        if tps_vals:
+            print(f"  {'Tokens/sec mean/min/max':<28} {sum(tps_vals)/len(tps_vals):>5.1f} / {min(tps_vals):>4.1f} / {max(tps_vals):>4.1f}")
+
     if args.verbose:
         failed = [r for r in results if not r["passed"]]
         if failed:
@@ -430,6 +460,11 @@ async def collect(args):
         "filler_levels": filler_levels,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "score": {"passed": total_pass, "total": total, "percent": pct},
+        "timing": {
+            "total_wall_s": round(total_wall, 2),
+            "latency_mean_s": round(sum(latencies) / len(latencies), 2) if timed else None,
+            "tokens_per_sec_mean": round(sum(tps_vals) / len(tps_vals), 1) if tps_vals else None,
+        },
         "categories": cats,
         "results": results,
     }
