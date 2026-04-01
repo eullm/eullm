@@ -108,18 +108,19 @@ pub fn patch_gguf_if_needed(src: &Path, dst: &Path) -> io::Result<bool> {
             };
 
             // Check if this key needs fixing
-            if let Some(&(_, target)) = KNOWN_FIXES.iter().find(|&&(k, _)| k == key.as_str()) {
-                if count < target && elem_sz > 0 {
-                    patches.push(ArrayPatch {
-                        count_offset,
-                        current_count: count,
-                        target_count: target,
-                        elem_size: elem_sz,
-                    });
-                    tracing::info!(
-                        "GGUF patch: {key} has {count} elements, extending to {target}"
-                    );
-                }
+            if let Some(&(_, target)) = KNOWN_FIXES.iter().find(|&&(k, _)| k == key.as_str())
+                && count < target
+                && elem_sz > 0
+            {
+                patches.push(ArrayPatch {
+                    count_offset,
+                    current_count: count,
+                    target_count: target,
+                    elem_size: elem_sz,
+                });
+                tracing::info!(
+                    "GGUF patch: {key} has {count} elements, extending to {target}"
+                );
             }
         } else {
             skip_gguf_value(&mut f, vtype)?;
