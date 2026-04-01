@@ -132,7 +132,8 @@ TURBO_CUH="${SYS_CRATE_DIR}/llama.cpp/ggml/src/ggml-cuda/turbo-quant-cuda.cuh"
 if [ -f "$TURBO_CUH" ]; then
     COUNT=$(grep -c "turbo_rotate_forward_cuda(x," "$TURBO_CUH" || true)
     if [ "$COUNT" -gt 0 ]; then
-        sed -i 's/^\(\s*\)turbo_rotate_forward_cuda(x,/\1\/\/ EULLM-FIX(bug7-rotation-mismatch): turbo_rotate_forward_cuda(x,/' "$TURBO_CUH"
+        sed 's/^\(\s*\)turbo_rotate_forward_cuda(x,/\1\/\/ EULLM-FIX(bug7-rotation-mismatch): turbo_rotate_forward_cuda(x,/' \
+            "$TURBO_CUH" > "${TURBO_CUH}.tmp" && mv "${TURBO_CUH}.tmp" "$TURBO_CUH"
         PATCHED=$(grep -c "EULLM-FIX(bug7-rotation-mismatch)" "$TURBO_CUH" || true)
         echo "  Applied Bug#7 rotation-mismatch fix: commented out $PATCHED turbo_rotate_forward_cuda call(s)"
         if [ "$PATCHED" -lt "$COUNT" ]; then

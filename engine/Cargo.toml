@@ -1,7 +1,7 @@
 [package]
 name = "eullm-engine"
 version = "0.3.3"
-edition = "2021"
+edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"
 repository = "https://github.com/eullm/eullm"
