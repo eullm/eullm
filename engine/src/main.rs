@@ -254,11 +254,11 @@ async fn main() {
             // Mixed TurboQuant types (e.g. K=tq4_0, V=tq3_0) are valid:
             // K needs more precision (attention scores), V tolerates more compression.
             // Warn the user, but allow it — fallback handles failures gracefully.
-            if let (inference::KvCacheType::Unknown(k_id), inference::KvCacheType::Unknown(v_id)) = (&ctk, &ctv) {
-                if k_id != v_id {
-                    eprintln!("Note: mixed TurboQuant KV cache (K={cache_type_k}, V={cache_type_v}).");
-                    eprintln!("  Advanced config — if OOM, will fallback to uniform type then F16.");
-                }
+            if let (inference::KvCacheType::Unknown(k_id), inference::KvCacheType::Unknown(v_id)) = (&ctk, &ctv)
+                && k_id != v_id
+            {
+                eprintln!("Note: mixed TurboQuant KV cache (K={cache_type_k}, V={cache_type_v}).");
+                eprintln!("  Advanced config — if OOM, will fallback to uniform type then F16.");
             }
             cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
         }
@@ -499,15 +499,14 @@ async fn detect_port_service(port: u16) -> Option<String> {
     }
 
     let url = format!("http://127.0.0.1:{port}/api/version");
-    if let Ok(resp) = reqwest::get(&url).await {
-        if let Ok(body) = resp.text().await {
-            if body.contains("version") {
-                if body.contains("eullm") {
-                    return Some("eullm (already running)".into());
-                }
-                return Some(format!("another service (response: {body})"));
-            }
+    if let Ok(resp) = reqwest::get(&url).await
+        && let Ok(body) = resp.text().await
+        && body.contains("version")
+    {
+        if body.contains("eullm") {
+            return Some("eullm (already running)".into());
         }
+        return Some(format!("another service (response: {body})"));
     }
 
     Some("unknown service".into())

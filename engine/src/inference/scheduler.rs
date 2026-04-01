@@ -569,10 +569,10 @@ fn run_scheduler_loop(
         decode_batch.clear();
 
         for seq in active.iter() {
-            if let Some(token) = seq.last_token {
-                if decode_batch.add(token, seq.n_past, &[seq.seq_id], true).is_err() {
-                    tracing::warn!("Failed to add token to batch for seq {}", seq.seq_id);
-                }
+            if let Some(token) = seq.last_token
+                && decode_batch.add(token, seq.n_past, &[seq.seq_id], true).is_err()
+            {
+                tracing::warn!("Failed to add token to batch for seq {}", seq.seq_id);
             }
         }
 
