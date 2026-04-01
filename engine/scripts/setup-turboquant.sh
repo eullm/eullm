@@ -116,40 +116,7 @@ else
     echo "  thinking_forced_open already present in fork headers"
 fi
 
-# 6. Bug#7 fix: comment out turbo_rotate_forward_cuda calls in turbo-quant-cuda.cuh
-#
-#    The spiritbuun fork applies a forward Walsh-Hadamard Transform (FWHT)
-#    when writing K vectors to the cache (in quantize_f32_turbo4_0_block and
-#    k_set_rows_turbo3) but never applies the inverse rotation when reading them
-#    back.  This means stored K vectors are in rotated space while Q vectors are
-#    in original space, so Q·K^T is computed across mismatched bases and produces
-#    completely wrong attention scores.
-#
-#    Fix: disable the forward rotation so both Q and K stay in original space.
-#    This trades the WHT-distribution benefit for correctness — TurboQuant still
-#    compresses via Lloyd-Max scalar quantization, just without WHT pre-rotation.
-TURBO_CUH="${SYS_CRATE_DIR}/llama.cpp/ggml/src/ggml-cuda/turbo-quant-cuda.cuh"
-if [ -f "$TURBO_CUH" ]; then
-    COUNT=$(grep -c "turbo_rotate_forward_cuda(x," "$TURBO_CUH" || true)
-    if [ "$COUNT" -gt 0 ]; then
-        sed 's/^\([[:space:]]*\)turbo_rotate_forward_cuda(x,/\1\/\/ EULLM-FIX(bug7-rotation-mismatch): turbo_rotate_forward_cuda(x,/' \
-            "$TURBO_CUH" > "${TURBO_CUH}.tmp" && mv "${TURBO_CUH}.tmp" "$TURBO_CUH"
-        PATCHED=$(grep -c "EULLM-FIX(bug7-rotation-mismatch)" "$TURBO_CUH" || true)
-        echo "  Applied Bug#7 rotation-mismatch fix: commented out $PATCHED turbo_rotate_forward_cuda call(s)"
-        if [ "$PATCHED" -lt "$COUNT" ]; then
-            echo "ERROR: Expected to patch $COUNT call(s) but only patched $PATCHED"
-            exit 1
-        fi
-        echo "  -> OK"
-    else
-        echo "  turbo_rotate_forward_cuda calls not found (already patched or fork changed)"
-    fi
-else
-    echo "WARNING: turbo-quant-cuda.cuh not found at expected path, skipping Bug#7 fix"
-    echo "  Expected: $TURBO_CUH"
-fi
-
-# 7. Verify TurboQuant types exist in the fork
+# 6. Verify TurboQuant types exist in the fork
 if grep -q "GGML_TYPE_TURBO3_0" "${SYS_CRATE_DIR}/llama.cpp/ggml/include/ggml.h"; then
     echo "Verified: GGML_TYPE_TURBO3_0 found in fork"
 else
@@ -157,7 +124,7 @@ else
     exit 1
 fi
 
-# 8. Activate [patch.crates-io] in Cargo.toml
+# 7. Activate [patch.crates-io] in Cargo.toml
 #    Uncomment the patch section so cargo uses the vendored fork
 #    instead of the standard crate from crates.io.
 if grep -q '^# \[patch.crates-io\]' "$CARGO_TOML"; then
@@ -175,7 +142,7 @@ llama-cpp-sys-2 = { path = "${PATCH_PATH}" }
 PATCH
 fi
 
-# 9. Verify the patch is active
+# 8. Verify the patch is active
 if grep -q "llama-cpp-sys-2" "$CARGO_TOML" && \
    grep -q "^\[patch.crates-io\]" "$CARGO_TOML"; then
     echo "Verified: [patch.crates-io] is active"
