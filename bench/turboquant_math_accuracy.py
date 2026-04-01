@@ -13,23 +13,37 @@ If a model passes (2) in F16 but fails in TurboQuant, the issue is KV corruption
 
 Tests
 ─────
-A. 2×2 matrix multiplication × 5 different matrix pairs
-B. 3×3 matrix multiplication × 3 pairs
-C. Scalar arithmetic chains  × 5 expressions
-D. All of the above with filler (200 / 500 / 1000 tokens)
+A. 2×2 matrix multiplication × 5 pairs       — direct and delayed
+B. 3×3 matrix multiplication × 3 pairs       — direct and delayed
+C. Scalar arithmetic chains  × 5 expressions — direct and delayed
 
-Answer format handling
-──────────────────────
-Accepts:  [[a,b],[c,d]]  |  [[a, b], [c, d]]  |  rows on lines  |  \\boxed{...}
+Usage:
+  # Direct only (no filler) — fastest baseline
+  python bench/turboquant_math_accuracy.py collect \\
+    --url http://localhost:11434 --model Qwen3-9B-Q4_K_M \\
+    --label F16_direct --filler 0
+
+  # Full test with filler (start engine with desired --cache-type-k/v first)
+  # F16:   ./eullm-tq run qwen3-14b.gguf --cache-type-k f16   --cache-type-v f16   ...
+  # TQ4_0: ./eullm-tq run qwen3-14b.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 ...
+  # TQ3_0: ./eullm-tq run qwen3-14b.gguf --cache-type-k tq3_0 --cache-type-v tq3_0 ...
+  python bench/turboquant_math_accuracy.py collect \\
+    --label f16 --filler 200,500,1000 -o bench/results/math_f16.json
+  python bench/turboquant_math_accuracy.py collect \\
+    --label tq4_0 --filler 200,500,1000 -o bench/results/math_tq4_0.json
+
+  # Compare
+  python bench/turboquant_math_accuracy.py compare \\
+    bench/results/math_f16.json bench/results/math_tq4_0.json
 """
 
 import argparse
 import asyncio
 import json
+import random
 import re
 import sys
 import time
-import random
 
 try:
     import aiohttp
@@ -43,14 +57,14 @@ except ImportError:
 FILLER_PARAGRAPHS = [
     "The European Union's digital strategy aims to make this transformation work for people and businesses, while helping to achieve its target of a climate-neutral Europe by 2050. The Commission has outlined key policies and frameworks to guide this transition.",
     "Recent advances in semiconductor manufacturing have enabled the production of chips at the 3nm node, dramatically increasing transistor density while reducing power consumption. TSMC, Samsung, and Intel are competing to deliver these next-generation processors.",
-    "The Mediterranean basin is home to approximately 25,000 plant species, of which about 50% are endemic. This biodiversity hotspot faces threats from urbanisation, agricultural intensification, and climate change. Conservation efforts include marine protected areas.",
+    "The Mediterranean basin is home to approximately 25,000 plant species, of which about 50% are endemic. This biodiversity hotspot faces threats from urbanisation, agricultural intensification, and climate change.",
     "Cloud computing has fundamentally changed how organisations deploy and manage IT infrastructure. The shift from capital expenditure to operational expenditure models has enabled startups and enterprises alike to scale their operations globally.",
-    "Italian Renaissance art underwent several distinct phases, from the early experiments of Giotto in the 13th century to the High Renaissance works of Leonardo, Michelangelo, and Raphael. Linear perspective transformed the representation of space.",
+    "Italian Renaissance art underwent several distinct phases, from the early experiments of Giotto in the 13th century to the High Renaissance works of Leonardo, Michelangelo, and Raphael.",
     "The carbon cycle involves the exchange of carbon between the atmosphere, oceans, terrestrial biosphere, and geological formations. Anthropogenic emissions have disrupted this cycle, leading to an increase in atmospheric CO2 concentrations.",
-    "Quantum computing leverages quantum mechanical phenomena such as superposition and entanglement to perform computations that would be impractical for classical computers. Researchers have demonstrated quantum advantage for specific problems.",
-    "The logistics industry handles approximately 65 billion parcels annually worldwide, with e-commerce driving a significant portion of this volume. Last-mile delivery remains the most expensive segment, accounting for up to 53% of total shipping costs.",
-    "Volcanic activity along tectonic plate boundaries shapes the Earth's surface through both constructive and destructive processes. The Ring of Fire contains approximately 75% of the world's active volcanoes and accounts for about 90% of earthquakes.",
-    "Machine learning models for natural language processing have grown exponentially in size. This scaling has been accompanied by emergent capabilities including in-context learning, chain-of-thought reasoning, and cross-lingual transfer.",
+    "Quantum computing leverages quantum mechanical phenomena such as superposition and entanglement to perform computations that would be impractical for classical computers.",
+    "The logistics industry handles approximately 65 billion parcels annually worldwide, with e-commerce driving a significant portion of this volume. Last-mile delivery remains the most expensive segment.",
+    "Volcanic activity along tectonic plate boundaries shapes the Earth's surface through both constructive and destructive processes. The Ring of Fire contains approximately 75% of the world's active volcanoes.",
+    "Machine learning models for natural language processing have grown exponentially in size. This scaling has been accompanied by emergent capabilities including in-context learning and chain-of-thought reasoning.",
 ]
 
 
@@ -65,347 +79,277 @@ def generate_filler(target_tokens: int) -> str:
     return "\n\n".join(paragraphs)
 
 
-# ── Answer normalisation ──────────────────────────────────────────────────────
+# ── Answer checking (mirrors turboquant_quality.py) ───────────────────────────
 
 def strip_thinking(s: str) -> str:
     return re.sub(r'<think>.*?</think>', '', s, flags=re.DOTALL).strip()
 
 
-def extract_boxed(s: str) -> str:
-    """Extract content from \\boxed{...} or $\\boxed{...}$."""
-    m = re.search(r'\\boxed\{([^}]+)\}', s)
-    return m.group(1) if m else ""
-
-
-def normalise_matrix(s: str) -> str:
-    """
-    Normalise a matrix string to [[a,b],[c,d]] canonical form.
-
-    Handles:
-      [[21, 29], [32, 44]]
-      21 29 / 32 44
-      21 29\n32 44
-      \\begin{pmatrix}21 & 29 \\\\ 32 & 44\\end{pmatrix}
-      \\boxed{[[21,29],[32,44]]}
-    """
+def normalize(s: str) -> str:
     s = strip_thinking(s)
-    boxed = extract_boxed(s)
-    if boxed:
-        s = boxed + " " + s  # try boxed content first
-
-    # Remove markdown fences, backticks
-    s = re.sub(r'```[^\n]*\n?', '', s)
-    s = s.replace('`', '').replace('*', '')
-
-    # Try to find a bracketed matrix directly
-    m = re.findall(r'\[\s*\[[\d,\s\-]+\]\s*,\s*\[[\d,\s\-]+\]\s*\]', s)
-    if m:
-        # Take the last match (often the final answer)
-        raw = m[-1]
-        nums = [int(x) for x in re.findall(r'-?\d+', raw)]
-        if len(nums) == 4:
-            return f"[[{nums[0]},{nums[1]}],[{nums[2]},{nums[3]}]]"
-        if len(nums) == 9:
-            return (f"[[{nums[0]},{nums[1]},{nums[2]}],"
-                    f"[{nums[3]},{nums[4]},{nums[5]}],"
-                    f"[{nums[6]},{nums[7]},{nums[8]}]]")
-
-    # Try LaTeX pmatrix / bmatrix
-    m = re.search(
-        r'(?:p|b|v)?matrix\}(.*?)\\end\{(?:p|b|v)?matrix\}', s, re.DOTALL)
-    if m:
-        inner = m.group(1)
-        rows = [r.strip() for r in re.split(r'\\\\', inner) if r.strip()]
-        nums = []
-        for row in rows:
-            nums.append([int(x) for x in re.findall(r'-?\d+', row)])
-        if len(nums) == 2 and all(len(r) == 2 for r in nums):
-            return f"[[{nums[0][0]},{nums[0][1]}],[{nums[1][0]},{nums[1][1]}]]"
-        if len(nums) == 3 and all(len(r) == 3 for r in nums):
-            return (f"[[{nums[0][0]},{nums[0][1]},{nums[0][2]}],"
-                    f"[{nums[1][0]},{nums[1][1]},{nums[1][2]}],"
-                    f"[{nums[2][0]},{nums[2][1]},{nums[2][2]}]]")
-
-    # Fallback: grab all integers, reshape
-    nums = [int(x) for x in re.findall(r'-?\d+', s)]
-    if len(nums) >= 4:
-        # try last 4 for 2x2
-        n = nums[-4:]
-        return f"[[{n[0]},{n[1]}],[{n[2]},{n[3]}]]"
-
-    return ""
+    s = s.replace(" ", "").replace("\n", "").replace("`", "").replace("*", "")
+    return s.strip().lower()
 
 
-def check_matrix(response: str, expected: str) -> tuple[bool, str]:
-    got = normalise_matrix(response)
-    exp = normalise_matrix(expected)
-    ok = got == exp
-    return ok, f"expected={exp} got={got}"
+def extract_last_line(s: str) -> str:
+    s = strip_thinking(s)
+    lines = [l.strip() for l in s.strip().split('\n') if l.strip()]
+    return lines[-1] if lines else s
 
 
-def check_scalar(response: str, expected: str) -> tuple[bool, str]:
-    s = strip_thinking(response)
-    boxed = extract_boxed(s)
-    candidates = set()
-    if boxed:
-        nums = re.findall(r'-?\d+(?:\.\d+)?', boxed)
-        candidates.update(nums)
-    nums = re.findall(r'-?\d+(?:\.\d+)?', s)
-    candidates.update(nums)
-    ok = expected in candidates or expected.lstrip('0') in candidates
-    preview = s[-80:].replace('\n', ' ')
-    return ok, f"expected={expected} in response: ...{preview}"
+def _extract_matrix_from_latex(s: str) -> str:
+    """
+    Extract a matrix from LaTeX notation and return [[a,b],[c,d]] form.
+    Handles \\begin{pmatrix}, \\begin{bmatrix}, \\begin{matrix}.
+    Also handles \\boxed{...} wrapping.
+    """
+    # Unwrap \boxed{...}
+    s = re.sub(r'\\boxed\{(.*?)\}', r'\1', s, flags=re.DOTALL)
+    # Find last pmatrix/bmatrix/matrix block
+    m = re.findall(
+        r'\\begin\{[pvb]?matrix\*?\}(.*?)\\end\{[pvb]?matrix\*?\}',
+        s, re.DOTALL
+    )
+    if not m:
+        return ""
+    inner = m[-1]  # take last occurrence (final answer)
+    rows = [r.strip() for r in re.split(r'\\\\', inner) if r.strip()]
+    result = []
+    for row in rows:
+        nums = [int(x) for x in re.findall(r'-?\d+', row)]
+        if nums:
+            result.append(nums)
+    if not result:
+        return ""
+    return "[" + ",".join("[" + ",".join(str(x) for x in r) + "]" for r in result) + "]"
 
 
-# ── Matrix test data ──────────────────────────────────────────────────────────
-# Each entry: (label, A_display, B_display, A_rows, B_rows, expected_rows)
+def check_answer(test: dict, response: str) -> tuple[bool, str]:
+    mode = test["check"]
+    resp = strip_thinking(response).strip()
+    resp_last = extract_last_line(response)
+
+    if mode == "exact_normalized":
+        expected = normalize(test["expected"])
+        # 1. Standard check (model output [[a,b],[c,d]] format)
+        if expected in normalize(resp) or expected in normalize(resp_last):
+            return True, f"expected={test['expected']} last_line={resp_last[:80]}"
+        # 2. LaTeX matrix fallback (Qwen2.5-Math, DeepSeek-Math style)
+        latex_result = _extract_matrix_from_latex(resp)
+        if latex_result and normalize(latex_result) == expected:
+            return True, f"expected={test['expected']} latex={latex_result}"
+        return False, f"expected={test['expected']} last_line={resp_last[:80]}"
+
+    elif mode == "contains_number":
+        expected = test["expected"]
+        # Also check inside \boxed{...}
+        boxed = re.findall(r'\\boxed\{([^}]+)\}', resp)
+        boxed_str = " ".join(boxed)
+        ok = expected in resp or expected in resp_last or expected in boxed_str
+        return ok, f"expected={expected} in response={resp_last[:80]}"
+
+    return False, "unknown check mode"
+
+
+# ── Matrix helpers ────────────────────────────────────────────────────────────
 
 def _mm(A, B):
-    """Multiply two 2D lists of ints."""
-    rows, cols = len(A), len(B[0])
-    inner = len(B)
-    C = [[sum(A[r][k] * B[k][c] for k in range(inner)) for c in range(cols)]
-         for r in range(rows)]
-    return C
+    rows, cols, inner = len(A), len(B[0]), len(B)
+    return [[sum(A[r][k] * B[k][c] for k in range(inner)) for c in range(cols)]
+            for r in range(rows)]
 
 
-def _fmt_matrix(rows):
-    """Format as [[a,b],[c,d]]."""
+def _fmt(rows):
+    """Format list-of-lists as [[a,b],[c,d]]."""
     return "[" + ",".join("[" + ",".join(str(x) for x in r) + "]" for r in rows) + "]"
 
 
-def _display_matrix(name, rows):
-    inner = ",".join("[" + ",".join(str(x) for x in r) + "]" for r in rows)
-    return f"{name} = [{inner}]"
+# ── Test data ─────────────────────────────────────────────────────────────────
 
-
-MATRIX_2X2_CASES = [
-    # (label, A, B)
-    ("M1", [[3, 1], [4, 2]], [[5, 7], [6, 8]]),          # [[21,29],[32,44]]
-    ("M2", [[1, 2], [3, 4]], [[5, 6], [7, 8]]),          # [[19,22],[43,50]]
-    ("M3", [[2, 0], [1, 3]], [[4, 1], [2, 5]]),          # [[8,2],[10,16]]
-    ("M4", [[5, 3], [2, 7]], [[1, 4], [6, 0]]),          # [[23,20],[44,8]]
-    ("M5", [[0, 1], [1, 0]], [[3, 4], [5, 6]]),          # [[5,6],[3,4]]
+MATRIX_2X2 = [
+    ("M1", [[3, 1], [4, 2]],   [[5, 7], [6, 8]]),
+    ("M2", [[1, 2], [3, 4]],   [[5, 6], [7, 8]]),
+    ("M3", [[2, 0], [1, 3]],   [[4, 1], [2, 5]]),
+    ("M4", [[5, 3], [2, 7]],   [[1, 4], [6, 0]]),
+    ("M5", [[0, 1], [1, 0]],   [[3, 4], [5, 6]]),
 ]
 
-MATRIX_3X3_CASES = [
-    ("M6", [[1, 0, 2], [3, 1, 0], [0, 2, 1]],
-           [[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
-    ("M7", [[2, 1, 0], [0, 3, 1], [1, 0, 2]],
-           [[1, 0, 1], [2, 1, 0], [0, 1, 2]]),
-    ("M8", [[1, 1, 1], [2, 2, 2], [3, 3, 3]],
-           [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+MATRIX_3X3 = [
+    ("M6", [[1, 0, 2], [3, 1, 0], [0, 2, 1]], [[1, 2, 3], [4, 5, 6], [7, 8, 9]]),
+    ("M7", [[2, 1, 0], [0, 3, 1], [1, 0, 2]], [[1, 0, 1], [2, 1, 0], [0, 1, 2]]),
+    ("M8", [[1, 1, 1], [2, 2, 2], [3, 3, 3]], [[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
 ]
 
-SCALAR_CASES = [
-    ("S1", "((17 * 23) + 14) / 1", str((17 * 23) + 14)),         # 405
-    ("S2", "3^4 + 2^5", str(3**4 + 2**5)),                        # 113
-    ("S3", "(144 / 12) * (15 - 8) + 3", str((144 // 12) * (15 - 8) + 3)),  # 87
-    ("S4", "7 * 8 + 6 * 9 + 5 * 10", str(7 * 8 + 6 * 9 + 5 * 10)),        # 160
-    ("S5", "1000 - 13 * 37", str(1000 - 13 * 37)),                 # 519
+SCALAR = [
+    ("S1", "(17 * 23) + 14",            str((17 * 23) + 14)),
+    ("S2", "3^4 + 2^5",                 str(3**4 + 2**5)),
+    ("S3", "(144 / 12) * (15 - 8) + 3", str(int((144 / 12) * (15 - 8) + 3))),
+    ("S4", "7*8 + 6*9 + 5*10",          str(7 * 8 + 6 * 9 + 5 * 10)),
+    ("S5", "1000 - 13 * 37",            str(1000 - 13 * 37)),
 ]
 
 
 # ── Build tests ───────────────────────────────────────────────────────────────
 
-def make_matrix_direct_test(label, A, B, size="2x2"):
-    C = _mm(A, B)
-    A_disp = _display_matrix("A", A)
-    B_disp = _display_matrix("B", B)
-    expected = _fmt_matrix(C)
-    prompt = (
-        f"Compute the matrix product A × B.\n\n"
-        f"{A_disp}\n{B_disp}\n\n"
-        f"Output ONLY the resulting matrix in format {expected[:10]}... (no explanation)."
-    )
-    return {
-        "id": f"direct_matrix_{label}",
-        "category": "direct_math",
-        "subtype": "matrix",
-        "size": size,
-        "filler_tokens": 0,
-        "prompt": prompt,
-        "expected": expected,
-        "check": "matrix",
-    }
-
-
-def make_matrix_delayed_test(label, A, B, filler_tokens, size="2x2"):
-    C = _mm(A, B)
-    A_disp = _display_matrix("A", A)
-    B_disp = _display_matrix("B", B)
-    expected = _fmt_matrix(C)
-    filler = generate_filler(filler_tokens)
-    prompt = (
-        f"Read these matrices carefully. Do NOT compute yet.\n\n"
-        f"{A_disp}\n{B_disp}\n\n"
-        f"[Do not compute yet — continue reading.]\n\n"
-        f"{filler}\n\n"
-        f"Now compute A × B.\n"
-        f"Output ONLY the resulting matrix in format [[a,b],[c,d]]. No explanation."
-    )
-    return {
-        "id": f"delayed_matrix_{label}_{filler_tokens}t",
-        "category": "delayed_math",
-        "subtype": "matrix",
-        "size": size,
-        "filler_tokens": filler_tokens,
-        "prompt": prompt,
-        "expected": expected,
-        "check": "matrix",
-    }
-
-
-def make_scalar_direct_test(label, expr, expected):
-    prompt = (
-        f"Compute this arithmetic expression exactly:\n\n"
-        f"  {expr}\n\n"
-        f"Output ONLY the integer result. No explanation."
-    )
-    return {
-        "id": f"direct_scalar_{label}",
-        "category": "direct_math",
-        "subtype": "scalar",
-        "filler_tokens": 0,
-        "prompt": prompt,
-        "expected": expected,
-        "check": "scalar",
-    }
-
-
-def make_scalar_delayed_test(label, expr, expected, filler_tokens):
-    filler = generate_filler(filler_tokens)
-    prompt = (
-        f"Remember this expression. Do NOT compute it yet.\n\n"
-        f"  EXPRESSION: {expr}\n\n"
-        f"[Do not compute yet.]\n\n"
-        f"{filler}\n\n"
-        f"Now compute the expression you were asked to remember.\n"
-        f"Output ONLY the integer result. No explanation."
-    )
-    return {
-        "id": f"delayed_scalar_{label}_{filler_tokens}t",
-        "category": "delayed_math",
-        "subtype": "scalar",
-        "filler_tokens": filler_tokens,
-        "prompt": prompt,
-        "expected": expected,
-        "check": "scalar",
-    }
-
-
-def build_tests(filler_levels, matrix_sizes, skip_3x3=False, skip_scalar=False):
+def build_tests(filler_levels, skip_3x3=False, skip_scalar=False):
     tests = []
 
-    # Direct 2x2
-    for label, A, B in MATRIX_2X2_CASES:
-        tests.append(make_matrix_direct_test(label, A, B, "2x2"))
+    # Direct 2×2
+    for label, A, B in MATRIX_2X2:
+        C = _mm(A, B)
+        tests.append({
+            "id": f"direct_mat2x2_{label}",
+            "category": "direct_math",
+            "subtype": "matrix_2x2",
+            "filler_tokens": 0,
+            "prompt": f"Compute {_fmt(A)} × {_fmt(B)}. Return ONLY [[a,b],[c,d]].",
+            "expected": _fmt(C),
+            "check": "exact_normalized",
+        })
 
-    # Direct 3x3
+    # Direct 3×3
     if not skip_3x3:
-        for label, A, B in MATRIX_3X3_CASES:
-            tests.append(make_matrix_direct_test(label, A, B, "3x3"))
+        for label, A, B in MATRIX_3X3:
+            C = _mm(A, B)
+            tests.append({
+                "id": f"direct_mat3x3_{label}",
+                "category": "direct_math",
+                "subtype": "matrix_3x3",
+                "filler_tokens": 0,
+                "prompt": f"Compute {_fmt(A)} × {_fmt(B)}. Return ONLY [[a,b,c],[d,e,f],[g,h,i]].",
+                "expected": _fmt(C),
+                "check": "exact_normalized",
+            })
 
     # Direct scalar
     if not skip_scalar:
-        for label, expr, expected in SCALAR_CASES:
-            tests.append(make_scalar_direct_test(label, expr, expected))
+        for label, expr, expected in SCALAR:
+            tests.append({
+                "id": f"direct_scalar_{label}",
+                "category": "direct_math",
+                "subtype": "scalar",
+                "filler_tokens": 0,
+                "prompt": f"Compute {expr}. Return ONLY the integer result.",
+                "expected": expected,
+                "check": "contains_number",
+            })
 
-    # Delayed 2x2
-    for label, A, B in MATRIX_2X2_CASES:
+    # Delayed 2×2
+    for label, A, B in MATRIX_2X2:
+        C = _mm(A, B)
         for fl in filler_levels:
-            tests.append(make_matrix_delayed_test(label, A, B, fl, "2x2"))
+            filler = generate_filler(fl)
+            tests.append({
+                "id": f"delayed_mat2x2_{label}_{fl}t",
+                "category": "delayed_math",
+                "subtype": "matrix_2x2",
+                "filler_tokens": fl,
+                "prompt": (
+                    f"Memorize these matrices. Do NOT compute yet.\n\n"
+                    f"A = {_fmt(A)}\nB = {_fmt(B)}\n\n"
+                    f"{filler}\n\n"
+                    f"Compute A × B. Return ONLY [[a,b],[c,d]], no explanation."
+                ),
+                "expected": _fmt(C),
+                "check": "exact_normalized",
+            })
 
-    # Delayed 3x3
+    # Delayed 3×3
     if not skip_3x3:
-        for label, A, B in MATRIX_3X3_CASES:
+        for label, A, B in MATRIX_3X3:
+            C = _mm(A, B)
             for fl in filler_levels:
-                tests.append(make_matrix_delayed_test(label, A, B, fl, "3x3"))
+                filler = generate_filler(fl)
+                tests.append({
+                    "id": f"delayed_mat3x3_{label}_{fl}t",
+                    "category": "delayed_math",
+                    "subtype": "matrix_3x3",
+                    "filler_tokens": fl,
+                    "prompt": (
+                        f"Memorize these matrices. Do NOT compute yet.\n\n"
+                        f"A = {_fmt(A)}\nB = {_fmt(B)}\n\n"
+                        f"{filler}\n\n"
+                        f"Compute A × B. Return ONLY [[a,b,c],[d,e,f],[g,h,i]], no explanation."
+                    ),
+                    "expected": _fmt(C),
+                    "check": "exact_normalized",
+                })
 
     # Delayed scalar
     if not skip_scalar:
-        for label, expr, expected in SCALAR_CASES:
+        for label, expr, expected in SCALAR:
             for fl in filler_levels:
-                tests.append(make_scalar_delayed_test(label, expr, expected, fl))
+                filler = generate_filler(fl)
+                tests.append({
+                    "id": f"delayed_scalar_{label}_{fl}t",
+                    "category": "delayed_math",
+                    "subtype": "scalar",
+                    "filler_tokens": fl,
+                    "prompt": (
+                        f"Remember this expression. Do NOT compute it yet.\n\n"
+                        f"EXPRESSION: {expr}\n\n"
+                        f"{filler}\n\n"
+                        f"Compute the expression you memorized. Return ONLY the integer result."
+                    ),
+                    "expected": expected,
+                    "check": "contains_number",
+                })
 
     return tests
 
 
-# ── API client ────────────────────────────────────────────────────────────────
+# ── API client (mirrors turboquant_quality.py) ────────────────────────────────
 
-async def send_prompt(session, url, model, prompt, temperature, system_prompt, timeout_s):
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
-
+async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
+                      prompt: str, temperature: float = 0.0,
+                      think: bool = False, num_predict: int = 512) -> str:
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": [{"role": "user", "content": prompt}],
         "stream": False,
-        "think": False,
-        "options": {"temperature": temperature, "num_predict": 512},
+        "options": {"temperature": temperature, "num_predict": num_predict},
     }
+    if think is not None:
+        payload["think"] = think
     try:
         async with session.post(
             f"{url}/api/chat", json=payload,
-            timeout=aiohttp.ClientTimeout(total=timeout_s)
+            timeout=aiohttp.ClientTimeout(total=120)
         ) as resp:
             if resp.status != 200:
-                body = await resp.text()
-                return f"[ERROR: HTTP {resp.status} — {body[:120]}]"
+                return f"[ERROR: HTTP {resp.status}]"
             data = await resp.json()
             return data.get("message", {}).get("content", "[no content]")
-    except asyncio.TimeoutError:
-        return f"[ERROR: timeout after {timeout_s}s]"
     except Exception as e:
         return f"[ERROR: {e}]"
 
 
-# ── Run ───────────────────────────────────────────────────────────────────────
+# ── Collect ───────────────────────────────────────────────────────────────────
 
 async def collect(args):
     random.seed(0)
-    filler_levels = [int(x) for x in args.filler.split(",")]
-    tests = build_tests(
-        filler_levels,
-        matrix_sizes=args.matrix_sizes,
-        skip_3x3=args.skip_3x3,
-        skip_scalar=args.skip_scalar,
-    )
+    filler_levels = [int(x) for x in args.filler.split(",") if x and int(x) > 0]
+    tests = build_tests(filler_levels, skip_3x3=args.skip_3x3, skip_scalar=args.skip_scalar)
 
-    system_prompt = args.system_prompt or ""
-    if args.math_model_prompt and not system_prompt:
-        system_prompt = (
-            "Please reason step by step, and put your final answer within \\boxed{}."
-        )
+    think = None if args.no_think else False
 
     print(f"TurboQuant Math Accuracy Test")
-    print(f"  URL:         {args.url}")
-    print(f"  Model:       {args.model}")
-    print(f"  Label:       {args.label}")
-    print(f"  Temperature: {args.temperature}")
-    print(f"  Filler:      {filler_levels} tokens")
-    print(f"  Tests:       {len(tests)}")
-    if system_prompt:
-        print(f"  System:      {system_prompt[:60]}...")
+    print(f"  URL:   {args.url}")
+    print(f"  Model: {args.model}")
+    print(f"  Label: {args.label}")
+    print(f"  Tests: {len(tests)}  filler={filler_levels}")
+    print(f"  think: {'omitted (non-Qwen3)' if think is None else think}")
     print()
 
     results = []
-    cats = {}
+    cats: dict[str, dict] = {}
 
     async with aiohttp.ClientSession() as session:
         for test in tests:
-            response = await send_prompt(
-                session, args.url, args.model,
-                test["prompt"], args.temperature,
-                system_prompt, args.timeout,
-            )
-
-            if test["check"] == "matrix":
-                passed, detail = check_matrix(response, test["expected"])
-            else:
-                passed, detail = check_scalar(response, test["expected"])
+            response = await send_prompt(session, args.url, args.model,
+                                         test["prompt"], args.temperature,
+                                         think, args.num_predict)
+            passed, detail = check_answer(test, response)
 
             status = "PASS" if passed else "FAIL"
             cat = test["category"]
@@ -414,24 +358,21 @@ async def collect(args):
             if passed:
                 cats[cat]["pass"] += 1
 
-            filler = test["filler_tokens"]
-            filler_s = f"filler={filler:>5}t" if filler else "direct       "
-            size = test.get("size", test["subtype"])
-            print(f"  [{status}] {test['id']:<38} {filler_s}  {size:<4}  {detail[:60]}")
+            fl = test["filler_tokens"]
+            fl_s = f"filler={fl:>5}t" if fl else "direct       "
+            print(f"  [{status}] {test['id']:<42} {fl_s}  {detail[:60]}")
 
             results.append({
                 "id": test["id"],
                 "category": cat,
                 "subtype": test["subtype"],
-                "size": test.get("size", ""),
-                "filler_tokens": filler,
+                "filler_tokens": fl,
                 "passed": passed,
                 "expected": test["expected"],
                 "detail": detail,
                 "response_preview": strip_thinking(response)[:300],
             })
 
-    # Summary
     total_pass = sum(1 for r in results if r["passed"])
     total = len(results)
     pct = total_pass / total * 100 if total else 0
@@ -441,69 +382,45 @@ async def collect(args):
     print(f"{'='*65}")
 
     print(f"\n  Category breakdown:")
-    print(f"  {'Category':<20} {'Pass/Total':>12} {'%':>8}")
-    print(f"  {'-'*42}")
+    print(f"  {'Category':<22} {'Pass/Total':>12}   {'%':>6}")
+    print(f"  {'-'*44}")
     for cat, s in sorted(cats.items()):
         p = s['pass'] / s['total'] * 100 if s['total'] else 0
-        print(f"  {cat:<20} {s['pass']}/{s['total']:>4}        {p:>5.1f}%")
+        print(f"  {cat:<22} {s['pass']:>4}/{s['total']:<4}        {p:>5.1f}%")
 
-    # Direct vs delayed breakdown
-    print(f"\n  Direct vs Delayed:")
-    print(f"  {'Type':<12} {'2x2':>8} {'3x3':>8} {'scalar':>8}")
-    print(f"  {'-'*40}")
+    # Direct vs delayed
+    print(f"\n  Direct vs Delayed (pass/total):")
+    print(f"  {'Type':<12} {'mat 2x2':>10} {'mat 3x3':>10} {'scalar':>10}")
+    print(f"  {'-'*44}")
     for cat in ["direct_math", "delayed_math"]:
         row = {}
         for sub in ["matrix_2x2", "matrix_3x3", "scalar"]:
-            if sub == "matrix_2x2":
-                matches = [r for r in results if r["category"] == cat
-                           and r["subtype"] == "matrix" and r.get("size") == "2x2"]
-            elif sub == "matrix_3x3":
-                matches = [r for r in results if r["category"] == cat
-                           and r["subtype"] == "matrix" and r.get("size") == "3x3"]
-            else:
-                matches = [r for r in results if r["category"] == cat
-                           and r["subtype"] == "scalar"]
-            if matches:
-                p = sum(1 for r in matches if r["passed"])
-                row[sub] = f"{p}/{len(matches)}"
-            else:
-                row[sub] = "-"
+            m = [r for r in results if r["category"] == cat and r["subtype"] == sub]
+            row[sub] = f"{sum(1 for r in m if r['passed'])}/{len(m)}" if m else "-"
         name = "direct" if cat == "direct_math" else "delayed"
-        print(f"  {name:<12} {row['matrix_2x2']:>8} {row['matrix_3x3']:>8} {row['scalar']:>8}")
+        print(f"  {name:<12} {row['matrix_2x2']:>10} {row['matrix_3x3']:>10} {row['scalar']:>10}")
 
-    # By filler level (delayed only)
+    # By filler level
     delayed = [r for r in results if r["category"] == "delayed_math"]
     if delayed and filler_levels:
-        print(f"\n  Delayed math by filler distance:")
-        print(f"  {'Filler':>7}   {'matrix 2x2':>12} {'matrix 3x3':>12} {'scalar':>8}")
-        print(f"  {'-'*45}")
+        print(f"\n  Delayed by filler distance:")
+        print(f"  {'Filler':>7}   {'mat 2x2':>10} {'mat 3x3':>10} {'scalar':>10}")
+        print(f"  {'-'*44}")
         for fl in filler_levels:
             row = {}
-            for sub, size in [("matrix", "2x2"), ("matrix", "3x3"), ("scalar", "")]:
-                if size:
-                    matches = [r for r in delayed if r["filler_tokens"] == fl
-                               and r["subtype"] == sub and r.get("size") == size]
-                else:
-                    matches = [r for r in delayed if r["filler_tokens"] == fl
-                               and r["subtype"] == sub]
-                key = f"{sub}_{size}" if size else sub
-                if matches:
-                    p = sum(1 for r in matches if r["passed"])
-                    row[key] = f"{p}/{len(matches)}"
-                else:
-                    row[key] = "-"
-            print(f"  {fl:>6}t   {row['matrix_2x2']:>12} {row.get('matrix_3x3', '-'):>12} {row.get('scalar', '-'):>8}")
+            for sub in ["matrix_2x2", "matrix_3x3", "scalar"]:
+                m = [r for r in delayed if r["filler_tokens"] == fl and r["subtype"] == sub]
+                row[sub] = f"{sum(1 for r in m if r['passed'])}/{len(m)}" if m else "-"
+            print(f"  {fl:>6}t   {row['matrix_2x2']:>10} {row['matrix_3x3']:>10} {row['scalar']:>10}")
 
-    # Failed tests — show response preview
-    failed = [r for r in results if not r["passed"]]
-    if failed and args.verbose:
-        print(f"\n  Failed test responses:")
-        print(f"  {'-'*60}")
-        for r in failed:
-            print(f"\n  [{r['id']}]")
-            print(f"  expected: {r['expected']}")
-            preview = r['response_preview'].replace('\n', ' ')
-            print(f"  got:      {preview[:120]}")
+    if args.verbose:
+        failed = [r for r in results if not r["passed"]]
+        if failed:
+            print(f"\n  Failed responses:")
+            print(f"  {'-'*60}")
+            for r in failed:
+                print(f"\n  [{r['id']}]  expected={r['expected']}")
+                print(f"  got: {r['response_preview'][:120].replace(chr(10), ' ')}")
 
     output = {
         "label": args.label,
@@ -511,18 +428,18 @@ async def collect(args):
         "url": args.url,
         "temperature": args.temperature,
         "filler_levels": filler_levels,
-        "system_prompt": system_prompt,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "score": {"passed": total_pass, "total": total, "percent": pct},
         "categories": cats,
         "results": results,
     }
-
     if args.output:
         with open(args.output, "w") as f:
             json.dump(output, f, indent=2)
         print(f"\n  Saved: {args.output}")
 
+
+# ── Compare ───────────────────────────────────────────────────────────────────
 
 def compare(args):
     data = []
@@ -530,115 +447,72 @@ def compare(args):
         with open(f) as fh:
             data.append(json.load(fh))
 
-    print(f"\n{'='*70}")
+    print(f"\n{'='*65}")
     print(f"  TurboQuant Math Accuracy Comparison")
-    print(f"{'='*70}\n")
+    print(f"{'='*65}\n")
 
-    print(f"  {'Label':<20} {'Pass/Total':>12} {'%':>8}")
-    print(f"  {'-'*44}")
+    print(f"  {'Label':<20} {'Pass/Total':>12}   {'%':>6}")
+    print(f"  {'-'*42}")
     for d in data:
         s = d["score"]
-        print(f"  {d['label']:<20} {s['passed']}/{s['total']:>4}        {s['percent']:>5.1f}%")
+        print(f"  {d['label']:<20} {s['passed']:>4}/{s['total']:<4}        {s['percent']:>5.1f}%")
 
-    print(f"\n  By category:")
-    all_cats = sorted({cat for d in data for cat in d.get("categories", {})})
-    header = f"  {'Category':<22}" + "".join(f" {d['label'][:10]:>12}" for d in data)
-    print(header)
-    print(f"  {'-'*len(header)}")
-    for cat in all_cats:
-        row = f"  {cat:<22}"
-        for d in data:
-            c = d.get("categories", {}).get(cat)
-            if c:
-                pct = c['pass'] / c['total'] * 100 if c['total'] else 0
-                row += f" {c['pass']}/{c['total']} ({pct:.0f}%):>12"
-            else:
-                row += f"{'—':>12}"
-        print(row)
-
-    print(f"\n  Divergent results:")
-    print(f"  {'-'*60}")
     if len(data) > 1:
+        print(f"\n  Divergent results:")
+        print(f"  {'-'*60}")
         any_diff = False
-        test_ids = [r["id"] for r in data[0]["results"]]
-        for tid in test_ids:
+        for tid in [r["id"] for r in data[0]["results"]]:
             rows = []
             for d in data:
                 r = next((x for x in d["results"] if x["id"] == tid), None)
                 if r:
                     rows.append((d["label"], r["passed"], r.get("detail", "")))
-            statuses = [r[1] for r in rows]
-            if len(set(statuses)) > 1:
+            if len({r[1] for r in rows}) > 1:
                 any_diff = True
                 print(f"\n  {tid}:")
                 for label, passed, detail in rows:
-                    s = "PASS" if passed else "FAIL"
-                    print(f"    [{s}] {label:<20} {detail[:60]}")
+                    print(f"    [{'PASS' if passed else 'FAIL'}] {label:<20} {detail[:60]}")
         if not any_diff:
             print(f"  None — identical results across all configurations.")
+
+    if args.markdown:
+        print(f"\n| Label | Pass | Total | % |")
+        print(f"|:---|:---:|:---:|:---:|")
+        for d in data:
+            s = d["score"]
+            print(f"| {d['label']} | {s['passed']} | {s['total']} | {s['percent']:.1f}% |")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="TurboQuant Math Accuracy Test",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-
-  # Baseline: test direct math only (no filler), fast
-  python turboquant_math_accuracy.py collect \\
-    --label f16_baseline --model qwen3:9b --skip-3x3 --filler 0
-
-  # Full test: direct + delayed at 3 filler levels
-  python turboquant_math_accuracy.py collect \\
-    --label f16 --model qwen3:9b --filler 200,500,1000
-
-  # Math-specialised model (adds system prompt, handles \\boxed{})
-  python turboquant_math_accuracy.py collect \\
-    --label math_f16 --model Qwen2.5-Math-7B-Instruct-Q8_0 \\
-    --math-model-prompt --filler 200,500,1000
-
-  # Compare two runs
-  python turboquant_math_accuracy.py compare results/math_f16.json results/math_tq.json
-""",
-    )
+    parser = argparse.ArgumentParser(description="TurboQuant Math Accuracy Test")
     sub = parser.add_subparsers(dest="command")
 
-    c = sub.add_parser("collect", help="Run math accuracy tests")
+    c = sub.add_parser("collect")
     c.add_argument("--url", default="http://localhost:11434")
-    c.add_argument("--model", default="qwen3:9b")
+    c.add_argument("--model", default="qwen3-14b")
     c.add_argument("--label", required=True)
     c.add_argument("--temperature", type=float, default=0.0)
     c.add_argument("--filler", default="200,500,1000",
-                   help="Comma-separated filler levels. Use 0 for direct-only.")
-    c.add_argument("--matrix-sizes", default="2x2,3x3")
-    c.add_argument("--skip-3x3", action="store_true",
-                   help="Skip 3×3 matrix tests (faster, less stress)")
-    c.add_argument("--skip-scalar", action="store_true",
-                   help="Skip scalar arithmetic tests")
-    c.add_argument("--math-model-prompt", action="store_true",
-                   help='Add "Please reason step by step... \\boxed{}" system prompt '
-                        '(for Qwen2.5-Math, DeepSeek-Math, etc.)')
-    c.add_argument("--system-prompt", default="",
-                   help="Custom system prompt (overrides --math-model-prompt)")
-    c.add_argument("--timeout", type=int, default=180,
-                   help="Per-request timeout in seconds (default: 180)")
-    c.add_argument("--output", "-o", help="Save results JSON to this path")
-    c.add_argument("--verbose", "-v", action="store_true",
-                   help="Print failed response previews")
+                   help="Comma-separated filler token counts (0 = direct only)")
+    c.add_argument("--skip-3x3", action="store_true")
+    c.add_argument("--skip-scalar", action="store_true")
+    c.add_argument("--no-think", action="store_true",
+                   help="Omit 'think' field from payload (for non-Qwen3 models: "
+                        "Qwen2.5-Math, DeepSeek-Math, etc.)")
+    c.add_argument("--num-predict", type=int, default=512,
+                   help="Max tokens to generate per response (default: 512). "
+                        "Use 1024 for math models that show full working.")
+    c.add_argument("--output", "-o")
+    c.add_argument("--verbose", "-v", action="store_true")
 
-    p = sub.add_parser("compare", help="Compare two result files")
+    p = sub.add_parser("compare")
     p.add_argument("files", nargs="+")
     p.add_argument("--markdown", action="store_true")
 
     args = parser.parse_args()
-
     if args.command == "collect":
-        # Parse filler levels, filtering out 0 for the delayed tests
-        raw = [int(x) for x in args.filler.split(",")]
-        args.filler = ",".join(str(x) for x in raw if x > 0)
         asyncio.run(collect(args))
     elif args.command == "compare":
         compare(args)
