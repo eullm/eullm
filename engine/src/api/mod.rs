@@ -189,10 +189,8 @@ impl AppState {
         }
 
         // 2. Directory containing .gguf files? Pick the first one.
-        if path.is_dir() {
-            if let Some(gguf) = find_gguf_in_dir(&path) {
-                return Ok(gguf);
-            }
+        if path.is_dir() && let Some(gguf) = find_gguf_in_dir(&path) {
+            return Ok(gguf);
         }
 
         // 3. Try appending .gguf extension.
@@ -216,10 +214,8 @@ impl AppState {
 
         // 5. Try normalized name (Ollama tag format).
         let normalized = normalize_model_name(name);
-        if normalized != name {
-            if let Some(p) = self.store.gguf_path(&normalized) {
-                return Ok(p);
-            }
+        if normalized != name && let Some(p) = self.store.gguf_path(&normalized) {
+            return Ok(p);
         }
 
         Err(format!(
