@@ -83,8 +83,17 @@ git -C "${SYS_CRATE_DIR}/llama.cpp" checkout FETCH_HEAD
 rm -rf "${SYS_CRATE_DIR}/llama.cpp/.git"
 
 # 5. Compatibility patches
-#    The spiritbuun fork may be based on an older llama.cpp.
-#    Add missing struct fields so llama-cpp-sys-2 v0.1.140 compiles.
+#    Fix upstream warnings in llama-cpp-sys-2 build.rs and
+#    add missing struct fields so the crate compiles against AmesianX.
+
+# 5a. Fix unused `mut` warning in build.rs (llama-cpp-sys-2 upstream issue)
+BUILD_RS="${SYS_CRATE_DIR}/build.rs"
+if [ -f "$BUILD_RS" ] && grep -q "let mut llama_libs = extract_lib_names" "$BUILD_RS"; then
+    echo "  Fixing unused mut in build.rs..."
+    sed "s/let mut llama_libs = extract_lib_names/let llama_libs = extract_lib_names/g" \
+        "$BUILD_RS" > "${BUILD_RS}.tmp" && mv "${BUILD_RS}.tmp" "$BUILD_RS"
+    echo "  -> OK"
+fi
 
 CHAT_H="${SYS_CRATE_DIR}/llama.cpp/common/chat.h"
 echo "Checking fork compatibility with llama-cpp-sys-2 v0.1.140..."

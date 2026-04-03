@@ -203,6 +203,12 @@ fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> 
                         turboquant::types::TurboquantType::TQ4_0  => ggml_ids::TBQ4_0,
                         turboquant::types::TurboquantType::TQP3_0 => ggml_ids::TBQP3_0,
                         turboquant::types::TurboquantType::TQP4_0 => ggml_ids::TBQP4_0,
+                        turboquant::types::TurboquantType::TQ3_1  => ggml_ids::TBQ3_1,
+                        turboquant::types::TurboquantType::TQ4_1  => ggml_ids::TBQ4_1,
+                        turboquant::types::TurboquantType::TQP3_1 => ggml_ids::TBQP3_1,
+                        turboquant::types::TurboquantType::TQP4_1 => ggml_ids::TBQP4_1,
+                        turboquant::types::TurboquantType::TQ3_2  => ggml_ids::TBQ3_2,
+                        turboquant::types::TurboquantType::TQ4_2  => ggml_ids::TBQ4_2,
                     };
                     tracing::info!("TurboQuant {tq} → GGML type {raw_id} (native backend)");
                     // Pass the raw GGML type ID via KvCacheType.
@@ -220,7 +226,10 @@ fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> 
     }
 
     #[cfg(feature = "turboquant")]
-    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1, tbq3_0, tbq4_0, tbqp3_0, tbqp4_0";
+    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1 | \
+                   head_dim=128 (Qwen3/Llama/Mistral): tbq3_1, tbq4_1, tbqp3_1, tbqp4_1 | \
+                   head_dim=256: tbq3_0, tbq4_0, tbqp3_0, tbqp4_0 | \
+                   head_dim=64: tbq3_2, tbq4_2";
     #[cfg(not(feature = "turboquant"))]
     let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1";
 
@@ -237,10 +246,16 @@ pub fn cache_type_display(ct: &KvCacheType) -> String {
         KvCacheType::Q4_1 => "Q4_1".to_string(),
         KvCacheType::Q5_0 => "Q5_0".to_string(),
         KvCacheType::Q5_1 => "Q5_1".to_string(),
-        KvCacheType::Unknown(41) => "TBQ3_0 (TurboQuant 3-bit MSE)".to_string(),
-        KvCacheType::Unknown(42) => "TBQ4_0 (TurboQuant 4-bit MSE)".to_string(),
-        KvCacheType::Unknown(43) => "TBQP3_0 (TurboQuant 3-bit QJL)".to_string(),
-        KvCacheType::Unknown(44) => "TBQP4_0 (TurboQuant 4-bit QJL)".to_string(),
+        KvCacheType::Unknown(41) => "TBQ3_0 (TurboQuant 3-bit MSE, head_dim=256)".to_string(),
+        KvCacheType::Unknown(42) => "TBQ4_0 (TurboQuant 4-bit MSE, head_dim=256)".to_string(),
+        KvCacheType::Unknown(43) => "TBQP3_0 (TurboQuant 3-bit QJL, head_dim=256)".to_string(),
+        KvCacheType::Unknown(44) => "TBQP4_0 (TurboQuant 4-bit QJL, head_dim=256)".to_string(),
+        KvCacheType::Unknown(45) => "TBQ3_1 (TurboQuant 3-bit MSE, head_dim=128)".to_string(),
+        KvCacheType::Unknown(46) => "TBQ4_1 (TurboQuant 4-bit MSE, head_dim=128)".to_string(),
+        KvCacheType::Unknown(47) => "TBQP3_1 (TurboQuant 3-bit DirectSign, head_dim=128)".to_string(),
+        KvCacheType::Unknown(48) => "TBQP4_1 (TurboQuant 4-bit DirectSign, head_dim=128)".to_string(),
+        KvCacheType::Unknown(49) => "TBQ3_2 (TurboQuant 3-bit MSE, head_dim=64)".to_string(),
+        KvCacheType::Unknown(50) => "TBQ4_2 (TurboQuant 4-bit MSE, head_dim=64)".to_string(),
         KvCacheType::Unknown(id) => format!("Unknown({id})"),
         _ => format!("{ct:?}"),
     }
