@@ -63,12 +63,15 @@ echo "Copying crate to vendor/..."
 cp -r "$INSTALLED_CRATE" "$SYS_CRATE_DIR"
 chmod -R u+w "$SYS_CRATE_DIR"
 
-# 3. Replace the bundled llama.cpp with spiritbuun's CUDA fork
-echo "Cloning spiritbuun's TurboQuant CUDA fork..."
+# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.4.1
+echo "Cloning AmesianX/TurboQuant v1.4.1..."
 rm -rf "${SYS_CRATE_DIR}/llama.cpp"
-git clone --depth 1 --branch feature/turboquant-kv-cache \
-    https://github.com/spiritbuun/llama-cpp-turboquant-cuda.git \
+git clone --depth 1 --branch main \
+    https://github.com/AmesianX/TurboQuant.git \
     "${SYS_CRATE_DIR}/llama.cpp"
+# Pin to v1.4.1 (V-cache FP32 butterfly fix, head_dim=576 support)
+git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.4.1
+git -C "${SYS_CRATE_DIR}/llama.cpp" checkout FETCH_HEAD
 
 # 4. Remove .git from the cloned repo (we vendor it, not submodule it)
 rm -rf "${SYS_CRATE_DIR}/llama.cpp/.git"
@@ -117,10 +120,10 @@ else
 fi
 
 # 6. Verify TurboQuant types exist in the fork
-if grep -q "GGML_TYPE_TURBO3_0" "${SYS_CRATE_DIR}/llama.cpp/ggml/include/ggml.h"; then
-    echo "Verified: GGML_TYPE_TURBO3_0 found in fork"
+if grep -q "GGML_TYPE_TBQ3_0" "${SYS_CRATE_DIR}/llama.cpp/ggml/include/ggml.h"; then
+    echo "Verified: GGML_TYPE_TBQ3_0 found in fork (AmesianX v1.4.1+)"
 else
-    echo "ERROR: GGML_TYPE_TURBO3_0 not found in fork — wrong branch?"
+    echo "ERROR: GGML_TYPE_TBQ3_0 not found in fork — wrong branch or version?"
     exit 1
 fi
 
@@ -155,7 +158,7 @@ echo "=== Setup complete ==="
 echo ""
 echo "Vendored llama-cpp-sys-2: ${SYS_CRATE_DIR}"
 echo "Patch in: ${CARGO_TOML}  (path = ${PATCH_PATH})"
-echo "Fork verified: GGML_TYPE_TURBO3_0 = 41"
+echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44"
 echo ""
 echo "Build with:"
 echo "  cd ${ENGINE_DIR}"

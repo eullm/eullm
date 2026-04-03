@@ -6,18 +6,28 @@ use super::types::{TurboquantType, parse_turboquant_type};
 
 #[test]
 fn parse_tq_types() {
-    assert_eq!(parse_turboquant_type("tq3_0"), Some(TurboquantType::TQ3_0));
-    assert_eq!(parse_turboquant_type("tq4_0"), Some(TurboquantType::TQ4_0));
-    assert_eq!(parse_turboquant_type("TQ3"), Some(TurboquantType::TQ3_0));
-    assert_eq!(parse_turboquant_type("TQ4"), Some(TurboquantType::TQ4_0));
-    assert_eq!(parse_turboquant_type("f16"), None);
+    // AmesianX names
+    assert_eq!(parse_turboquant_type("tbq3_0"),  Some(TurboquantType::TQ3_0));
+    assert_eq!(parse_turboquant_type("tbq4_0"),  Some(TurboquantType::TQ4_0));
+    assert_eq!(parse_turboquant_type("tbqp3_0"), Some(TurboquantType::TQP3_0));
+    assert_eq!(parse_turboquant_type("tbqp4_0"), Some(TurboquantType::TQP4_0));
+    // Legacy aliases (spiritbuun / user-friendly)
+    assert_eq!(parse_turboquant_type("tq3_0"),  Some(TurboquantType::TQ3_0));
+    assert_eq!(parse_turboquant_type("tq4_0"),  Some(TurboquantType::TQ4_0));
+    assert_eq!(parse_turboquant_type("turbo3"), Some(TurboquantType::TQ3_0));
+    assert_eq!(parse_turboquant_type("turbo4"), Some(TurboquantType::TQ4_0));
+    assert_eq!(parse_turboquant_type("f16"),  None);
     assert_eq!(parse_turboquant_type("q8_0"), None);
 }
 
 #[test]
 fn is_tq_type() {
-    assert!(is_turboquant_type("tq3_0"));
-    assert!(is_turboquant_type("tq4_0"));
+    assert!(is_turboquant_type("tbq3_0"));
+    assert!(is_turboquant_type("tbq4_0"));
+    assert!(is_turboquant_type("tbqp3_0"));
+    assert!(is_turboquant_type("tbqp4_0"));
+    assert!(is_turboquant_type("tq3_0"));   // legacy alias
+    assert!(is_turboquant_type("tq4_0"));   // legacy alias
     assert!(!is_turboquant_type("f16"));
     assert!(!is_turboquant_type("q4_0"));
 }
@@ -26,6 +36,8 @@ fn is_tq_type() {
 fn compression_ratios() {
     assert!((TurboquantType::TQ3_0.compression_ratio() - 5.33).abs() < 0.1);
     assert!((TurboquantType::TQ4_0.compression_ratio() - 4.0).abs() < 0.1);
+    assert!((TurboquantType::TQP3_0.compression_ratio() - 5.33).abs() < 0.1);
+    assert!((TurboquantType::TQP4_0.compression_ratio() - 4.0).abs() < 0.1);
 }
 
 #[test]

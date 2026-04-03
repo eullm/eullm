@@ -38,7 +38,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 futures-util = "0.3"
-llama-cpp-2 = { version = "0.1.140", features = ["sampler"] }
+llama-cpp-2 = { version = "0.1.141", features = ["sampler"] }
 encoding_rs = "0.8"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
@@ -52,6 +52,6 @@ predicates = "3"
 
 # ── TurboQuant backend (experimental) ───────────────────────────
 # To enable TurboQuant, run: scripts/setup-turboquant.sh
-# The script vendors llama-cpp-sys-2 with spiritbuun's fork and
+# The script vendors llama-cpp-sys-2 with AmesianX/TurboQuant and
 # appends [patch.crates-io] to this file automatically.
 # Then build with: cargo build --release --features "cuda turboquant_native"
