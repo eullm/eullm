@@ -33,11 +33,17 @@ echo "=== EULLM TurboQuant Backend Setup ==="
 echo ""
 
 # 1. Find the installed llama-cpp-sys-2 crate
+# Read version from Cargo.toml so this script doesn't need updating on bumps.
+LLAMA_CPP_2_VERSION=$(grep '^llama-cpp-2' "${ENGINE_DIR}/Cargo.toml" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -1)
+if [ -z "$LLAMA_CPP_2_VERSION" ]; then
+    echo "ERROR: Could not determine llama-cpp-2 version from Cargo.toml."
+    exit 1
+fi
 CARGO_REGISTRY="${CARGO_HOME:-$HOME/.cargo}/registry/src"
-INSTALLED_CRATE=$(find "$CARGO_REGISTRY" -maxdepth 2 -name "llama-cpp-sys-2-0.1.140" -type d 2>/dev/null | head -1)
+INSTALLED_CRATE=$(find "$CARGO_REGISTRY" -maxdepth 2 -name "llama-cpp-sys-2-${LLAMA_CPP_2_VERSION}" -type d 2>/dev/null | head -1)
 
 if [ -z "$INSTALLED_CRATE" ]; then
-    echo "ERROR: llama-cpp-sys-2 v0.1.140 not found in cargo registry."
+    echo "ERROR: llama-cpp-sys-2 v${LLAMA_CPP_2_VERSION} not found in cargo registry."
     echo "Run 'cargo fetch' in the engine/ directory first."
     exit 1
 fi
