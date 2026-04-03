@@ -49,7 +49,7 @@ pub fn resolve_turboquant_cache_type(s: &str, strict: bool) -> Option<ResolvedCa
     } else if strict {
         tracing::error!(
             "TurboQuant {tq_type} requested in strict mode but backend does not support it. \
-             Build with --features turboquant_native against the spiritbuun fork."
+             Build with --features turboquant_native against the AmesianX/TurboQuant fork."
         );
         Some(ResolvedCacheType::Unsupported {
             requested: tq_type,
@@ -76,12 +76,12 @@ pub fn resolve_turboquant_cache_type(s: &str, strict: bool) -> Option<ResolvedCa
 pub fn log_turboquant_status() {
     if backend_supports_turboquant() {
         tracing::info!(
-            "TurboQuant: ACTIVE (native backend, tq3_0/tq4_0 available for --cache-type-k/v)"
+            "TurboQuant: ACTIVE (AmesianX v1.4.1+, tbq3_0/tbq4_0/tbqp3_0/tbqp4_0 available)"
         );
     } else {
         tracing::info!(
             "TurboQuant: STANDBY (module loaded, backend lacks native support — \
-             tq3_0/tq4_0 will fall back to F16)"
+             tbq3_0/tbq4_0 will fall back to F16)"
         );
     }
 }
@@ -90,8 +90,8 @@ pub fn log_turboquant_status() {
 ///
 /// Returns true when built with `--features turboquant_native`, which
 /// implies the vendored llama.cpp has TQ type definitions (GGML type
-/// IDs 41-43).  This is set automatically when using the spiritbuun
-/// fork via `scripts/setup-turboquant.sh`.
+/// IDs 41-44).  This is set automatically when using the AmesianX fork
+/// via `scripts/setup-turboquant.sh`.
 fn backend_supports_turboquant() -> bool {
     cfg!(feature = "turboquant_native")
 }
