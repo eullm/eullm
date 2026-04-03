@@ -369,7 +369,9 @@ async def collect(args):
 
             fl = test["filler_tokens"]
             fl_s = f"filler={fl:>5}t" if fl else "direct       "
-            print(f"  [{status}] {test['id']:<42} {fl_s}  {detail[:60]}")
+            ptoks = timing.get("prompt_eval_count", 0)
+            ptoks_s = f" ctx={ptoks:>5}t" if ptoks else ""
+            print(f"  [{status}] {test['id']:<42} {fl_s}{ptoks_s}  {detail[:50]}")
 
             eval_toks = timing.get("eval_count", 0)
             eval_ns   = timing.get("eval_duration_ns", 0)
@@ -429,6 +431,26 @@ async def collect(args):
                 m = [r for r in delayed if r["filler_tokens"] == fl and r["subtype"] == sub]
                 row[sub] = f"{sum(1 for r in m if r['passed'])}/{len(m)}" if m else "-"
             print(f"  {fl:>6}t   {row['matrix_2x2']:>10} {row['matrix_3x3']:>10} {row['scalar']:>10}")
+
+    # Breakdown by context size bucket (to spot precision bugs at specific token ranges)
+    ctx_results = [r for r in results if r.get("prompt_tokens", 0) > 0]
+    if ctx_results:
+        buckets = [(0, 500), (500, 1000), (1000, 1500), (1500, 2000), (2000, 2500), (2500, 9999)]
+        bucket_rows = []
+        for lo, hi in buckets:
+            br = [r for r in ctx_results if lo < r["prompt_tokens"] <= hi]
+            if br:
+                bucket_rows.append((lo, hi, br))
+        if bucket_rows:
+            print(f"\n  Accuracy by context size (prompt tokens):")
+            print(f"  {'Range':>16}   {'Pass/Total':>12}   {'%':>6}   {'Avg ctx':>9}")
+            print(f"  {'-'*52}")
+            for lo, hi, br in bucket_rows:
+                bp = sum(1 for r in br if r["passed"])
+                bt = len(br)
+                bpct = bp / bt * 100
+                avg_ctx = sum(r["prompt_tokens"] for r in br) / bt
+                print(f"  {lo:>5}–{hi:<5}t        {bp:>4}/{bt:<4}        {bpct:>5.1f}%   {avg_ctx:>7.0f}t")
 
     # Timing summary
     total_wall = time.time() - run_start
@@ -530,7 +552,9 @@ def main():
     c.add_argument("--label", required=True)
     c.add_argument("--temperature", type=float, default=0.0)
     c.add_argument("--filler", default="200,500,1000",
-                   help="Comma-separated filler token counts (0 = direct only)")
+                   help="Comma-separated filler token counts (0 = direct only). "
+                        "Use 200,500,1000,1500,2000,2500 for full bug-window coverage "
+                        "(AmesianX v1.3 V-cache precision bug manifests at ctx 1500-2300t)")
     c.add_argument("--skip-3x3", action="store_true")
     c.add_argument("--skip-scalar", action="store_true")
     c.add_argument("--no-think", action="store_true",
