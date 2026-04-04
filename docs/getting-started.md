@@ -228,14 +228,14 @@ TurboQuant compresses the KV cache using WHT rotation + Lloyd-Max quantization, 
 # One-time setup
 ./scripts/setup-turboquant.sh
 
-# Run Qwen3-14B with 131K context on 16GB VRAM
-eullm run ./qwen3-14b-q4_k_m.gguf \
+# Run Qwen3-14B with 131K context on 16GB VRAM (head_dim=128)
+eullm-tq run ./qwen3-14b-q4_k_m.gguf \
   --ctx-size 131072 \
-  --cache-type-k tq4_0 --cache-type-v tq4_0 \
+  --cache-type-k tbq4_1 --cache-type-v tbq4_1 \
   --batch-size 16
 ```
 
-Available TurboQuant types: `tq4_0` (~50% KV cache VRAM savings) and `tq3_0` (~62% savings). See [Engine documentation](engine.md) for details.
+Available TurboQuant types: `tbq4_1` / `tbq3_1` for head_dim=128 models (Qwen3, Llama, Mistral). See [Engine documentation](engine.md) for the full type reference.
 
 > **Note:** TurboQuant is experimental and may change between releases.
 

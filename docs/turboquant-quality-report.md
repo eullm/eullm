@@ -26,7 +26,7 @@
 
 - **Model**: Qwen3-14B Q4_K_M (GGUF)
 - **Hardware**: NVIDIA RTX 5070 Ti 16GB
-- **Engine**: EULLM v0.3.2 with TurboQuant (spiritbuun CUDA fork)
+- **Engine**: EULLM v0.3.2 with TurboQuant (spiritbuun CUDA fork — superseded by AmesianX v1.4.2 in v0.3.6+)
 - **Temperature**: 0.0 (deterministic)
 - **Thinking mode**: disabled (`think: false`)
 - **Tests**: 100 questions, 20 per category, all with verifiable answers

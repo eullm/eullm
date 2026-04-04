@@ -212,13 +212,15 @@ eullm run qwen3-14b --ctx-size 16384 --cache-type-k q8_0 --cache-type-v q4_0
 eullm run qwen3-14b --ctx-size 32768 --cache-type-k q4_0 --cache-type-v q4_0
 ```
 
-Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`, `tq4_0`, `tq3_0`.
+Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`. With TurboQuant: `tbq4_1`, `tbq3_1` (head_dim=128), `tbq4_0`, `tbq3_0` (head_dim=256).
 
 > **Note:** Quantized V cache types (Q4_0, Q8_0) require Flash Attention. On GPUs where Flash Attention doesn't support these types, the engine automatically falls back to F16 KV cache and logs a warning. You can also set F16 explicitly by omitting the `--cache-type-v` flag.
 
 ### TurboQuant KV Cache (Experimental)
 
 TurboQuant is a KV cache compression method based on the TurboQuant algorithm (Zandieh et al., ICLR 2026). It applies **WHT (Walsh-Hadamard Transform) rotation** followed by **Lloyd-Max quantization** to compress the KV cache far more aggressively than standard round-to-nearest quantization. This is **not weight quantization** — the model weights stay at their original precision (e.g. Q4_K_M GGUF). Only the keys and values stored in the KV cache during inference are compressed.
+
+Backend: **AmesianX/TurboQuant v1.4.2** (MMA tensor core acceleration, multi-head_dim support).
 
 This enables running large models at very long context lengths on consumer GPUs that would otherwise run out of VRAM.
 
@@ -232,10 +234,10 @@ KV cache VRAM usage for Qwen3-14B at 131K context:
 |:---:|:---:|:---:|---|
 | F16 (default) | ~10 GB | — | Does not fit on 16GB GPU with model weights |
 | Q4_0 | ~2.5 GB | ~75% | Standard round-to-nearest, higher quality loss |
-| **TQ4_0** | **~5 GB** | **~50%** | WHT + Lloyd-Max 4-bit, better quality than Q4_0 at same bits |
-| **TQ3_0** | **~3.8 GB** | **~62%** | WHT + Lloyd-Max 3-bit, maximum compression |
+| **tbq4_1** | **~5 GB** | **~50%** | WHT + Lloyd-Max 4-bit, head_dim=128 (Qwen3/Llama/Mistral) |
+| **tbq3_1** | **~3.8 GB** | **~62%** | WHT + Lloyd-Max 3-bit, head_dim=128, maximum compression |
 
-**Key result:** Qwen3-14B Q4_K_M (~8GB weights) + TQ4_0 KV cache (~5GB for 131K context) = **~13GB total**, fitting on an RTX 5070 Ti 16GB with room for 16 concurrent batch slots.
+**Key result:** Qwen3-14B Q4_K_M (~8GB weights) + tbq4_1 KV cache (~5GB for 131K context) = **~13GB total**, fitting on an RTX 5070 Ti 16GB with room for 16 concurrent batch slots.
 
 #### Setup
 
@@ -254,33 +256,40 @@ cargo build --release --features cuda   # or your preferred GPU backend
 
 #### Usage
 
-Use the `tq4_0` or `tq3_0` cache types via the `--cache-type-k` and `--cache-type-v` flags:
+Use the TurboQuant cache types via `--cache-type-k` and `--cache-type-v`. The suffix encodes the head_dim of the model — **you must use the correct suffix** (bypasses auto-detection):
+
+| Suffix | head_dim | Models |
+|---|:---:|---|
+| `tbq4_1` / `tbq3_1` | 128 | Qwen3, Llama, Mistral, Falcon |
+| `tbq4_0` / `tbq3_0` | 256 | Qwen2.5-72B, some large models |
+| `tbq4_2` / `tbq3_2` | 64  | Phi-3-mini, some small models |
 
 ```bash
-# TQ4_0 — ~50% KV cache VRAM savings, good quality
-eullm run ./qwen3-14b-q4_k_m.gguf \
+# Best quality — asymmetric: q8_0 keys + tbq4 values (Qwen3/Llama head_dim=128)
+eullm-tq run ./qwen3-14b-q4_k_m.gguf \
   --ctx-size 131072 \
-  --cache-type-k tq4_0 --cache-type-v tq4_0 \
+  --cache-type-k q8_0 --cache-type-v tbq4_1 \
   --batch-size 16
 
-# TQ3_0 — ~62% KV cache VRAM savings, maximum compression
-eullm run ./qwen3-14b-q4_k_m.gguf \
+# Maximum compression — symmetric tbq3 (head_dim=128)
+eullm-tq run ./qwen3-14b-q4_k_m.gguf \
   --ctx-size 131072 \
-  --cache-type-k tq3_0 --cache-type-v tq3_0 \
+  --cache-type-k tbq3_1 --cache-type-v tbq3_1 \
   --batch-size 16
 
-# Mixed: TQ4_0 for keys, TQ3_0 for values
-eullm run ./qwen3-14b-q4_k_m.gguf \
+# With QJL correction (tbqp) — higher quality, same compression
+eullm-tq run ./qwen3-14b-q4_k_m.gguf \
   --ctx-size 131072 \
-  --cache-type-k tq4_0 --cache-type-v tq3_0
+  --cache-type-k tbqp4_1 --cache-type-v tbq4_1
 ```
 
 #### When to use TurboQuant
 
-| Scenario | Recommended type |
+| Scenario | Recommended config |
 |---|---|
-| Long context (64K–131K) on consumer GPU (16GB) | `tq4_0` |
-| Maximum context on limited VRAM | `tq3_0` |
+| Best quality + VRAM saving (head_dim=128) | `q8_0-K / tbq4_1-V` |
+| Long context (64K–131K) on 16GB GPU | `tbq4_1 / tbq4_1` |
+| Maximum context on limited VRAM | `tbq3_1 / tbq3_1` |
 | Short context (4K–8K), plenty of VRAM | `f16` (default) |
 | Standard VRAM savings without TurboQuant | `q8_0` or `q4_0` |
 
@@ -793,7 +802,7 @@ The model generates fewer tokens than `num_predict` requested.
 | Component | Status |
 |---|---|
 | CLI (pull, run, list, show, serve, forge, import-ollama) | Implemented |
-| Real inference (llama.cpp via llama-cpp-2 0.1.140) | Implemented |
+| Real inference (llama.cpp via llama-cpp-2 0.1.141) | Implemented |
 | EULLM API routes (Ollama-compatible) | Implemented |
 | OpenAI-compatible API | Implemented |
 | GPU acceleration (CUDA, ROCm, Vulkan, Metal) | Implemented (feature flags) |
@@ -804,7 +813,7 @@ The model generates fewer tokens than `num_predict` requested.
 | Import from Ollama (import-ollama with GGUF patching) | Implemented |
 | Dynamic model swap (load/unload via API, dynamic batch_size/ctx_size) | Implemented |
 | KV cache (F16 default, automatic fallback from quantized types) | Implemented |
-| TurboQuant KV cache (tq4_0, tq3_0 — WHT + Lloyd-Max compression) | Experimental |
+| TurboQuant KV cache (tbq4_1, tbq3_1 — WHT + Lloyd-Max, AmesianX v1.4.2) | Experimental |
 | Constrained JSON decoding (format: "json" via GBNF) | Implemented |
 | Continuous batching scheduler | Implemented |
 | Audit trail (persistent JSONL) | Implemented |
