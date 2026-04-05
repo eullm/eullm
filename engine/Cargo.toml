@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.3.6"
+version = "0.3.10"
 edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"
@@ -52,6 +52,6 @@ predicates = "3"
 
 # ── TurboQuant backend (experimental) ───────────────────────────
 # To enable TurboQuant, run: scripts/setup-turboquant.sh
-# The script vendors llama-cpp-sys-2 with AmesianX/TurboQuant and
+# The script vendors llama-cpp-sys-2 with AmesianX/TurboQuant v1.5.0 and
 # appends [patch.crates-io] to this file automatically.
 # Then build with: cargo build --release --features "cuda turboquant_native"

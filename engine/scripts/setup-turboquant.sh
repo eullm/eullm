@@ -69,14 +69,15 @@ echo "Copying crate to vendor/..."
 cp -r "$INSTALLED_CRATE" "$SYS_CRATE_DIR"
 chmod -R u+w "$SYS_CRATE_DIR"
 
-# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.4.2
-echo "Cloning AmesianX/TurboQuant v1.4.2..."
+# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.5.0
+echo "Cloning AmesianX/TurboQuant v1.5.0..."
 rm -rf "${SYS_CRATE_DIR}/llama.cpp"
 git clone --depth 1 --branch main \
     https://github.com/AmesianX/TurboQuant.git \
     "${SYS_CRATE_DIR}/llama.cpp"
-# Pin to v1.4.2 (MMA tensor core acceleration, +55% throughput on tbq3)
-git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.4.2
+# Pin to v1.5.0 (Gemma 4 / hybrid SWA support, 512-point WHT single-pass,
+#               upstream llama.cpp rebase; TBQP not supported at D=512)
+git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.5.0
 git -C "${SYS_CRATE_DIR}/llama.cpp" checkout FETCH_HEAD
 
 # 4. Remove .git from the cloned repo (we vendor it, not submodule it)
@@ -96,7 +97,7 @@ if [ -f "$BUILD_RS" ] && grep -q "let mut llama_libs = extract_lib_names" "$BUIL
 fi
 
 CHAT_H="${SYS_CRATE_DIR}/llama.cpp/common/chat.h"
-echo "Checking fork compatibility with llama-cpp-sys-2 v0.1.140..."
+echo "Checking fork compatibility with llama-cpp-sys-2 v0.1.141..."
 
 if [ -f "$CHAT_H" ] && ! grep -q "thinking_forced_open" "$CHAT_H"; then
     echo "  Adding thinking_forced_open to structs in chat.h..."
@@ -173,7 +174,7 @@ echo "=== Setup complete ==="
 echo ""
 echo "Vendored llama-cpp-sys-2: ${SYS_CRATE_DIR}"
 echo "Patch in: ${CARGO_TOML}  (path = ${PATCH_PATH})"
-echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44"
+echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44 (v1.5.0: D=512 SWA support)"
 echo ""
 echo "Build with:"
 echo "  cd ${ENGINE_DIR}"
