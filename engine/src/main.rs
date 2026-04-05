@@ -1209,6 +1209,9 @@ async fn interactive_chat(
         .strip_prefix("eullm/")
         .unwrap_or(model_name);
 
+    let mut temperature: f32 = 0.8;
+    let mut max_reply_tokens: u32 = 2048;
+
     let mut history: Vec<ChatMessage> = vec![ChatMessage {
         role: "system",
         content: "You are a helpful assistant.".into(),
@@ -1256,24 +1259,46 @@ async fn interactive_chat(
         }
 
         // Commands
-        match input.as_str() {
-            "/bye" | "/exit" | "/quit" => {
-                println!("Bye!");
-                return;
+        if input == "/bye" || input == "/exit" || input == "/quit" {
+            println!("Bye!");
+            return;
+        } else if input == "/clear" {
+            history.truncate(1);
+            println!("Chat history cleared.\n");
+            continue;
+        } else if input == "/help" {
+            println!("Commands:");
+            println!("  /bye              Exit the chat");
+            println!("  /clear            Clear conversation history");
+            println!("  /temp <0.0–2.0>   Set temperature (current: {temperature:.1})");
+            println!("  /maxtokens <n>    Set max reply tokens (current: {max_reply_tokens})");
+            println!("  /system <text>    Replace system prompt");
+            println!("  /help             Show this help\n");
+            continue;
+        } else if let Some(val) = input.strip_prefix("/temp ") {
+            match val.trim().parse::<f32>() {
+                Ok(t) if (0.0..=2.0).contains(&t) => {
+                    temperature = t;
+                    println!("Temperature set to {temperature:.2}\n");
+                }
+                _ => eprintln!("Usage: /temp <0.0–2.0>\n"),
             }
-            "/clear" => {
-                history.truncate(1); // keep system message
-                println!("Chat history cleared.\n");
-                continue;
+            continue;
+        } else if let Some(val) = input.strip_prefix("/maxtokens ") {
+            match val.trim().parse::<u32>() {
+                Ok(n) if n > 0 => {
+                    max_reply_tokens = n;
+                    println!("Max reply tokens set to {max_reply_tokens}\n");
+                }
+                _ => eprintln!("Usage: /maxtokens <n>\n"),
             }
-            "/help" => {
-                println!("Commands:");
-                println!("  /bye     Exit the chat");
-                println!("  /clear   Clear conversation history");
-                println!("  /help    Show this help\n");
-                continue;
+            continue;
+        } else if let Some(sys) = input.strip_prefix("/system ") {
+            if let Some(first) = history.first_mut() {
+                first.content = sys.trim().to_string();
+                println!("System prompt updated.\n");
             }
-            _ => {}
+            continue;
         }
 
         // Add user message to history.
@@ -1301,7 +1326,8 @@ async fn interactive_chat(
 
         let request = inference::GenerateRequest {
             prompt,
-            max_tokens,
+            max_tokens: max_tokens.min(max_reply_tokens),
+            temperature,
             stop_sequences: template.stop_sequences(),
             ..Default::default()
         };
