@@ -476,6 +476,7 @@ async def collect(args):
 
     output = {
         "label": args.label,
+        "note": args.note,
         "model": args.model,
         "url": args.url,
         "temperature": args.temperature,
@@ -564,6 +565,8 @@ def main():
                    help="Max tokens to generate per response (default: 512). "
                         "Use 1024 for math models that show full working.")
     c.add_argument("--output", "-o")
+    c.add_argument("--note", default="",
+                   help="Free-form note saved in JSON metadata (e.g. 'cache-k=q8_0 cache-v=tbq4_1 ctx=32768')")
     c.add_argument("--verbose", "-v", action="store_true")
 
     p = sub.add_parser("compare")
