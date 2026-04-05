@@ -1323,6 +1323,17 @@ async fn interactive_chat(
                     tokens_prompt,
                     duration_ms,
                 } => {
+                    // Strip any trailing stop sequence that was printed as part of the stream.
+                    for stop in template.stop_sequences() {
+                        if response_text.ends_with(&stop) {
+                            // Erase the stop token from the terminal using backspaces.
+                            let erase = "\x08 \x08".repeat(stop.chars().count());
+                            print!("{erase}");
+                            let _ = std::io::stdout().flush();
+                            response_text.truncate(response_text.len() - stop.len());
+                            break;
+                        }
+                    }
                     let tps = if duration_ms > 0 {
                         tokens_generated as f64 / (duration_ms as f64 / 1000.0)
                     } else {
