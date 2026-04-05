@@ -395,7 +395,11 @@ impl InferenceEngine {
         check_gpu_support(config.gpu_layers);
 
         tracing::info!("Initializing llama.cpp backend...");
-        let backend = LlamaBackend::init()?;
+        let mut backend = LlamaBackend::init()?;
+        // Suppress llama.cpp/ggml internal log messages (CUDA graph warmup etc.)
+        // so they don't pollute the interactive REPL or API response streams.
+        // EULLM uses tracing for its own structured logging.
+        backend.void_logs();
 
         let model_params = if config.gpu_layers >= 0 {
             LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers as u32)
