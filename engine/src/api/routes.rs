@@ -169,24 +169,19 @@ fn parse_format_grammar(body: &Value) -> Option<String> {
     }
 }
 
-/// Format chat messages into a ChatML-style prompt string.
-/// When `think` is false, appends `/no_think` to disable Qwen3 thinking mode.
-fn format_chat_prompt(messages: &[Value], think: bool) -> String {
-    let mut prompt = String::new();
-    for msg in messages {
-        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
-        let content = msg
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        prompt.push_str(&format!("<|im_start|>{role}\n{content}<|im_end|>\n"));
-    }
-    if think {
-        prompt.push_str("<|im_start|>assistant\n");
-    } else {
-        prompt.push_str("<|im_start|>assistant\n<think>\n</think>\n\n");
-    }
-    prompt
+/// Format chat messages into a prompt string using the model-appropriate template.
+/// When `think` is false, suppresses Qwen3 thinking mode (ChatML only).
+fn format_chat_prompt(messages: &[Value], think: bool, model_name: &str) -> String {
+    let template = crate::chat_template::ChatTemplate::detect(model_name);
+    let pairs: Vec<(&str, &str)> = messages
+        .iter()
+        .map(|msg| {
+            let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+            let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+            (role, content)
+        })
+        .collect();
+    template.build_prompt(&pairs, think)
 }
 
 /// Collect all tokens from a receiver into a final result.
@@ -423,9 +418,14 @@ async fn chat(
         .unwrap_or_default();
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
-    let prompt = format_chat_prompt(&messages, think);
+    let model_name_ref: &str = &model;
+    let template = crate::chat_template::ChatTemplate::detect(model_name_ref);
+    let prompt = format_chat_prompt(&messages, think, model_name_ref);
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
+
+    let mut stop_sequences = template.stop_sequences();
+    stop_sequences.push("<|end|>".to_string());
 
     let request = GenerateRequest {
         prompt,
@@ -438,10 +438,7 @@ async fn chat(
         repeat_last_n: sp.repeat_last_n,
         seed: sp.seed,
         num_ctx: sp.num_ctx,
-        stop_sequences: vec![
-            "<|im_end|>".to_string(),
-            "<|end|>".to_string(),
-        ],
+        stop_sequences,
         grammar,
         raw: false,
     };
@@ -595,9 +592,14 @@ async fn chat_completions(
         .unwrap_or_default();
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
-    let prompt = format_chat_prompt(&messages, think);
+    let model_name_ref: &str = &model;
+    let template = crate::chat_template::ChatTemplate::detect(model_name_ref);
+    let prompt = format_chat_prompt(&messages, think, model_name_ref);
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
+
+    let mut stop_sequences = template.stop_sequences();
+    stop_sequences.push("<|end|>".to_string());
 
     let request = GenerateRequest {
         prompt,
@@ -610,10 +612,7 @@ async fn chat_completions(
         repeat_last_n: sp.repeat_last_n,
         seed: sp.seed,
         num_ctx: sp.num_ctx,
-        stop_sequences: vec![
-            "<|im_end|>".to_string(),
-            "<|end|>".to_string(),
-        ],
+        stop_sequences,
         grammar,
         raw: false,
     };

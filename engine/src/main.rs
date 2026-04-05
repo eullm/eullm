@@ -1,5 +1,6 @@
 mod api;
 mod audit;
+mod chat_template;
 mod gguf_patch;
 mod inference;
 mod models;
@@ -1197,30 +1198,6 @@ struct ChatMessage {
     content: String,
 }
 
-/// Build a ChatML prompt from conversation history.
-///
-/// Format:
-/// ```text
-/// <|im_start|>system
-/// You are a helpful assistant.<|im_end|>
-/// <|im_start|>user
-/// Hello<|im_end|>
-/// <|im_start|>assistant
-/// ```
-fn build_chatml_prompt(history: &[ChatMessage]) -> String {
-    let mut prompt = String::new();
-    for msg in history {
-        prompt.push_str("<|im_start|>");
-        prompt.push_str(msg.role);
-        prompt.push('\n');
-        prompt.push_str(&msg.content);
-        prompt.push_str("<|im_end|>\n");
-    }
-    // Open the assistant turn for the model to complete.
-    prompt.push_str("<|im_start|>assistant\n");
-    prompt
-}
-
 async fn interactive_chat(
     scheduler: inference::SchedulerHandle,
     model_name: &str,
@@ -1305,8 +1282,12 @@ async fn interactive_chat(
             content: input,
         });
 
-        // Build prompt and estimate token budget.
-        let prompt = build_chatml_prompt(&history);
+        // Build prompt using the model-appropriate chat template.
+        let template = crate::chat_template::ChatTemplate::detect(model_name);
+        let pairs: Vec<(&str, &str)> = history.iter()
+            .map(|m| (m.role, m.content.as_str()))
+            .collect();
+        let prompt = template.build_prompt(&pairs, true);
 
         // Rough token estimate: ~4 chars per token. Leave room for the response.
         let estimated_prompt_tokens = prompt.len() as u32 / 4;
@@ -1321,7 +1302,7 @@ async fn interactive_chat(
         let request = inference::GenerateRequest {
             prompt,
             max_tokens,
-            stop_sequences: vec!["<|im_end|>".into()],
+            stop_sequences: template.stop_sequences(),
             ..Default::default()
         };
 
