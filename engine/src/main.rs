@@ -270,21 +270,21 @@ async fn main() {
                 eprintln!("  If it crashes, try symmetric: --cache-type-k {cache_type_v} --cache-type-v {cache_type_v}");
             }
             // Standard quantized KV (q8_0, q4_0) on Gemma 4 (mixed SWA D=512/256)
-            // causes KV cache layout mismatches — model echoes input instead of responding.
-            // Auto-correct to f16/f16 when this incompatible combination is detected.
+            // Gemma 4's mixed SWA architecture (25 SWA layers D=256 + 5 global D=512)
+            // is incompatible with any KV quantization in AmesianX v1.5.0:
+            //   - q8_0/q4_0: KV layout mismatch → model echoes input
+            //   - tbq4_0/tbq4_0: SWA quantization noise → model generates past stop token
+            // AmesianX v1.5.1 will fix this with SWA bypass to f16. Until then,
+            // auto-correct all non-f16 KV to f16/f16 for Gemma 4.
             let model_lower = model.to_lowercase();
             let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
-            let is_std_quant = |t: &inference::KvCacheType| matches!(
-                t,
-                inference::KvCacheType::Q8_0 | inference::KvCacheType::Q4_0
-                | inference::KvCacheType::Q4_1 | inference::KvCacheType::Q5_0
-                | inference::KvCacheType::Q5_1
-            );
-            if is_gemma4 && (is_std_quant(&ctk) || is_std_quant(&ctv)) {
-                eprintln!("[EULLM] Gemma 4 + standard quantized KV ({cache_type_k}/{cache_type_v}): incompatible.");
-                eprintln!("[EULLM] Gemma 4's mixed SWA architecture (D=512/256) causes KV layout mismatches");
-                eprintln!("[EULLM] with q8_0/q4_0 — auto-correcting to f16/f16.");
-                eprintln!("[EULLM] Use --cache-type-k tbq4_0 --cache-type-v tbq4_0 for TurboQuant compression.");
+            let needs_correction = ctk != inference::KvCacheType::F16
+                || ctv != inference::KvCacheType::F16;
+            if is_gemma4 && needs_correction {
+                eprintln!("[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v}).");
+                eprintln!("[EULLM] Gemma 4's mixed SWA architecture (D=512/256) requires f16 KV cache");
+                eprintln!("[EULLM] until AmesianX TurboQuant v1.5.1 (SWA bypass) is available.");
+                eprintln!("[EULLM] Auto-correcting to f16/f16.");
                 ctk = inference::KvCacheType::F16;
                 ctv = inference::KvCacheType::F16;
             }
