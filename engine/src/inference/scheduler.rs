@@ -251,7 +251,11 @@ fn run_scheduler_loop(
     super::log_turboquant_status();
 
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
-    let backend = LlamaBackend::init()?;
+    let mut backend = LlamaBackend::init()?;
+    // Suppress llama.cpp/ggml log messages (CUDA graph warmup etc.) — these
+    // come from the global ggml logger and pollute interactive output.
+    // void_logs() calls llama_log_set which internally calls ggml_log_set.
+    backend.void_logs();
 
     let model_params = if config.gpu_layers >= 0 {
         LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers as u32)

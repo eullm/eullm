@@ -252,14 +252,22 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            // Mixed TurboQuant types (e.g. K=tq4_0, V=tq3_0) are valid:
-            // K needs more precision (attention scores), V tolerates more compression.
-            // Warn the user, but allow it — fallback handles failures gracefully.
+            // Mixed TurboQuant types (e.g. K=tq4_0, V=tq3_0) — both Unknown.
             if let (inference::KvCacheType::Unknown(k_id), inference::KvCacheType::Unknown(v_id)) = (&ctk, &ctv)
                 && k_id != v_id
             {
                 eprintln!("Note: mixed TurboQuant KV cache (K={cache_type_k}, V={cache_type_v}).");
                 eprintln!("  Advanced config — if OOM, will fallback to uniform type then F16.");
+            }
+            // Asymmetric F16/Q8_0-K + TurboQuant-V — may crash on models with
+            // non-standard head dimensions (e.g. Gemma 4 D=512/256 SWA).
+            // For those models, use symmetric TQ/TQ (e.g. tbq4_0/tbq4_0) instead.
+            if matches!(&ctv, inference::KvCacheType::Unknown(_))
+                && !matches!(&ctk, inference::KvCacheType::Unknown(_))
+            {
+                eprintln!("Note: asymmetric KV cache (K={cache_type_k}, V={cache_type_v}).");
+                eprintln!("  TurboQuant V with non-TQ K may crash on Gemma 4 / models with D=512.");
+                eprintln!("  If it crashes, try symmetric: --cache-type-k {cache_type_v} --cache-type-v {cache_type_v}");
             }
             cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
         }

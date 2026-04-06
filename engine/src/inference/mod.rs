@@ -101,13 +101,22 @@ pub(crate) fn build_ctx_params_with_cache(
         params = params.with_type_k(cache_type_k).with_type_v(cache_type_v);
     }
 
-    if config.flash_attn {
+    // The default flash_attn_type in llama.cpp is AUTO (-1), not DISABLED (0).
+    // We must always set it explicitly — if we skip this when flash_attn=false,
+    // the default AUTO mode stays active, which can enable FA unexpectedly.
+    let fa_policy: i32 = if config.flash_attn {
         // AUTO (-1): llama.cpp tests whether the GPU supports FA for the
-        // current KV cache types.  If not → disables FA and uses regular
-        // attention on GPU.  ENABLED (1) would skip this check and silently
-        // route the FA op to the CPU backend on unsupported configs.
-        params = params.with_flash_attention_policy(-1);
-    }
+        // current KV cache types.  If not → disables FA and uses standard
+        // attention.  ENABLED (1) would skip this check.
+        -1
+    } else {
+        // DISABLED (0): explicitly turn off FA.
+        // Note: llama.cpp requires flash_attn for quantized V cache; if V is
+        // quantized and FA is disabled, context creation returns an error and
+        // our fallback logic switches to F16/F16.
+        0
+    };
+    params = params.with_flash_attention_policy(fa_policy);
     params
 }
 
