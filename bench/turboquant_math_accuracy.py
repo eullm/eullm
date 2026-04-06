@@ -337,7 +337,7 @@ async def collect(args):
     filler_levels = [int(x) for x in args.filler.split(",") if x and int(x) > 0]
     tests = build_tests(filler_levels, skip_3x3=args.skip_3x3, skip_scalar=args.skip_scalar)
 
-    think = None if args.no_think else False
+    think = None if args.no_think else True
 
     print(f"TurboQuant Math Accuracy Test")
     print(f"  URL:   {args.url}")
