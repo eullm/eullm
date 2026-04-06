@@ -269,6 +269,20 @@ async fn main() {
                 eprintln!("  TurboQuant V with non-TQ K may crash on Gemma 4 / models with D=512.");
                 eprintln!("  If it crashes, try symmetric: --cache-type-k {cache_type_v} --cache-type-v {cache_type_v}");
             }
+            // Standard quantized KV (q8_0, q4_0) on Gemma 4 (mixed SWA D=512/256)
+            // causes KV cache layout mismatches — model echoes input instead of responding.
+            // Gemma 4 only supports f16/f16 or tbq4_0/tbq4_0 (AmesianX-specific).
+            let model_lower = model.to_lowercase();
+            if (model_lower.contains("gemma-4") || model_lower.contains("gemma4"))
+                && (matches!(&ctk, inference::KvCacheType::Q8_0 | inference::KvCacheType::Q4_0 | inference::KvCacheType::Q4_1 | inference::KvCacheType::Q5_0 | inference::KvCacheType::Q5_1)
+                    || matches!(&ctv, inference::KvCacheType::Q8_0 | inference::KvCacheType::Q4_0 | inference::KvCacheType::Q4_1 | inference::KvCacheType::Q5_0 | inference::KvCacheType::Q5_1))
+            {
+                eprintln!("Warning: Gemma 4 detected with standard quantized KV cache ({cache_type_k}/{cache_type_v}).");
+                eprintln!("  Gemma 4's mixed SWA architecture (D=512/256) is incompatible with q8_0/q4_0 KV.");
+                eprintln!("  The model will echo input instead of responding.");
+                eprintln!("  Use: --cache-type-k f16 --cache-type-v f16");
+                eprintln!("  Or (with AmesianX TurboQuant): --cache-type-k tbq4_0 --cache-type-v tbq4_0");
+            }
             cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
         }
         Commands::List => cmd_list(&store),
@@ -1358,13 +1372,20 @@ async fn interactive_chat(
                     duration_ms,
                 } => {
                     // Strip any trailing stop sequence that was printed as part of the stream.
+                    // Use trim_end() before matching: some models append \n after the
+                    // stop token (e.g. Gemma's <end_of_turn>\n), which would break
+                    // an exact ends_with() check.
+                    let trimmed = response_text.trim_end();
                     for stop in template.stop_sequences() {
-                        if response_text.ends_with(&stop) {
-                            // Erase the stop token from the terminal using backspaces.
-                            let erase = "\x08 \x08".repeat(stop.chars().count());
+                        if trimmed.ends_with(&stop) {
+                            // Erase the stop token (+ any trailing whitespace) from
+                            // the terminal using backspaces.
+                            let suffix_len = response_text.len() - trimmed.len() + stop.len();
+                            let erase_chars = response_text[response_text.len() - suffix_len..].chars().count();
+                            let erase = "\x08 \x08".repeat(erase_chars);
                             print!("{erase}");
                             let _ = std::io::stdout().flush();
-                            response_text.truncate(response_text.len() - stop.len());
+                            response_text.truncate(trimmed.len() - stop.len());
                             break;
                         }
                     }
