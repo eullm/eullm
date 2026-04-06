@@ -244,11 +244,11 @@ async fn main() {
         } => {
             // --daemon is handled at the top of main() before tokio starts.
             let _ = (daemon, pidfile);
-            let ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
+            let mut ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            let ctv = inference::parse_cache_type(&cache_type_v).unwrap_or_else(|e| {
+            let mut ctv = inference::parse_cache_type(&cache_type_v).unwrap_or_else(|e| {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
@@ -271,17 +271,22 @@ async fn main() {
             }
             // Standard quantized KV (q8_0, q4_0) on Gemma 4 (mixed SWA D=512/256)
             // causes KV cache layout mismatches — model echoes input instead of responding.
-            // Gemma 4 only supports f16/f16 or tbq4_0/tbq4_0 (AmesianX-specific).
+            // Auto-correct to f16/f16 when this incompatible combination is detected.
             let model_lower = model.to_lowercase();
-            if (model_lower.contains("gemma-4") || model_lower.contains("gemma4"))
-                && (matches!(&ctk, inference::KvCacheType::Q8_0 | inference::KvCacheType::Q4_0 | inference::KvCacheType::Q4_1 | inference::KvCacheType::Q5_0 | inference::KvCacheType::Q5_1)
-                    || matches!(&ctv, inference::KvCacheType::Q8_0 | inference::KvCacheType::Q4_0 | inference::KvCacheType::Q4_1 | inference::KvCacheType::Q5_0 | inference::KvCacheType::Q5_1))
-            {
-                eprintln!("Warning: Gemma 4 detected with standard quantized KV cache ({cache_type_k}/{cache_type_v}).");
-                eprintln!("  Gemma 4's mixed SWA architecture (D=512/256) is incompatible with q8_0/q4_0 KV.");
-                eprintln!("  The model will echo input instead of responding.");
-                eprintln!("  Use: --cache-type-k f16 --cache-type-v f16");
-                eprintln!("  Or (with AmesianX TurboQuant): --cache-type-k tbq4_0 --cache-type-v tbq4_0");
+            let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
+            let is_std_quant = |t: &inference::KvCacheType| matches!(
+                t,
+                inference::KvCacheType::Q8_0 | inference::KvCacheType::Q4_0
+                | inference::KvCacheType::Q4_1 | inference::KvCacheType::Q5_0
+                | inference::KvCacheType::Q5_1
+            );
+            if is_gemma4 && (is_std_quant(&ctk) || is_std_quant(&ctv)) {
+                eprintln!("[EULLM] Gemma 4 + standard quantized KV ({cache_type_k}/{cache_type_v}): incompatible.");
+                eprintln!("[EULLM] Gemma 4's mixed SWA architecture (D=512/256) causes KV layout mismatches");
+                eprintln!("[EULLM] with q8_0/q4_0 — auto-correcting to f16/f16.");
+                eprintln!("[EULLM] Use --cache-type-k tbq4_0 --cache-type-v tbq4_0 for TurboQuant compression.");
+                ctk = inference::KvCacheType::F16;
+                ctv = inference::KvCacheType::F16;
             }
             cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
         }
