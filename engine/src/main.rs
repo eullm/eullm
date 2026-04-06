@@ -244,11 +244,11 @@ async fn main() {
         } => {
             // --daemon is handled at the top of main() before tokio starts.
             let _ = (daemon, pidfile);
-            let ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
+            let mut ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            let ctv = inference::parse_cache_type(&cache_type_v).unwrap_or_else(|e| {
+            let mut ctv = inference::parse_cache_type(&cache_type_v).unwrap_or_else(|e| {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
@@ -268,6 +268,25 @@ async fn main() {
                 eprintln!("Note: asymmetric KV cache (K={cache_type_k}, V={cache_type_v}).");
                 eprintln!("  TurboQuant V with non-TQ K may crash on Gemma 4 / models with D=512.");
                 eprintln!("  If it crashes, try symmetric: --cache-type-k {cache_type_v} --cache-type-v {cache_type_v}");
+            }
+            // Standard quantized KV (q8_0, q4_0) on Gemma 4 (mixed SWA D=512/256)
+            // Gemma 4's mixed SWA architecture (25 SWA layers D=256 + 5 global D=512)
+            // is incompatible with any KV quantization in AmesianX v1.5.0:
+            //   - q8_0/q4_0: KV layout mismatch → model echoes input
+            //   - tbq4_0/tbq4_0: SWA quantization noise → model generates past stop token
+            // AmesianX v1.5.1 will fix this with SWA bypass to f16. Until then,
+            // auto-correct all non-f16 KV to f16/f16 for Gemma 4.
+            let model_lower = model.to_lowercase();
+            let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
+            let needs_correction = ctk != inference::KvCacheType::F16
+                || ctv != inference::KvCacheType::F16;
+            if is_gemma4 && needs_correction {
+                eprintln!("[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v}).");
+                eprintln!("[EULLM] Gemma 4's mixed SWA architecture (D=512/256) requires f16 KV cache");
+                eprintln!("[EULLM] until AmesianX TurboQuant v1.5.1 (SWA bypass) is available.");
+                eprintln!("[EULLM] Auto-correcting to f16/f16.");
+                ctk = inference::KvCacheType::F16;
+                ctv = inference::KvCacheType::F16;
             }
             cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
         }
@@ -1358,13 +1377,20 @@ async fn interactive_chat(
                     duration_ms,
                 } => {
                     // Strip any trailing stop sequence that was printed as part of the stream.
+                    // Use trim_end() before matching: some models append \n after the
+                    // stop token (e.g. Gemma's <end_of_turn>\n), which would break
+                    // an exact ends_with() check.
+                    let trimmed = response_text.trim_end();
                     for stop in template.stop_sequences() {
-                        if response_text.ends_with(&stop) {
-                            // Erase the stop token from the terminal using backspaces.
-                            let erase = "\x08 \x08".repeat(stop.chars().count());
+                        if trimmed.ends_with(&stop) {
+                            // Erase the stop token (+ any trailing whitespace) from
+                            // the terminal using backspaces.
+                            let suffix_len = response_text.len() - trimmed.len() + stop.len();
+                            let erase_chars = response_text[response_text.len() - suffix_len..].chars().count();
+                            let erase = "\x08 \x08".repeat(erase_chars);
                             print!("{erase}");
                             let _ = std::io::stdout().flush();
-                            response_text.truncate(response_text.len() - stop.len());
+                            response_text.truncate(trimmed.len() - stop.len());
                             break;
                         }
                     }
