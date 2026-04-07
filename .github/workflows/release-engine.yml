@@ -39,6 +39,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
@@ -90,6 +94,22 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
+      # Cache cargo registry (works inside containers)
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-cuda-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-cuda-
+
+      # Cache compiled target/ — biggest win: llama.cpp C++ + CUDA kernels
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock', 'engine/Cargo.toml') }}
+          restore-keys: target-cuda-${{ matrix.cuda }}-
+
       - name: Build engine with CUDA
         run: |
           . "$HOME/.cargo/env"
@@ -136,12 +156,44 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
+      # Cache cargo registry
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-cuda-tq-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-cuda-tq-
+
+      # Cache vendored TurboQuant llama.cpp clone
+      # Key: hash of setup script (encodes the pinned version tag)
+      - uses: actions/cache@v4
+        id: vendor-cache
+        with:
+          path: engine/vendor
+          key: tq-vendor-linux-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
+
+      # Cache compiled target/ — llama.cpp C++ + TurboQuant CUDA kernels
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-cuda-tq-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: target-cuda-tq-${{ matrix.cuda }}-
+
       - name: Setup TurboQuant backend
         working-directory: engine
         run: |
           . "$HOME/.cargo/env"
           cargo fetch
-          bash scripts/setup-turboquant.sh
+          if [ "${{ steps.vendor-cache.outputs.cache-hit }}" != "true" ]; then
+            bash scripts/setup-turboquant.sh
+          else
+            echo "Vendor cache hit — skipping TurboQuant clone."
+            # Still need to activate the Cargo patch if not present
+            if ! grep -q '^\[patch.crates-io\]' ../Cargo.toml; then
+              bash scripts/setup-turboquant.sh
+            fi
+          fi
           echo "--- Verifying patch (workspace root) ---"
           grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
           . "$HOME/.cargo/env" && cargo tree -i llama-cpp-sys-2 2>&1 | head -5
@@ -183,11 +235,39 @@ jobs:
         with:
           targets: aarch64-apple-darwin
 
+      # Cache cargo registry + vendor + compiled target/
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-macos-tq-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-macos-tq-
+
+      - uses: actions/cache@v4
+        id: vendor-cache-mac
+        with:
+          path: engine/vendor
+          key: tq-vendor-macos-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
+
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-metal-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: target-metal-tq-
+
       - name: Setup TurboQuant backend
         working-directory: engine
         run: |
           cargo fetch
-          bash scripts/setup-turboquant.sh
+          if [ "${{ steps.vendor-cache-mac.outputs.cache-hit }}" != "true" ]; then
+            bash scripts/setup-turboquant.sh
+          else
+            echo "Vendor cache hit — skipping TurboQuant clone."
+            if ! grep -q '^\[patch.crates-io\]' ../Cargo.toml; then
+              bash scripts/setup-turboquant.sh
+            fi
+          fi
           echo "--- Verifying patch (workspace root) ---"
           grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
           cargo tree -i llama-cpp-sys-2 2>&1 | head -5
@@ -292,11 +372,15 @@ jobs:
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda12.8-turboquant-exp -o eullm
             chmod +x eullm
 
-            # Run with TurboQuant KV cache (3-bit, ~5x compression)
-            ./eullm run model.gguf --cache-type-k tq3_0 --cache-type-v tq3_0
-
             # Run with TurboQuant KV cache (4-bit, ~4x compression)
-            ./eullm run model.gguf --cache-type-k tq4_0 --cache-type-v tq4_0
+            ./eullm run model.gguf --cache-type-k tbq4_0 --cache-type-v tbq4_0
+            ```
+
+            ### Web browsing
+
+            ```bash
+            # Enable transparent web fetch (URLs in messages are fetched and injected)
+            ./eullm run model.gguf --web
             ```
 
             ### Usage
@@ -304,6 +388,7 @@ jobs:
             ```bash
             ./eullm run ./model.gguf                    # Run any GGUF model
             ./eullm run ./model.gguf --batch-size 16    # Continuous batching for RAG
+            ./eullm run ./model.gguf --web              # Enable web browsing
             ```
 
             ### Verify checksums

@@ -44,6 +44,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "engine -> target"
       - name: Install dependencies
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
       - name: Build
@@ -65,6 +68,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "hub -> target"
       - name: Build
         working-directory: hub
         run: cargo build
@@ -83,6 +89,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-forge-${{ hashFiles('forge/pyproject.toml') }}
+          restore-keys: pip-forge-
       - name: Install
         working-directory: forge
         run: pip install -e ".[dev]"
@@ -93,7 +104,7 @@ jobs:
         working-directory: forge
         run: pytest -v
 
-  # ── Engine TurboQuant (experimental) ────────────────────────────
+  # ── Engine TurboQuant (experimental) ────────────────────────────────
   engine-turboquant:
     name: Engine TurboQuant (experimental)
     needs: changes
@@ -102,9 +113,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+
+      # Cache cargo registry + git sources
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-
+
+      # Cache the vendored TurboQuant llama.cpp + compiled target/
+      # Key includes setup script hash so a version bump invalidates cache
+      - uses: actions/cache@v4
+        id: vendor-cache
+        with:
+          path: |
+            engine/vendor
+            target
+          key: tq-vendor-${{ runner.os }}-${{ hashFiles('engine/scripts/setup-turboquant.sh', 'Cargo.lock') }}
+          restore-keys: tq-vendor-${{ runner.os }}-
+
       - name: Install dependencies
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
+
       - name: Setup TurboQuant backend
+        if: steps.vendor-cache.outputs.cache-hit != 'true'
         working-directory: engine
         run: |
           cargo fetch
@@ -113,6 +147,17 @@ jobs:
           grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
           echo "--- cargo tree llama-cpp-sys-2 ---"
           cargo tree -i llama-cpp-sys-2 2>&1 | head -5
+
+      - name: Re-activate Cargo patch (cache hit)
+        if: steps.vendor-cache.outputs.cache-hit == 'true'
+        working-directory: engine
+        run: |
+          if ! grep -q '^\[patch.crates-io\]' ../Cargo.toml; then
+            bash scripts/setup-turboquant.sh
+          else
+            echo "Cargo patch already active (vendor cache hit)."
+          fi
+
       - name: Build (turboquant)
         working-directory: engine
         run: cargo build --features turboquant
