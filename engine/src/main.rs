@@ -1347,10 +1347,15 @@ async fn interactive_chat(
             continue;
         }
 
-        // Add user message to history.
-        // If web browsing is enabled, fetch any URLs in the message and
-        // inject their content as a preceding system message.
-        if web_enabled {
+        // Add user message to permanent history.
+        history.push(ChatMessage { role: "user", content: input.clone() });
+
+        // Build prompt using the model-appropriate chat template.
+        // If web browsing is enabled, fetch URLs and inject content into a
+        // TEMPORARY message list — web content is NOT stored in history so it
+        // doesn't accumulate across turns and bloat the context.
+        let template = crate::chat_template::ChatTemplate::detect(model_name);
+        let prompt = if web_enabled {
             let urls = crate::tools::extract_urls(&input);
             if !urls.is_empty() {
                 let existing_chars: usize = history.iter().map(|m| m.content.len()).sum();
@@ -1369,25 +1374,30 @@ async fn interactive_chat(
                     }
                 }
                 if !injected.is_empty() {
-                    history.push(ChatMessage {
+                    // Build a temporary message list with the web content injected
+                    // just before the current user turn — not stored in history.
+                    let web_msg = ChatMessage {
                         role: "system",
                         content: injected.join("\n\n---\n\n"),
-                    });
+                    };
+                    let insert_at = history.len() - 1; // before last (user) msg
+                    let mut tmp: Vec<&ChatMessage> = history[..insert_at].iter().collect();
+                    tmp.push(&web_msg);
+                    tmp.push(history.last().unwrap());
+                    let pairs: Vec<(&str, &str)> = tmp.iter().map(|m| (m.role, m.content.as_str())).collect();
+                    template.build_prompt(&pairs, true)
+                } else {
+                    let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+                    template.build_prompt(&pairs, true)
                 }
+            } else {
+                let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+                template.build_prompt(&pairs, true)
             }
-        }
-
-        history.push(ChatMessage {
-            role: "user",
-            content: input,
-        });
-
-        // Build prompt using the model-appropriate chat template.
-        let template = crate::chat_template::ChatTemplate::detect(model_name);
-        let pairs: Vec<(&str, &str)> = history.iter()
-            .map(|m| (m.role, m.content.as_str()))
-            .collect();
-        let prompt = template.build_prompt(&pairs, true);
+        } else {
+            let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+            template.build_prompt(&pairs, true)
+        };
 
         // Rough token estimate: ~4 chars per token. Leave room for the response.
         let estimated_prompt_tokens = prompt.len() as u32 / 4;
