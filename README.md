@@ -419,6 +419,8 @@ For RAG, long documents, and multi-turn conversations, the context gain far outw
 
 Google's ICLR 2026 algorithm (Zandieh et al.). Compresses the KV cache — **not the model weights**. Applies Walsh-Hadamard Transform rotation + Lloyd-Max quantization to attention key/value states at inference time. Model weights (Q4_K_M, etc.) stay untouched. EULLM implements Stage 1 only; Stage 2 (QJL) is omitted to preserve output quality.
 
+EULLM uses [AmesianX/TurboQuant](https://github.com/AmesianX/TurboQuant) as its llama.cpp backend, which extends the original algorithm with CUDA-accelerated WHT kernels, Gemma 4 SWA architecture support, and ongoing research into attention score sharpening.
+
 Available types:
 - **TQ4_0** — 4-bit KV cache, ~50% VRAM savings, minimal quality impact
 - **TQ3_0** — 3-bit KV cache, ~62% VRAM savings, slight quality reduction

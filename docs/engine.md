@@ -220,7 +220,7 @@ Available types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`. With Turb
 
 TurboQuant is a KV cache compression method based on the TurboQuant algorithm (Zandieh et al., ICLR 2026). It applies **WHT (Walsh-Hadamard Transform) rotation** followed by **Lloyd-Max quantization** to compress the KV cache far more aggressively than standard round-to-nearest quantization. This is **not weight quantization** — the model weights stay at their original precision (e.g. Q4_K_M GGUF). Only the keys and values stored in the KV cache during inference are compressed.
 
-Backend: **AmesianX/TurboQuant v1.5.0** (Gemma 4 / hybrid SWA support, 512-point WHT single-pass, upstream llama.cpp rebase).
+Backend: **[AmesianX/TurboQuant](https://github.com/AmesianX/TurboQuant) v1.5.2** (V rotation bug fix, SQNR-based attention score sharpening, per-block norm for D=512, Gemma 4 SWA bypass, 512-point WHT single-pass, upstream llama.cpp rebase).
 
 This enables running large models at very long context lengths on consumer GPUs that would otherwise run out of VRAM.
 
