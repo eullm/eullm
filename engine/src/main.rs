@@ -778,7 +778,7 @@ async fn cmd_run(
 
     if has_backend && is_tty {
         if let Some(sched) = repl_scheduler {
-            interactive_chat(sched, &model_name, ctx_size).await;
+            interactive_chat(sched, &model_name, ctx_size, web).await;
         }
     } else {
         // No REPL — wait for shutdown signal.
@@ -1243,6 +1243,7 @@ async fn interactive_chat(
     scheduler: inference::SchedulerHandle,
     model_name: &str,
     ctx_size: u32,
+    web_enabled: bool,
 ) {
     use std::io::{BufRead, Write};
 
@@ -1343,6 +1344,35 @@ async fn interactive_chat(
         }
 
         // Add user message to history.
+        // If web browsing is enabled, fetch any URLs in the message and
+        // inject their content as a preceding system message.
+        if web_enabled {
+            let urls = crate::tools::extract_urls(&input);
+            if !urls.is_empty() {
+                let existing_chars: usize = history.iter().map(|m| m.content.len()).sum();
+                let mut injected = Vec::new();
+                for url in &urls {
+                    match crate::tools::fetch_for_context(url, ctx_size, existing_chars, &input).await {
+                        Ok((content, truncated)) => {
+                            let note = if truncated { " [truncated to fit context]" } else { "" };
+                            injected.push(format!("[Web content from {url}{note}]\n\n{content}"));
+                            eprintln!("[web] fetched {} ({} chars{})", url, content.len(), if truncated { ", truncated" } else { "" });
+                        }
+                        Err(e) => {
+                            injected.push(format!("[Failed to fetch {url}: {e}]"));
+                            eprintln!("[web] fetch failed for {url}: {e}");
+                        }
+                    }
+                }
+                if !injected.is_empty() {
+                    history.push(ChatMessage {
+                        role: "system",
+                        content: injected.join("\n\n---\n\n"),
+                    });
+                }
+            }
+        }
+
         history.push(ChatMessage {
             role: "user",
             content: input,
