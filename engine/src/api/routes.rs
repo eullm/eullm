@@ -225,10 +225,18 @@ async fn inject_web_content(
     mut messages: Vec<Value>,
     web_enabled: bool,
     ctx_size: u32,
+    batch_size: usize,
 ) -> Vec<Value> {
     if !web_enabled {
         return messages;
     }
+    // With continuous batching each slot gets ctx_size/batch_size tokens.
+    // Use per-slot context as the budget so injected content actually fits.
+    let effective_ctx = if batch_size > 1 {
+        ctx_size / batch_size as u32
+    } else {
+        ctx_size
+    };
 
     // Find last user message
     let last_user_idx = messages.iter().rposition(|m| {
@@ -257,7 +265,7 @@ async fn inject_web_content(
 
     let mut injections: Vec<String> = Vec::new();
     for url in &urls {
-        match tools::fetch_for_context(url, ctx_size, existing_chars, &user_text).await {
+        match tools::fetch_for_context(url, effective_ctx, existing_chars, &user_text).await {
             Ok((content, truncated)) => {
                 let note = if truncated {
                     " [content truncated to fit context]"
@@ -493,7 +501,7 @@ async fn chat(
         .cloned()
         .unwrap_or_default();
 
-    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size).await;
+    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size, state.batch_size).await;
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
@@ -669,7 +677,7 @@ async fn chat_completions(
         .cloned()
         .unwrap_or_default();
 
-    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size).await;
+    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size, state.batch_size).await;
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;

@@ -778,7 +778,7 @@ async fn cmd_run(
 
     if has_backend && is_tty {
         if let Some(sched) = repl_scheduler {
-            interactive_chat(sched, &model_name, ctx_size, web).await;
+            interactive_chat(sched, &model_name, ctx_size, batch_size, web).await;
         }
     } else {
         // No REPL — wait for shutdown signal.
@@ -1243,8 +1243,12 @@ async fn interactive_chat(
     scheduler: inference::SchedulerHandle,
     model_name: &str,
     ctx_size: u32,
+    batch_size: usize,
     web_enabled: bool,
 ) {
+    // Effective per-slot context — with continuous batching the total ctx
+    // is divided among slots; injected web content must fit in one slot.
+    let effective_ctx = if batch_size > 1 { ctx_size / batch_size as u32 } else { ctx_size };
     use std::io::{BufRead, Write};
 
     let short = model_name
@@ -1352,7 +1356,7 @@ async fn interactive_chat(
                 let existing_chars: usize = history.iter().map(|m| m.content.len()).sum();
                 let mut injected = Vec::new();
                 for url in &urls {
-                    match crate::tools::fetch_for_context(url, ctx_size, existing_chars, &input).await {
+                    match crate::tools::fetch_for_context(url, effective_ctx, existing_chars, &input).await {
                         Ok((content, truncated)) => {
                             let note = if truncated { " [truncated to fit context]" } else { "" };
                             injected.push(format!("[Web content from {url}{note}]\n\n{content}"));
