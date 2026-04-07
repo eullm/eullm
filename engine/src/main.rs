@@ -778,7 +778,7 @@ async fn cmd_run(
 
     if has_backend && is_tty {
         if let Some(sched) = repl_scheduler {
-            interactive_chat(sched, &model_name, ctx_size, web).await;
+            interactive_chat(sched, &model_name, ctx_size, batch_size, web).await;
         }
     } else {
         // No REPL — wait for shutdown signal.
@@ -1243,8 +1243,12 @@ async fn interactive_chat(
     scheduler: inference::SchedulerHandle,
     model_name: &str,
     ctx_size: u32,
+    batch_size: usize,
     web_enabled: bool,
 ) {
+    // Effective per-slot context — with continuous batching the total ctx
+    // is divided among slots; injected web content must fit in one slot.
+    let effective_ctx = if batch_size > 1 { ctx_size / batch_size as u32 } else { ctx_size };
     use std::io::{BufRead, Write};
 
     let short = model_name
@@ -1343,16 +1347,21 @@ async fn interactive_chat(
             continue;
         }
 
-        // Add user message to history.
-        // If web browsing is enabled, fetch any URLs in the message and
-        // inject their content as a preceding system message.
-        if web_enabled {
+        // Add user message to permanent history.
+        history.push(ChatMessage { role: "user", content: input.clone() });
+
+        // Build prompt using the model-appropriate chat template.
+        // If web browsing is enabled, fetch URLs and inject content into a
+        // TEMPORARY message list — web content is NOT stored in history so it
+        // doesn't accumulate across turns and bloat the context.
+        let template = crate::chat_template::ChatTemplate::detect(model_name);
+        let prompt = if web_enabled {
             let urls = crate::tools::extract_urls(&input);
             if !urls.is_empty() {
                 let existing_chars: usize = history.iter().map(|m| m.content.len()).sum();
                 let mut injected = Vec::new();
                 for url in &urls {
-                    match crate::tools::fetch_for_context(url, ctx_size, existing_chars, &input).await {
+                    match crate::tools::fetch_for_context(url, effective_ctx, existing_chars, &input).await {
                         Ok((content, truncated)) => {
                             let note = if truncated { " [truncated to fit context]" } else { "" };
                             injected.push(format!("[Web content from {url}{note}]\n\n{content}"));
@@ -1365,25 +1374,30 @@ async fn interactive_chat(
                     }
                 }
                 if !injected.is_empty() {
-                    history.push(ChatMessage {
+                    // Build a temporary message list with the web content injected
+                    // just before the current user turn — not stored in history.
+                    let web_msg = ChatMessage {
                         role: "system",
                         content: injected.join("\n\n---\n\n"),
-                    });
+                    };
+                    let insert_at = history.len() - 1; // before last (user) msg
+                    let mut tmp: Vec<&ChatMessage> = history[..insert_at].iter().collect();
+                    tmp.push(&web_msg);
+                    tmp.push(history.last().unwrap());
+                    let pairs: Vec<(&str, &str)> = tmp.iter().map(|m| (m.role, m.content.as_str())).collect();
+                    template.build_prompt(&pairs, true)
+                } else {
+                    let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+                    template.build_prompt(&pairs, true)
                 }
+            } else {
+                let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+                template.build_prompt(&pairs, true)
             }
-        }
-
-        history.push(ChatMessage {
-            role: "user",
-            content: input,
-        });
-
-        // Build prompt using the model-appropriate chat template.
-        let template = crate::chat_template::ChatTemplate::detect(model_name);
-        let pairs: Vec<(&str, &str)> = history.iter()
-            .map(|m| (m.role, m.content.as_str()))
-            .collect();
-        let prompt = template.build_prompt(&pairs, true);
+        } else {
+            let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+            template.build_prompt(&pairs, true)
+        };
 
         // Rough token estimate: ~4 chars per token. Leave room for the response.
         let estimated_prompt_tokens = prompt.len() as u32 / 4;
