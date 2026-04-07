@@ -260,9 +260,9 @@ async fn inject_web_content(
         match tools::fetch_for_context(url, ctx_size, existing_chars, &user_text).await {
             Ok((content, truncated)) => {
                 let note = if truncated {
-                    format!(" [content truncated to fit context]")
+                    " [content truncated to fit context]"
                 } else {
-                    String::new()
+                    ""
                 };
                 injections.push(format!(
                     "[Web content from {url}{note}]\n\n{content}"
