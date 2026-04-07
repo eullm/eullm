@@ -69,15 +69,15 @@ echo "Copying crate to vendor/..."
 cp -r "$INSTALLED_CRATE" "$SYS_CRATE_DIR"
 chmod -R u+w "$SYS_CRATE_DIR"
 
-# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.5.0
-echo "Cloning AmesianX/TurboQuant v1.5.0..."
+# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.5.2
+echo "Cloning AmesianX/TurboQuant v1.5.2..."
 rm -rf "${SYS_CRATE_DIR}/llama.cpp"
 git clone --depth 1 --branch main \
     https://github.com/AmesianX/TurboQuant.git \
     "${SYS_CRATE_DIR}/llama.cpp"
-# Pin to v1.5.0 (Gemma 4 / hybrid SWA support, 512-point WHT single-pass,
-#               upstream llama.cpp rebase; TBQP not supported at D=512)
-git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.5.0
+# Pin to v1.5.2 (V rotation bug fix, attention score sharpening via SQNR-based
+#               alpha correction, per-block norm for D=512, SWA bypass for Gemma 4)
+git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.5.2
 git -C "${SYS_CRATE_DIR}/llama.cpp" checkout FETCH_HEAD
 
 # 4. Remove .git from the cloned repo (we vendor it, not submodule it)
@@ -174,7 +174,7 @@ echo "=== Setup complete ==="
 echo ""
 echo "Vendored llama-cpp-sys-2: ${SYS_CRATE_DIR}"
 echo "Patch in: ${CARGO_TOML}  (path = ${PATCH_PATH})"
-echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44 (v1.5.0: D=512 SWA support)"
+echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44 (v1.5.2: V rotation fix, attention sharpening, SWA bypass)"
 echo ""
 echo "Build with:"
 echo "  cd ${ENGINE_DIR}"
