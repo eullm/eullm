@@ -57,6 +57,10 @@ pub struct AppState {
     /// 0 = sequential, >0 = continuous batching with this many slots.
     pub batch_size: usize,
 
+    /// Enable transparent web fetching: URLs in user messages are fetched
+    /// and their content is injected into the prompt before inference.
+    pub web_enabled: bool,
+
     /// Model store for resolving names → GGUF paths.
     pub store: ModelStore,
 }
@@ -262,6 +266,7 @@ pub struct ServeConfig {
     pub cache_type_k: crate::inference::KvCacheType,
     pub cache_type_v: crate::inference::KvCacheType,
     pub batch_size: usize,
+    pub web_enabled: bool,
     pub store: ModelStore,
 }
 
@@ -286,6 +291,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         cache_type_k: cfg.cache_type_k,
         cache_type_v: cfg.cache_type_v,
         batch_size: cfg.batch_size,
+        web_enabled: cfg.web_enabled,
         store: cfg.store,
     });
     let port = cfg.port;

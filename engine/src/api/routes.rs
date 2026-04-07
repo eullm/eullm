@@ -27,6 +27,7 @@ use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
 use crate::inference::{GenerateRequest, InferenceEngine, SchedulerHandle, StreamEvent, JSON_GBNF};
 use crate::models::EU_CATALOG;
+use crate::tools;
 
 type S = Arc<AppState>;
 
@@ -211,6 +212,81 @@ async fn collect_stream(
     }
 
     Ok((text, tokens_generated, tokens_prompt, duration_ms))
+}
+
+// ── Web content injection ────────────────────────────────────────────────────
+
+/// If web browsing is enabled and the last user message contains URLs,
+/// fetch each URL and inject the content as a system-style message
+/// prepended to the conversation (before the last user turn).
+///
+/// Returns a new messages Vec with injected content, or the original unchanged.
+async fn inject_web_content(
+    mut messages: Vec<Value>,
+    web_enabled: bool,
+    ctx_size: u32,
+) -> Vec<Value> {
+    if !web_enabled {
+        return messages;
+    }
+
+    // Find last user message
+    let last_user_idx = messages.iter().rposition(|m| {
+        m.get("role").and_then(|v| v.as_str()) == Some("user")
+    });
+    let idx = match last_user_idx {
+        Some(i) => i,
+        None => return messages,
+    };
+
+    let user_text = messages[idx]
+        .get("content")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let urls = tools::extract_urls(&user_text);
+    if urls.is_empty() {
+        return messages;
+    }
+
+    // Estimate prompt chars already used (rough: all messages joined)
+    let existing_chars: usize = messages.iter()
+        .map(|m| m.get("content").and_then(|v| v.as_str()).unwrap_or("").len())
+        .sum();
+
+    let mut injections: Vec<String> = Vec::new();
+    for url in &urls {
+        match tools::fetch_for_context(url, ctx_size, existing_chars, &user_text).await {
+            Ok((content, truncated)) => {
+                let note = if truncated {
+                    format!(" [content truncated to fit context]")
+                } else {
+                    String::new()
+                };
+                injections.push(format!(
+                    "[Web content from {url}{note}]\n\n{content}"
+                ));
+                tracing::info!("Web: fetched {} ({} chars{})", url, content.len(), if truncated { ", truncated" } else { "" });
+            }
+            Err(e) => {
+                injections.push(format!("[Failed to fetch {url}: {e}]"));
+                tracing::warn!("Web: fetch failed for {url}: {e}");
+            }
+        }
+    }
+
+    if injections.is_empty() {
+        return messages;
+    }
+
+    // Insert a synthetic "tool" message before the last user turn
+    let web_message = json!({
+        "role": "system",
+        "content": injections.join("\n\n---\n\n")
+    });
+    messages.insert(idx, web_message);
+    messages
 }
 
 // ── EULLM API handlers ──────────────────────────────────────────────────────
@@ -417,6 +493,8 @@ async fn chat(
         .cloned()
         .unwrap_or_default();
 
+    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size).await;
+
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
     let template = crate::chat_template::ChatTemplate::detect(model_name_ref);
@@ -590,6 +668,8 @@ async fn chat_completions(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+
+    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size).await;
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;

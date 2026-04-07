@@ -5,6 +5,7 @@ mod gguf_patch;
 mod inference;
 mod models;
 mod registry;
+mod tools;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,6 +75,12 @@ enum Commands {
         /// KV cache type for values. Options: f16 (default, best GPU compat), q8_0, q4_0
         #[arg(long, default_value = "f16")]
         cache_type_v: String,
+
+        /// Enable transparent web browsing: URLs in user messages are fetched
+        /// and their content is injected into the prompt before inference.
+        /// Dynamic budget: available context = ctx_size - prompt - 512 reserve.
+        #[arg(long)]
+        web: bool,
 
         /// Run as a background daemon (writes PID to --pidfile)
         #[arg(long)]
@@ -239,6 +246,7 @@ async fn main() {
             n_batch,
             cache_type_k,
             cache_type_v,
+            web,
             daemon,
             pidfile,
         } => {
@@ -288,7 +296,7 @@ async fn main() {
                 ctk = inference::KvCacheType::F16;
                 ctv = inference::KvCacheType::F16;
             }
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
@@ -573,6 +581,7 @@ async fn cmd_run(
     n_batch: u32,
     cache_type_k: inference::KvCacheType,
     cache_type_v: inference::KvCacheType,
+    web: bool,
 ) {
     ensure_port_available(port, replace).await;
 
@@ -717,6 +726,9 @@ async fn cmd_run(
         if is_tq {
             println!("  TurboQuant:    active (experimental)");
         }
+        if web {
+            println!("  Web browsing:  enabled (URLs in messages are fetched and injected)");
+        }
         println!("  Threads:       {resolved_threads}");
         println!("  Batch (prefill): {n_batch}");
         println!("  Mode:          {mode}");
@@ -751,6 +763,7 @@ async fn cmd_run(
             cache_type_k,
             cache_type_v,
             batch_size,
+            web_enabled: web,
             store: api_store,
         })
         .await
@@ -802,6 +815,7 @@ async fn cmd_serve(port: u16, replace: bool) {
         cache_type_k: inference::KvCacheType::Q8_0,
         cache_type_v: inference::KvCacheType::Q4_0,
         batch_size: 8,
+        web_enabled: false,
         store,
     })
     .await
