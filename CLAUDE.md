@@ -7,6 +7,30 @@
 - **Commit messages**: Conventional commits (feat:, fix:, docs:, chore:). No references to AI tools or Claude in commit messages or code comments.
 - **Working branch**: Always ask the user which branch to work on, or use the one specified in session instructions. If the session specifies a `claude/` branch, rename it following the rules above before pushing.
 
+## CI/CD Rules (MANDATORY — do not remove or simplify)
+
+The GitHub Actions workflows have been carefully optimized. **Do not remove caching steps.**
+
+### `.github/workflows/ci.yml`
+- `Swatinem/rust-cache@v2` on `engine` and `hub` jobs — caches `target/` and `~/.cargo`. Removing it adds ~25 min per run.
+- `actions/cache` for pip on `forge` job.
+- `engine-turboquant` job uses TWO cache layers: cargo registry + vendor dir + target/. The vendor cache is keyed on `setup-turboquant.sh` hash — this avoids re-cloning TurboQuant llama.cpp when the version hasn't changed.
+
+### `.github/workflows/release-engine.yml`
+- All `build` matrix jobs use `Swatinem/rust-cache@v2` keyed by target triple.
+- `build-cuda` and `build-cuda-turboquant` jobs (container-based) use `actions/cache` manually (Swatinem doesn't work in containers) for: cargo registry, `engine/vendor`, `target/`.
+- `build-metal-turboquant` caches vendor + target similarly.
+- The vendor cache (`engine/vendor`) is keyed on `hashFiles('engine/scripts/setup-turboquant.sh')` so it invalidates automatically on TurboQuant version bumps.
+- Cache hit check (`steps.vendor-cache.outputs.cache-hit != 'true'`) skips the git clone but still re-activates the Cargo `[patch]` section if needed.
+
+### Build times (approximate)
+| Job | Cold | Warm cache |
+|-----|------|------------|
+| Engine standard | ~6 min | ~1-2 min |
+| CUDA plain | ~18 min | ~3-5 min |
+| CUDA TurboQuant | ~20 min | ~5-8 min |
+| macOS Metal TQ | ~18 min | ~4-6 min |
+
 ## What is EULLM
 
 EULLM (eullm.eu) is an open-source platform for creating, distributing, and running sovereign LLMs on European infrastructure. It targets European businesses and developers who need AI models that are GDPR-compliant, EU AI Act ready, and run on local hardware.
