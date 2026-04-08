@@ -185,13 +185,14 @@ def parse_normattiva_opendata_zip(
 ) -> dict[str, list[dict]]:
     """Parse an AKN XML ZIP from dati.normattiva.it.
 
-    The ZIP contains one XML file per law.  Each file uses the Akoma Ntoso
-    (AKN) schema with <article> elements containing <num> and <content>.
+    The ZIP may contain nested folders of any depth.  Every .xml entry is
+    inspected; the law identity is read from the AKN <FRBRthis> metadata
+    inside the file itself — no filename-pattern hardcoding.
 
     Args:
         zip_bytes: Raw ZIP file bytes.
         source_ids: Optional list of source IDs to filter (e.g. ["codice_civile"]).
-            If None, all files in the ZIP are parsed.
+            If None, all recognised laws in the ZIP are parsed.
 
     Returns:
         Dict mapping source_id → list of article records.
@@ -199,51 +200,38 @@ def parse_normattiva_opendata_zip(
     import io
     import zipfile
 
-    # Map ZIP folder/filename patterns to our source IDs.
-    # dati.normattiva.it names folders as TIPO_YYYYMMDD_N (e.g. REGIO_DECRETO_19420316_262).
-    # Each URN date "YYYY-MM-DD;N" maps to "YYYYMMDD_N" in the ZIP.
-    _SOURCE_HINTS: dict[str, str] = {
-        # ZIP YYYYMMDD_N patterns (primary — matches ZIP folder/filename)
-        "19420316_262": "codice_civile",        # Codice Civile
-        "19301019_1398": "codice_penale",       # Codice Penale
-        "19401028_1443": "codice_procedura_civile",
-        "19880922_447": "codice_procedura_penale",
-        "20050906_206": "codice_consumo",
-        "19471227": "costituzione",              # Costituzione (any suffix)
-        # Legacy URN / codiceRedazionale patterns (fallback)
-        "042u0262": "codice_civile",
-        "codice.civile": "codice_civile",
-        "1930-10-19;1398": "codice_penale",
-        "1940-10-28;1443": "codice_procedura_civile",
-        "1988-09-22;447": "codice_procedura_penale",
-        "2005-09-06;206": "codice_consumo",
-        "047u0001": "costituzione",
-    }
-
     results: dict[str, list[dict]] = {}
 
     try:
         with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
-            xml_files = [n for n in zf.namelist() if n.lower().endswith(".xml")]
-            logger.info("OpenData ZIP contains %d XML files", len(xml_files))
+            all_entries = zf.namelist()
+            xml_files = [n for n in all_entries if n.lower().endswith(".xml")]
+            logger.info(
+                "OpenData ZIP: %d total entries, %d XML files", len(all_entries), len(xml_files)
+            )
 
             for name in xml_files:
-                # Guess source_id from filename
-                lower = name.lower()
-                sid = next(
-                    (v for k, v in _SOURCE_HINTS.items() if k in lower), None
-                )
+                try:
+                    xml_text = zf.read(name).decode("utf-8", errors="replace")
+                except Exception as exc:
+                    logger.warning("Cannot read %s: %s", name, exc)
+                    continue
+
+                # Identify the law from its AKN metadata — no filename guessing
+                sid = _detect_source_from_akn(xml_text)
                 if sid is None:
-                    continue  # unknown file — skip
+                    logger.debug("Unrecognised law in %s — skipping", name)
+                    continue
                 if source_ids and sid not in source_ids:
                     continue
 
                 try:
-                    xml_text = zf.read(name).decode("utf-8", errors="replace")
                     records = _parse_akn_xml(xml_text, sid)
                     if records:
                         results[sid] = records
-                        logger.info("  OpenData [%s] → %d articles", sid, len(records))
+                        logger.info("  OpenData [%s] → %d articles  (%s)", sid, len(records), name)
+                    else:
+                        logger.warning("  OpenData [%s]: 0 articles extracted from %s", sid, name)
                 except Exception as exc:
                     logger.warning("Failed to parse %s: %s", name, exc)
 
@@ -253,35 +241,82 @@ def parse_normattiva_opendata_zip(
     return results
 
 
-def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
-    """Parse an AKN (Akoma Ntoso) XML file and extract article records."""
-    # AKN uses namespaces — strip them for simpler parsing (same as NIR approach)
-    xml_clean = re.sub(r'\s+xmlns(?::[a-zA-Z0-9_]+)?="[^"]*"', "", xml_text)
-    xml_clean = re.sub(r"<([a-zA-Z]+):", "<", xml_clean)
-    xml_clean = re.sub(r"</([a-zA-Z]+):", "</", xml_clean)
+def _detect_source_from_akn(xml_text: str) -> Optional[str]:
+    """Identify which NORMATTIVA_LAWS entry this AKN document belongs to.
 
+    Reads the <FRBRthis value="urn:nir:..."/> element from the AKN metadata
+    section and matches it against the URNs declared in NORMATTIVA_LAWS.
+    Falls back to scanning the raw text for known URN substrings.
+    """
+    # AKN 3.0: <FRBRthis value="urn:nir:stato:regio.decreto:1942-03-16;262"/>
+    # Try both quoted-attribute forms
+    m = re.search(r'<FRBRthis\b[^>]+\bvalue="([^"]+)"', xml_text)
+    frbrthis = m.group(1).lower() if m else ""
+
+    for law in NORMATTIVA_LAWS:
+        urn_lower = law.urn.lower()
+        if urn_lower in frbrthis or frbrthis in urn_lower:
+            return law.id
+        # Match by the date;number tail (e.g. "1942-03-16;262")
+        tail = re.search(r":(\d{4}-\d{2}-\d{2};\d+)$", urn_lower)
+        if tail and tail.group(1) in frbrthis:
+            return law.id
+
+    # Broader fallback: scan the first 4 KB of the file for any known URN fragment
+    header = xml_text[:4096].lower()
+    for law in NORMATTIVA_LAWS:
+        tail = re.search(r":(\d{4}-\d{2}-\d{2};\d+)$", law.urn.lower())
+        if tail and tail.group(1) in header:
+            return law.id
+
+    return None
+
+
+def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
+    """Parse an AKN (Akoma Ntoso) XML file and extract article records.
+
+    Handles the AKN 3.0 default namespace
+    (xmlns="http://docs.oasis-open.org/legaldocml/ns/akn/3.0") by detecting
+    the namespace URI from the parsed root element and using it in all
+    element lookups — no fragile regex stripping.
+    """
     try:
-        root = ET.fromstring(xml_clean)
-    except ET.ParseError:
+        root = ET.fromstring(xml_text.encode("utf-8"))
+    except ET.ParseError as exc:
+        logger.warning("AKN parse error for %s: %s", source_id, exc)
         return []
 
+    # Detect the default namespace from the root tag, e.g.:
+    # "{http://docs.oasis-open.org/legaldocml/ns/akn/3.0}akomaNtoso"
+    ns_uri = ""
+    if root.tag.startswith("{"):
+        ns_uri = root.tag[1: root.tag.index("}")]
+    ns = f"{{{ns_uri}}}" if ns_uri else ""
+    logger.debug("AKN [%s]: namespace=%r root=<%s>", source_id, ns_uri, root.tag.split("}")[-1])
+
     records = []
-    # AKN uses <article> (lowercase); find recursively
-    for art in root.iter("article"):
-        num_el = art.find(".//num")
+    art_count = 0
+    for art in root.iter(f"{ns}article"):
+        art_count += 1
+        num_el = art.find(f".//{ns}num")
         num = (num_el.text or "").strip() if num_el is not None else ""
 
-        heading_el = art.find(".//heading")
+        heading_el = art.find(f".//{ns}heading")
         heading = " ".join(heading_el.itertext()).strip() if heading_el is not None else ""
 
-        # Collect all paragraph text
+        # Collect paragraph text (try <p> first, then <content> as fallback)
         paragraphs: list[str] = []
-        for p in art.iter("p"):
-            t = clean_text(" ".join(p.itertext()))
+        for pel in art.iter(f"{ns}p"):
+            t = clean_text(" ".join(pel.itertext()))
             if t:
                 paragraphs.append(t)
-        body = " ".join(paragraphs)
+        if not paragraphs:
+            for cel in art.iter(f"{ns}content"):
+                t = clean_text(" ".join(cel.itertext()))
+                if t:
+                    paragraphs.append(t)
 
+        body = " ".join(paragraphs)
         if len(body) < 20:
             continue
 
@@ -297,6 +332,7 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
             "article_title": heading,
         })
 
+    logger.debug("AKN [%s]: %d <article> elements → %d records", source_id, art_count, len(records))
     return records
 
 
