@@ -117,6 +117,183 @@ EURLEX_REGULATIONS: list[EurlexSource] = [
 NORMATTIVA_EXPORT_URL = "https://www.normattiva.it/do/atto/export"
 EURLEX_HTML_URL = "https://eur-lex.europa.eu/legal-content/IT/TXT/HTML/"
 
+# dati.normattiva.it OpenData — bulk AKN XML download (all codes in one ZIP)
+DATI_NORMATTIVA_DOWNLOAD = "https://dati.normattiva.it/download"
+
+
+# ---------------------------------------------------------------------------
+# dati.normattiva.it OpenData — bulk AKN XML ZIP
+# ---------------------------------------------------------------------------
+
+def fetch_normattiva_opendata_zip(
+    *,
+    local_zip: str | None = None,
+    vigenza: str = "VIGENTE",
+) -> Optional[bytes]:
+    """Download or load the dati.normattiva.it bulk AKN XML ZIP for all codici.
+
+    The OPENDATA portal at dati.normattiva.it offers a 'Codici' collection
+    downloadable as AKN (Akoma Ntoso) XML — the official structured format.
+    This is far more reliable than HTML scraping.
+
+    Args:
+        local_zip: Path to a manually downloaded ZIP (skips HTTP download).
+            Download at: https://dati.normattiva.it → Collezioni → Codici
+            Format: AKN, Vigenza: VIGENTE, then click Download.
+        vigenza: "VIGENTE" (current law) or "ORIGINALE" (historical).
+
+    Returns:
+        Raw ZIP bytes, or None on failure.
+    """
+    if local_zip:
+        path = Path(local_zip)
+        if not path.exists():
+            raise FileNotFoundError(f"ZIP not found: {local_zip}")
+        logger.info("Loading normattiva.it OpenData ZIP from %s", local_zip)
+        return path.read_bytes()
+
+    # Try automatic download
+    url = f"{DATI_NORMATTIVA_DOWNLOAD}?collezione=codici&formato=AKN&vigenza={vigenza}"
+    logger.info("Downloading normattiva.it OpenData ZIP (codici, %s)...", vigenza)
+    try:
+        import requests
+
+        from .base import DEFAULT_HEADERS
+
+        r = requests.get(url, headers=DEFAULT_HEADERS, timeout=300, stream=True)
+        r.raise_for_status()
+        if "zip" not in r.headers.get("Content-Type", "").lower() and len(r.content) < 10000:
+            logger.warning(
+                "dati.normattiva.it: unexpected response (not a ZIP). "
+                "Download manually from https://dati.normattiva.it → Codici → AKN"
+            )
+            return None
+        return r.content
+    except Exception as exc:
+        logger.warning(
+            "dati.normattiva.it download failed (%s). "
+            "Download manually from https://dati.normattiva.it → Codici → AKN, "
+            "then pass --normattiva-zip path/to/file.zip",
+            exc,
+        )
+        return None
+
+
+def parse_normattiva_opendata_zip(
+    zip_bytes: bytes,
+    source_ids: list[str] | None = None,
+) -> dict[str, list[dict]]:
+    """Parse an AKN XML ZIP from dati.normattiva.it.
+
+    The ZIP contains one XML file per law.  Each file uses the Akoma Ntoso
+    (AKN) schema with <article> elements containing <num> and <content>.
+
+    Args:
+        zip_bytes: Raw ZIP file bytes.
+        source_ids: Optional list of source IDs to filter (e.g. ["codice_civile"]).
+            If None, all files in the ZIP are parsed.
+
+    Returns:
+        Dict mapping source_id → list of article records.
+    """
+    import io
+    import zipfile
+
+    # Map codiceRedazionale / common name fragments to our source IDs
+    _SOURCE_HINTS: dict[str, str] = {
+        "042u0262": "codice_civile",
+        "codice.civile": "codice_civile",
+        "1930-10-19;1398": "codice_penale",
+        "codice.penale": "codice_penale",
+        "1940-10-28;1443": "codice_procedura_civile",
+        "codice.procedura.civile": "codice_procedura_civile",
+        "1988-09-22;447": "codice_procedura_penale",
+        "codice.procedura.penale": "codice_procedura_penale",
+        "2005-09-06;206": "codice_consumo",
+        "codice.consumo": "codice_consumo",
+        "047u0001": "costituzione",
+        "costituzione": "costituzione",
+    }
+
+    results: dict[str, list[dict]] = {}
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+            xml_files = [n for n in zf.namelist() if n.lower().endswith(".xml")]
+            logger.info("OpenData ZIP contains %d XML files", len(xml_files))
+
+            for name in xml_files:
+                # Guess source_id from filename
+                lower = name.lower()
+                sid = next(
+                    (v for k, v in _SOURCE_HINTS.items() if k in lower), None
+                )
+                if sid is None:
+                    continue  # unknown file — skip
+                if source_ids and sid not in source_ids:
+                    continue
+
+                try:
+                    xml_text = zf.read(name).decode("utf-8", errors="replace")
+                    records = _parse_akn_xml(xml_text, sid)
+                    if records:
+                        results[sid] = records
+                        logger.info("  OpenData [%s] → %d articles", sid, len(records))
+                except Exception as exc:
+                    logger.warning("Failed to parse %s: %s", name, exc)
+
+    except zipfile.BadZipFile as exc:
+        logger.error("Not a valid ZIP file: %s", exc)
+
+    return results
+
+
+def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
+    """Parse an AKN (Akoma Ntoso) XML file and extract article records."""
+    # AKN uses namespaces — strip them for simpler parsing (same as NIR approach)
+    xml_clean = re.sub(r'\s+xmlns(?::[a-zA-Z0-9_]+)?="[^"]*"', "", xml_text)
+    xml_clean = re.sub(r"<([a-zA-Z]+):", "<", xml_clean)
+    xml_clean = re.sub(r"</([a-zA-Z]+):", "</", xml_clean)
+
+    try:
+        root = ET.fromstring(xml_clean)
+    except ET.ParseError:
+        return []
+
+    records = []
+    # AKN uses <article> (lowercase); find recursively
+    for art in root.iter("article"):
+        num_el = art.find(".//num")
+        num = (num_el.text or "").strip() if num_el is not None else ""
+
+        heading_el = art.find(".//heading")
+        heading = " ".join(heading_el.itertext()).strip() if heading_el is not None else ""
+
+        # Collect all paragraph text
+        paragraphs: list[str] = []
+        for p in art.iter("p"):
+            t = clean_text(" ".join(p.itertext()))
+            if t:
+                paragraphs.append(t)
+        body = " ".join(paragraphs)
+
+        if len(body) < 20:
+            continue
+
+        header = f"Art. {num}" if num else ""
+        if heading:
+            header += f" ({heading})"
+        text = f"{header}\n{body}" if header else body
+
+        records.append({
+            "text": text,
+            "source": source_id,
+            "article_num": num,
+            "article_title": heading,
+        })
+
+    return records
+
 
 # ---------------------------------------------------------------------------
 # normattiva.it — XML download and parsing
@@ -610,6 +787,7 @@ def prepare_legal_it(
     hub_repo: str = "eullm/legal-it-corpus",
     val_ratio: float = 0.05,
     no_cache: bool = False,
+    normattiva_zip: str | None = None,
 ) -> Path:
     """Download and prepare the Italian legal corpus.
 
@@ -623,6 +801,10 @@ def prepare_legal_it(
         hub_repo: HuggingFace Hub repo ID for push (default: eullm/legal-it-corpus).
         val_ratio: Fraction of records to put in validation split.
         no_cache: If True, bypass local HTTP cache and re-download all sources.
+        normattiva_zip: Path to a locally downloaded AKN ZIP from dati.normattiva.it.
+            If provided (or if the automatic download succeeds), this is used instead
+            of the HTML scraper for normattiva.it sources.
+            Get it at: https://dati.normattiva.it → Collezioni → Codici → AKN → Download
 
     Returns:
         Path to the output directory.
@@ -640,17 +822,33 @@ def prepare_legal_it(
     all_records: list[dict] = []
     failed_sources: list[str] = []
 
-    # --- normattiva.it sources (shared session across all fetches) ---
+    # --- normattiva.it sources ---
     normattiva_laws = [law for law in NORMATTIVA_LAWS if not sources or law.id in sources]
-    normattiva_session = make_normattiva_session() if normattiva_laws else None
+
+    # Prefer dati.normattiva.it OpenData ZIP (best quality, no scraping needed)
+    opendata_results: dict[str, list[dict]] = {}
+    if normattiva_laws:
+        wanted_ids = [law.id for law in normattiva_laws]
+        zip_bytes = fetch_normattiva_opendata_zip(local_zip=normattiva_zip)
+        if zip_bytes:
+            opendata_results = parse_normattiva_opendata_zip(zip_bytes, wanted_ids)
+
+    # For sources not covered by OpenData, fall back to HTML scraping
+    normattiva_session = None
+    scrape_laws = [law for law in normattiva_laws if law.id not in opendata_results]
+    if scrape_laws:
+        normattiva_session = make_normattiva_session()
 
     for law in normattiva_laws:
-        xml_text = fetch_normattiva(law, session=normattiva_session)
-        if xml_text is None:
-            failed_sources.append(law.id)
-            continue
+        if law.id in opendata_results:
+            records = opendata_results[law.id]
+        else:
+            xml_text = fetch_normattiva(law, session=normattiva_session)
+            if xml_text is None:
+                failed_sources.append(law.id)
+                continue
+            records = parse_normattiva_xml(xml_text, law.id)
 
-        records = parse_normattiva_xml(xml_text, law.id)
         if not records:
             logger.warning("No articles extracted from %s", law.name)
             failed_sources.append(law.id)
