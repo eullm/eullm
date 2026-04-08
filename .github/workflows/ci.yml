@@ -123,7 +123,7 @@ jobs:
           key: cargo-registry-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-
 
-      # Cache the vendored TurboQuant llama.cpp only (small, ~100 MB)
+      # Cache vendored TurboQuant llama.cpp only (small, ~100 MB)
       # Key includes setup script hash so a version bump invalidates cache
       - uses: actions/cache@v4
         id: vendor-cache
@@ -132,9 +132,24 @@ jobs:
           key: tq-vendor-${{ runner.os }}-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
           restore-keys: tq-vendor-${{ runner.os }}-
 
-      # sccache: caches individual C++/Rust .o files — replaces target/ cache
+      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-tq-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: sccache-tq-${{ runner.os }}-
+
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.5
+        run: |
+          SCCACHE_VER=0.8.2
+          curl -sSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz --strip-components=1 -C /usr/local/bin/ --wildcards '*/sccache'
+          mkdir -p ~/.cache/sccache
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          sccache --version
 
       - name: Install dependencies
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
@@ -163,28 +178,12 @@ jobs:
       - name: Build (turboquant)
         working-directory: engine
         run: cargo build --features turboquant
-        env:
-          RUSTC_WRAPPER: sccache
-          CMAKE_C_COMPILER_LAUNCHER: sccache
-          CMAKE_CXX_COMPILER_LAUNCHER: sccache
-          SCCACHE_GHA_ENABLED: "true"
       - name: Build (turboquant_native)
         working-directory: engine
         run: cargo build --features turboquant_native
-        env:
-          RUSTC_WRAPPER: sccache
-          CMAKE_C_COMPILER_LAUNCHER: sccache
-          CMAKE_CXX_COMPILER_LAUNCHER: sccache
-          SCCACHE_GHA_ENABLED: "true"
       - name: Test
         working-directory: engine
         run: cargo test --features turboquant_native
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
       - name: Clippy
         working-directory: engine
         run: cargo clippy --features turboquant_native -- -D warnings -A dead-code -A unused-imports
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
