@@ -354,33 +354,89 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
 
     logger.debug("AKN [%s]: %d <article> elements → %d records", source_id, art_count, len(records))
 
-    # Diagnostic: when suspiciously few records, log the actual XML structure
-    # so we can understand what element names are used without manual inspection.
     if art_count < 10:
         from collections import Counter
         tag_counts = Counter(el.tag.split("}")[-1] for el in root.iter())
         top_tags = dict(tag_counts.most_common(20))
-        logger.warning(
-            "AKN [%s]: only %d <article> elements found. "
-            "Top element types in file: %s. "
-            "Trying eId-based fallback...",
-            source_id, art_count, top_tags,
-        )
-        # Fallback: some normattiva AKN files encode articles as <section>/<chapter>
-        # elements with eId="art_NNN" or eId="art-NNN" attributes.
-        eId_articles = [
-            el for el in root.iter()
-            if re.match(r"art[_-]\d", el.get("eId", ""), re.IGNORECASE)
-            and el.tag != f"{ns}article"  # not already counted
-        ]
-        if eId_articles:
-            logger.warning(
-                "AKN [%s]: found %d elements with eId='art_...' — "
-                "re-parsing using those as article containers",
-                source_id, len(eId_articles),
-            )
-            records = _parse_akn_eId_articles(eId_articles, ns, source_id)
+        logger.warning("AKN [%s]: only %d <article> found. Element distribution: %s",
+                       source_id, art_count, top_tags)
 
+        # Fallback 1: NIR format uses <articolo> (Italian) instead of <article> (AKN English)
+        articolo_list = list(root.iter(f"{ns}articolo"))
+        if not articolo_list:
+            # Also try without namespace (old NIR files may have no namespace)
+            articolo_list = list(root.iter("articolo"))
+        if articolo_list:
+            logger.warning("AKN [%s]: found %d <articolo> elements — using NIR parser",
+                           source_id, len(articolo_list))
+            records = _parse_nir_articoli(articolo_list, ns, source_id)
+
+        # Fallback 2: elements with eId="art_NNN" attribute (any tag name)
+        if not records:
+            eId_articles = [
+                el for el in root.iter()
+                if re.match(r"art[_-]\d", el.get("eId", ""), re.IGNORECASE)
+            ]
+            if eId_articles:
+                logger.warning("AKN [%s]: found %d eId='art_...' elements — using eId parser",
+                               source_id, len(eId_articles))
+                records = _parse_akn_eId_articles(eId_articles, ns, source_id)
+
+    return records
+
+
+def _parse_nir_articoli(
+    elements: list[ET.Element], ns: str, source_id: str
+) -> list[dict]:
+    """Parse NIR-format <articolo> elements (leggi italiane anni 1930-40).
+
+    NIR (Norme in Rete) usa nomi di elementi in italiano:
+      <articolo>  → articolo
+      <rubrica>   → titolo/intestazione
+      <comma>     → paragrafo numerato
+      <alinea>    → testo di apertura del paragrafo
+      <lettera>   → sub-item letterale
+      <corpo>     → testo del sub-item
+    """
+    records = []
+    for art in elements:
+        num_el = art.find(f".//{ns}num") or art.find(".//num")
+        num = (num_el.text or "").strip() if num_el is not None else ""
+
+        rub_el = (
+            art.find(f".//{ns}rubrica") or art.find(".//rubrica")
+            or art.find(f".//{ns}heading") or art.find(".//heading")
+        )
+        heading = " ".join(rub_el.itertext()).strip() if rub_el is not None else ""
+
+        skip_tags = {
+            f"{ns}num", "num",
+            f"{ns}rubrica", "rubrica",
+            f"{ns}heading", "heading",
+        }
+        parts: list[str] = []
+        for el in art.iter():
+            if el.tag in skip_tags:
+                continue
+            if el.text and el.text.strip():
+                parts.append(el.text.strip())
+            if el.tail and el.tail.strip():
+                parts.append(el.tail.strip())
+        body = clean_text(" ".join(parts))
+
+        if len(body) < 10:
+            continue
+
+        header = f"Art. {num}" if num else ""
+        if heading:
+            header += f" ({heading})"
+        text = f"{header}\n{body}" if header else body
+        records.append({
+            "text": text,
+            "source": source_id,
+            "article_num": num,
+            "article_title": heading,
+        })
     return records
 
 
