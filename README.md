@@ -52,7 +52,7 @@ EULLM is the missing infrastructure.
 
 | Component | Status | What works today | Next |
 |-----------|--------|-----------------|------|
-| **Engine** | **Ready to use** | Local GGUF inference, Ollama + OpenAI APIs, continuous batching, GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant KV cache compression, audit trail, prebuilt binaries (Linux/macOS) | Full Ollama parity, performance tuning |
+| **Engine** | **Ready to use** | Local GGUF inference, Ollama + OpenAI APIs, continuous batching, GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant KV cache compression, transparent web browsing, audit trail, prebuilt binaries (Linux/macOS) | Full Ollama parity, performance tuning |
 | **Hub** | Prototype | REST API, model catalog, AI Act compliance cards | DB-backed catalog, S3 storage |
 | **Forge** | Modules ready | Pruning, distillation, quantization, identity LoRA, GGUF export; CLI; 3 domain profiles | End-to-end pipeline, first demo model |
 | **Demo models** | Not yet | Pipeline components exist individually | `eullm/legal-it-7b` |
@@ -76,6 +76,7 @@ Run sovereign LLMs locally with **real llama.cpp inference**, built-in audit tra
 # Run any GGUF model — local file or from the EU registry
 eullm run ./model.gguf                    # Local GGUF file
 eullm run ./model.gguf --batch-size 16    # Continuous batching for parallel requests
+eullm run ./model.gguf --web              # Transparent web browsing (URLs in messages auto-fetched)
 eullm run legal-it-7b                     # From EU registry (coming soon)
 
 # CLI
@@ -96,6 +97,7 @@ Key features:
 - **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
+- **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling setup, no orchestrator, no model changes. Works from REPL and API alike. *No other local inference engine does this.*
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
 - **[TurboQuant KV cache compression](#turboquant-kv-cache-compression-experimental)** *(experimental)* — **4x context length, 4x concurrent users.** Run Qwen3-14B with 131K context on a 16GB consumer GPU. Projected 2M+ context on H100. Saves up to EUR 180K/month on enterprise clusters
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
@@ -256,6 +258,7 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | Request scheduling | Sequential (one at a time) | **Continuous batching** (parallel decode) |
 | API compatibility | Ollama API or custom | Ollama-compatible + OpenAI-compatible |
 | GPU support | Manual build flags | `--features cuda/rocm/vulkan/metal` |
+| **Transparent web browsing** | No (requires external orchestrator + function calling + model support) | **`--web` flag — one flag, zero config, works on any model** |
 | Model registry | US servers (HuggingFace) | EU servers (Hetzner DE, OVH FR) |
 | AI Act compliance | None | Built-in audit trail + compliance card templates |
 | Model verticalizzazione | Manual, requires ML expertise | Forge CLI + pipeline modules (end-to-end integration in progress) |
@@ -485,6 +488,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 - [x] Getting started guide (`docs/getting-started.md`)
 - [x] First Colab notebook: identity LoRA on Qwen3-14B
 - [x] **TurboQuant KV cache** — experimental WHT + Lloyd-Max KV cache compression (tq3_0, tq4_0)
+- [x] **Transparent web browsing** — `--web` flag: URLs in messages auto-fetched, HTML stripped, content injected before inference; works on any GGUF model with no model changes
 - [ ] First verticalizzato model: `eullm/legal-it-7b`
 - [ ] Landing page with waitlist
 - [ ] Public launch (HN, Reddit, community)
