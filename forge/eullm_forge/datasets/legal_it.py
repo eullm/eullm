@@ -361,35 +361,34 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
         logger.warning("AKN [%s]: only %d <article> found. Element distribution: %s",
                        source_id, art_count, top_tags)
 
-        # Fallback 1: NIR format uses <articolo> (Italian) instead of <article> (AKN English)
-        articolo_list = list(root.iter(f"{ns}articolo"))
-        if not articolo_list:
-            # Also try without namespace (old NIR files may have no namespace)
-            articolo_list = list(root.iter("articolo"))
-        if articolo_list:
-            logger.warning("AKN [%s]: found %d <articolo> elements — using NIR parser",
-                           source_id, len(articolo_list))
-            records = _parse_nir_articoli(articolo_list, ns, source_id)
+        fallback: list[dict] = []
 
-        # Fallback 2: documentCollection — ogni articolo è un elemento <doc>
-        # (regio decreto anni 1930-40: codice civile, penale, proc. civile)
-        if not records:
+        # Fallback 1: NIR — <articolo> invece di <article>
+        articolo_list = list(root.iter(f"{ns}articolo")) or list(root.iter("articolo"))
+        if articolo_list:
+            logger.warning("AKN [%s]: %d <articolo> — NIR parser", source_id, len(articolo_list))
+            fallback = _parse_nir_articoli(articolo_list, ns, source_id)
+
+        # Fallback 2: documentCollection — ogni articolo è un <doc>
+        if len(fallback) < 10:
             doc_elements = list(root.iter(f"{ns}doc")) or list(root.iter("doc"))
             if len(doc_elements) > 10:
-                logger.warning("AKN [%s]: found %d <doc> elements — documentCollection format",
+                logger.warning("AKN [%s]: %d <doc> — documentCollection",
                                source_id, len(doc_elements))
-                records = _parse_akn_doc_collection(doc_elements, ns, source_id)
+                fallback = _parse_akn_doc_collection(doc_elements, ns, source_id)
 
         # Fallback 3: elementi con eId="art_NNN"
-        if not records:
+        if len(fallback) < 10:
             eId_articles = [
                 el for el in root.iter()
                 if re.match(r"art[_-]\d", el.get("eId", ""), re.IGNORECASE)
             ]
             if eId_articles:
-                logger.warning("AKN [%s]: found %d eId='art_...' elements — using eId parser",
-                               source_id, len(eId_articles))
-                records = _parse_akn_eId_articles(eId_articles, ns, source_id)
+                logger.warning("AKN [%s]: %d eId='art_...'", source_id, len(eId_articles))
+                fallback = _parse_akn_eId_articles(eId_articles, ns, source_id)
+
+        if fallback:
+            records = fallback
 
     return records
 
