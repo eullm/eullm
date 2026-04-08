@@ -26,22 +26,40 @@ const MIN_CHUNK_CHARS: usize = 80;
 /// Extract all http/https URLs from a text string.
 pub fn extract_urls(text: &str) -> Vec<String> {
     let mut urls = Vec::new();
-    let mut i = 0;
-    while i < text.len() {
-        if text[i..].starts_with("https://") || text[i..].starts_with("http://") {
-            let end = text[i..]
-                .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']'))
-                .map(|n| i + n)
-                .unwrap_or(text.len());
-            let url = text[i..end].trim_end_matches(['.', ',', '!', '?']).to_string();
-            if !url.is_empty() {
-                urls.push(url);
-            }
-            i = end;
-        } else {
-            i += 1;
+    let mut search_from = 0;
+
+    loop {
+        // find() on string slices always returns byte offsets at char boundaries
+        let http  = text[search_from..].find("http://").map(|p| search_from + p);
+        let https = text[search_from..].find("https://").map(|p| search_from + p);
+
+        let start = match (http, https) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(a), None)    => a,
+            (None,    Some(b)) => b,
+            (None,    None)    => break,
+        };
+
+        let rest = &text[start..];
+        let end = rest
+            .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']'))
+            .unwrap_or(rest.len());
+
+        let url = rest[..end].trim_end_matches(['.', ',', '!', '?']).to_string();
+        if !url.is_empty() {
+            urls.push(url);
+        }
+
+        // Advance past this URL; if end==0 skip one char to avoid infinite loop
+        search_from = start + end;
+        if end == 0 {
+            search_from += text[search_from..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+        }
+        if search_from >= text.len() {
+            break;
         }
     }
+
     urls
 }
 
