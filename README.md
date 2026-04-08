@@ -97,7 +97,7 @@ Key features:
 - **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
-- **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling setup, no orchestrator, no model changes. Works from REPL and API alike. *No other local inference engine does this.*
+- **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
 - **[TurboQuant KV cache compression](#turboquant-kv-cache-compression-experimental)** *(experimental)* — **4x context length, 4x concurrent users.** Run Qwen3-14B with 131K context on a 16GB consumer GPU. Projected 2M+ context on H100. Saves up to EUR 180K/month on enterprise clusters
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
@@ -258,7 +258,7 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | Request scheduling | Sequential (one at a time) | **Continuous batching** (parallel decode) |
 | API compatibility | Ollama API or custom | Ollama-compatible + OpenAI-compatible |
 | GPU support | Manual build flags | `--features cuda/rocm/vulkan/metal` |
-| **Transparent web browsing** | No (requires external orchestrator + function calling + model support) | **`--web` flag — one flag, zero config, works on any model** |
+| **Transparent web browsing** | Via function calling (model must support tool use; requires tool-capable model) | **`--web` flag — model-agnostic, works with any GGUF, no tool-use support required** |
 | Model registry | US servers (HuggingFace) | EU servers (Hetzner DE, OVH FR) |
 | AI Act compliance | None | Built-in audit trail + compliance card templates |
 | Model verticalizzazione | Manual, requires ML expertise | Forge CLI + pipeline modules (end-to-end integration in progress) |
