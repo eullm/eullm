@@ -1209,10 +1209,19 @@ def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
             # Raccoglie link a sentenze individuali
             links = page.eval_on_selector_all(
                 "a[href]",
-                "els => els.map(e => e.getAttribute('href')).filter("
-                "h => h && (h.includes('sentenz') || h.includes('ordinanz')))",
+                "els => els.map(e => e.href).filter("
+                "h => h && (h.includes('sentenz') || h.includes('ordinanz') "
+                "|| h.includes('pronunce') || h.includes('decisioni')))",
             )
-            logger.info("  cortedicassazione.it: %d link trovati", len(links))
+            if not links:
+                # Diagnostica: mostra tutti i link della pagina
+                all_links = page.eval_on_selector_all(
+                    "a[href]", "els => els.slice(0,15).map(e => e.href)"
+                )
+                logger.info("  cortedicassazione.it: 0 link sentenze. "
+                            "Sample link pagina: %s", all_links)
+            else:
+                logger.info("  cortedicassazione.it: %d link trovati", len(links))
 
             for href in links[: source.max_sentences]:
                 full_url = (
@@ -1362,15 +1371,23 @@ def _fetch_cc_playwright(max_sentences: int) -> list[dict]:
                     f"{CORTECOSTITUZIONALE_BASE}/actionPronuncia.do"
                     f"?anno={anno}&tipoatto=S&Submit=Cerca"
                 )
-                logger.info("  CC: ricerca anno %d — %s", anno, search_url)
-                page.goto(search_url, wait_until="networkidle", timeout=60_000)
+                logger.info("  CC: ricerca anno %d", anno)
+                # domcontentloaded evita timeout su siti con analytics attivi
+                page.goto(search_url, wait_until="domcontentloaded", timeout=45_000)
+                page.wait_for_timeout(2000)  # breve attesa per il rendering
 
-                # Raccoglie link alle sentenze nella pagina risultati
+                # Raccoglie link alle sentenze
                 links = page.eval_on_selector_all(
-                    "a[href*='actionPronuncia']",
-                    "els => els.map(e => e.href)"
-                    ".filter(h => h.includes('idAct') || h.includes('pronunzia'))",
+                    "a[href]",
+                    "els => els.map(e => e.href).filter(h =>"
+                    " h.includes('actionPronuncia') && h.includes('idAct'))",
                 )
+                if not links:
+                    # prova selettore più ampio
+                    links = page.eval_on_selector_all(
+                        "a[href*='Pronuncia']",
+                        "els => els.map(e => e.href)",
+                    )
                 logger.info("  CC anno %d: %d link trovati", anno, len(links))
 
                 for href in links[: max_sentences - len(records)]:
@@ -1412,15 +1429,23 @@ def _fetch_cc_requests(max_sentences: int) -> list[dict]:
             f"{CORTECOSTITUZIONALE_BASE}/actionPronuncia.do"
             f"?anno={anno}&tipoatto=S&Submit=Cerca"
         )
+        logger.info("  CC requests: %s", search_url)
         try:
-            r = session.get(search_url, timeout=20)
+            r = session.get(search_url, timeout=30)
+            r.raise_for_status()
             soup = BeautifulSoup(r.text, "html.parser")
+            # Prova diversi pattern di link
             links = [
                 a["href"] for a in soup.find_all("a", href=True)
-                if "actionPronuncia" in a["href"] and (
-                    "idAct" in a["href"] or "pronunzia" in a["href"]
-                )
+                if any(k in a["href"] for k in ("idAct", "pronunzia", "Pronuncia"))
             ]
+            logger.info("  CC requests anno %d: %d link trovati (HTML len=%d)",
+                        anno, len(links), len(r.text))
+            if not links:
+                # Mostra i primi link per diagnostica
+                sample = [a["href"] for a in soup.find_all("a", href=True)][:10]
+                logger.info("  CC: sample link dalla pagina: %s", sample)
+
             for href in links[: max_sentences - len(records)]:
                 full_url = (
                     href if href.startswith("http")
@@ -1434,7 +1459,7 @@ def _fetch_cc_requests(max_sentences: int) -> list[dict]:
                 except Exception:
                     continue
         except Exception as exc:
-            logger.debug("CC requests errore anno %d: %s", anno, exc)
+            logger.warning("CC requests errore anno %d: %s", anno, exc)
             continue
 
     return records
