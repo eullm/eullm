@@ -371,7 +371,16 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
                            source_id, len(articolo_list))
             records = _parse_nir_articoli(articolo_list, ns, source_id)
 
-        # Fallback 2: elements with eId="art_NNN" attribute (any tag name)
+        # Fallback 2: documentCollection — ogni articolo è un elemento <doc>
+        # (regio decreto anni 1930-40: codice civile, penale, proc. civile)
+        if not records:
+            doc_elements = list(root.iter(f"{ns}doc")) or list(root.iter("doc"))
+            if len(doc_elements) > 10:
+                logger.warning("AKN [%s]: found %d <doc> elements — documentCollection format",
+                               source_id, len(doc_elements))
+                records = _parse_akn_doc_collection(doc_elements, ns, source_id)
+
+        # Fallback 3: elementi con eId="art_NNN"
         if not records:
             eId_articles = [
                 el for el in root.iter()
@@ -382,6 +391,58 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
                                source_id, len(eId_articles))
                 records = _parse_akn_eId_articles(eId_articles, ns, source_id)
 
+    return records
+
+
+def _parse_akn_doc_collection(
+    doc_elements: list[ET.Element], ns: str, source_id: str
+) -> list[dict]:
+    """Estrae articoli da un documentCollection AKN (regio decreto anni 1930-40).
+
+    Struttura: ogni <doc> corrisponde a un articolo. Il numero è ricavato
+    dal valore di FRBRthis (es. "urn:nir:...:1942-03-16;262~art_1" → "1").
+    Il testo è in mainBody → paragraph → content → p.
+    """
+    records = []
+    for doc in doc_elements:
+        # Numero articolo: ricavato da FRBRWork/FRBRthis value="...~art_N"
+        num = ""
+        frbrthis_el = (
+            doc.find(f".//{ns}FRBRWork/{ns}FRBRthis")
+            or doc.find(".//FRBRWork/FRBRthis")
+            or doc.find(f".//{ns}FRBRthis")
+            or doc.find(".//FRBRthis")
+        )
+        if frbrthis_el is not None:
+            val = frbrthis_el.get("value", "")
+            m = re.search(r"~art[_-]?(\w+)", val, re.IGNORECASE)
+            if m:
+                num = m.group(1)
+
+        # Testo: mainBody → paragraph → content → p
+        paragraphs: list[str] = []
+        for pel in doc.iter(f"{ns}p"):
+            t = clean_text(" ".join(pel.itertext()))
+            if t:
+                paragraphs.append(t)
+        if not paragraphs:
+            for cel in doc.iter(f"{ns}content"):
+                t = clean_text(" ".join(cel.itertext()))
+                if t:
+                    paragraphs.append(t)
+
+        body = " ".join(paragraphs)
+        if len(body) < 10:
+            continue
+
+        header = f"Art. {num}" if num else ""
+        text = f"{header}\n{body}" if header else body
+        records.append({
+            "text": text,
+            "source": source_id,
+            "article_num": num,
+            "article_title": "",
+        })
     return records
 
 
