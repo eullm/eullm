@@ -250,15 +250,39 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
 
     logger.info("  Fetching %d articles via AJAX for %s...", len(ajax_urls), source.id)
 
+    # Cap at 1000 articles per source to avoid rate limiting on large codes.
+    # The Codice Civile has ~2969 articles — fetching all would take ~50 min.
+    # 1000 is sufficient diversity for domain fine-tuning.
+    MAX_ARTICLES = 1000
+    if len(ajax_urls) > MAX_ARTICLES:
+        # Evenly sample across the full range so we get all parts of the code
+        step = len(ajax_urls) / MAX_ARTICLES
+        ajax_urls = [ajax_urls[int(i * step)] for i in range(MAX_ARTICLES)]
+        logger.info("  (capped at %d evenly-sampled articles)", MAX_ARTICLES)
+
+    import time
+
     # Fetch each article and build XML
     xml_parts = ["<atto>"]
-    for url in ajax_urls:
+    consecutive_errors = 0
+    for i, url in enumerate(ajax_urls):
         try:
             r = session.get(url, timeout=30,
                             headers={"X-Requested-With": "XMLHttpRequest",
                                      "Referer": viewer_url})
+            if r.status_code == 429 or r.status_code >= 500:
+                # Rate limited — back off and retry once
+                time.sleep(3.0)
+                r = session.get(url, timeout=30,
+                                headers={"X-Requested-With": "XMLHttpRequest",
+                                         "Referer": viewer_url})
             if not r.ok:
+                consecutive_errors += 1
+                if consecutive_errors >= 5:
+                    logger.warning("  5 consecutive errors for %s — stopping early", source.id)
+                    break
                 continue
+            consecutive_errors = 0
             soup = BeautifulSoup(r.text, "html.parser")
             num_el = soup.find(class_="article-num-akn")
             txt_el = soup.find(class_="art-just-text-akn")
@@ -274,6 +298,8 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
             xml_parts.append(
                 f"<articolo><num>{num_safe}</num><testo>{txt_safe}</testo></articolo>"
             )
+            # Polite delay — avoids triggering normattiva.it rate limiting
+            time.sleep(0.3)
         except Exception:
             continue
 
