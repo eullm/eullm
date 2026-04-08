@@ -268,6 +268,14 @@ def export(model_path: str, output: str | None, quant: str) -> None:
     help="Path to AKN ZIP from dati.normattiva.it (Collezioni → Codici → AKN). "
          "Skips HTML scraping for normattiva.it sources.",
 )
+@click.option(
+    "--max-cassazione",
+    default=300,
+    show_default=True,
+    type=int,
+    help="Max sentenze per sezione Cassazione (civile/penale/lavoro). "
+         "Le sentenze non vengono pubblicate (GDPR).",
+)
 def prepare_dataset(
     profile: str,
     output: str,
@@ -276,6 +284,7 @@ def prepare_dataset(
     hub_repo: str | None,
     no_cache: bool,
     normattiva_zip: str | None,
+    max_cassazione: int,
 ) -> None:
     """Download and prepare training corpus for a verticalizzazione profile.
 
@@ -336,6 +345,7 @@ def prepare_dataset(
                 hub_repo=resolved_hub_repo,
                 no_cache=no_cache,
                 normattiva_zip=normattiva_zip,
+                max_cassazione_sentences=max_cassazione,
             )
         elif profile == "medical-de":
             from .datasets.medical_de import prepare_medical_de

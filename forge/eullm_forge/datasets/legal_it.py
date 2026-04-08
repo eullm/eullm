@@ -120,6 +120,46 @@ EURLEX_HTML_URL = "https://eur-lex.europa.eu/legal-content/IT/TXT/HTML/"
 # dati.normattiva.it OpenData — bulk AKN XML download (all codes in one ZIP)
 DATI_NORMATTIVA_DOWNLOAD = "https://dati.normattiva.it/download"
 
+# Corte di Cassazione — italgiure.giustizia.it
+ITALGIURE_SNCASS = "https://italgiure.giustizia.it/sncass/"
+
+# Sentenze Cassazione (uso interno — non pubblicare il dataset grezzo, GDPR)
+CASSAZIONE_SOURCES: list["CassazioneSource"] = []  # popolato dopo la def
+
+
+@dataclass
+class CassazioneSource:
+    id: str
+    name: str
+    sezione: str      # parametro "sezione" nel form italgiure
+    max_sentences: int = 300
+    description: str = ""
+
+
+CASSAZIONE_SOURCES = [
+    CassazioneSource(
+        id="cassazione_civile",
+        name="Corte di Cassazione — Sezioni Civili",
+        sezione="civile",
+        max_sentences=300,
+        description="Sentenze civili: contratti, responsabilità, famiglia",
+    ),
+    CassazioneSource(
+        id="cassazione_penale",
+        name="Corte di Cassazione — Sezioni Penali",
+        sezione="penale",
+        max_sentences=300,
+        description="Sentenze penali",
+    ),
+    CassazioneSource(
+        id="cassazione_lavoro",
+        name="Corte di Cassazione — Sezione Lavoro",
+        sezione="lavoro",
+        max_sentences=200,
+        description="Sentenze lavoro e previdenza sociale",
+    ),
+]
+
 
 # ---------------------------------------------------------------------------
 # dati.normattiva.it OpenData — bulk AKN XML ZIP
@@ -1055,6 +1095,292 @@ def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Corte di Cassazione — italgiure.giustizia.it
+# ---------------------------------------------------------------------------
+
+def fetch_cassazione(source: CassazioneSource) -> list[dict]:
+    """Scarica sentenze dalla Corte di Cassazione via italgiure.giustizia.it.
+
+    Usa Playwright (headless Chromium) come metodo primario — italgiure
+    richiede JavaScript per il form di ricerca. Fallback a requests puro.
+
+    Le sentenze vengono salvate in cache locale per non riscaricale.
+    Non pubblicare il dataset grezzo (GDPR: contiene dati personali delle parti).
+
+    Returns:
+        Lista di record {text, source, sentence_id}.
+    """
+    import json
+
+    from .base import _cache_load, _cache_save
+
+    cache_key = f"cassazione_{source.id}"
+    cached = _cache_load(cache_key)
+    if cached:
+        try:
+            records = json.loads(cached)
+            if records:
+                logger.debug("Cache hit: %s (%d sentenze)", cache_key, len(records))
+                return records
+        except Exception:
+            pass
+
+    logger.info("Scaricando sentenze %s da italgiure.giustizia.it...", source.name)
+
+    records = _fetch_cassazione_playwright(source)
+    if not records:
+        records = _fetch_cassazione_requests(source)
+
+    if records:
+        _cache_save(cache_key, json.dumps(records, ensure_ascii=False))
+        logger.info("  [%s] %d sentenze scaricate", source.id, len(records))
+    else:
+        logger.warning(
+            "Nessuna sentenza scaricata per %s. "
+            "Verifica che italgiure.giustizia.it sia accessibile e che "
+            "Playwright sia installato: pip install playwright && playwright install chromium",
+            source.name,
+        )
+    return records
+
+
+def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
+    """Scarica sentenze via Playwright — gestisce il JS di italgiure."""
+    try:
+        from playwright.sync_api import TimeoutError as PWTimeout
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    records: list[dict] = []
+    logger.info("  Playwright: apertura italgiure.giustizia.it [%s]...", source.sezione)
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context(locale="it-IT")
+            page = ctx.new_page()
+
+            # Carica homepage italgiure Cassazione
+            page.goto(ITALGIURE_SNCASS, wait_until="networkidle", timeout=60_000)
+
+            # Cerca il campo sezione/materia e imposta il valore
+            _italgiure_fill_search(page, source.sezione)
+
+            # Attendi i risultati
+            try:
+                page.wait_for_selector("a[href*='sentenza'], a[href*='documento']",
+                                       timeout=20_000)
+            except PWTimeout:
+                logger.warning("italgiure: nessun risultato trovato per sezione=%s", source.sezione)
+                browser.close()
+                return []
+
+            # Raccogli link alle sentenze dalla pagina risultati
+            sentence_links = _italgiure_collect_links(page)
+            logger.info("  italgiure [%s]: trovati %d link sentenze",
+                        source.sezione, len(sentence_links))
+
+            # Scarica ogni sentenza
+            for href in sentence_links[: source.max_sentences]:
+                try:
+                    url = href if href.startswith("http") else f"https://italgiure.giustizia.it{href}"
+                    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                    html = page.content()
+                    rec = _parse_cassazione_page(html, source.id, url)
+                    if rec:
+                        records.append(rec)
+                except PWTimeout:
+                    continue
+                except Exception as exc:
+                    logger.debug("Errore sentenza %s: %s", href, exc)
+                    continue
+
+                if len(records) % 50 == 0 and records:
+                    logger.info("  [%s] %d/%d sentenze",
+                                source.id, len(records), source.max_sentences)
+
+            browser.close()
+
+    except PWTimeout:
+        logger.warning("Playwright timeout su italgiure.giustizia.it")
+    except Exception as exc:
+        logger.warning("Playwright errore su italgiure: %s", exc)
+
+    return records
+
+
+def _italgiure_fill_search(page: object, sezione: str) -> None:
+    """Compila il form di ricerca di italgiure con sezione e anni recenti."""
+    # Prova selettori comuni per il campo sezione
+    sezione_selectors = [
+        f"select[name*='sezione'] option[value*='{sezione}']",
+        f"select[id*='sezione'] option[value*='{sezione}']",
+        f"option[value*='{sezione}']",
+    ]
+    for sel in sezione_selectors:
+        try:
+            page.click(sel, timeout=3_000)
+            break
+        except Exception:
+            continue
+
+    # Anno: ultimi 3 anni per avere un campione recente
+    import datetime
+    anno_fine = datetime.date.today().year
+    anno_inizio = anno_fine - 3
+    for name in ["annoInizio", "anno_inizio", "dataInizio", "anno"]:
+        try:
+            page.fill(f"input[name='{name}']", str(anno_inizio), timeout=2_000)
+            break
+        except Exception:
+            continue
+    for name in ["annoFine", "anno_fine", "dataFine"]:
+        try:
+            page.fill(f"input[name='{name}']", str(anno_fine), timeout=2_000)
+            break
+        except Exception:
+            continue
+
+    # Invia il form
+    for sel in ["button[type='submit']", "input[type='submit']", "button:text('Cerca')"]:
+        try:
+            page.click(sel, timeout=3_000)
+            return
+        except Exception:
+            continue
+
+
+def _italgiure_collect_links(page: object) -> list[str]:
+    """Raccoglie tutti i link a sentenze dalla pagina risultati."""
+    try:
+        links = page.eval_on_selector_all(
+            "a[href]",
+            "els => els.map(e => e.getAttribute('href')).filter(h => h && ("
+            "h.includes('sentenza') || h.includes('documento') || h.includes('massima')))",
+        )
+        return links or []
+    except Exception:
+        return []
+
+
+def _fetch_cassazione_requests(source: CassazioneSource) -> list[dict]:
+    """Fallback requests puro per italgiure (funziona solo senza WAF attivo)."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    from .base import DEFAULT_HEADERS
+
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+    records: list[dict] = []
+
+    try:
+        r = session.get(ITALGIURE_SNCASS, timeout=15)
+        r.raise_for_status()
+    except Exception as exc:
+        logger.warning("italgiure requests GET fallito: %s", exc)
+        return []
+
+    # Prova URL di ricerca diretta con parametri GET comuni
+    import datetime
+    anno = datetime.date.today().year - 1
+    search_urls = [
+        (f"{ITALGIURE_SNCASS}?db=sncass&sezione={source.sezione}&anno={anno}"
+         f"&action=ricerca&pagina=0"),
+        (f"{ITALGIURE_SNCASS}form_ricerca.jsp?sezione={source.sezione}&anno={anno}"),
+    ]
+
+    for search_url in search_urls:
+        try:
+            r = session.get(search_url, timeout=20)
+            soup = BeautifulSoup(r.text, "html.parser")
+            links = [
+                a["href"] for a in soup.find_all("a", href=True)
+                if any(k in a["href"] for k in ("sentenza", "documento", "massima"))
+            ]
+            if not links:
+                continue
+
+            for href in links[: source.max_sentences]:
+                url = href if href.startswith("http") else f"https://italgiure.giustizia.it{href}"
+                try:
+                    resp = session.get(url, timeout=20)
+                    rec = _parse_cassazione_page(resp.text, source.id, url)
+                    if rec:
+                        records.append(rec)
+                except Exception:
+                    continue
+            if records:
+                break
+        except Exception as exc:
+            logger.debug("italgiure search URL fallita (%s): %s", search_url, exc)
+            continue
+
+    return records
+
+
+def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict]:
+    """Estrae il testo da una pagina sentenza di italgiure.
+
+    Le sentenze hanno struttura:
+      - Header: sezione, numero, data
+      - Sezioni "FATTO", "DIRITTO"/"MOTIVI", "P.Q.M."
+
+    Per il training estraiamo l'intera motivazione (DIRITTO + FATTO).
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Rimuovi nav/script/style
+    for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
+        tag.decompose()
+
+    full_text = soup.get_text(separator="\n", strip=True)
+
+    # Estratto minimo: deve contenere testo legale sostanziale
+    if len(full_text) < 500 or not any(
+        kw in full_text for kw in ("Corte di Cassazione", "Cassazione", "ricorso", "motivo")
+    ):
+        return None
+
+    # Prova a isolare la motivazione (testo dopo "FATTO" o "DIRITTO")
+    # Le sentenze italiane hanno sezioni ben marcate in maiuscolo
+    body = full_text
+    for marker in ("MOTIVI DELLA DECISIONE", "DIRITTO", "FATTO E DIRITTO", "FATTO"):
+        idx = full_text.upper().find(marker)
+        if idx != -1:
+            body = full_text[idx:]
+            break
+
+    body = clean_text(body)
+    if len(body) < 300:
+        body = clean_text(full_text)  # usa tutto se il ritaglio è troppo corto
+
+    if len(body) < 300:
+        return None
+
+    # Numero sentenza dall'URL o dall'HTML
+    sentence_id = re.search(r"[/=](\d{4,})", url)
+    sid = sentence_id.group(1) if sentence_id else url.split("/")[-1]
+
+    return {
+        "text": body,
+        "source": source_id,
+        "sentence_id": sid,
+        "article_num": sid,
+        "article_title": "",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1067,16 +1393,19 @@ def prepare_legal_it(
     val_ratio: float = 0.05,
     no_cache: bool = False,
     normattiva_zip: str | None = None,
+    max_cassazione_sentences: int = 300,
 ) -> Path:
     """Download and prepare the Italian legal corpus.
 
-    Downloads Italian legislation from normattiva.it and EU regulations
-    from EUR-Lex, extracts articles, cleans text, and saves as JSONL.
+    Downloads Italian legislation from normattiva.it, EU regulations from
+    EUR-Lex, and Corte di Cassazione sentences from italgiure.giustizia.it.
 
     Args:
         output_dir: Directory where train.jsonl and val.jsonl will be saved.
         sources: Source IDs to include (None = all). E.g. ["costituzione", "gdpr"].
+            Cassazione IDs: cassazione_civile, cassazione_penale, cassazione_lavoro.
         push_to_hub: If True, push dataset to HuggingFace Hub.
+            WARNING: non usare con sentenze Cassazione (GDPR — dati personali).
         hub_repo: HuggingFace Hub repo ID for push (default: eullm/legal-it-corpus).
         val_ratio: Fraction of records to put in validation split.
         no_cache: If True, bypass local HTTP cache and re-download all sources.
@@ -1084,6 +1413,7 @@ def prepare_legal_it(
             If provided (or if the automatic download succeeds), this is used instead
             of the HTML scraper for normattiva.it sources.
             Get it at: https://dati.normattiva.it → Collezioni → Codici → AKN → Download
+        max_cassazione_sentences: Max sentenze per sezione Cassazione (default 300).
 
     Returns:
         Path to the output directory.
@@ -1154,6 +1484,28 @@ def prepare_legal_it(
 
         all_records.extend(records)
         logger.info("  [%s] %d articles", reg.id, len(records))
+
+    # --- Corte di Cassazione ---
+    for cass in CASSAZIONE_SOURCES:
+        if sources and cass.id not in sources:
+            continue
+
+        # Applica il limite personalizzato
+        cass_source = CassazioneSource(
+            id=cass.id,
+            name=cass.name,
+            sezione=cass.sezione,
+            max_sentences=max_cassazione_sentences,
+            description=cass.description,
+        )
+        records = fetch_cassazione(cass_source)
+        if not records:
+            logger.warning("Nessuna sentenza per %s", cass.name)
+            failed_sources.append(cass.id)
+            continue
+
+        all_records.extend(records)
+        logger.info("  [%s] %d sentenze", cass.id, len(records))
 
     if not all_records:
         raise RuntimeError(
