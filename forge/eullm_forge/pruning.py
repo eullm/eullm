@@ -83,7 +83,9 @@ def _load_calibration_data(
 
     try:
         if Path(dataset_name).exists():
-            ds = load_dataset("text", data_files=dataset_name, split="train")
+            ext = Path(dataset_name).suffix.lower()
+            loader = "json" if ext in (".jsonl", ".json") else "text"
+            ds = load_dataset(loader, data_files=dataset_name, split="train")
         else:
             ds = load_dataset(dataset_name, split="train")
     except Exception:

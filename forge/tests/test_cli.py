@@ -63,3 +63,25 @@ def test_export_help():
     result = runner.invoke(main, ["export", "--help"])
     assert result.exit_code == 0
     assert "GGUF" in result.output
+
+
+def test_prepare_dataset_help():
+    runner = CliRunner()
+    result = runner.invoke(main, ["prepare-dataset", "--help"])
+    assert result.exit_code == 0
+    assert "legal-it" in result.output
+
+
+def test_prepare_dataset_not_implemented_medical():
+    """medical-de should fail gracefully with NotImplementedError."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["prepare-dataset", "medical-de"])
+    # Not yet implemented — should exit cleanly with a message
+    assert "Not yet implemented" in result.output
+
+
+def test_prepare_dataset_not_implemented_finance():
+    """finance-fr should fail gracefully with NotImplementedError."""
+    runner = CliRunner()
+    result = runner.invoke(main, ["prepare-dataset", "finance-fr"])
+    assert "Not yet implemented" in result.output

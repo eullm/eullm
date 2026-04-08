@@ -242,6 +242,134 @@ def export(model_path: str, output: str | None, quant: str) -> None:
         console.print(f"[yellow]Not implemented yet:[/yellow] {e}")
 
 
+@main.command("prepare-dataset")
+@click.argument("profile", type=click.Choice(["legal-it", "medical-de", "finance-fr"]))
+@click.option("--output", "-o", default="./datasets", help="Output directory")
+@click.option(
+    "--sources",
+    help="Comma-separated source IDs to include (default: all). "
+         "E.g. --sources costituzione,gdpr",
+)
+@click.option(
+    "--push-to-hub",
+    is_flag=True,
+    help="Push prepared dataset to HuggingFace Hub (requires: huggingface-cli login)",
+)
+@click.option(
+    "--hub-repo",
+    default=None,
+    help="HuggingFace Hub repo ID (default: eullm/PROFILE-corpus)",
+)
+@click.option("--no-cache", is_flag=True, help="Re-download sources, bypass local HTTP cache")
+def prepare_dataset(
+    profile: str,
+    output: str,
+    sources: str | None,
+    push_to_hub: bool,
+    hub_repo: str | None,
+    no_cache: bool,
+) -> None:
+    """Download and prepare training corpus for a verticalizzazione profile.
+
+    Downloads text from public sources (normattiva.it, EUR-Lex, etc.),
+    extracts articles, cleans text, and saves as JSONL in OUTPUT/PROFILE/.
+
+    Raw HTTP responses are cached at ~/.cache/eullm-forge/raw/ to avoid
+    re-downloading on subsequent runs. Use --no-cache to force refresh.
+
+    The resulting dataset can be used directly by the forge pipeline:
+
+        eullm-forge forge Qwen/Qwen3-14B --profile legal-it
+
+    Examples:
+
+        eullm-forge prepare-dataset legal-it
+
+        eullm-forge prepare-dataset legal-it --sources costituzione,gdpr,ai_act
+
+        eullm-forge prepare-dataset legal-it --push-to-hub --hub-repo eullm/legal-it-corpus
+    """
+    from pathlib import Path
+
+    profile_to_dir = {
+        "legal-it": "legal_it",
+        "medical-de": "medical_de",
+        "finance-fr": "finance_fr",
+    }
+    dataset_dir = Path(output) / profile_to_dir[profile]
+
+    source_list = [s.strip() for s in sources.split(",")] if sources else None
+    default_hub_repos = {
+        "legal-it": "eullm/legal-it-corpus",
+        "medical-de": "eullm/medical-de-corpus",
+        "finance-fr": "eullm/finance-fr-corpus",
+    }
+    resolved_hub_repo = hub_repo or default_hub_repos[profile]
+
+    console.print(
+        f"[bold blue]EULLM Forge[/bold blue] — Dataset Preparation: [green]{profile}[/green]"
+    )
+    console.print(f"  Output:  {dataset_dir}")
+    if source_list:
+        console.print(f"  Sources: {', '.join(source_list)}")
+    else:
+        console.print("  Sources: all")
+    if push_to_hub:
+        console.print(f"  Hub:     {resolved_hub_repo}")
+    console.print()
+
+    try:
+        if profile == "legal-it":
+            from .datasets.legal_it import prepare_legal_it
+            result = prepare_legal_it(
+                dataset_dir,
+                sources=source_list,
+                push_to_hub=push_to_hub,
+                hub_repo=resolved_hub_repo,
+                no_cache=no_cache,
+            )
+        elif profile == "medical-de":
+            from .datasets.medical_de import prepare_medical_de
+            result = prepare_medical_de(dataset_dir)
+        elif profile == "finance-fr":
+            from .datasets.finance_fr import prepare_finance_fr
+            result = prepare_finance_fr(dataset_dir)
+
+        import json
+        info_path = dataset_dir / "dataset_info.json"
+        if info_path.exists():
+            info = json.loads(info_path.read_text())
+            console.print(f"[bold green]Done![/bold green] Dataset ready at: {result}")
+            console.print()
+            table = Table(title=f"Dataset: {profile}")
+            table.add_column("Source")
+            table.add_column("Records", justify="right")
+            for src, count in info.get("sources", {}).items():
+                table.add_row(src, str(count))
+            table.add_row("", "")
+            table.add_row(
+                "[bold]Total[/bold]",
+                f"[bold]{info['total_records']} ({info['train_records']} train + "
+                f"{info['val_records']} val)[/bold]",
+            )
+            console.print(table)
+            console.print()
+            console.print(
+                "Use in pipeline: set [cyan]calibration_dataset[/cyan] / "
+                "[cyan]dataset[/cyan] to the train.jsonl path in your profile YAML, "
+                f"or pass [cyan]--dataset {result / 'train.jsonl'}[/cyan] to forge."
+            )
+        else:
+            console.print(f"[bold green]Done![/bold green] Dataset ready at: {result}")
+
+    except NotImplementedError as e:
+        console.print(f"[yellow]Not yet implemented:[/yellow] {e}")
+    except RuntimeError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise SystemExit(1)
+
+
+
 def _guess_params_from_name(model_name: str) -> float:
     """Guess parameter count from model name (e.g., 'Qwen3-14B' → 14.0)."""
     import re
