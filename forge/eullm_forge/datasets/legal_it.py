@@ -203,14 +203,17 @@ def fetch_normattiva(source: NormaSource, session: object = None) -> Optional[st
 
 
 def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[str]:
-    """Fallback: fetch articles one-by-one via the normattiva.it AJAX endpoint.
+    """Fallback: download the full act via the normattiva.it 'attoCompleto' endpoint.
 
-    The normattiva.it viewer page embeds all article URLs as JavaScript onclick
-    handlers of the form:
-        showArticle('/atto/caricaArticolo?...&art.idArticolo=N&...', this)
+    The viewer page has an 'esporta/attoCompleto' link that returns the full law
+    as a single HTML page (~1–3MB) with all articles pre-rendered:
+        <div class="bodyTesto">
+            <h2 class="article-num-akn">Art. N</h2>
+            <span class="art-just-text-akn">...</span>
+        </div>
 
-    We extract all these URLs from the viewer page, then fetch each article via
-    the AJAX endpoint. Returns a minimal XML string for parse_normattiva_xml.
+    This replaces the previous AJAX approach (N individual requests) with a
+    single bulk download, avoiding rate limiting entirely.
     """
     try:
         import warnings
@@ -222,6 +225,7 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
 
     from .base import _cache_save
 
+    # Step 1: load viewer page to find the attoCompleto link
     viewer_url = f"https://www.normattiva.it/uri-res/N2Ls?{source.urn}"
     try:
         resp = session.get(viewer_url, timeout=60)
@@ -231,85 +235,53 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
         logger.warning("normattiva.it viewer failed for %s: %s", source.id, exc)
         return None
 
-    # Extract all article AJAX URLs from onclick handlers
-    ajax_urls: list[str] = []
-    seen: set[str] = set()
-    for m in re.finditer(r"'/atto/caricaArticolo[^']+'", viewer_html):
-        url = "https://www.normattiva.it" + m.group(0).strip("'")
-        # Deduplicate by art.idArticolo parameter
-        art_id = re.search(r"art\.idArticolo=(\d+)", url)
-        if art_id:
-            key = art_id.group(1)
-            if key not in seen:
-                seen.add(key)
-                ajax_urls.append(url)
-
-    if not ajax_urls:
-        logger.warning("No article AJAX URLs found for %s", source.id)
+    soup_v = BeautifulSoup(viewer_html, "html.parser")
+    link = soup_v.find("a", href=re.compile(r"attoCompleto"))
+    if not link:
+        logger.warning("No attoCompleto link found for %s", source.id)
         return None
 
-    logger.info("  Fetching %d articles via AJAX for %s...", len(ajax_urls), source.id)
+    # Step 2: download the full act in one request
+    full_url = "https://www.normattiva.it" + link["href"]
+    logger.info("  Downloading full act for %s...", source.id)
+    try:
+        r = session.get(
+            full_url,
+            timeout=120,
+            headers={"Referer": viewer_url},
+        )
+        r.raise_for_status()
+        full_html = r.text
+    except Exception as exc:
+        logger.warning("normattiva.it attoCompleto failed for %s: %s", source.id, exc)
+        return None
 
-    # Cap at 1000 articles per source to avoid rate limiting on large codes.
-    # The Codice Civile has ~2969 articles — fetching all would take ~50 min.
-    # 1000 is sufficient diversity for domain fine-tuning.
-    MAX_ARTICLES = 1000
-    if len(ajax_urls) > MAX_ARTICLES:
-        # Evenly sample across the full range so we get all parts of the code
-        step = len(ajax_urls) / MAX_ARTICLES
-        ajax_urls = [ajax_urls[int(i * step)] for i in range(MAX_ARTICLES)]
-        logger.info("  (capped at %d evenly-sampled articles)", MAX_ARTICLES)
-
-    import time
-
-    # Fetch each article and build XML
+    # Step 3: extract articles from the rendered HTML
+    soup = BeautifulSoup(full_html, "html.parser")
     xml_parts = ["<atto>"]
-    consecutive_errors = 0
-    for i, url in enumerate(ajax_urls):
-        try:
-            r = session.get(url, timeout=30,
-                            headers={"X-Requested-With": "XMLHttpRequest",
-                                     "Referer": viewer_url})
-            if r.status_code == 429 or r.status_code >= 500:
-                # Rate limited — back off and retry once
-                time.sleep(3.0)
-                r = session.get(url, timeout=30,
-                                headers={"X-Requested-With": "XMLHttpRequest",
-                                         "Referer": viewer_url})
-            if not r.ok:
-                consecutive_errors += 1
-                if consecutive_errors >= 5:
-                    logger.warning("  5 consecutive errors for %s — stopping early", source.id)
-                    break
-                continue
-            consecutive_errors = 0
-            soup = BeautifulSoup(r.text, "html.parser")
-            num_el = soup.find(class_="article-num-akn")
-            txt_el = soup.find(class_="art-just-text-akn")
-            if not txt_el:
-                continue
-            num = num_el.get_text(strip=True) if num_el else ""
-            text = " ".join(txt_el.get_text(separator=" ").split())
-            if len(text) < 10:
-                continue
-            # Escape XML special chars
-            num_safe = num.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            txt_safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-            xml_parts.append(
-                f"<articolo><num>{num_safe}</num><testo>{txt_safe}</testo></articolo>"
-            )
-            # Polite delay — avoids triggering normattiva.it rate limiting
-            time.sleep(0.3)
-        except Exception:
+    for body in soup.find_all(class_="bodyTesto"):
+        num_el = body.find(class_="article-num-akn")
+        txt_el = body.find(class_="art-just-text-akn")
+        if not txt_el:
             continue
-
+        num = num_el.get_text(strip=True) if num_el else ""
+        text = " ".join(txt_el.get_text(separator=" ").split())
+        if len(text) < 15:
+            continue
+        num_s = num.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        txt_s = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        xml_parts.append(
+            f"<articolo><num>{num_s}</num><testo>{txt_s}</testo></articolo>"
+        )
     xml_parts.append("</atto>")
-    if len(xml_parts) <= 2:  # only <atto> + </atto>
+
+    if len(xml_parts) <= 2:
+        logger.warning("No articles extracted from attoCompleto for %s", source.id)
         return None
 
     result = "\n".join(xml_parts)
     _cache_save(f"normattiva_{source.id}", result)
-    logger.info("  Fetched %d articles for %s", len(xml_parts) - 2, source.id)
+    logger.info("  Extracted %d articles for %s", len(xml_parts) - 2, source.id)
     return result
 
 
