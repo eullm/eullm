@@ -43,8 +43,34 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.5
+      # sccache persisted via actions/cache — disk-only, no GHA cache API dependency
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sccache-${{ matrix.target }}-
+
+      - name: Install sccache
+        shell: bash
+        run: |
+          SCCACHE_VER=0.8.2
+          OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          ARCH=$(uname -m)
+          if [ "$OS" = "linux" ]; then
+            FNAME="sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz"
+          elif [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+            FNAME="sccache-v${SCCACHE_VER}-aarch64-apple-darwin.tar.gz"
+          else
+            FNAME="sccache-v${SCCACHE_VER}-x86_64-apple-darwin.tar.gz"
+          fi
+          curl -sSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/${FNAME}" \
+            | tar -xz --strip-components=1 -C /usr/local/bin/ --wildcards '*/sccache'
+          mkdir -p ~/.cache/sccache
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          sccache --version
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -61,11 +87,6 @@ jobs:
 
       - name: Build engine
         run: cargo build --release --target ${{ matrix.target }} -p eullm-engine
-        env:
-          RUSTC_WRAPPER: sccache
-          CMAKE_C_COMPILER_LAUNCHER: sccache
-          CMAKE_CXX_COMPILER_LAUNCHER: sccache
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Package binary
         run: |
@@ -111,13 +132,23 @@ jobs:
           key: cargo-registry-cuda-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-cuda-
 
-      # sccache: caches individual C++/CUDA/Rust .o files — much smaller than target/
-      # and works correctly inside Docker containers with GHA cache backend
+      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/sccache-store
+          key: sccache-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sccache-cuda-${{ matrix.cuda }}-
+
       - name: Install sccache
         run: |
           SCCACHE_VER=0.8.2
           curl -sSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin/ --wildcards '*/sccache'
+          mkdir -p /tmp/sccache-store
+          echo "SCCACHE_DIR=/tmp/sccache-store" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           sccache --version
 
       - name: Build engine with CUDA
@@ -130,10 +161,6 @@ jobs:
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_ARCHITECTURES: "120"
-          RUSTC_WRAPPER: sccache
-          CMAKE_C_COMPILER_LAUNCHER: sccache
-          CMAKE_CXX_COMPILER_LAUNCHER: sccache
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Package binary
         run: |
@@ -187,13 +214,25 @@ jobs:
           path: engine/vendor
           key: tq-vendor-linux-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
 
-      # sccache: caches individual C++/CUDA/Rust .o files — replaces target/ cache
-      # which was too large (3-5 GB) and hit GitHub Actions 5 GB/entry limits
+      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
+      - uses: actions/cache@v4
+        with:
+          path: /tmp/sccache-store
+          key: sccache-cuda-tq-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: |
+            sccache-cuda-tq-${{ matrix.cuda }}-
+            sccache-cuda-tq-
+
       - name: Install sccache
         run: |
           SCCACHE_VER=0.8.2
           curl -sSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin/ --wildcards '*/sccache'
+          mkdir -p /tmp/sccache-store
+          echo "SCCACHE_DIR=/tmp/sccache-store" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           sccache --version
 
       - name: Setup TurboQuant backend
@@ -224,18 +263,11 @@ jobs:
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_ARCHITECTURES: "120"
-          RUSTC_WRAPPER: sccache
-          CMAKE_C_COMPILER_LAUNCHER: sccache
-          CMAKE_CXX_COMPILER_LAUNCHER: sccache
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Test TurboQuant module
         run: |
           . "$HOME/.cargo/env"
           cargo test --features turboquant_native -p eullm-engine
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Package binary
         run: |
@@ -273,9 +305,24 @@ jobs:
           path: engine/vendor
           key: tq-vendor-macos-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
 
-      # sccache: caches C++/Metal/Rust compilation units — replaces target/ cache
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.5
+      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/sccache
+          key: sccache-macos-arm64-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: sccache-macos-arm64-tq-
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER=0.8.2
+          curl -sSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-aarch64-apple-darwin.tar.gz" \
+            | tar -xz --strip-components=1 -C /usr/local/bin/ --wildcards '*/sccache'
+          mkdir -p ~/.cache/sccache
+          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          sccache --version
 
       - name: Setup TurboQuant backend
         working-directory: engine
@@ -295,17 +342,9 @@ jobs:
 
       - name: Build engine with Metal + TurboQuant
         run: cargo build --release --target aarch64-apple-darwin --features "metal turboquant_native" -p eullm-engine
-        env:
-          RUSTC_WRAPPER: sccache
-          CMAKE_C_COMPILER_LAUNCHER: sccache
-          CMAKE_CXX_COMPILER_LAUNCHER: sccache
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Test TurboQuant module
         run: cargo test --features turboquant_native -p eullm-engine
-        env:
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
 
       - name: Package binary
         run: |
