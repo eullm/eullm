@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import re
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -133,7 +133,7 @@ def fetch_normattiva(source: NormaSource) -> Optional[str]:
     Returns raw XML string, or None on failure.
     Cached locally at ~/.cache/eullm-forge/raw/ to avoid re-downloading.
     """
-    from .base import _cache_load, _cache_save, DEFAULT_HEADERS
+    from .base import DEFAULT_HEADERS, _cache_load, _cache_save
 
     cache_key = f"normattiva_{source.id}"
 
@@ -453,8 +453,9 @@ def prepare_legal_it(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if no_cache:
-        from .base import CACHE_DIR
         import shutil
+
+        from .base import CACHE_DIR
         logger.info("--no-cache: clearing HTTP cache at %s", CACHE_DIR)
         shutil.rmtree(CACHE_DIR, ignore_errors=True)
 
@@ -531,7 +532,9 @@ def prepare_legal_it(
 
     info = {
         "name": "eullm/legal-it-corpus",
-        "description": "Italian legal corpus: Codice Civile, Penale, Costituzione, GDPR, AI Act, ecc.",
+        "description": (
+            "Italian legal corpus: Codice Civile, Penale, Costituzione, GDPR, AI Act, ecc."
+        ),
         "language": ["it"],
         "license": "public-domain",
         "total_records": len(all_records),
@@ -557,7 +560,7 @@ def prepare_legal_it(
 def _push_to_hub(train_path: Path, val_path: Path, repo_id: str) -> None:
     """Push prepared dataset to HuggingFace Hub."""
     try:
-        from datasets import Dataset, DatasetDict, load_dataset
+        from datasets import Dataset, DatasetDict
     except ImportError:
         logger.error("datasets package required for Hub push. Install: pip install datasets")
         return
@@ -567,7 +570,9 @@ def _push_to_hub(train_path: Path, val_path: Path, repo_id: str) -> None:
         val_ds = Dataset.from_json(str(val_path))
         ds_dict = DatasetDict({"train": train_ds, "validation": val_ds})
         ds_dict.push_to_hub(repo_id, private=False)
-        logger.info("Dataset pushed to HuggingFace Hub: https://huggingface.co/datasets/%s", repo_id)
+        logger.info(
+            "Dataset pushed to HuggingFace Hub: https://huggingface.co/datasets/%s", repo_id
+        )
     except Exception as exc:
         logger.error("Failed to push to Hub: %s", exc)
         logger.info("Make sure you are logged in: huggingface-cli login")
