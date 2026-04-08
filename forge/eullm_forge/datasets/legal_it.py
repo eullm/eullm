@@ -21,7 +21,6 @@ from .base import (
     clean_text,
     http_get,
     save_jsonl,
-    strip_html_tags,
     train_val_split,
 )
 
@@ -157,26 +156,86 @@ def fetch_normattiva(source: NormaSource) -> Optional[str]:
     try:
         session = requests.Session()
         session.headers.update(DEFAULT_HEADERS)
-        # Step 1: establish JSESSIONID by visiting the main page
+        # Step 1: establish JSESSIONID — visit main page
         session.get("https://www.normattiva.it/", timeout=15)
-        # Step 2: download the export (session cookie is sent automatically)
+        # Step 2: visit the law's viewer page to build proper session context
+        viewer_url = f"https://www.normattiva.it/uri-res/N2Ls?{source.urn}"
+        session.get(viewer_url, timeout=30)
+        # Step 3: download the XML export
         response = session.get(url, timeout=60)
         response.raise_for_status()
         content = response.text
 
-        # Validate it's actually XML — HTML responses start with <!DOCTYPE
-        if content.lstrip().startswith("<!") or "<articolo" not in content.lower():
+        # Validate it's actually XML — HTML error pages start with <!DOCTYPE
+        # normattiva XML uses <articolo> (NIR) or <article> (AKN) elements
+        if content.lstrip().startswith("<!") or not re.search(r"<[Aa]rt", content):
             logger.warning(
-                "normattiva.it returned HTML for %s — session may not have been established",
+                "normattiva.it returned HTML for %s — trying HTML viewer scrape",
                 source.id,
             )
-            return None
+            return _scrape_normattiva_html(session, source)
 
         _cache_save(cache_key, content)
         return content
 
     except Exception as exc:
         logger.warning("Failed to fetch %s: %s", source.name, exc)
+        return None
+
+
+def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[str]:
+    """Fallback: scrape article text from the normattiva.it HTML viewer.
+
+    Used when the XML export endpoint returns HTML instead of XML.
+    """
+    try:
+        from bs4 import BeautifulSoup  # noqa: F401 — availability check
+    except ImportError:
+        return None
+
+    from .base import _cache_save
+
+    viewer_url = f"https://www.normattiva.it/uri-res/N2Ls?{source.urn}"
+    try:
+        resp = session.get(viewer_url, timeout=60)
+        resp.raise_for_status()
+        html = resp.text
+    except Exception as exc:
+        logger.warning("normattiva.it HTML viewer failed for %s: %s", source.id, exc)
+        return None
+
+    try:
+        from bs4 import BeautifulSoup  # noqa: F811
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
+            tag.decompose()
+        # normattiva.it viewer wraps article content in divs with specific classes
+        # Try to find article blocks by heading pattern in plain text
+        text = soup.get_text(separator="\n", strip=True)
+        if len(text) < 100:
+            return None
+        # Return as pseudo-XML so parse_normattiva_xml can fall back to regex path
+        # Wrap in a minimal root element and mark articles manually
+        parts = re.split(r"\n(Art\.?\s*\d+[\s\.\-])", text, flags=re.IGNORECASE)
+        if len(parts) < 3:
+            return None
+        # Build a minimal XML-like string for the regex fallback parser
+        xml_parts = ["<atto>"]
+        i = 1
+        while i + 1 < len(parts):
+            art_header = parts[i].strip()
+            art_body = parts[i + 1].strip()
+            i += 2
+            if art_body:
+                xml_parts.append(
+                    f"<articolo><num>{art_header}</num><testo>{art_body}</testo></articolo>"
+                )
+        xml_parts.append("</atto>")
+        result = "\n".join(xml_parts)
+        _cache_save(f"normattiva_{source.id}", result)
+        return result
+    except Exception as exc:
+        logger.warning("normattiva.it HTML scrape failed for %s: %s", source.id, exc)
         return None
 
 
@@ -347,8 +406,9 @@ def fetch_eurlex(source: EurlexSource) -> Optional[str]:
 def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
     """Extract article records from EUR-Lex HTML.
 
-    EUR-Lex HTML has article headers like "Articolo 1" as bold/heading elements
-    followed by paragraph content. Parses article-by-article.
+    Uses a text-split approach: strip all HTML, then split the plain text by
+    "Articolo N" boundaries. This is robust against EUR-Lex HTML structure
+    variations (different CSS classes, TOC duplicates, nested spans, etc.).
 
     Returns list of dicts with keys: text, source, article_num, article_title.
     """
@@ -362,59 +422,47 @@ def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Remove nav, header, footer noise
+    # Remove navigation noise before extracting text
     for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
         tag.decompose()
 
-    records: list[dict] = []
-    current_num: Optional[str] = None
-    current_title: str = ""
-    current_paragraphs: list[str] = []
+    # Get full plain text — preserving line breaks between elements
+    full_text = soup.get_text(separator="\n", strip=True)
 
-    # EUR-Lex uses <p> elements; article headers contain "Articolo N"
-    article_pattern = re.compile(
-        r"^Articolo\s+(\d+)\s*\.?\s*(.*?)$",
-        re.IGNORECASE,
+    # Split on "Articolo N" boundaries.
+    # Pattern captures the article header line (num + optional title on same line).
+    # re.split with a capturing group keeps the delimiters in the result list.
+    parts = re.split(
+        r"\n(Articolo\s+\d+[^\n]*)",
+        full_text,
+        flags=re.IGNORECASE,
     )
+    # parts = [preamble, "Articolo 1 ...", content1, "Articolo 2 ...", content2, ...]
 
-    def _flush_article() -> None:
-        if current_num and current_paragraphs:
-            body = clean_text(" ".join(current_paragraphs))
-            if len(body) < 20:
-                return
-            header = f"Art. {current_num}"
-            if current_title:
-                header += f" ({current_title})"
-            records.append({
-                "text": f"{header}\n{body}",
-                "source": source_id,
-                "article_num": current_num,
-                "article_title": current_title,
-            })
+    records: list[dict] = []
+    i = 1  # skip preamble at index 0
+    while i + 1 < len(parts):
+        header = parts[i].strip()
+        content = clean_text(parts[i + 1])
+        i += 2
 
-    for elem in soup.find_all(["p", "h2", "h3", "h4", "span"]):
-        raw = elem.get_text(separator=" ", strip=True)
-        if not raw:
+        m = re.match(r"Articolo\s+(\d+)\s*(.*)", header, re.IGNORECASE)
+        if not m or len(content) < 20:
             continue
 
-        m = article_pattern.match(raw)
-        if m:
-            _flush_article()
-            current_num = m.group(1)
-            current_title = m.group(2).strip().rstrip(".")
-            current_paragraphs = []
-        elif current_num:
-            # Append paragraph to current article
-            text = clean_text(raw)
-            if text and len(text) > 5:
-                current_paragraphs.append(text)
-
-    _flush_article()  # Save last article
+        num = m.group(1)
+        title = clean_text(m.group(2).lstrip("—–- "))
+        full = f"{header}\n{content}"
+        records.append({
+            "text": full,
+            "source": source_id,
+            "article_num": num,
+            "article_title": title,
+        })
 
     if not records:
-        # Fallback: strip all tags and chunk
-        plain = strip_html_tags(html)
-        return _text_to_records(plain, source_id)
+        # Fallback: chunk the full plain text
+        return _text_to_records(full_text, source_id)
 
     logger.info("  Extracted %d articles from %s", len(records), source_id)
     return records
