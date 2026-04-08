@@ -121,53 +121,64 @@ EURLEX_HTML_URL = "https://eur-lex.europa.eu/legal-content/IT/TXT/HTML/"
 DATI_NORMATTIVA_DOWNLOAD = "https://dati.normattiva.it/download"
 
 # Corte di Cassazione — italgiure.giustizia.it
-# italgiure: prova più varianti di URL (il sottodominio è cambiato nel tempo)
+# italgiure: URL base confermato (con www), database per sezione
+ITALGIURE_BASE = "https://www.italgiure.giustizia.it"
 ITALGIURE_CANDIDATES = [
-    "https://www.italgiure.giustizia.it/sncass/",
-    "https://italgiure.giustizia.it/sncass/",
     "https://www.italgiure.giustizia.it/",
+    "https://italgiure.giustizia.it/",
 ]
-ITALGIURE_SNCASS = ITALGIURE_CANDIDATES[0]  # default, verificato runtime
+ITALGIURE_SNCASS = ITALGIURE_CANDIDATES[0]
+
+# Codici database italgiure (visibili dalla homepage)
+# SN* = testo integrale sentenze; senza SN = solo massime (più accessibili)
+_ITALGIURE_DB: dict[str, dict[str, str]] = {
+    "civile":  {"sentenze": "snciv",  "massime": "civile"},
+    "penale":  {"sentenze": "snpen",  "massime": "penale"},
+    "lavoro":  {"sentenze": "snciv",  "massime": "civile"},   # lavoro = sezione civile
+    "tributaria": {"sentenze": "snciv", "massime": "civile"},
+}
 
 # Fallback: massime pubbliche dal sito ufficiale Cassazione
-CASSAZIONE_MASSIME_URL = "https://www.cortedicassazione.it/corte-di-cassazione/it/sentenze.page"
+CASSAZIONE_MASSIME_URL = (
+    "https://www.cortedicassazione.it/corte-di-cassazione/it/sentenze.page"
+)
 
 # Sentenze Cassazione (uso interno — non pubblicare il dataset grezzo, GDPR)
-CASSAZIONE_SOURCES: list["CassazioneSource"] = []  # popolato dopo la def
-
-
 @dataclass
 class CassazioneSource:
     id: str
     name: str
-    sezione: str      # parametro "sezione" nel form italgiure
+    sezione: str      # "civile", "penale", "lavoro"
     max_sentences: int = 300
     description: str = ""
 
 
-CASSAZIONE_SOURCES = [
+# italgiure.giustizia.it richiede abbonamento a pagamento — non usabile.
+# Sorgenti gratuite per giurisprudenza italiana:
+#   - cortedicassazione.it  : sentenze selezionate + massimario (libero)
+#   - cortecostituzionale.it: TUTTE le sentenze CC, API pubblica ECLI (libero)
+CASSAZIONE_SOURCES: list[CassazioneSource] = [
     CassazioneSource(
         id="cassazione_civile",
-        name="Corte di Cassazione — Sezioni Civili",
+        name="Corte di Cassazione — Sentenze Civili",
         sezione="civile",
         max_sentences=300,
-        description="Sentenze civili: contratti, responsabilità, famiglia",
+        description="Sentenze civili selezionate da cortedicassazione.it",
     ),
     CassazioneSource(
         id="cassazione_penale",
-        name="Corte di Cassazione — Sezioni Penali",
+        name="Corte di Cassazione — Sentenze Penali",
         sezione="penale",
         max_sentences=300,
-        description="Sentenze penali",
-    ),
-    CassazioneSource(
-        id="cassazione_lavoro",
-        name="Corte di Cassazione — Sezione Lavoro",
-        sezione="lavoro",
-        max_sentences=200,
-        description="Sentenze lavoro e previdenza sociale",
+        description="Sentenze penali selezionate da cortedicassazione.it",
     ),
 ]
+
+# Corte Costituzionale: accesso libero a tutte le sentenze (ECLI API)
+CORTECOSTITUZIONALE_BASE = "https://www.cortecostituzionale.it"
+CORTECOSTITUZIONALE_SEARCH = (
+    f"{CORTECOSTITUZIONALE_BASE}/actionPronuncia.do"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1104,16 +1115,21 @@ def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Corte di Cassazione — italgiure.giustizia.it
+# Giurisprudenza — sorgenti gratuite
+#
+# italgiure.giustizia.it richiede abbonamento a pagamento → non usabile.
+# Sorgenti libere:
+#   1. cortedicassazione.it — sentenze selezionate Cassazione (HTML)
+#   2. cortecostituzionale.it — TUTTE le sentenze CC (API pubblica)
 # ---------------------------------------------------------------------------
 
 def fetch_cassazione(source: CassazioneSource) -> list[dict]:
-    """Scarica sentenze dalla Corte di Cassazione via italgiure.giustizia.it.
+    """Scarica sentenze Cassazione da cortedicassazione.it (accesso libero).
 
-    Usa Playwright (headless Chromium) come metodo primario — italgiure
-    richiede JavaScript per il form di ricerca. Fallback a requests puro.
+    Il sito ufficiale della Corte di Cassazione pubblica sentenze selezionate
+    in HTML senza richiedere registrazione o abbonamento.
 
-    Le sentenze vengono salvate in cache locale per non riscaricale.
+    Le sentenze vengono salvate in cache locale.
     Non pubblicare il dataset grezzo (GDPR: contiene dati personali delle parti).
 
     Returns:
@@ -1134,241 +1150,31 @@ def fetch_cassazione(source: CassazioneSource) -> list[dict]:
         except Exception:
             pass
 
-    logger.info("Scaricando sentenze %s da italgiure.giustizia.it...", source.name)
-
-    # Determina quale URL italgiure risponde (il sottodominio varia)
-    base_url = _resolve_italgiure_url()
-
-    records = _fetch_cassazione_playwright(source, base_url)
-    if not records:
-        records = _fetch_cassazione_requests(source, base_url)
-    if not records:
-        logger.info("  italgiure non raggiungibile — provo cortedicassazione.it...")
-        records = _fetch_cassazione_cortedicassazione(source)
+    logger.info("Scaricando sentenze %s da cortedicassazione.it...", source.name)
+    records = _fetch_cassazione_cortedicassazione(source)
 
     if records:
         _cache_save(cache_key, json.dumps(records, ensure_ascii=False))
-        logger.info("  [%s] %d sentenze scaricate", source.id, len(records))
+        logger.info("  [%s] %d sentenze", source.id, len(records))
     else:
         logger.warning(
-            "Nessuna sentenza scaricata per %s. "
-            "Verifica che italgiure.giustizia.it sia accessibile e che "
-            "Playwright sia installato: pip install playwright && playwright install chromium",
+            "Nessuna sentenza per %s da cortedicassazione.it. "
+            "Installa Playwright per il fetch headless: "
+            "pip install playwright && playwright install chromium",
             source.name,
         )
     return records
 
 
-def _resolve_italgiure_url() -> str:
-    """Prova i candidati URL di italgiure e restituisce il primo che risponde."""
-    try:
-        import requests
-    except ImportError:
-        return ITALGIURE_SNCASS
-    for url in ITALGIURE_CANDIDATES:
-        try:
-            r = requests.head(url, timeout=8, allow_redirects=True)
-            if r.status_code < 500:
-                logger.debug("italgiure: URL attivo: %s", url)
-                return url
-        except Exception:
-            continue
-    logger.warning("italgiure: nessun URL risponde — %s", ITALGIURE_CANDIDATES)
-    return ITALGIURE_SNCASS
 
-
-def _fetch_cassazione_playwright(source: CassazioneSource, base_url: str) -> list[dict]:
-    """Scarica sentenze via Playwright — gestisce il JS di italgiure."""
-    try:
-        from playwright.sync_api import TimeoutError as PWTimeout
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        return []
-
-    records: list[dict] = []
-    logger.info("  Playwright: apertura italgiure.giustizia.it [%s]...", source.sezione)
-
-    try:
-        with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=True)
-            ctx = browser.new_context(locale="it-IT")
-            page = ctx.new_page()
-
-            # Carica homepage italgiure Cassazione
-            page.goto(base_url, wait_until="networkidle", timeout=60_000)
-
-            # Cerca il campo sezione/materia e imposta il valore
-            _italgiure_fill_search(page, source.sezione)
-
-            # Attendi i risultati
-            try:
-                page.wait_for_selector("a[href*='sentenza'], a[href*='documento']",
-                                       timeout=20_000)
-            except PWTimeout:
-                logger.warning("italgiure: nessun risultato trovato per sezione=%s", source.sezione)
-                browser.close()
-                return []
-
-            # Raccogli link alle sentenze dalla pagina risultati
-            sentence_links = _italgiure_collect_links(page)
-            logger.info("  italgiure [%s]: trovati %d link sentenze",
-                        source.sezione, len(sentence_links))
-
-            # Estrai il dominio base dall'URL risolto
-            from urllib.parse import urlparse
-            base_domain = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
-
-            # Scarica ogni sentenza
-            for href in sentence_links[: source.max_sentences]:
-                try:
-                    url = href if href.startswith("http") else f"{base_domain}{href}"
-                    page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                    html = page.content()
-                    rec = _parse_cassazione_page(html, source.id, url)
-                    if rec:
-                        records.append(rec)
-                except PWTimeout:
-                    continue
-                except Exception as exc:
-                    logger.debug("Errore sentenza %s: %s", href, exc)
-                    continue
-
-                if len(records) % 50 == 0 and records:
-                    logger.info("  [%s] %d/%d sentenze",
-                                source.id, len(records), source.max_sentences)
-
-            browser.close()
-
-    except PWTimeout:
-        logger.warning("Playwright timeout su italgiure.giustizia.it")
-    except Exception as exc:
-        logger.warning("Playwright errore su italgiure: %s", exc)
-
-    return records
-
-
-def _italgiure_fill_search(page: object, sezione: str) -> None:
-    """Compila il form di ricerca di italgiure con sezione e anni recenti."""
-    # Prova selettori comuni per il campo sezione
-    sezione_selectors = [
-        f"select[name*='sezione'] option[value*='{sezione}']",
-        f"select[id*='sezione'] option[value*='{sezione}']",
-        f"option[value*='{sezione}']",
-    ]
-    for sel in sezione_selectors:
-        try:
-            page.click(sel, timeout=3_000)
-            break
-        except Exception:
-            continue
-
-    # Anno: ultimi 3 anni per avere un campione recente
-    import datetime
-    anno_fine = datetime.date.today().year
-    anno_inizio = anno_fine - 3
-    for name in ["annoInizio", "anno_inizio", "dataInizio", "anno"]:
-        try:
-            page.fill(f"input[name='{name}']", str(anno_inizio), timeout=2_000)
-            break
-        except Exception:
-            continue
-    for name in ["annoFine", "anno_fine", "dataFine"]:
-        try:
-            page.fill(f"input[name='{name}']", str(anno_fine), timeout=2_000)
-            break
-        except Exception:
-            continue
-
-    # Invia il form
-    for sel in ["button[type='submit']", "input[type='submit']", "button:text('Cerca')"]:
-        try:
-            page.click(sel, timeout=3_000)
-            return
-        except Exception:
-            continue
-
-
-def _italgiure_collect_links(page: object) -> list[str]:
-    """Raccoglie tutti i link a sentenze dalla pagina risultati."""
-    try:
-        links = page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(e => e.getAttribute('href')).filter(h => h && ("
-            "h.includes('sentenza') || h.includes('documento') || h.includes('massima')))",
-        )
-        return links or []
-    except Exception:
-        return []
-
-
-def _fetch_cassazione_requests(source: CassazioneSource, base_url: str) -> list[dict]:
-    """Fallback requests puro per italgiure (funziona solo senza WAF attivo)."""
-    try:
-        import requests
-        from bs4 import BeautifulSoup
-    except ImportError:
-        return []
-
-    from .base import DEFAULT_HEADERS
-
-    session = requests.Session()
-    session.headers.update(DEFAULT_HEADERS)
-    records: list[dict] = []
-
-    try:
-        r = session.get(base_url, timeout=15)
-        r.raise_for_status()
-    except Exception as exc:
-        logger.warning("italgiure requests GET fallito: %s", exc)
-        return []
-
-    from urllib.parse import urlparse
-    base_domain = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
-
-    # Prova URL di ricerca diretta con parametri GET comuni
-    import datetime
-    anno = datetime.date.today().year - 1
-    search_urls = [
-        (f"{base_url}?db=sncass&sezione={source.sezione}&anno={anno}"
-         f"&action=ricerca&pagina=0"),
-        f"{base_url}form_ricerca.jsp?sezione={source.sezione}&anno={anno}",
-    ]
-
-    for search_url in search_urls:
-        try:
-            r = session.get(search_url, timeout=20)
-            soup = BeautifulSoup(r.text, "html.parser")
-            links = [
-                a["href"] for a in soup.find_all("a", href=True)
-                if any(k in a["href"] for k in ("sentenza", "documento", "massima"))
-            ]
-            if not links:
-                continue
-
-            for href in links[: source.max_sentences]:
-                url = href if href.startswith("http") else f"{base_domain}{href}"
-                try:
-                    resp = session.get(url, timeout=20)
-                    rec = _parse_cassazione_page(resp.text, source.id, url)
-                    if rec:
-                        records.append(rec)
-                except Exception:
-                    continue
-            if records:
-                break
-        except Exception as exc:
-            logger.debug("italgiure search URL fallita (%s): %s", search_url, exc)
-            continue
 
     return records
 
 
 def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
-    """Fallback: scarica sentenze dal sito ufficiale cortedicassazione.it.
+    """Scarica sentenze dal sito ufficiale cortedicassazione.it (accesso libero).
 
-    Il sito pubblica un sottoinsieme di sentenze notevoli in HTML accessibile
-    senza session management. Non copre tutte le sezioni ma è un buon fallback
-    quando italgiure non è raggiungibile.
+    Il sito pubblica sentenze selezionate in HTML senza richiedere login.
     """
     try:
         from playwright.sync_api import sync_playwright
@@ -1486,6 +1292,196 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
 
 
 # ---------------------------------------------------------------------------
+# Corte Costituzionale — accesso libero a tutte le sentenze
+# ---------------------------------------------------------------------------
+
+def fetch_corte_costituzionale(max_sentences: int = 300) -> list[dict]:
+    """Scarica sentenze della Corte Costituzionale (accesso completamente libero).
+
+    Il sito cortecostituzionale.it pubblica TUTTE le sentenze in HTML senza
+    richiedere login, abbonamento o registrazione. Sono pubblico dominio.
+
+    La ricerca usa il form pubblico su actionPronuncia.do con parametri GET.
+
+    Returns:
+        Lista di record {text, source, sentence_id}.
+    """
+    import json
+
+    from .base import _cache_load, _cache_save
+
+    cache_key = "corte_costituzionale"
+    cached = _cache_load(cache_key)
+    if cached:
+        try:
+            records = json.loads(cached)
+            if records:
+                logger.debug("Cache hit: corte_costituzionale (%d sentenze)", len(records))
+                return records
+        except Exception:
+            pass
+
+    logger.info("Scaricando sentenze Corte Costituzionale...")
+    records = _fetch_cc_playwright(max_sentences)
+    if not records:
+        records = _fetch_cc_requests(max_sentences)
+
+    if records:
+        _cache_save(cache_key, json.dumps(records, ensure_ascii=False))
+        logger.info("  [corte_costituzionale] %d sentenze", len(records))
+    else:
+        logger.warning(
+            "Nessuna sentenza Corte Costituzionale. "
+            "Installa Playwright: pip install playwright && playwright install chromium"
+        )
+    return records
+
+
+def _fetch_cc_playwright(max_sentences: int) -> list[dict]:
+    """Scraper Playwright per cortecostituzionale.it."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    records: list[dict] = []
+    # Ricerca per anno corrente e precedente — sentenze recenti
+    import datetime
+    anni = [datetime.date.today().year, datetime.date.today().year - 1]
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(locale="it-IT")
+
+            for anno in anni:
+                if len(records) >= max_sentences:
+                    break
+                # URL ricerca per anno: parametri GET del form pubblico
+                search_url = (
+                    f"{CORTECOSTITUZIONALE_BASE}/actionPronuncia.do"
+                    f"?anno={anno}&tipoatto=S&Submit=Cerca"
+                )
+                logger.info("  CC: ricerca anno %d — %s", anno, search_url)
+                page.goto(search_url, wait_until="networkidle", timeout=60_000)
+
+                # Raccoglie link alle sentenze nella pagina risultati
+                links = page.eval_on_selector_all(
+                    "a[href*='actionPronuncia']",
+                    "els => els.map(e => e.href)"
+                    ".filter(h => h.includes('idAct') || h.includes('pronunzia'))",
+                )
+                logger.info("  CC anno %d: %d link trovati", anno, len(links))
+
+                for href in links[: max_sentences - len(records)]:
+                    try:
+                        page.goto(href, wait_until="domcontentloaded", timeout=30_000)
+                        rec = _parse_cc_page(page.content(), href)
+                        if rec:
+                            records.append(rec)
+                    except Exception:
+                        continue
+
+            browser.close()
+    except Exception as exc:
+        logger.warning("CC Playwright errore: %s", exc)
+
+    return records
+
+
+def _fetch_cc_requests(max_sentences: int) -> list[dict]:
+    """Fallback requests per cortecostituzionale.it (nessun WAF, accesso libero)."""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    import datetime
+
+    from .base import DEFAULT_HEADERS
+
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+    records: list[dict] = []
+
+    for anno in [datetime.date.today().year, datetime.date.today().year - 1]:
+        if len(records) >= max_sentences:
+            break
+        search_url = (
+            f"{CORTECOSTITUZIONALE_BASE}/actionPronuncia.do"
+            f"?anno={anno}&tipoatto=S&Submit=Cerca"
+        )
+        try:
+            r = session.get(search_url, timeout=20)
+            soup = BeautifulSoup(r.text, "html.parser")
+            links = [
+                a["href"] for a in soup.find_all("a", href=True)
+                if "actionPronuncia" in a["href"] and (
+                    "idAct" in a["href"] or "pronunzia" in a["href"]
+                )
+            ]
+            for href in links[: max_sentences - len(records)]:
+                full_url = (
+                    href if href.startswith("http")
+                    else f"{CORTECOSTITUZIONALE_BASE}{href}"
+                )
+                try:
+                    resp = session.get(full_url, timeout=20)
+                    rec = _parse_cc_page(resp.text, full_url)
+                    if rec:
+                        records.append(rec)
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.debug("CC requests errore anno %d: %s", anno, exc)
+            continue
+
+    return records
+
+
+def _parse_cc_page(html: str, url: str) -> Optional[dict]:
+    """Estrae il testo da una pagina sentenza della Corte Costituzionale."""
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return None
+
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["nav", "header", "footer", "script", "style"]):
+        tag.decompose()
+
+    full_text = soup.get_text(separator="\n", strip=True)
+    if len(full_text) < 500 or "Corte Costituzionale" not in full_text:
+        return None
+
+    # Isola la motivazione
+    body = full_text
+    for marker in ("CONSIDERATO IN DIRITTO", "RITENUTO IN FATTO", "IN DIRITTO"):
+        idx = full_text.upper().find(marker)
+        if idx != -1:
+            body = full_text[idx:]
+            break
+
+    body = clean_text(body)
+    if len(body) < 300:
+        body = clean_text(full_text)
+    if len(body) < 300:
+        return None
+
+    sid = re.search(r"[/=&](\d{3,})", url)
+    sentence_id = sid.group(1) if sid else url.split("/")[-1]
+
+    return {
+        "text": body,
+        "source": "corte_costituzionale",
+        "sentence_id": sentence_id,
+        "article_num": sentence_id,
+        "article_title": "",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -1590,7 +1586,16 @@ def prepare_legal_it(
         all_records.extend(records)
         logger.info("  [%s] %d articles", reg.id, len(records))
 
-    # --- Corte di Cassazione ---
+    # --- Corte Costituzionale ---
+    if not sources or "corte_costituzionale" in sources:
+        cc_records = fetch_corte_costituzionale(max_sentences=max_cassazione_sentences)
+        if cc_records:
+            all_records.extend(cc_records)
+            logger.info("  [corte_costituzionale] %d sentenze", len(cc_records))
+        else:
+            failed_sources.append("corte_costituzionale")
+
+    # --- Corte di Cassazione (sentenze selezionate da cortedicassazione.it) ---
     for cass in CASSAZIONE_SOURCES:
         if sources and cass.id not in sources:
             continue
