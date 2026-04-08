@@ -199,20 +199,25 @@ def parse_normattiva_opendata_zip(
     import io
     import zipfile
 
-    # Map codiceRedazionale / common name fragments to our source IDs
+    # Map ZIP folder/filename patterns to our source IDs.
+    # dati.normattiva.it names folders as TIPO_YYYYMMDD_N (e.g. REGIO_DECRETO_19420316_262).
+    # Each URN date "YYYY-MM-DD;N" maps to "YYYYMMDD_N" in the ZIP.
     _SOURCE_HINTS: dict[str, str] = {
+        # ZIP YYYYMMDD_N patterns (primary — matches ZIP folder/filename)
+        "19420316_262": "codice_civile",        # Codice Civile
+        "19301019_1398": "codice_penale",       # Codice Penale
+        "19401028_1443": "codice_procedura_civile",
+        "19880922_447": "codice_procedura_penale",
+        "20050906_206": "codice_consumo",
+        "19471227": "costituzione",              # Costituzione (any suffix)
+        # Legacy URN / codiceRedazionale patterns (fallback)
         "042u0262": "codice_civile",
         "codice.civile": "codice_civile",
         "1930-10-19;1398": "codice_penale",
-        "codice.penale": "codice_penale",
         "1940-10-28;1443": "codice_procedura_civile",
-        "codice.procedura.civile": "codice_procedura_civile",
         "1988-09-22;447": "codice_procedura_penale",
-        "codice.procedura.penale": "codice_procedura_penale",
         "2005-09-06;206": "codice_consumo",
-        "codice.consumo": "codice_consumo",
         "047u0001": "costituzione",
-        "costituzione": "costituzione",
     }
 
     results: dict[str, list[dict]] = {}
@@ -400,12 +405,23 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
     except ImportError:
         return None
 
-    from .base import _cache_save
+    from .base import DEFAULT_HEADERS, _cache_save
+
+    # Use a fresh session for each bulk download — reusing a session that has
+    # already fetched a large attoCompleto causes normattiva.it to return a
+    # reduced "one article" page on subsequent requests.
+    try:
+        import requests as _requests
+        fresh_session = _requests.Session()
+        fresh_session.headers.update(DEFAULT_HEADERS)
+        fresh_session.get("https://www.normattiva.it/", timeout=15)
+    except Exception:
+        fresh_session = session  # fall back to shared session
 
     # Step 1: load viewer page to find the attoCompleto link
     viewer_url = f"https://www.normattiva.it/uri-res/N2Ls?{source.urn}"
     try:
-        resp = session.get(viewer_url, timeout=60)
+        resp = fresh_session.get(viewer_url, timeout=60)
         resp.raise_for_status()
         viewer_html = resp.text
     except Exception as exc:
@@ -422,7 +438,7 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
     full_url = "https://www.normattiva.it" + link["href"]
     logger.info("  Downloading full act for %s...", source.id)
     try:
-        r = session.get(
+        r = fresh_session.get(
             full_url,
             timeout=120,
             headers={"Referer": viewer_url},
