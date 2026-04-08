@@ -203,12 +203,20 @@ def fetch_normattiva(source: NormaSource, session: object = None) -> Optional[st
 
 
 def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[str]:
-    """Fallback: scrape article text from the normattiva.it HTML viewer.
+    """Fallback: fetch articles one-by-one via the normattiva.it AJAX endpoint.
 
-    Used when the XML export endpoint returns HTML instead of XML.
+    The normattiva.it viewer page embeds all article URLs as JavaScript onclick
+    handlers of the form:
+        showArticle('/atto/caricaArticolo?...&art.idArticolo=N&...', this)
+
+    We extract all these URLs from the viewer page, then fetch each article via
+    the AJAX endpoint. Returns a minimal XML string for parse_normattiva_xml.
     """
     try:
-        from bs4 import BeautifulSoup  # noqa: F401 — availability check
+        import warnings
+
+        from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+        warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     except ImportError:
         return None
 
@@ -218,44 +226,65 @@ def _scrape_normattiva_html(session: object, source: NormaSource) -> Optional[st
     try:
         resp = session.get(viewer_url, timeout=60)
         resp.raise_for_status()
-        html = resp.text
+        viewer_html = resp.text
     except Exception as exc:
-        logger.warning("normattiva.it HTML viewer failed for %s: %s", source.id, exc)
+        logger.warning("normattiva.it viewer failed for %s: %s", source.id, exc)
         return None
 
-    try:
-        from bs4 import BeautifulSoup  # noqa: F811
-        soup = BeautifulSoup(html, "html.parser")
-        for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
-            tag.decompose()
-        # normattiva.it viewer wraps article content in divs with specific classes
-        # Try to find article blocks by heading pattern in plain text
-        text = soup.get_text(separator="\n", strip=True)
-        if len(text) < 100:
-            return None
-        # Return as pseudo-XML so parse_normattiva_xml can fall back to regex path
-        # Wrap in a minimal root element and mark articles manually
-        parts = re.split(r"\n(Art\.?\s*\d+[\s\.\-])", text, flags=re.IGNORECASE)
-        if len(parts) < 3:
-            return None
-        # Build a minimal XML-like string for the regex fallback parser
-        xml_parts = ["<atto>"]
-        i = 1
-        while i + 1 < len(parts):
-            art_header = parts[i].strip()
-            art_body = parts[i + 1].strip()
-            i += 2
-            if art_body:
-                xml_parts.append(
-                    f"<articolo><num>{art_header}</num><testo>{art_body}</testo></articolo>"
-                )
-        xml_parts.append("</atto>")
-        result = "\n".join(xml_parts)
-        _cache_save(f"normattiva_{source.id}", result)
-        return result
-    except Exception as exc:
-        logger.warning("normattiva.it HTML scrape failed for %s: %s", source.id, exc)
+    # Extract all article AJAX URLs from onclick handlers
+    ajax_urls: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"'/atto/caricaArticolo[^']+'", viewer_html):
+        url = "https://www.normattiva.it" + m.group(0).strip("'")
+        # Deduplicate by art.idArticolo parameter
+        art_id = re.search(r"art\.idArticolo=(\d+)", url)
+        if art_id:
+            key = art_id.group(1)
+            if key not in seen:
+                seen.add(key)
+                ajax_urls.append(url)
+
+    if not ajax_urls:
+        logger.warning("No article AJAX URLs found for %s", source.id)
         return None
+
+    logger.info("  Fetching %d articles via AJAX for %s...", len(ajax_urls), source.id)
+
+    # Fetch each article and build XML
+    xml_parts = ["<atto>"]
+    for url in ajax_urls:
+        try:
+            r = session.get(url, timeout=30,
+                            headers={"X-Requested-With": "XMLHttpRequest",
+                                     "Referer": viewer_url})
+            if not r.ok:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            num_el = soup.find(class_="article-num-akn")
+            txt_el = soup.find(class_="art-just-text-akn")
+            if not txt_el:
+                continue
+            num = num_el.get_text(strip=True) if num_el else ""
+            text = " ".join(txt_el.get_text(separator=" ").split())
+            if len(text) < 10:
+                continue
+            # Escape XML special chars
+            num_safe = num.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            txt_safe = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            xml_parts.append(
+                f"<articolo><num>{num_safe}</num><testo>{txt_safe}</testo></articolo>"
+            )
+        except Exception:
+            continue
+
+    xml_parts.append("</atto>")
+    if len(xml_parts) <= 2:  # only <atto> + </atto>
+        return None
+
+    result = "\n".join(xml_parts)
+    _cache_save(f"normattiva_{source.id}", result)
+    logger.info("  Fetched %d articles for %s", len(xml_parts) - 2, source.id)
+    return result
 
 
 def parse_normattiva_xml(xml_text: str, source_id: str) -> list[dict]:
