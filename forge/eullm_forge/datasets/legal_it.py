@@ -121,7 +121,16 @@ EURLEX_HTML_URL = "https://eur-lex.europa.eu/legal-content/IT/TXT/HTML/"
 DATI_NORMATTIVA_DOWNLOAD = "https://dati.normattiva.it/download"
 
 # Corte di Cassazione — italgiure.giustizia.it
-ITALGIURE_SNCASS = "https://italgiure.giustizia.it/sncass/"
+# italgiure: prova più varianti di URL (il sottodominio è cambiato nel tempo)
+ITALGIURE_CANDIDATES = [
+    "https://www.italgiure.giustizia.it/sncass/",
+    "https://italgiure.giustizia.it/sncass/",
+    "https://www.italgiure.giustizia.it/",
+]
+ITALGIURE_SNCASS = ITALGIURE_CANDIDATES[0]  # default, verificato runtime
+
+# Fallback: massime pubbliche dal sito ufficiale Cassazione
+CASSAZIONE_MASSIME_URL = "https://www.cortedicassazione.it/corte-di-cassazione/it/sentenze.page"
 
 # Sentenze Cassazione (uso interno — non pubblicare il dataset grezzo, GDPR)
 CASSAZIONE_SOURCES: list["CassazioneSource"] = []  # popolato dopo la def
@@ -1127,9 +1136,15 @@ def fetch_cassazione(source: CassazioneSource) -> list[dict]:
 
     logger.info("Scaricando sentenze %s da italgiure.giustizia.it...", source.name)
 
-    records = _fetch_cassazione_playwright(source)
+    # Determina quale URL italgiure risponde (il sottodominio varia)
+    base_url = _resolve_italgiure_url()
+
+    records = _fetch_cassazione_playwright(source, base_url)
     if not records:
-        records = _fetch_cassazione_requests(source)
+        records = _fetch_cassazione_requests(source, base_url)
+    if not records:
+        logger.info("  italgiure non raggiungibile — provo cortedicassazione.it...")
+        records = _fetch_cassazione_cortedicassazione(source)
 
     if records:
         _cache_save(cache_key, json.dumps(records, ensure_ascii=False))
@@ -1144,7 +1159,25 @@ def fetch_cassazione(source: CassazioneSource) -> list[dict]:
     return records
 
 
-def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
+def _resolve_italgiure_url() -> str:
+    """Prova i candidati URL di italgiure e restituisce il primo che risponde."""
+    try:
+        import requests
+    except ImportError:
+        return ITALGIURE_SNCASS
+    for url in ITALGIURE_CANDIDATES:
+        try:
+            r = requests.head(url, timeout=8, allow_redirects=True)
+            if r.status_code < 500:
+                logger.debug("italgiure: URL attivo: %s", url)
+                return url
+        except Exception:
+            continue
+    logger.warning("italgiure: nessun URL risponde — %s", ITALGIURE_CANDIDATES)
+    return ITALGIURE_SNCASS
+
+
+def _fetch_cassazione_playwright(source: CassazioneSource, base_url: str) -> list[dict]:
     """Scarica sentenze via Playwright — gestisce il JS di italgiure."""
     try:
         from playwright.sync_api import TimeoutError as PWTimeout
@@ -1162,7 +1195,7 @@ def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
             page = ctx.new_page()
 
             # Carica homepage italgiure Cassazione
-            page.goto(ITALGIURE_SNCASS, wait_until="networkidle", timeout=60_000)
+            page.goto(base_url, wait_until="networkidle", timeout=60_000)
 
             # Cerca il campo sezione/materia e imposta il valore
             _italgiure_fill_search(page, source.sezione)
@@ -1181,10 +1214,14 @@ def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
             logger.info("  italgiure [%s]: trovati %d link sentenze",
                         source.sezione, len(sentence_links))
 
+            # Estrai il dominio base dall'URL risolto
+            from urllib.parse import urlparse
+            base_domain = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+
             # Scarica ogni sentenza
             for href in sentence_links[: source.max_sentences]:
                 try:
-                    url = href if href.startswith("http") else f"https://italgiure.giustizia.it{href}"
+                    url = href if href.startswith("http") else f"{base_domain}{href}"
                     page.goto(url, wait_until="domcontentloaded", timeout=30_000)
                     html = page.content()
                     rec = _parse_cassazione_page(html, source.id, url)
@@ -1264,7 +1301,7 @@ def _italgiure_collect_links(page: object) -> list[str]:
         return []
 
 
-def _fetch_cassazione_requests(source: CassazioneSource) -> list[dict]:
+def _fetch_cassazione_requests(source: CassazioneSource, base_url: str) -> list[dict]:
     """Fallback requests puro per italgiure (funziona solo senza WAF attivo)."""
     try:
         import requests
@@ -1279,19 +1316,22 @@ def _fetch_cassazione_requests(source: CassazioneSource) -> list[dict]:
     records: list[dict] = []
 
     try:
-        r = session.get(ITALGIURE_SNCASS, timeout=15)
+        r = session.get(base_url, timeout=15)
         r.raise_for_status()
     except Exception as exc:
         logger.warning("italgiure requests GET fallito: %s", exc)
         return []
 
+    from urllib.parse import urlparse
+    base_domain = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}"
+
     # Prova URL di ricerca diretta con parametri GET comuni
     import datetime
     anno = datetime.date.today().year - 1
     search_urls = [
-        (f"{ITALGIURE_SNCASS}?db=sncass&sezione={source.sezione}&anno={anno}"
+        (f"{base_url}?db=sncass&sezione={source.sezione}&anno={anno}"
          f"&action=ricerca&pagina=0"),
-        (f"{ITALGIURE_SNCASS}form_ricerca.jsp?sezione={source.sezione}&anno={anno}"),
+        f"{base_url}form_ricerca.jsp?sezione={source.sezione}&anno={anno}",
     ]
 
     for search_url in search_urls:
@@ -1306,7 +1346,7 @@ def _fetch_cassazione_requests(source: CassazioneSource) -> list[dict]:
                 continue
 
             for href in links[: source.max_sentences]:
-                url = href if href.startswith("http") else f"https://italgiure.giustizia.it{href}"
+                url = href if href.startswith("http") else f"{base_domain}{href}"
                 try:
                     resp = session.get(url, timeout=20)
                     rec = _parse_cassazione_page(resp.text, source.id, url)
@@ -1319,6 +1359,71 @@ def _fetch_cassazione_requests(source: CassazioneSource) -> list[dict]:
         except Exception as exc:
             logger.debug("italgiure search URL fallita (%s): %s", search_url, exc)
             continue
+
+    return records
+
+
+def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
+    """Fallback: scarica sentenze dal sito ufficiale cortedicassazione.it.
+
+    Il sito pubblica un sottoinsieme di sentenze notevoli in HTML accessibile
+    senza session management. Non copre tutte le sezioni ma è un buon fallback
+    quando italgiure non è raggiungibile.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return []
+
+    records: list[dict] = []
+    # URL sezione-specifica per cortedicassazione.it
+    sezione_urls = {
+        "civile": (
+            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
+            "sentenze_civili.page"
+        ),
+        "penale": (
+            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
+            "sentenze_penali.page"
+        ),
+        "lavoro": (
+            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
+            "sentenze_lavoro.page"
+        ),
+    }
+    url = sezione_urls.get(source.sezione, CASSAZIONE_MASSIME_URL)
+    logger.info("  cortedicassazione.it: %s", url)
+
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            page = browser.new_page(locale="it-IT")
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+
+            # Raccoglie link a sentenze individuali
+            links = page.eval_on_selector_all(
+                "a[href]",
+                "els => els.map(e => e.getAttribute('href')).filter("
+                "h => h && (h.includes('sentenz') || h.includes('ordinanz')))",
+            )
+            logger.info("  cortedicassazione.it: %d link trovati", len(links))
+
+            for href in links[: source.max_sentences]:
+                full_url = (
+                    href if href.startswith("http")
+                    else f"https://www.cortedicassazione.it{href}"
+                )
+                try:
+                    page.goto(full_url, wait_until="domcontentloaded", timeout=30_000)
+                    rec = _parse_cassazione_page(page.content(), source.id, full_url)
+                    if rec:
+                        records.append(rec)
+                except Exception:
+                    continue
+
+            browser.close()
+    except Exception as exc:
+        logger.warning("cortedicassazione.it errore: %s", exc)
 
     return records
 
