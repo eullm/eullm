@@ -122,47 +122,66 @@ EURLEX_HTML_URL = "https://eur-lex.europa.eu/legal-content/IT/TXT/HTML/"
 # normattiva.it — XML download and parsing
 # ---------------------------------------------------------------------------
 
-def fetch_normattiva(source: NormaSource) -> Optional[str]:
+def make_normattiva_session() -> object:
+    """Create and warm up a requests.Session for normattiva.it.
+
+    Visits the main page to establish a JSESSIONID cookie. Reuse this session
+    across all normattiva.it downloads to avoid repeated authentication overhead.
+    """
+    try:
+        import requests
+    except ImportError:
+        raise RuntimeError("requests is required. Install with: pip install requests")
+
+    from .base import DEFAULT_HEADERS
+
+    session = requests.Session()
+    session.headers.update(DEFAULT_HEADERS)
+    try:
+        session.get("https://www.normattiva.it/", timeout=15)
+    except Exception as exc:
+        logger.warning("Could not warm up normattiva.it session: %s", exc)
+    return session
+
+
+def fetch_normattiva(source: NormaSource, session: object = None) -> Optional[str]:
     """Download law XML from normattiva.it.
 
     normattiva.it is a Java EE application that requires a JSESSIONID session
     cookie. A cold GET to the export endpoint returns an HTML page instead of XML.
-    We establish the session first by visiting the main page, then download.
+
+    Pass a session returned by ``make_normattiva_session()`` to share one
+    authenticated session across multiple law downloads.
 
     Returns raw XML string, or None on failure.
     Cached locally at ~/.cache/eullm-forge/raw/ to avoid re-downloading.
     """
-    from .base import DEFAULT_HEADERS, _cache_load, _cache_save
+    from .base import _cache_load, _cache_save
 
     cache_key = f"normattiva_{source.id}"
 
-    # Check cache — but reject stale HTML responses
+    # Check cache — reject stale HTML responses
     cached = _cache_load(cache_key)
     if cached is not None and not cached.lstrip().startswith("<!"):
         logger.debug("Cache hit: %s", cache_key)
         return cached
 
-    try:
-        import requests
-    except ImportError:
-        raise RuntimeError(
-            "requests is required for dataset preparation. "
-            "Install with: pip install requests"
-        )
+    if session is None:
+        session = make_normattiva_session()
 
     url = f"{NORMATTIVA_EXPORT_URL}?urn={source.urn}&includiAllegati=N"
     logger.info("Fetching %s from normattiva.it...", source.name)
 
     try:
-        session = requests.Session()
-        session.headers.update(DEFAULT_HEADERS)
-        # Step 1: establish JSESSIONID — visit main page
-        session.get("https://www.normattiva.it/", timeout=15)
-        # Step 2: visit the law's viewer page to build proper session context
+        # Visit the law's viewer page — sets Referer and activates session context
         viewer_url = f"https://www.normattiva.it/uri-res/N2Ls?{source.urn}"
         session.get(viewer_url, timeout=30)
-        # Step 3: download the XML export
-        response = session.get(url, timeout=60)
+        # Download XML export with Referer set to the viewer page
+        response = session.get(
+            url,
+            timeout=60,
+            headers={"Referer": viewer_url},
+        )
         response.raise_for_status()
         content = response.text
 
@@ -395,12 +414,44 @@ def fetch_eurlex(source: EurlexSource) -> Optional[str]:
 
     Returns raw HTML string, or None on failure.
     """
+    from .base import _cache_load, _cache_path, _cache_save
+
+    cache_key = f"eurlex_{source.id}"
+
+    # Check cache — reject placeholder responses (EUR-Lex 202 "queued" returns ~2KB empty page)
+    cached = _cache_load(cache_key)
+    if cached is not None:
+        if _eurlex_content_valid(cached):
+            logger.debug("Cache hit: %s", cache_key)
+            return cached
+        # Stale/invalid cached response — remove and re-fetch
+        _cache_path(cache_key).unlink(missing_ok=True)
+
     url = f"{EURLEX_HTML_URL}?uri=CELEX:{source.celex}"
     logger.info("Fetching %s from EUR-Lex...", source.name)
-    html = http_get(url, cache_key=f"eurlex_{source.id}")
-    if html is None:
-        logger.warning("Failed to download %s", source.name)
-    return html
+
+    # EUR-Lex sometimes returns 202 "queued" for large documents — retry up to 3x
+    import time
+    for attempt in range(3):
+        html = http_get(url, cache_key=None)  # don't auto-cache; we validate first
+        if html and _eurlex_content_valid(html):
+            _cache_save(cache_key, html)
+            return html
+        if html is not None:
+            logger.warning(
+                "EUR-Lex returned a placeholder for %s (attempt %d/3, len=%d)",
+                source.id, attempt + 1, len(html),
+            )
+        if attempt < 2:
+            time.sleep(5 * (attempt + 1))
+
+    logger.warning("Failed to download substantive content for %s", source.name)
+    return None
+
+
+def _eurlex_content_valid(html: str) -> bool:
+    """Return True if the HTML looks like real regulation content (not a 202 placeholder)."""
+    return len(html) > 5000 and "Articolo" in html
 
 
 def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
@@ -510,12 +561,12 @@ def prepare_legal_it(
     all_records: list[dict] = []
     failed_sources: list[str] = []
 
-    # --- normattiva.it sources ---
-    for law in NORMATTIVA_LAWS:
-        if sources and law.id not in sources:
-            continue
+    # --- normattiva.it sources (shared session across all fetches) ---
+    normattiva_laws = [law for law in NORMATTIVA_LAWS if not sources or law.id in sources]
+    normattiva_session = make_normattiva_session() if normattiva_laws else None
 
-        xml_text = fetch_normattiva(law)
+    for law in normattiva_laws:
+        xml_text = fetch_normattiva(law, session=normattiva_session)
         if xml_text is None:
             failed_sources.append(law.id)
             continue
