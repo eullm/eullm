@@ -441,45 +441,97 @@ def _text_to_records(text: str, source_id: str, chunk_chars: int = 3000) -> list
 def fetch_eurlex(source: EurlexSource) -> Optional[str]:
     """Download EU regulation HTML from EUR-Lex (Italian version).
 
+    EUR-Lex is protected by AWS WAF which requires JavaScript execution.
+    Fetching is attempted in order:
+      1. Local cache (fast path)
+      2. Playwright headless browser (if installed: pip install playwright
+         && playwright install chromium)
+      3. Plain HTTP GET (works only without WAF — may fail silently)
+
     Returns raw HTML string, or None on failure.
     """
     from .base import _cache_load, _cache_path, _cache_save
 
     cache_key = f"eurlex_{source.id}"
 
-    # Check cache — reject placeholder responses (EUR-Lex 202 "queued" returns ~2KB empty page)
+    # Check cache — reject stale WAF placeholder responses (~2KB)
     cached = _cache_load(cache_key)
     if cached is not None:
         if _eurlex_content_valid(cached):
             logger.debug("Cache hit: %s", cache_key)
             return cached
-        # Stale/invalid cached response — remove and re-fetch
         _cache_path(cache_key).unlink(missing_ok=True)
 
     url = f"{EURLEX_HTML_URL}?uri=CELEX:{source.celex}"
     logger.info("Fetching %s from EUR-Lex...", source.name)
 
-    # EUR-Lex sometimes returns 202 "queued" for large documents — retry up to 3x
+    # Try Playwright first (bypasses AWS WAF JavaScript challenge)
+    html = _fetch_eurlex_playwright(url, source.id)
+    if html and _eurlex_content_valid(html):
+        _cache_save(cache_key, html)
+        return html
+
+    # Plain HTTP fallback (works only if WAF is inactive for the IP)
     import time
     for attempt in range(3):
-        html = http_get(url, cache_key=None)  # don't auto-cache; we validate first
+        html = http_get(url, cache_key=None)
         if html and _eurlex_content_valid(html):
             _cache_save(cache_key, html)
             return html
         if html is not None:
             logger.warning(
-                "EUR-Lex returned a placeholder for %s (attempt %d/3, len=%d)",
+                "EUR-Lex WAF placeholder for %s (attempt %d/3, len=%d) — "
+                "install Playwright to bypass: "
+                "pip install playwright && playwright install chromium",
                 source.id, attempt + 1, len(html),
             )
         if attempt < 2:
             time.sleep(5 * (attempt + 1))
 
-    logger.warning("Failed to download substantive content for %s", source.name)
+    logger.warning(
+        "Could not fetch %s — EUR-Lex blocks automated access via AWS WAF. "
+        "Fix: pip install playwright && playwright install chromium",
+        source.name,
+    )
     return None
 
 
+def _fetch_eurlex_playwright(url: str, source_id: str) -> Optional[str]:
+    """Fetch a EUR-Lex page using Playwright (headless Chromium).
+
+    Resolves the AWS WAF JavaScript challenge automatically.
+    Requires: pip install playwright && playwright install chromium
+    """
+    try:
+        from playwright.sync_api import TimeoutError as PWTimeout
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None  # Playwright not installed — fall through to plain HTTP
+
+    logger.info("  Using Playwright for %s (resolving AWS WAF challenge)...", source_id)
+    try:
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(headless=True)
+            ctx = browser.new_context(
+                locale="it-IT",
+                extra_http_headers={"Accept-Language": "it-IT,it;q=0.9"},
+            )
+            page = ctx.new_page()
+            # Wait for network to be idle so WAF challenge completes
+            page.goto(url, wait_until="networkidle", timeout=60_000)
+            html = page.content()
+            browser.close()
+        return html
+    except PWTimeout:
+        logger.warning("Playwright timeout fetching %s", source_id)
+        return None
+    except Exception as exc:
+        logger.warning("Playwright error fetching %s: %s", source_id, exc)
+        return None
+
+
 def _eurlex_content_valid(html: str) -> bool:
-    """Return True if the HTML looks like real regulation content (not a 202 placeholder)."""
+    """Return True if the HTML looks like real regulation content (not a WAF placeholder)."""
     return len(html) > 5000 and "Articolo" in html
 
 
