@@ -353,6 +353,97 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
         })
 
     logger.debug("AKN [%s]: %d <article> elements → %d records", source_id, art_count, len(records))
+
+    # Diagnostic: when suspiciously few records, log the actual XML structure
+    # so we can understand what element names are used without manual inspection.
+    if art_count < 10:
+        from collections import Counter
+        tag_counts = Counter(el.tag.split("}")[-1] for el in root.iter())
+        top_tags = dict(tag_counts.most_common(20))
+        logger.warning(
+            "AKN [%s]: only %d <article> elements found. "
+            "Top element types in file: %s. "
+            "Trying eId-based fallback...",
+            source_id, art_count, top_tags,
+        )
+        # Fallback: some normattiva AKN files encode articles as <section>/<chapter>
+        # elements with eId="art_NNN" or eId="art-NNN" attributes.
+        eId_articles = [
+            el for el in root.iter()
+            if re.match(r"art[_-]\d", el.get("eId", ""), re.IGNORECASE)
+            and el.tag != f"{ns}article"  # not already counted
+        ]
+        if eId_articles:
+            logger.warning(
+                "AKN [%s]: found %d elements with eId='art_...' — "
+                "re-parsing using those as article containers",
+                source_id, len(eId_articles),
+            )
+            records = _parse_akn_eId_articles(eId_articles, ns, source_id)
+
+    return records
+
+
+def _parse_akn_eId_articles(
+    elements: list[ET.Element], ns: str, source_id: str
+) -> list[dict]:
+    """Extract records from AKN elements identified by eId='art_NNN' attribute.
+
+    Used as fallback when <article> elements are absent but the law's articles
+    are encoded as <section>/<chapter>/etc. elements with article eId attributes.
+    """
+    records = []
+    for art in elements:
+        num_el = art.find(f".//{ns}num")
+        num = (num_el.text or "").strip() if num_el is not None else ""
+        if not num:
+            # Extract number from eId attribute: "art_1" → "1"
+            eid = art.get("eId", "")
+            m = re.search(r"art[_-](\d+)", eid, re.IGNORECASE)
+            num = m.group(1) if m else eid
+
+        heading_el = art.find(f".//{ns}heading")
+        heading = " ".join(heading_el.itertext()).strip() if heading_el is not None else ""
+
+        paragraphs: list[str] = []
+        for pel in art.iter(f"{ns}p"):
+            t = clean_text(" ".join(pel.itertext()))
+            if t:
+                paragraphs.append(t)
+        if not paragraphs:
+            for cel in art.iter(f"{ns}content"):
+                t = clean_text(" ".join(cel.itertext()))
+                if t:
+                    paragraphs.append(t)
+        if not paragraphs:
+            skip_ids = {id(num_el), id(heading_el)} - {id(None)}
+            parts: list[str] = []
+            for el in art.iter():
+                if id(el) in skip_ids:
+                    continue
+                if el.tag in (f"{ns}num", f"{ns}heading"):
+                    continue
+                if el.text and el.text.strip():
+                    parts.append(el.text.strip())
+                if el.tail and el.tail.strip():
+                    parts.append(el.tail.strip())
+            body = clean_text(" ".join(parts))
+        else:
+            body = " ".join(paragraphs)
+
+        if len(body) < 10:
+            continue
+
+        header = f"Art. {num}" if num else ""
+        if heading:
+            header += f" ({heading})"
+        text = f"{header}\n{body}" if header else body
+        records.append({
+            "text": text,
+            "source": source_id,
+            "article_num": num,
+            "article_title": heading,
+        })
     return records
 
 
