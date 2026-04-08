@@ -126,15 +126,58 @@ EURLEX_HTML_URL = "https://eur-lex.europa.eu/legal-content/IT/TXT/HTML/"
 def fetch_normattiva(source: NormaSource) -> Optional[str]:
     """Download law XML from normattiva.it.
 
+    normattiva.it is a Java EE application that requires a JSESSIONID session
+    cookie. A cold GET to the export endpoint returns an HTML page instead of XML.
+    We establish the session first by visiting the main page, then download.
+
     Returns raw XML string, or None on failure.
     Cached locally at ~/.cache/eullm-forge/raw/ to avoid re-downloading.
     """
+    from .base import _cache_load, _cache_save, DEFAULT_HEADERS
+
+    cache_key = f"normattiva_{source.id}"
+
+    # Check cache — but reject stale HTML responses
+    cached = _cache_load(cache_key)
+    if cached is not None and not cached.lstrip().startswith("<!"):
+        logger.debug("Cache hit: %s", cache_key)
+        return cached
+
+    try:
+        import requests
+    except ImportError:
+        raise RuntimeError(
+            "requests is required for dataset preparation. "
+            "Install with: pip install requests"
+        )
+
     url = f"{NORMATTIVA_EXPORT_URL}?urn={source.urn}&includiAllegati=N"
     logger.info("Fetching %s from normattiva.it...", source.name)
-    xml_text = http_get(url, cache_key=f"normattiva_{source.id}")
-    if xml_text is None:
-        logger.warning("Failed to download %s", source.name)
-    return xml_text
+
+    try:
+        session = requests.Session()
+        session.headers.update(DEFAULT_HEADERS)
+        # Step 1: establish JSESSIONID by visiting the main page
+        session.get("https://www.normattiva.it/", timeout=15)
+        # Step 2: download the export (session cookie is sent automatically)
+        response = session.get(url, timeout=60)
+        response.raise_for_status()
+        content = response.text
+
+        # Validate it's actually XML — HTML responses start with <!DOCTYPE
+        if content.lstrip().startswith("<!") or "<articolo" not in content.lower():
+            logger.warning(
+                "normattiva.it returned HTML for %s — session may not have been established",
+                source.id,
+            )
+            return None
+
+        _cache_save(cache_key, content)
+        return content
+
+    except Exception as exc:
+        logger.warning("Failed to fetch %s: %s", source.name, exc)
+        return None
 
 
 def parse_normattiva_xml(xml_text: str, source_id: str) -> list[dict]:
