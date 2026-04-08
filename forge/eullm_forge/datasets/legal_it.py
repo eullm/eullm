@@ -304,7 +304,10 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
         heading_el = art.find(f".//{ns}heading")
         heading = " ".join(heading_el.itertext()).strip() if heading_el is not None else ""
 
-        # Collect paragraph text (try <p> first, then <content> as fallback)
+        # Collect paragraph text.
+        # Older "regio decreto" AKN files (1930s–40s) may store text directly
+        # as tail text of child elements or in element names other than <p>/<content>.
+        # Strategy: try specific elements first, then fall back to itertext().
         paragraphs: list[str] = []
         for pel in art.iter(f"{ns}p"):
             t = clean_text(" ".join(pel.itertext()))
@@ -315,9 +318,26 @@ def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
                 t = clean_text(" ".join(cel.itertext()))
                 if t:
                     paragraphs.append(t)
+        if not paragraphs:
+            # Final fallback: grab all text in the article subtree.
+            # Skip elements whose text we already extracted as num/heading so
+            # they're not duplicated in the body field.
+            skip_ids = {id(num_el), id(heading_el)} - {id(None)}
+            parts: list[str] = []
+            for el in art.iter():
+                if id(el) in skip_ids:
+                    continue
+                if el.tag in (f"{ns}num", f"{ns}heading"):
+                    continue
+                if el.text and el.text.strip():
+                    parts.append(el.text.strip())
+                if el.tail and el.tail.strip():
+                    parts.append(el.tail.strip())
+            body = clean_text(" ".join(parts))
+        else:
+            body = " ".join(paragraphs)
 
-        body = " ".join(paragraphs)
-        if len(body) < 20:
+        if len(body) < 10:
             continue
 
         header = f"Art. {num}" if num else ""
