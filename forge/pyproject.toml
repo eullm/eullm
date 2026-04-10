@@ -37,6 +37,9 @@ dev = [
 distill = [
     "nvidia-modelopt[torch]>=0.11",
 ]
+datasets-browser = [
+    "playwright>=1.40",
+]
 
 [tool.setuptools.packages.find]
 include = ["eullm_forge*"]
