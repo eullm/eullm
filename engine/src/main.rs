@@ -260,12 +260,14 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            // Mixed TurboQuant types (e.g. K=tq4_0, V=tq3_0) — both Unknown.
+            // Mixed TurboQuant types (e.g. K=tbqp3, V=tbq3) — both Unknown.
+            // AmesianX recommended: --cache-type-k tbqp3 --cache-type-v tbq3
+            // (corrected K for recall, MSE-only V for speed, flash-attn on by default)
             if let (inference::KvCacheType::Unknown(k_id), inference::KvCacheType::Unknown(v_id)) = (&ctk, &ctv)
                 && k_id != v_id
             {
                 eprintln!("Note: mixed TurboQuant KV cache (K={cache_type_k}, V={cache_type_v}).");
-                eprintln!("  Advanced config — if OOM, will fallback to uniform type then F16.");
+                eprintln!("  This is the AmesianX recommended config (corrected K, MSE-only V).");
             }
             // Asymmetric F16/Q8_0-K + TurboQuant-V — may crash on models with
             // non-standard head dimensions (e.g. Gemma 4 D=512/256 SWA).
@@ -279,11 +281,9 @@ async fn main() {
             }
             // Standard quantized KV (q8_0, q4_0) on Gemma 4 (mixed SWA D=512/256)
             // Gemma 4's mixed SWA architecture (25 SWA layers D=256 + 5 global D=512)
-            // is incompatible with any KV quantization in AmesianX v1.5.0:
-            //   - q8_0/q4_0: KV layout mismatch → model echoes input
-            //   - tbq4_0/tbq4_0: SWA quantization noise → model generates past stop token
-            // AmesianX v1.5.1 will fix this with SWA bypass to f16. Until then,
-            // auto-correct all non-f16 KV to f16/f16 for Gemma 4.
+            // is incompatible with standard KV quantization — SWA bypass to f16
+            // was added in AmesianX v1.5.1 and is active in v1.5.3.
+            // Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
             let model_lower = model.to_lowercase();
             let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
             let needs_correction = ctk != inference::KvCacheType::F16
