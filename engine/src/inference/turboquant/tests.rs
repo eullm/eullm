@@ -28,6 +28,11 @@ fn parse_tq_types() {
     assert_eq!(parse_turboquant_type("tq4_0"),  Some(TurboquantType::TQ4_0));
     assert_eq!(parse_turboquant_type("turbo3"), Some(TurboquantType::TQ3_0));
     assert_eq!(parse_turboquant_type("turbo4"), Some(TurboquantType::TQ4_0));
+    // AmesianX recommended config bare aliases (default → _1, head_dim=128)
+    assert_eq!(parse_turboquant_type("tbq3"),   Some(TurboquantType::TQ3_1));
+    assert_eq!(parse_turboquant_type("tbq4"),   Some(TurboquantType::TQ4_1));
+    assert_eq!(parse_turboquant_type("tbqp3"),  Some(TurboquantType::TQP3_1));
+    assert_eq!(parse_turboquant_type("tbqp4"),  Some(TurboquantType::TQP4_1));
     assert_eq!(parse_turboquant_type("f16"),  None);
     assert_eq!(parse_turboquant_type("q8_0"), None);
 }
@@ -44,6 +49,10 @@ fn is_tq_type() {
     assert!(is_turboquant_type("tbqp4_1"));
     assert!(is_turboquant_type("tq3_0"));   // legacy alias
     assert!(is_turboquant_type("tq4_0"));   // legacy alias
+    assert!(is_turboquant_type("tbq3"));    // AmesianX recommended bare alias → _1
+    assert!(is_turboquant_type("tbq4"));
+    assert!(is_turboquant_type("tbqp3"));
+    assert!(is_turboquant_type("tbqp4"));
     assert!(!is_turboquant_type("f16"));
     assert!(!is_turboquant_type("q4_0"));
 }

@@ -89,6 +89,10 @@ impl fmt::Display for TurboquantType {
 /// AmesianX auto-detects head_dim at the llama-cli layer; via Rust bindings
 /// the suffix must be correct for the model. Most models (Qwen3, Llama,
 /// Mistral) have head_dim=128 → use tbq4_1 / tbqp4_1.
+///
+/// Bare aliases without suffix (tbqp3, tbq3, tbqp4, tbq4) default to _1
+/// (head_dim=128) following the AmesianX recommended config:
+///   --cache-type-k tbqp3 --cache-type-v tbq3 --flash-attn on
 pub fn parse_turboquant_type(s: &str) -> Option<TurboquantType> {
     match s.to_lowercase().as_str() {
         // head_dim=256 (_0)
@@ -97,10 +101,11 @@ pub fn parse_turboquant_type(s: &str) -> Option<TurboquantType> {
         "tbqp3_0" | "tqp3_0"                     => Some(TurboquantType::TQP3_0),
         "tbqp4_0" | "tqp4_0"                     => Some(TurboquantType::TQP4_0),
         // head_dim=128 (_1) — Qwen3, Llama, Mistral, Falcon
-        "tbq3_1"  | "tq3_1"                      => Some(TurboquantType::TQ3_1),
-        "tbq4_1"  | "tq4_1"                      => Some(TurboquantType::TQ4_1),
-        "tbqp3_1" | "tqp3_1"                     => Some(TurboquantType::TQP3_1),
-        "tbqp4_1" | "tqp4_1"                     => Some(TurboquantType::TQP4_1),
+        // Bare aliases (no suffix) map here — AmesianX recommended defaults.
+        "tbq3_1"  | "tq3_1"  | "tbq3"            => Some(TurboquantType::TQ3_1),
+        "tbq4_1"  | "tq4_1"  | "tbq4"            => Some(TurboquantType::TQ4_1),
+        "tbqp3_1" | "tqp3_1" | "tbqp3"           => Some(TurboquantType::TQP3_1),
+        "tbqp4_1" | "tqp4_1" | "tbqp4"           => Some(TurboquantType::TQP4_1),
         // head_dim=64 (_2) — Phi-3-mini
         "tbq3_2"  | "tq3_2"                      => Some(TurboquantType::TQ3_2),
         "tbq4_2"  | "tq4_2"                      => Some(TurboquantType::TQ4_2),
