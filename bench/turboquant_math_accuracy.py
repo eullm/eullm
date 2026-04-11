@@ -554,8 +554,9 @@ def main():
     c.add_argument("--temperature", type=float, default=0.0)
     c.add_argument("--filler", default="200,500,1000",
                    help="Comma-separated filler token counts (0 = direct only). "
-                        "Use 200,500,1000,1500,2000,2500 for full bug-window coverage "
-                        "(AmesianX v1.3 V-cache precision bug manifests at ctx 1500-2300t)")
+                        "Regression history: "
+                        "v1.3 V-cache precision bug: ctx 1500–2300t → use 200,500,1000,1500,2000,2500. "
+                        "v1.5.3 D=64 multi-turn bug: 9+ turns needed → use 200,500,1000,2500,8000,16000,32000,48000.")
     c.add_argument("--skip-3x3", action="store_true")
     c.add_argument("--skip-scalar", action="store_true")
     c.add_argument("--no-think", action="store_true",

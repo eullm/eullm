@@ -1,6 +1,6 @@
 //! TurboQuant KV cache type definitions.
 //!
-//! AmesianX/TurboQuant v1.4.1 auto-detects head_dim at the llama-cli level,
+//! AmesianX/TurboQuant v1.5.3 auto-detects head_dim at the llama-cli level,
 //! but when using llama-cpp-2 Rust bindings we bypass that layer and must
 //! pass the correct GGML type ID directly.
 //!
@@ -108,7 +108,7 @@ pub fn parse_turboquant_type(s: &str) -> Option<TurboquantType> {
     }
 }
 
-/// GGML type IDs from AmesianX/TurboQuant v1.4.1 (ggml/include/ggml.h).
+/// GGML type IDs from AmesianX/TurboQuant v1.5.3 (ggml/include/ggml.h).
 pub mod ggml_ids {
     // head_dim=256 (_0)
     pub const TBQ3_0:  u32 = 41;

@@ -12,9 +12,10 @@
 //! 2. **Lloyd-Max quantization**: Quantize each rotated coordinate using
 //!    precomputed optimal scalar codebooks (3-4 bits per value).
 //!
-//! The QJL residual correction (Algorithm 2 in the paper) is intentionally
-//! omitted — independent testing shows it hurts quality by trading bias for
-//! variance, which is counterproductive for attention score computation.
+//! QJL residual correction (Algorithm 2) behaviour depends on head_dim:
+//! for D≥128 it is omitted (increases variance, hurts attention quality);
+//! for D=64 it is re-enabled in the AmesianX fork (v1.5.3) — critical for
+//! multi-turn accuracy (verified stable across 9+ turns on GPT-OSS 120B).
 //!
 //! ## Feature gate
 //!
