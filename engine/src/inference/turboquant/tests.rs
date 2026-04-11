@@ -1,6 +1,10 @@
 //! Unit tests for TurboQuant module.
 
-use super::codebook::{CODEBOOK_3BIT, CODEBOOK_4BIT, boundaries_3bit, boundaries_4bit};
+use super::codebook::{
+    CODEBOOK_3BIT, CODEBOOK_4BIT,
+    boundaries_3bit, boundaries_4bit,
+    quantize_scalar_3bit, quantize_scalar_4bit,
+};
 use super::config::{is_turboquant_type, resolve_turboquant_cache_type, ResolvedCacheType};
 use super::types::{TurboquantType, parse_turboquant_type};
 
@@ -135,4 +139,158 @@ fn resolve_ignores_standard_types() {
     assert!(resolve_turboquant_cache_type("f16", false).is_none());
     assert!(resolve_turboquant_cache_type("q8_0", false).is_none());
     assert!(resolve_turboquant_cache_type("q4_0", true).is_none());
+}
+
+// ── Accuracy / SQNR tests ─────────────────────────────────────────────────────
+//
+// These tests verify the Rust-side Lloyd-Max codebook achieves expected
+// quantization accuracy.  They run fully in-process (no GPU required) and
+// catch codebook regressions of the kind reported as KV cache degradation
+// (AmesianX/TurboQuant v1.5.3 upgrade, April 2026).
+//
+// Test distribution: uniform grid over [-3.0, 3.0] (601 points, step 0.01).
+// Signal power ≈ 3.0 (mean x² for uniform [-3,3]).
+// Expected SQNR: ≥11 dB for 3-bit, ≥17 dB for 4-bit (conservative floor).
+
+/// Compute mean-squared error and SQNR (dB) for a quantizer over a test grid.
+fn sqnr_db(quantize: impl Fn(f32) -> f32) -> (f32, f32) {
+    const N: usize = 601;
+    let mut signal_power = 0.0f32;
+    let mut noise_power = 0.0f32;
+    for i in 0..N {
+        let x = -3.0 + (i as f32) * (6.0 / (N as f32 - 1.0));
+        let q = quantize(x);
+        signal_power += x * x;
+        noise_power += (x - q) * (x - q);
+    }
+    signal_power /= N as f32;
+    noise_power /= N as f32;
+    let mse = noise_power;
+    let sqnr = 10.0 * (signal_power / noise_power).log10();
+    (mse, sqnr)
+}
+
+#[test]
+fn sqnr_3bit_meets_spec() {
+    let (mse, sqnr) = sqnr_db(quantize_scalar_3bit);
+    assert!(
+        sqnr >= 11.0,
+        "3-bit SQNR {sqnr:.2} dB below 11 dB floor (MSE={mse:.4}). \
+         Codebook regression? Check AmesianX/TurboQuant version."
+    );
+}
+
+#[test]
+fn sqnr_4bit_meets_spec() {
+    let (mse, sqnr) = sqnr_db(quantize_scalar_4bit);
+    assert!(
+        sqnr >= 17.0,
+        "4-bit SQNR {sqnr:.2} dB below 17 dB floor (MSE={mse:.4}). \
+         Codebook regression? Check AmesianX/TurboQuant version."
+    );
+}
+
+#[test]
+fn mse_3bit_bounded() {
+    let (mse, _) = sqnr_db(quantize_scalar_3bit);
+    // 3-bit Lloyd-Max on uniform [-3,3]: expected ~0.144, must stay under 0.20.
+    // (Actual 0.1438 on this grid; bound gives headroom for f32 precision.)
+    assert!(
+        mse < 0.20,
+        "3-bit MSE {mse:.4} exceeds 0.20 — possible codebook corruption."
+    );
+}
+
+#[test]
+fn mse_4bit_bounded() {
+    let (mse, _) = sqnr_db(quantize_scalar_4bit);
+    // 4-bit Lloyd-Max on uniform [-3,3]: MSE must stay well under 0.05.
+    assert!(
+        mse < 0.05,
+        "4-bit MSE {mse:.4} exceeds 0.05 — possible codebook corruption."
+    );
+}
+
+#[test]
+fn codebook_3bit_near_symmetry() {
+    // For i in 0..3, centroids[i] ≈ -centroids[6-i] (roughly symmetric around 0).
+    // The 8th entry (index 7) is the upper-tail clamp and has no mirror.
+    for i in 0..3usize {
+        let lo = CODEBOOK_3BIT[i];
+        let hi = CODEBOOK_3BIT[6 - i];
+        let diff = (lo + hi).abs();
+        assert!(
+            diff < 1e-3,
+            "3-bit codebook not symmetric at index {i}: {lo} + {hi} = {diff}"
+        );
+    }
+}
+
+#[test]
+fn codebook_4bit_near_symmetry() {
+    // For i in 0..7, centroids[i] ≈ -centroids[14-i].
+    // Index 15 is the upper-tail clamp.
+    for i in 0..7usize {
+        let lo = CODEBOOK_4BIT[i];
+        let hi = CODEBOOK_4BIT[14 - i];
+        let diff = (lo + hi).abs();
+        assert!(
+            diff < 1e-3,
+            "4-bit codebook not symmetric at index {i}: {lo} + {hi} = {diff}"
+        );
+    }
+}
+
+#[test]
+fn all_centroids_reachable_3bit() {
+    // Every centroid must be the nearest reconstruction for at least one input.
+    let mut seen = [false; 8];
+    for i in 0..=1000 {
+        let x = -3.0 + (i as f32) * 0.006;
+        let q = quantize_scalar_3bit(x);
+        if let Some(idx) = CODEBOOK_3BIT.iter().position(|&c| (c - q).abs() < 1e-6) {
+            seen[idx] = true;
+        }
+    }
+    for (i, &reachable) in seen.iter().enumerate() {
+        assert!(reachable, "3-bit centroid index {i} ({}) is unreachable", CODEBOOK_3BIT[i]);
+    }
+}
+
+#[test]
+fn all_centroids_reachable_4bit() {
+    let mut seen = [false; 16];
+    for i in 0..=1000 {
+        let x = -3.0 + (i as f32) * 0.006;
+        let q = quantize_scalar_4bit(x);
+        if let Some(idx) = CODEBOOK_4BIT.iter().position(|&c| (c - q).abs() < 1e-6) {
+            seen[idx] = true;
+        }
+    }
+    for (i, &reachable) in seen.iter().enumerate() {
+        assert!(reachable, "4-bit centroid index {i} ({}) is unreachable", CODEBOOK_4BIT[i]);
+    }
+}
+
+#[test]
+fn quantize_is_idempotent_3bit() {
+    // Quantizing an already-quantized value (a centroid) must return itself.
+    for &c in &CODEBOOK_3BIT {
+        let q = quantize_scalar_3bit(c);
+        assert!(
+            (q - c).abs() < 1e-6,
+            "3-bit centroid {c} not idempotent: quantize({c}) = {q}"
+        );
+    }
+}
+
+#[test]
+fn quantize_is_idempotent_4bit() {
+    for &c in &CODEBOOK_4BIT {
+        let q = quantize_scalar_4bit(c);
+        assert!(
+            (q - c).abs() < 1e-6,
+            "4-bit centroid {c} not idempotent: quantize({c}) = {q}"
+        );
+    }
 }

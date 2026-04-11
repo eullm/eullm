@@ -76,7 +76,7 @@ pub fn resolve_turboquant_cache_type(s: &str, strict: bool) -> Option<ResolvedCa
 pub fn log_turboquant_status() {
     if backend_supports_turboquant() {
         tracing::info!(
-            "TurboQuant: ACTIVE (AmesianX v1.4.1+, tbq3_0/tbq4_0/tbqp3_0/tbqp4_0 available)"
+            "TurboQuant: ACTIVE (AmesianX v1.5.3, tbq3_0/tbq4_0/tbqp3_0/tbqp4_0 available)"
         );
     } else {
         tracing::info!(

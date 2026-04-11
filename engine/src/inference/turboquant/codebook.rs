@@ -74,3 +74,28 @@ pub fn boundaries_4bit() -> [f32; 15] {
     }
     b
 }
+
+/// Quantize a scalar value using the 3-bit Lloyd-Max codebook.
+///
+/// Finds the nearest centroid via decision boundaries and returns the
+/// reconstruction value.  Used in unit tests to verify codebook accuracy.
+pub fn quantize_scalar_3bit(x: f32) -> f32 {
+    let b = boundaries_3bit();
+    for (i, &boundary) in b.iter().enumerate() {
+        if x < boundary {
+            return CODEBOOK_3BIT[i];
+        }
+    }
+    CODEBOOK_3BIT[CODEBOOK_3BIT.len() - 1]
+}
+
+/// Quantize a scalar value using the 4-bit Lloyd-Max codebook.
+pub fn quantize_scalar_4bit(x: f32) -> f32 {
+    let b = boundaries_4bit();
+    for (i, &boundary) in b.iter().enumerate() {
+        if x < boundary {
+            return CODEBOOK_4BIT[i];
+        }
+    }
+    CODEBOOK_4BIT[CODEBOOK_4BIT.len() - 1]
+}

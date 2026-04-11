@@ -69,15 +69,16 @@ echo "Copying crate to vendor/..."
 cp -r "$INSTALLED_CRATE" "$SYS_CRATE_DIR"
 chmod -R u+w "$SYS_CRATE_DIR"
 
-# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.5.2
-echo "Cloning AmesianX/TurboQuant v1.5.2..."
+# 3. Replace the bundled llama.cpp with AmesianX/TurboQuant v1.5.3
+echo "Cloning AmesianX/TurboQuant v1.5.3..."
 rm -rf "${SYS_CRATE_DIR}/llama.cpp"
 git clone --depth 1 --branch main \
     https://github.com/AmesianX/TurboQuant.git \
     "${SYS_CRATE_DIR}/llama.cpp"
-# Pin to v1.5.2 (V rotation bug fix, attention score sharpening via SQNR-based
-#               alpha correction, per-block norm for D=512, SWA bypass for Gemma 4)
-git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.5.2
+# Pin to v1.5.3 (double WHT per-head for D=64: S1→WHT64→S2→WHT64 per-head,
+#               cross-head WHT abandoned; QJL re-enabled for D=64 — critical for
+#               multi-turn accuracy, 9+ turns verified on GPT-OSS 120B 35/35 math)
+git -C "${SYS_CRATE_DIR}/llama.cpp" fetch --depth 1 origin v1.5.3
 git -C "${SYS_CRATE_DIR}/llama.cpp" checkout FETCH_HEAD
 
 # 4. Remove .git from the cloned repo (we vendor it, not submodule it)
@@ -137,7 +138,7 @@ fi
 
 # 6. Verify TurboQuant types exist in the fork
 if grep -q "GGML_TYPE_TBQ3_0" "${SYS_CRATE_DIR}/llama.cpp/ggml/include/ggml.h"; then
-    echo "Verified: GGML_TYPE_TBQ3_0 found in fork (AmesianX v1.4.1+)"
+    echo "Verified: GGML_TYPE_TBQ3_0 found in fork (AmesianX v1.5.3+)"
 else
     echo "ERROR: GGML_TYPE_TBQ3_0 not found in fork — wrong branch or version?"
     exit 1
@@ -174,7 +175,7 @@ echo "=== Setup complete ==="
 echo ""
 echo "Vendored llama-cpp-sys-2: ${SYS_CRATE_DIR}"
 echo "Patch in: ${CARGO_TOML}  (path = ${PATCH_PATH})"
-echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44 (v1.5.2: V rotation fix, attention sharpening, SWA bypass)"
+echo "Fork verified: GGML_TYPE_TBQ3_0=41 GGML_TYPE_TBQ4_0=42 GGML_TYPE_TBQP3_0=43 GGML_TYPE_TBQP4_0=44 (v1.5.3: double WHT per-head D=64, QJL re-enabled D=64, multi-turn fix)"
 echo ""
 echo "Build with:"
 echo "  cd ${ENGINE_DIR}"
