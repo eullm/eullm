@@ -270,6 +270,28 @@ jobs:
           grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
           . "$HOME/.cargo/env" && cargo tree -i llama-cpp-sys-2 2>&1 | head -5
 
+      - name: Create NCCL stub (TurboQuant v1.5.3 multi-GPU support)
+        run: |
+          # TurboQuant v1.5.3 added multi-GPU AllReduce via NCCL.
+          # NCCL is not installed in this container and not needed for single-GPU inference.
+          # Provide no-op stubs so the linker is satisfied; these are never called at runtime.
+          mkdir -p /tmp/nccl-stub
+          cat > /tmp/nccl-stub/nccl_stub.c << 'STUB_EOF'
+          #include <stddef.h>
+          typedef int ncclResult_t;
+          typedef void* ncclComm_t;
+          typedef int ncclDataType_t;
+          typedef int ncclRedOp_t;
+          typedef void* cudaStream_t;
+          ncclResult_t ncclCommInitAll(ncclComm_t* c, int n, const int* d) { (void)c;(void)n;(void)d; return 0; }
+          const char* ncclGetErrorString(ncclResult_t r) { (void)r; return "nccl-stub"; }
+          ncclResult_t ncclGroupStart(void) { return 0; }
+          ncclResult_t ncclAllReduce(const void* s, void* r, size_t n, ncclDataType_t t, ncclRedOp_t op, ncclComm_t c, cudaStream_t st) { (void)s;(void)r;(void)n;(void)t;(void)op;(void)c;(void)st; return 0; }
+          ncclResult_t ncclGroupEnd(void) { return 0; }
+          STUB_EOF
+          gcc -c /tmp/nccl-stub/nccl_stub.c -o /tmp/nccl-stub/nccl_stub.o
+          echo "RUSTFLAGS=-C link-arg=/tmp/nccl-stub/nccl_stub.o" >> $GITHUB_ENV
+
       - name: Build engine with CUDA + TurboQuant
         run: |
           . "$HOME/.cargo/env"
@@ -279,12 +301,7 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          # TurboQuant v1.5.3 compiles 100+ fattn-vec kernel instantiations (all TBQ
-          # type/head_dim combos). Some D=576 or cross-head variants hit register/shmem
-          # limits on sm_120 (Blackwell) with CUDA 12.8. Use sm_89 (Ada Lovelace) to
-          # produce PTX that JIT-compiles natively on sm_120 at first run — cached after,
-          # zero runtime overhead. sm_120 native stays in build-cuda (base llama.cpp only).
-          CMAKE_CUDA_ARCHITECTURES: "89"
+          CMAKE_CUDA_ARCHITECTURES: "120"
 
       - name: Test TurboQuant module
         run: |
