@@ -236,6 +236,32 @@ impl BatchScheduler {
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Build a human-readable hint for context allocation failures.
+///
+/// Suggests smaller `--ctx-size` values and, if the requested size is large,
+/// points the user towards TurboQuant KV cache to reduce VRAM usage.
+fn ctx_oom_hint(requested_tokens: u32) -> String {
+    let smaller = [requested_tokens / 2, requested_tokens / 4]
+        .iter()
+        .filter(|&&v| v >= 512)
+        .map(|v| format!("--ctx-size {v}"))
+        .collect::<Vec<_>>()
+        .join("  or  ");
+
+    let tq_tip = if requested_tokens >= 8192 {
+        "\n  Use --cache-type-k tbqp3 --cache-type-v tbq3 (TurboQuant) to cut KV-cache VRAM by ~5×."
+    } else {
+        ""
+    };
+
+    format!(
+        "  Requested context: {requested_tokens} tokens — KV cache likely exceeds available VRAM.\
+        \n  Try a smaller context: {smaller}{tq_tip}"
+    )
+}
+
 // ── Scheduler loop (runs on a dedicated thread) ─────────────────────────────
 
 fn run_scheduler_loop(
@@ -252,10 +278,12 @@ fn run_scheduler_loop(
 
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let mut backend = LlamaBackend::init()?;
-    // Suppress llama.cpp/ggml log messages (CUDA graph warmup etc.) — these
-    // come from the global ggml logger and pollute interactive output.
-    // void_logs() calls llama_log_set which internally calls ggml_log_set.
-    backend.void_logs();
+    // NOTE: backend.void_logs() is intentionally deferred until AFTER the
+    // context is created.  During model load and KV cache allocation, llama.cpp
+    // prints useful diagnostics (VRAM offload, tensor sizes, OOM details) that
+    // help users diagnose failures like out-of-VRAM context allocation.
+    // Once the context is up, void_logs() is called to suppress the repetitive
+    // per-decode messages (CUDA graph warmup etc.) that pollute interactive output.
 
     let model_params = if config.gpu_layers >= 0 {
         LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers as u32)
@@ -305,6 +333,8 @@ fn run_scheduler_loop(
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
         Err(e) => {
+            // Build a hint suggesting smaller ctx-size values to try.
+            let hint = ctx_oom_hint(total_ctx);
             if has_quantized_cache {
                 if has_mixed_tq {
                     // Mixed TQ fallback: try the heavier (more precise) type for both.
@@ -332,7 +362,9 @@ fn run_scheduler_loop(
                             match model.new_context(&backend, ctx_params) {
                                 Ok(c) => c,
                                 Err(e3) => {
-                                    let msg = format!("Failed to create context (even with F16 fallback): {e3}");
+                                    let msg = format!(
+                                        "Context allocation failed (likely out of VRAM): {e3}\n{hint}"
+                                    );
                                     let _ = ready_tx.send(Err(msg.clone()));
                                     return Err(msg.into());
                                 }
@@ -352,19 +384,27 @@ fn run_scheduler_loop(
                     match model.new_context(&backend, ctx_params) {
                         Ok(c) => c,
                         Err(e2) => {
-                            let msg = format!("Failed to create context (even with F16 fallback): {e2}");
+                            let msg = format!(
+                                "Context allocation failed (likely out of VRAM): {e2}\n{hint}"
+                            );
                             let _ = ready_tx.send(Err(msg.clone()));
                             return Err(msg.into());
                         }
                     }
                 }
             } else {
-                let msg = format!("Failed to create context: {e}");
+                let msg = format!(
+                    "Context allocation failed (likely out of VRAM): {e}\n{hint}"
+                );
                 let _ = ready_tx.send(Err(msg.clone()));
                 return Err(msg.into());
             }
         }
     };
+
+    // Context created successfully — now suppress repetitive per-decode
+    // llama.cpp messages (CUDA graph warmup, etc.) to keep output clean.
+    backend.void_logs();
 
     let mut active: Vec<ActiveSequence> = Vec::with_capacity(sched_config.max_batch_size);
     // Pool of reusable seq_ids in range [0, max_batch_size).
