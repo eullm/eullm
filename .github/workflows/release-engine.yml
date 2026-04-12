@@ -139,6 +139,13 @@ jobs:
           key: cargo-registry-cuda-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-cuda-
 
+      # Cache Rust target/ directory
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-cuda-${{ matrix.cuda }}-
+
       # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
       - uses: actions/cache@v4
         with:
@@ -225,6 +232,18 @@ jobs:
         with:
           path: engine/vendor
           key: tq-vendor-linux-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
+
+      # Cache Rust target/ directory — avoids full relink on every run.
+      # Keyed on Cargo.lock + setup script so it invalidates on dep upgrades
+      # or TurboQuant version bumps.  restore-keys fall back to any previous
+      # CUDA-TQ target/ cache so incremental builds stay fast across patches.
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-cuda-tq-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: |
+            target-cuda-tq-${{ matrix.cuda }}-
+            target-cuda-tq-
 
       # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
       - uses: actions/cache@v4
@@ -343,6 +362,15 @@ jobs:
         with:
           path: engine/vendor
           key: tq-vendor-macos-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
+
+      # Cache Rust target/ directory
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-macos-arm64-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: |
+            target-macos-arm64-tq-
+            target-macos-arm64-
 
       # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
       - uses: actions/cache@v4
