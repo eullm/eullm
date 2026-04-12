@@ -394,6 +394,19 @@ async def collect(args):
                 "prompt_tokens": timing.get("prompt_eval_count", 0),
             })
 
+            # Incremental save after each test so data is not lost on interrupt.
+            if args.output:
+                _partial = {
+                    "label": args.label, "note": args.note,
+                    "model": args.model, "url": args.url,
+                    "filler_levels": filler_levels,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "partial": True,
+                    "results": results,
+                }
+                with open(args.output, "w") as _f:
+                    json.dump(_partial, _f, indent=2)
+
     total_pass = sum(1 for r in results if r["passed"])
     total = len(results)
     pct = total_pass / total * 100 if total else 0
