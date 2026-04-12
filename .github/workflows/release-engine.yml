@@ -98,6 +98,7 @@ jobs:
       - name: Package binary
         run: |
           cp target/${{ matrix.target }}/release/eullm ${{ matrix.artifact }}
+          strip --strip-all ${{ matrix.artifact }} 2>/dev/null || strip -x ${{ matrix.artifact }} 2>/dev/null || true
           chmod +x ${{ matrix.artifact }}
 
       - name: Upload artifact
@@ -184,6 +185,7 @@ jobs:
       - name: Package binary
         run: |
           cp target/release/eullm ${{ matrix.artifact }}
+          strip --strip-all ${{ matrix.artifact }} || true
           chmod +x ${{ matrix.artifact }}
 
       - name: Upload artifact
@@ -330,6 +332,7 @@ jobs:
       - name: Package binary
         run: |
           cp target/release/eullm ${{ matrix.artifact }}
+          strip --strip-all ${{ matrix.artifact }} || true
           chmod +x ${{ matrix.artifact }}
 
       - name: Upload artifact
@@ -421,6 +424,7 @@ jobs:
       - name: Package binary
         run: |
           cp target/aarch64-apple-darwin/release/eullm eullm-macos-arm64-turboquant-exp
+          strip -x eullm-macos-arm64-turboquant-exp || true
           chmod +x eullm-macos-arm64-turboquant-exp
 
       - name: Upload artifact
