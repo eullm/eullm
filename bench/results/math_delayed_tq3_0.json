@@ -1,0 +1,429 @@
+{
+  "label": "tq3_0_delayed",
+  "model": "qwen3-14b",
+  "url": "http://localhost:11434",
+  "temperature": 0.0,
+  "filler_levels": [
+    200,
+    500,
+    1000
+  ],
+  "timestamp": "2026-03-31T20:28:24+0200",
+  "score": {
+    "passed": 13,
+    "total": 40,
+    "percent": 32.5
+  },
+  "categories": {
+    "direct_math": {
+      "pass": 4,
+      "total": 10
+    },
+    "delayed_math": {
+      "pass": 9,
+      "total": 30
+    }
+  },
+  "results": [
+    {
+      "id": "direct_mat2x2_M1",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[17, 39], [28, 64]]",
+      "response_preview": "[[17, 39], [28, 64]]"
+    },
+    {
+      "id": "direct_mat2x2_M2",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[34, 40],[70, 82]]",
+      "response_preview": "[[34, 40],[70, 82]]"
+    },
+    {
+      "id": "direct_mat2x2_M3",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[14, 8], [10, 7]]",
+      "response_preview": "[[14, 8], [10, 7]]"
+    },
+    {
+      "id": "direct_mat2x2_M4",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[35,20],[44,14]]",
+      "response_preview": "[[35,20],[44,14]]"
+    },
+    {
+      "id": "direct_mat2x2_M5",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[1, 4], [8, 19]]",
+      "response_preview": "[[1, 4], [8, 19]]"
+    },
+    {
+      "id": "direct_scalar_S1",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=461",
+      "response_preview": "461"
+    },
+    {
+      "id": "direct_scalar_S2",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "113",
+      "detail": "expected=113 in response=**Answer:** 113",
+      "response_preview": "$3^4 + 2^5 = 81 + 32 = 113$\n\n**Answer:** 113"
+    },
+    {
+      "id": "direct_scalar_S3",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "87",
+      "detail": "expected=87 in response=**Answer:** 87",
+      "response_preview": "$$\n\\left(\\frac{144}{12}\\right) \\times (15 - 8) + 3 = 12 \\times 7 + 3 = 84 + 3 = 87\n$$\n\n**Answer:** 87"
+    },
+    {
+      "id": "direct_scalar_S4",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "160",
+      "detail": "expected=160 in response=Adding them: 56 + 54 + 50 = **160**",
+      "response_preview": "7*8 = 56  \n6*9 = 54  \n5*10 = 50  \n\nAdding them: 56 + 54 + 50 = **160**"
+    },
+    {
+      "id": "direct_scalar_S5",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=1000 - 13 * 37 = 1000 - 481 = **519**",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = **519**"
+    },
+    {
+      "id": "delayed_mat2x2_M1_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[27, 31], [38, 44]]",
+      "response_preview": "[[27, 31], [38, 44]]"
+    },
+    {
+      "id": "delayed_mat2x2_M1_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[27, 31], [46, 54]]",
+      "response_preview": "[[27, 31], [46, 54]]"
+    },
+    {
+      "id": "delayed_mat2x2_M1_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[23, 29], [46, 58]]",
+      "response_preview": "[[23, 29], [46, 58]]"
+    },
+    {
+      "id": "delayed_mat2x2_M2_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[43, 50]]",
+      "response_preview": "[[19, 22],\n [43, 50]]"
+    },
+    {
+      "id": "delayed_mat2x2_M2_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19, 22], [43, 50]]",
+      "response_preview": "[[19, 22], [43, 50]]"
+    },
+    {
+      "id": "delayed_mat2x2_M2_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19, 22], [43, 50]]",
+      "response_preview": "[[19, 22], [43, 50]]"
+    },
+    {
+      "id": "delayed_mat2x2_M3_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 2], [14, 17]]",
+      "response_preview": "[[8, 2], [14, 17]]"
+    },
+    {
+      "id": "delayed_mat2x2_M3_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 2], [10, 17]]",
+      "response_preview": "[[8, 2], [10, 17]]"
+    },
+    {
+      "id": "delayed_mat2x2_M3_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 2], [14, 17]]",
+      "response_preview": "[[8, 2], [14, 17]]"
+    },
+    {
+      "id": "delayed_mat2x2_M4_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[23, 12], [46, 24]]",
+      "response_preview": "[[23, 12], [46, 24]]"
+    },
+    {
+      "id": "delayed_mat2x2_M4_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[17, 20], [46, 28]]",
+      "response_preview": "[[17, 20], [46, 28]]"
+    },
+    {
+      "id": "delayed_mat2x2_M4_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[23, 15], [46, 14]]",
+      "response_preview": "[[23, 15], [46, 14]]"
+    },
+    {
+      "id": "delayed_mat2x2_M5_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[3,4],[5,6]]",
+      "response_preview": "[[3,4],[5,6]]"
+    },
+    {
+      "id": "delayed_mat2x2_M5_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[4, 6], [8, 10]]",
+      "response_preview": "[[4, 6], [8, 10]]"
+    },
+    {
+      "id": "delayed_mat2x2_M5_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[3,4],[5,6]]",
+      "response_preview": "[[3,4],[5,6]]"
+    },
+    {
+      "id": "delayed_scalar_S1_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=395",
+      "response_preview": "395"
+    },
+    {
+      "id": "delayed_scalar_S1_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=395",
+      "response_preview": "395"
+    },
+    {
+      "id": "delayed_scalar_S1_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=465",
+      "response_preview": "465"
+    },
+    {
+      "id": "delayed_scalar_S2_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "113",
+      "detail": "expected=113 in response=83",
+      "response_preview": "83"
+    },
+    {
+      "id": "delayed_scalar_S2_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "113",
+      "detail": "expected=113 in response=83",
+      "response_preview": "83"
+    },
+    {
+      "id": "delayed_scalar_S2_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": true,
+      "expected": "113",
+      "detail": "expected=113 in response=3^4 + 2^5 = 81 + 32 = 113",
+      "response_preview": "3^4 + 2^5 = 81 + 32 = 113"
+    },
+    {
+      "id": "delayed_scalar_S3_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "87",
+      "detail": "expected=87 in response=Final answer: **87**",
+      "response_preview": "Let's compute the expression step by step:\n\n1. **(144 / 12)** = 12  \n2. **(15 - 8)** = 7  \n3. Multiply the results: **12 * 7** = 84  \n4. Add 3 to the result: **84 + 3** = **87**\n\nFinal answer: **87**"
+    },
+    {
+      "id": "delayed_scalar_S3_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "87",
+      "detail": "expected=87 in response=103",
+      "response_preview": "103"
+    },
+    {
+      "id": "delayed_scalar_S3_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "87",
+      "detail": "expected=87 in response=106",
+      "response_preview": "106"
+    },
+    {
+      "id": "delayed_scalar_S4_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "160",
+      "detail": "expected=160 in response=59",
+      "response_preview": "59"
+    },
+    {
+      "id": "delayed_scalar_S4_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": true,
+      "expected": "160",
+      "detail": "expected=160 in response== **160**",
+      "response_preview": "7*8 + 6*9 + 5*10  \n= 56 + 54 + 50  \n= **160**"
+    },
+    {
+      "id": "delayed_scalar_S4_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "160",
+      "detail": "expected=160 in response=593",
+      "response_preview": "593"
+    },
+    {
+      "id": "delayed_scalar_S5_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=Result: 519",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = 519\n\nResult: 519"
+    },
+    {
+      "id": "delayed_scalar_S5_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=1000 - 481 = **519**",
+      "response_preview": "13 * 37 = 481  \n1000 - 481 = **519**"
+    },
+    {
+      "id": "delayed_scalar_S5_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=**Answer:** 519",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = 519\n\n**Answer:** 519"
+    }
+  ]
+}
