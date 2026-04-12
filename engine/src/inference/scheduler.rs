@@ -850,9 +850,14 @@ fn cache_type_bytes_per_elem(ct: &super::KvCacheType) -> f64 {
         super::KvCacheType::Q4_1 => 20.0 / 32.0,
         super::KvCacheType::Q5_0 => 22.0 / 32.0,
         super::KvCacheType::Q5_1 => 24.0 / 32.0,
-        super::KvCacheType::Unknown(41) => 0.375,  // TQ3_0 (3-bit)
-        super::KvCacheType::Unknown(42) => 0.5,    // TQ4_0 (4-bit)
-        super::KvCacheType::Unknown(43) => 0.25,   // TQ2_0 (2-bit)
+        // TurboQuant v1.5.3 (AmesianX fork): IDs 42–61.
+        // Q1_0=41 was inserted before the TBQ block in v1.5.3, shifting all
+        // IDs by +1 vs v1.5.2.  Within the TBQ block the pattern repeats
+        // every 4: TBQ3_x=42+4k, TBQ4_x=43+4k, TBQP3_x=44+4k, TBQP4_x=45+4k.
+        // Even IDs → 3-bit (0.375 B/elem); odd IDs → 4-bit (0.5 B/elem).
+        super::KvCacheType::Unknown(id @ 42..=61) => {
+            if id % 2 == 0 { 0.375 } else { 0.5 }
+        }
         _ => 2.0, // default to F16
     }
 }
