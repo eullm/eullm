@@ -302,7 +302,8 @@ def build_tests(filler_levels, skip_3x3=False, skip_scalar=False):
 
 async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
                       prompt: str, temperature: float = 0.0,
-                      think: bool = False, num_predict: int = 2048) -> tuple[str, dict]:
+                      think: bool = False, num_predict: int = 2048,
+                      timeout: int = 120) -> tuple[str, dict]:
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -314,7 +315,7 @@ async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
     try:
         async with session.post(
             f"{url}/api/chat", json=payload,
-            timeout=aiohttp.ClientTimeout(total=120)
+            timeout=aiohttp.ClientTimeout(total=timeout)
         ) as resp:
             if resp.status != 200:
                 return f"[ERROR: HTTP {resp.status}]", {}
@@ -356,7 +357,8 @@ async def collect(args):
             t0 = time.time()
             response, timing = await send_prompt(session, args.url, args.model,
                                                  test["prompt"], args.temperature,
-                                                 think, args.num_predict)
+                                                 think, args.num_predict,
+                                                 timeout=args.timeout)
             latency_s = time.time() - t0
             passed, detail = check_answer(test, response)
 
@@ -565,6 +567,9 @@ def main():
     c.add_argument("--num-predict", type=int, default=2048,
                    help="Max tokens to generate per response (default: 512). "
                         "Use 1024 for math models that show full working.")
+    c.add_argument("--timeout", type=int, default=120,
+                   help="HTTP timeout per request in seconds (default: 120). "
+                        "Increase to 300+ for large filler levels (32000t/48000t).")
     c.add_argument("--output", "-o")
     c.add_argument("--note", default="",
                    help="Free-form note saved in JSON metadata (e.g. 'cache-k=q8_0 cache-v=tbq4_1 ctx=32768')")
