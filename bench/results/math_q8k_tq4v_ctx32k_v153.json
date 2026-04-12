@@ -1,0 +1,46 @@
+{
+  "label": "q8k_tq4v_ctx32k_v153",
+  "model": "qwen3-14b",
+  "url": "http://localhost:11434",
+  "temperature": 0.0,
+  "ctx_size": 32768,
+  "cache_type_k": "q8_0",
+  "cache_type_v": "tbq4_1",
+  "note": "TurboQuant v1.5.3, K=Q8_0 (1360 MiB), V=TBQ4_1 (640 MiB), flash-attn on. Reconstructed from conversation transcript — per-test detail unavailable.",
+  "reconstructed": true,
+  "filler_levels": [200, 500, 1000, 1500, 2000, 2500],
+  "timestamp": "2026-04-12T14:00:00+0200",
+  "score": {
+    "passed": 91,
+    "total": 91,
+    "percent": 100.0
+  },
+  "timing": {
+    "total_wall_s": 839.7,
+    "latency_mean_s": 9.2,
+    "latency_min_s": 4.8,
+    "latency_max_s": 29.6,
+    "tokens_per_sec_mean": 62.7,
+    "tokens_per_sec_min": 53.7,
+    "tokens_per_sec_max": 69.1
+  },
+  "categories": {
+    "direct_math": {
+      "pass": 13,
+      "total": 13
+    },
+    "delayed_math": {
+      "pass": 78,
+      "total": 78
+    }
+  },
+  "by_filler": {
+    "200t":  {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "500t":  {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "1000t": {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "1500t": {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "2000t": {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "2500t": {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}}
+  },
+  "results": []
+}
