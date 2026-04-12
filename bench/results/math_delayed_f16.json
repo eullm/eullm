@@ -1,0 +1,429 @@
+{
+  "label": "f16_delayed",
+  "model": "qwen3-14b",
+  "url": "http://localhost:11434",
+  "temperature": 0.0,
+  "filler_levels": [
+    200,
+    500,
+    1000
+  ],
+  "timestamp": "2026-03-31T20:26:26+0200",
+  "score": {
+    "passed": 15,
+    "total": 40,
+    "percent": 37.5
+  },
+  "categories": {
+    "direct_math": {
+      "pass": 5,
+      "total": 10
+    },
+    "delayed_math": {
+      "pass": 10,
+      "total": 30
+    }
+  },
+  "results": [
+    {
+      "id": "direct_mat2x2_M1",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[23, 27], [46, 54]]",
+      "response_preview": "[[23, 27], [46, 54]]"
+    },
+    {
+      "id": "direct_mat2x2_M2",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19,22],[43,50]]",
+      "response_preview": "[[19,22],[43,50]]"
+    },
+    {
+      "id": "direct_mat2x2_M3",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 12], [14, 17]]",
+      "response_preview": "[[8, 12], [14, 17]]"
+    },
+    {
+      "id": "direct_mat2x2_M4",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[35, 20], [46, 8]]",
+      "response_preview": "[[35, 20], [46, 8]]"
+    },
+    {
+      "id": "direct_mat2x2_M5",
+      "category": "direct_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[5, 6], [3, 4]]",
+      "response_preview": "[[0*3 + 1*5, 0*4 + 1*6], [1*3 + 0*5, 1*4 + 0*6]]  \n[[5, 6], [3, 4]]"
+    },
+    {
+      "id": "direct_scalar_S1",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=395",
+      "response_preview": "395"
+    },
+    {
+      "id": "direct_scalar_S2",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": false,
+      "expected": "113",
+      "detail": "expected=113 in response=83",
+      "response_preview": "83"
+    },
+    {
+      "id": "direct_scalar_S3",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "87",
+      "detail": "expected=87 in response== **87**",
+      "response_preview": "(144 / 12) * (15 - 8) + 3  \n= 12 * 7 + 3  \n= 84 + 3  \n= **87**"
+    },
+    {
+      "id": "direct_scalar_S4",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "160",
+      "detail": "expected=160 in response=56 + 54 + 50 = **160**",
+      "response_preview": "56 + 54 + 50 = **160**"
+    },
+    {
+      "id": "direct_scalar_S5",
+      "category": "direct_math",
+      "subtype": "scalar",
+      "filler_tokens": 0,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=1000 - 13 * 37 = 1000 - 481 = **519**",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = **519**"
+    },
+    {
+      "id": "delayed_mat2x2_M1_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[23, 29], [46, 58]]",
+      "response_preview": "[[23, 29], [46, 58]]"
+    },
+    {
+      "id": "delayed_mat2x2_M1_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[23, 29], [46, 58]]",
+      "response_preview": "[[23, 29], [46, 58]]"
+    },
+    {
+      "id": "delayed_mat2x2_M1_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[21,29],[32,44]]",
+      "detail": "expected=[[21,29],[32,44]] last_line=[[23, 29], [46, 58]]",
+      "response_preview": "[[23, 29], [46, 58]]"
+    },
+    {
+      "id": "delayed_mat2x2_M2_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19, 22], [43, 50]]",
+      "response_preview": "[[19, 22], [43, 50]]"
+    },
+    {
+      "id": "delayed_mat2x2_M2_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19, 22], [43, 50]]",
+      "response_preview": "[[19, 22], [43, 50]]"
+    },
+    {
+      "id": "delayed_mat2x2_M2_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": true,
+      "expected": "[[19,22],[43,50]]",
+      "detail": "expected=[[19,22],[43,50]] last_line=[[19, 22], [43, 50]]",
+      "response_preview": "[[19, 22], [43, 50]]"
+    },
+    {
+      "id": "delayed_mat2x2_M3_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 2], [10, 17]]",
+      "response_preview": "[[8, 2], [10, 17]]"
+    },
+    {
+      "id": "delayed_mat2x2_M3_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 2], [10, 17]]",
+      "response_preview": "[[8, 2], [10, 17]]"
+    },
+    {
+      "id": "delayed_mat2x2_M3_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[8,2],[10,16]]",
+      "detail": "expected=[[8,2],[10,16]] last_line=[[8, 2], [14, 17]]",
+      "response_preview": "[[8, 2], [14, 17]]"
+    },
+    {
+      "id": "delayed_mat2x2_M4_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[23, 20], [46, 24]]",
+      "response_preview": "[[23, 20], [46, 24]]"
+    },
+    {
+      "id": "delayed_mat2x2_M4_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[23, 12],[46, 24]]",
+      "response_preview": "[[23, 12],[46, 24]]"
+    },
+    {
+      "id": "delayed_mat2x2_M4_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[23,20],[44,8]]",
+      "detail": "expected=[[23,20],[44,8]] last_line=[[23, 12],[47, 6]]",
+      "response_preview": "[[23, 12],[47, 6]]"
+    },
+    {
+      "id": "delayed_mat2x2_M5_200t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[3,4],[5,6]]",
+      "response_preview": "[[3,4],[5,6]]"
+    },
+    {
+      "id": "delayed_mat2x2_M5_500t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[4, 6], [5, 9]]",
+      "response_preview": "[[4, 6], [5, 9]]"
+    },
+    {
+      "id": "delayed_mat2x2_M5_1000t",
+      "category": "delayed_math",
+      "subtype": "matrix_2x2",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "[[5,6],[3,4]]",
+      "detail": "expected=[[5,6],[3,4]] last_line=[[4, 6], [5, 8]]",
+      "response_preview": "[[4, 6], [5, 8]]"
+    },
+    {
+      "id": "delayed_scalar_S1_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=399",
+      "response_preview": "399"
+    },
+    {
+      "id": "delayed_scalar_S1_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=465",
+      "response_preview": "465"
+    },
+    {
+      "id": "delayed_scalar_S1_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "405",
+      "detail": "expected=405 in response=465",
+      "response_preview": "465"
+    },
+    {
+      "id": "delayed_scalar_S2_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "113",
+      "detail": "expected=113 in response=81 + 32 = 113",
+      "response_preview": "81 + 32 = 113"
+    },
+    {
+      "id": "delayed_scalar_S2_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "113",
+      "detail": "expected=113 in response=83",
+      "response_preview": "83"
+    },
+    {
+      "id": "delayed_scalar_S2_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "113",
+      "detail": "expected=113 in response=83",
+      "response_preview": "83"
+    },
+    {
+      "id": "delayed_scalar_S3_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": false,
+      "expected": "87",
+      "detail": "expected=87 in response=103",
+      "response_preview": "103"
+    },
+    {
+      "id": "delayed_scalar_S3_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": false,
+      "expected": "87",
+      "detail": "expected=87 in response=107",
+      "response_preview": "107"
+    },
+    {
+      "id": "delayed_scalar_S3_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": false,
+      "expected": "87",
+      "detail": "expected=87 in response=103",
+      "response_preview": "103"
+    },
+    {
+      "id": "delayed_scalar_S4_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "160",
+      "detail": "expected=160 in response=7*8 + 6*9 + 5*10 = 56 + 54 + 50 = 160",
+      "response_preview": "7*8 + 6*9 + 5*10 = 56 + 54 + 50 = 160"
+    },
+    {
+      "id": "delayed_scalar_S4_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": true,
+      "expected": "160",
+      "detail": "expected=160 in response=7*8 + 6*9 + 5*10 = 56 + 54 + 50 = 160",
+      "response_preview": "7*8 + 6*9 + 5*10 = 56 + 54 + 50 = 160"
+    },
+    {
+      "id": "delayed_scalar_S4_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": true,
+      "expected": "160",
+      "detail": "expected=160 in response=7*8 + 6*9 + 5*10 = 56 + 54 + 50 = 160",
+      "response_preview": "7*8 + 6*9 + 5*10 = 56 + 54 + 50 = 160"
+    },
+    {
+      "id": "delayed_scalar_S5_200t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 200,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=1000 - 13 * 37 = 1000 - 481 = 519",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = 519"
+    },
+    {
+      "id": "delayed_scalar_S5_500t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 500,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=**Answer:** 519",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = 519\n\n**Answer:** 519"
+    },
+    {
+      "id": "delayed_scalar_S5_1000t",
+      "category": "delayed_math",
+      "subtype": "scalar",
+      "filler_tokens": 1000,
+      "passed": true,
+      "expected": "519",
+      "detail": "expected=519 in response=1000 - 13 * 37 = 1000 - 481 = 519",
+      "response_preview": "1000 - 13 * 37 = 1000 - 481 = 519"
+    }
+  ]
+}
