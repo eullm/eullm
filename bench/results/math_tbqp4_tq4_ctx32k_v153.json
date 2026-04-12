@@ -1,0 +1,46 @@
+{
+  "label": "tbqp4_tq4_ctx32k_v153",
+  "model": "qwen3-14b",
+  "url": "http://localhost:11434",
+  "temperature": 0.0,
+  "ctx_size": 32768,
+  "cache_type_k": "tbqp4_1",
+  "cache_type_v": "tbq4_1",
+  "note": "TurboQuant v1.5.3, K=TBQP4_1 (Direct Sign, 4-bit), V=TBQ4_1 (MSE, 4-bit), flash-attn on. 5 mat2x2 failures at filler>=1000t. Reconstructed from conversation transcript — per-test detail unavailable.",
+  "reconstructed": true,
+  "filler_levels": [200, 500, 1000, 1500, 2000, 2500],
+  "timestamp": "2026-04-12T16:00:00+0200",
+  "score": {
+    "passed": 86,
+    "total": 91,
+    "percent": 94.5
+  },
+  "timing": {
+    "total_wall_s": 978.4,
+    "latency_mean_s": 10.8,
+    "latency_min_s": 0.8,
+    "latency_max_s": 35.8,
+    "tokens_per_sec_mean": 48.2,
+    "tokens_per_sec_min": 8.4,
+    "tokens_per_sec_max": 59.6
+  },
+  "categories": {
+    "direct_math": {
+      "pass": 13,
+      "total": 13
+    },
+    "delayed_math": {
+      "pass": 73,
+      "total": 78
+    }
+  },
+  "by_filler": {
+    "200t":  {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "500t":  {"mat2x2": {"pass": 5, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "1000t": {"mat2x2": {"pass": 4, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "1500t": {"mat2x2": {"pass": 4, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "2000t": {"mat2x2": {"pass": 4, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}},
+    "2500t": {"mat2x2": {"pass": 3, "total": 5}, "mat3x3": {"pass": 3, "total": 3}, "scalar": {"pass": 5, "total": 5}}
+  },
+  "results": []
+}
