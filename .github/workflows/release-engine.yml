@@ -279,7 +279,12 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          CMAKE_CUDA_ARCHITECTURES: "120"
+          # TurboQuant v1.5.3 compiles 100+ fattn-vec kernel instantiations (all TBQ
+          # type/head_dim combos). Some D=576 or cross-head variants hit register/shmem
+          # limits on sm_120 (Blackwell) with CUDA 12.8. Use sm_89 (Ada Lovelace) to
+          # produce PTX that JIT-compiles natively on sm_120 at first run — cached after,
+          # zero runtime overhead. sm_120 native stays in build-cuda (base llama.cpp only).
+          CMAKE_CUDA_ARCHITECTURES: "89"
 
       - name: Test TurboQuant module
         run: |

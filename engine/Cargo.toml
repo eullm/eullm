@@ -52,6 +52,6 @@ predicates = "3"
 
 # ── TurboQuant backend (experimental) ───────────────────────────
 # To enable TurboQuant, run: scripts/setup-turboquant.sh
-# The script vendors llama-cpp-sys-2 with AmesianX/TurboQuant v1.5.2 and
+# The script vendors llama-cpp-sys-2 with AmesianX/TurboQuant v1.5.3 and
 # appends [patch.crates-io] to this file automatically.
 # Then build with: cargo build --release --features "cuda turboquant_native"
