@@ -1200,7 +1200,12 @@ def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
 
 
 def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
-    """Scarica la listing page con Playwright e segue i link alle sentenze."""
+    """Scarica sentenze da cortedicassazione.it con Playwright.
+
+    La listing page è JS-rendered e restituisce pagina blank — usiamo la
+    HOMEPAGE come entry point: ha le ultime ~9 sentenze come HTML statico
+    baked direttamente, poi le seguiamo con Playwright per il testo completo.
+    """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
@@ -1209,14 +1214,20 @@ def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
     sezione_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
     records: list[dict] = []
 
-    logger.info("  cortedicassazione.it (Playwright): %s", CASSAZIONE_LISTING_URL)
+    logger.info("  cortedicassazione.it (Playwright homepage): %s", CASSAZIONE_BASE)
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            page = browser.new_page(locale="it-IT")
-            # domcontentloaded evita timeout su siti con analytics pesanti
-            page.goto(CASSAZIONE_LISTING_URL, wait_until="domcontentloaded", timeout=45_000)
-            page.wait_for_timeout(2000)
+            page = browser.new_page(
+                locale="it-IT",
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            # Homepage: HTML statico con le ultime sentenze baked nel DOM
+            page.goto(CASSAZIONE_BASE, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(1500)
 
             # Raccoglie link alle sentenze della sezione richiesta
             js_filter = f"h.includes('{sezione_pattern}') && h.includes('contentId')"
@@ -1224,7 +1235,7 @@ def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
                 "a[href]",
                 f"els => els.map(e => e.href).filter(h => h && ({js_filter}))",
             )
-            # Se non troviamo link di sezione, prendi tutti i dettaglio
+            # Fallback: qualsiasi link dettaglio sentenza
             if not links:
                 all_patterns = " || ".join(
                     f"h.includes('{p}')" for p in CASSAZIONE_DETAIL_PATTERNS
@@ -1238,8 +1249,8 @@ def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
                     "a[href]", "els => els.slice(0, 20).map(e => e.href)"
                 )
                 logger.warning(
-                    "  cortedicassazione.it: 0 link trovati. "
-                    "Sample pagina: %s", all_links
+                    "  cortedicassazione.it: 0 link trovati in homepage. "
+                    "Sample: %s", all_links
                 )
             else:
                 logger.info("  cortedicassazione.it: %d link trovati", len(links))
@@ -1283,16 +1294,21 @@ def _fetch_cassazione_homepage_static(source: CassazioneSource) -> list[dict]:
     sezione_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
     records: list[dict] = []
 
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
     try:
-        resp = requests.get(
-            CASSAZIONE_BASE,
-            headers={
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-                "Accept": "text/html,application/xhtml+xml",
-                "Accept-Language": "it-IT,it;q=0.9",
-            },
-            timeout=20,
-        )
+        session = requests.Session()
+        session.headers.update(_HEADERS)
+        resp = session.get(CASSAZIONE_BASE, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
         links = [
@@ -1309,11 +1325,7 @@ def _fetch_cassazione_homepage_static(source: CassazioneSource) -> list[dict]:
         for href in unique_links[: source.max_sentences]:
             full_url = href if href.startswith("http") else f"{CASSAZIONE_BASE}{href}"
             try:
-                r2 = requests.get(
-                    full_url,
-                    headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "it-IT"},
-                    timeout=20,
-                )
+                r2 = session.get(full_url, timeout=20)
                 r2.raise_for_status()
                 rec = _parse_cassazione_page(r2.text, source.id, full_url)
                 if rec:
