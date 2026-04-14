@@ -140,7 +140,13 @@ _ITALGIURE_DB: dict[str, dict[str, str]] = {
 
 # URL reali verificati dal DOM (struttura /it/, non /corte-di-cassazione/it/)
 CASSAZIONE_BASE = "https://www.cortedicassazione.it"
-CASSAZIONE_LISTING_URL = f"{CASSAZIONE_BASE}/it/ultime_sent_ord_e_questioni.page"
+# URL listing verificati dal DOM reale — paginazione via frame3_item=N
+# Totali indicativi: civile ~301, penale ~448 (aggiornati periodicamente)
+CASSAZIONE_LISTING_URLS = {
+    "civile": f"{CASSAZIONE_BASE}/it/giurisprudenza_civile.page",
+    "penale": f"{CASSAZIONE_BASE}/it/giurisprudenza_penale.page",
+    "lavoro": f"{CASSAZIONE_BASE}/it/giurisprudenza_civile.page",  # sezione lavoro → civile
+}
 # Pattern href per sentenze individuali
 CASSAZIONE_DETAIL_PATTERNS = (
     "civile_dettaglio",
@@ -148,11 +154,10 @@ CASSAZIONE_DETAIL_PATTERNS = (
     "quc_dettaglio",
     "rlc_dettaglio",
 )
-# Filtro per sezione
 CASSAZIONE_SEZIONE_PATTERN = {
     "civile": "civile_dettaglio",
     "penale": "penale_dettaglio",
-    "lavoro": "civile_dettaglio",   # sezione lavoro usa stesso template civile
+    "lavoro": "civile_dettaglio",
 }
 
 # Sentenze Cassazione (uso interno — non pubblicare il dataset grezzo, GDPR)
@@ -1184,18 +1189,93 @@ def fetch_cassazione(source: CassazioneSource) -> list[dict]:
 
 
 def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
-    """Scarica sentenze dal sito ufficiale cortedicassazione.it (accesso libero).
+    """Scarica sentenze da cortedicassazione.it via paginazione frame3_item.
 
-    Il sito pubblica sentenze selezionate in HTML senza richiedere login.
-    La listing page è JS-rendered → usa Playwright.
-    URL struttura verificata: /it/ultime_sent_ord_e_questioni.page
-    Link individuali: civile_dettaglio.page, penale_dettaglio.page, ecc.
+    Le listing page /it/giurisprudenza_*.page sono accessibili via requests
+    (HTML statico con link baked). Paginazione: ?frame3_item=N (N=1,2,3,...).
+    ~9-12 sentenze per pagina, nessun JS richiesto.
     """
-    # Prima prova con Playwright (pagina JS-rendered)
-    records = _fetch_cassazione_playwright(source)
+    records = _fetch_cassazione_paged(source)
     if not records:
-        # Fallback: estrae le sentenze baked nell'homepage (HTML statico)
-        records = _fetch_cassazione_homepage_static(source)
+        # Fallback Playwright se requests è bloccato
+        records = _fetch_cassazione_playwright(source)
+    return records
+
+
+def _fetch_cassazione_paged(source: CassazioneSource) -> list[dict]:
+    """Scarica sentenze paginando /it/giurisprudenza_*.page?frame3_item=N.
+
+    Nessun JS richiesto — le listing page servono HTML statico con link baked.
+    Itera finché la pagina non restituisce link nuovi.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    listing_url = CASSAZIONE_LISTING_URLS.get(
+        source.sezione, CASSAZIONE_LISTING_URLS["penale"]
+    )
+    detail_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+    })
+
+    all_links: list[str] = []
+    seen_links: set[str] = set()
+
+    logger.info("  cortedicassazione.it paginazione: %s", listing_url)
+    for page_n in range(1, 200):  # max 200 pagine (~2400 sentenze)
+        try:
+            resp = session.get(
+                listing_url, params={"frame3_item": page_n}, timeout=20
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("  cortedicassazione.it pagina %d errore: %s", page_n, exc)
+            break
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        page_links = [
+            a["href"] for a in soup.find_all("a", href=True)
+            if detail_pattern in a.get("href", "") and "contentId" in a.get("href", "")
+        ]
+        # Deduplicazione
+        new_links = [h for h in page_links if h not in seen_links]
+        for h in new_links:
+            seen_links.add(h)
+        if not new_links:
+            logger.info("  cortedicassazione.it: fine a pagina %d (%d link totali)",
+                        page_n, len(all_links))
+            break
+        all_links.extend(new_links)
+        logger.info("  cortedicassazione.it: pagina %d → +%d link (%d totali)",
+                    page_n, len(new_links), len(all_links))
+        if len(all_links) >= source.max_sentences:
+            break
+
+    # Scarica testo di ogni sentenza
+    records: list[dict] = []
+    for href in all_links[: source.max_sentences]:
+        full_url = href if href.startswith("http") else f"{CASSAZIONE_BASE}{href}"
+        try:
+            r2 = session.get(full_url, timeout=20)
+            r2.raise_for_status()
+            rec = _parse_cassazione_page(r2.text, source.id, full_url)
+            if rec:
+                records.append(rec)
+        except Exception:
+            continue
+
+    logger.info("  cortedicassazione.it: %d sentenze scaricate", len(records))
     return records
 
 
