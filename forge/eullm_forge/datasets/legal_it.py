@@ -138,10 +138,22 @@ _ITALGIURE_DB: dict[str, dict[str, str]] = {
     "tributaria": {"sentenze": "snciv", "massime": "civile"},
 }
 
-# Fallback: massime pubbliche dal sito ufficiale Cassazione
-CASSAZIONE_MASSIME_URL = (
-    "https://www.cortedicassazione.it/corte-di-cassazione/it/sentenze.page"
+# URL reali verificati dal DOM (struttura /it/, non /corte-di-cassazione/it/)
+CASSAZIONE_BASE = "https://www.cortedicassazione.it"
+CASSAZIONE_LISTING_URL = f"{CASSAZIONE_BASE}/it/ultime_sent_ord_e_questioni.page"
+# Pattern href per sentenze individuali
+CASSAZIONE_DETAIL_PATTERNS = (
+    "civile_dettaglio",
+    "penale_dettaglio",
+    "quc_dettaglio",
+    "rlc_dettaglio",
 )
+# Filtro per sezione
+CASSAZIONE_SEZIONE_PATTERN = {
+    "civile": "civile_dettaglio",
+    "penale": "penale_dettaglio",
+    "lavoro": "civile_dettaglio",   # sezione lavoro usa stesso template civile
+}
 
 # Sentenze Cassazione (uso interno — non pubblicare il dataset grezzo, GDPR)
 @dataclass
@@ -1175,58 +1187,71 @@ def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
     """Scarica sentenze dal sito ufficiale cortedicassazione.it (accesso libero).
 
     Il sito pubblica sentenze selezionate in HTML senza richiedere login.
+    La listing page è JS-rendered → usa Playwright.
+    URL struttura verificata: /it/ultime_sent_ord_e_questioni.page
+    Link individuali: civile_dettaglio.page, penale_dettaglio.page, ecc.
     """
+    # Prima prova con Playwright (pagina JS-rendered)
+    records = _fetch_cassazione_playwright(source)
+    if not records:
+        # Fallback: estrae le sentenze baked nell'homepage (HTML statico)
+        records = _fetch_cassazione_homepage_static(source)
+    return records
+
+
+def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
+    """Scarica la listing page con Playwright e segue i link alle sentenze."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return []
 
+    sezione_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
     records: list[dict] = []
-    # URL sezione-specifica per cortedicassazione.it
-    sezione_urls = {
-        "civile": (
-            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
-            "sentenze_civili.page"
-        ),
-        "penale": (
-            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
-            "sentenze_penali.page"
-        ),
-        "lavoro": (
-            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
-            "sentenze_lavoro.page"
-        ),
-    }
-    url = sezione_urls.get(source.sezione, CASSAZIONE_MASSIME_URL)
-    logger.info("  cortedicassazione.it: %s", url)
 
+    logger.info("  cortedicassazione.it (Playwright): %s", CASSAZIONE_LISTING_URL)
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
             page = browser.new_page(locale="it-IT")
-            page.goto(url, wait_until="networkidle", timeout=60_000)
+            # domcontentloaded evita timeout su siti con analytics pesanti
+            page.goto(CASSAZIONE_LISTING_URL, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(2000)
 
-            # Raccoglie link a sentenze individuali
+            # Raccoglie link alle sentenze della sezione richiesta
+            js_filter = f"h.includes('{sezione_pattern}') && h.includes('contentId')"
             links = page.eval_on_selector_all(
                 "a[href]",
-                "els => els.map(e => e.href).filter("
-                "h => h && (h.includes('sentenz') || h.includes('ordinanz') "
-                "|| h.includes('pronunce') || h.includes('decisioni')))",
+                f"els => els.map(e => e.href).filter(h => h && ({js_filter}))",
             )
+            # Se non troviamo link di sezione, prendi tutti i dettaglio
             if not links:
-                # Diagnostica: mostra tutti i link della pagina
-                all_links = page.eval_on_selector_all(
-                    "a[href]", "els => els.slice(0,15).map(e => e.href)"
+                all_patterns = " || ".join(
+                    f"h.includes('{p}')" for p in CASSAZIONE_DETAIL_PATTERNS
                 )
-                logger.info("  cortedicassazione.it: 0 link sentenze. "
-                            "Sample link pagina: %s", all_links)
+                links = page.eval_on_selector_all(
+                    "a[href]",
+                    f"els => els.map(e => e.href).filter(h => h && ({all_patterns}))",
+                )
+            if not links:
+                all_links = page.eval_on_selector_all(
+                    "a[href]", "els => els.slice(0, 20).map(e => e.href)"
+                )
+                logger.warning(
+                    "  cortedicassazione.it: 0 link trovati. "
+                    "Sample pagina: %s", all_links
+                )
             else:
                 logger.info("  cortedicassazione.it: %d link trovati", len(links))
 
-            for href in links[: source.max_sentences]:
+            # Deduplicazione (ogni link appare due volte nel DOM)
+            seen: set[str] = set()
+            unique_links = [h for h in links if h not in seen and not seen.add(h)]
+
+            for href in unique_links[: source.max_sentences]:
                 full_url = (
                     href if href.startswith("http")
-                    else f"https://www.cortedicassazione.it{href}"
+                    else f"{CASSAZIONE_BASE}{href}"
                 )
                 try:
                     page.goto(full_url, wait_until="domcontentloaded", timeout=30_000)
@@ -1238,7 +1263,65 @@ def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
 
             browser.close()
     except Exception as exc:
-        logger.warning("cortedicassazione.it errore: %s", exc)
+        logger.warning("cortedicassazione.it Playwright errore: %s", exc)
+
+    return records
+
+
+def _fetch_cassazione_homepage_static(source: CassazioneSource) -> list[dict]:
+    """Fallback: estrae sentenze baked nell'homepage (HTML statico, no JS).
+
+    La homepage cortedicassazione.it include sempre le ultime ~9 sentenze
+    come HTML statico, accessibili anche senza JS.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    sezione_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
+    records: list[dict] = []
+
+    try:
+        resp = requests.get(
+            CASSAZIONE_BASE,
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "it-IT,it;q=0.9",
+            },
+            timeout=20,
+        )
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        links = [
+            a["href"] for a in soup.find_all("a", href=True)
+            if sezione_pattern in a["href"] and "contentId" in a["href"]
+        ]
+        seen: set[str] = set()
+        unique_links = [h for h in links if h not in seen and not seen.add(h)]
+        logger.info(
+            "  cortedicassazione.it (homepage fallback): %d link %s",
+            len(unique_links), sezione_pattern
+        )
+
+        for href in unique_links[: source.max_sentences]:
+            full_url = href if href.startswith("http") else f"{CASSAZIONE_BASE}{href}"
+            try:
+                r2 = requests.get(
+                    full_url,
+                    headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "it-IT"},
+                    timeout=20,
+                )
+                r2.raise_for_status()
+                rec = _parse_cassazione_page(r2.text, source.id, full_url)
+                if rec:
+                    records.append(rec)
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.warning("cortedicassazione.it homepage fallback errore: %s", exc)
 
     return records
 
