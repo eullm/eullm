@@ -1419,7 +1419,7 @@ def _fetch_cassazione_homepage_static(source: CassazioneSource) -> list[dict]:
 
 
 def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict]:
-    """Estrae il testo da una pagina sentenza di italgiure.
+    """Estrae il testo da una pagina sentenza di cortedicassazione.it.
 
     Le sentenze hanno struttura:
       - Header: sezione, numero, data
@@ -1434,11 +1434,30 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Rimuovi nav/script/style
+    # Rimuovi chrome UI: nav, header, footer, script, style, sezione allegati
     for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
         tag.decompose()
+    # Rimuovi sezioni allegati / download (contengono "Scarica Documento", dimensioni file)
+    for tag in soup.find_all(True):
+        txt = tag.get_text(strip=True).lower()
+        if any(x in txt for x in ("scarica documento", "allegato", "scarica il documento")):
+            if len(txt) < 200:  # solo tag piccoli (non rimuove l'intera pagina)
+                tag.decompose()
 
     full_text = soup.get_text(separator="\n", strip=True)
+
+    # Rimuovi righe di UI residue (dimensioni file, etichette bottoni)
+    import re as _re
+    lines = full_text.splitlines()
+    clean_lines = [
+        l for l in lines
+        if not _re.match(
+            r"^\s*(\d+\s*[KkMm][Bb]|Allegato|Scarica|VAI AL DOCUMENTO|Home|Cookie|Privacy"
+            r"|Cerca\b|Menu|Torna|Condividi|Stampa|Follow)\b",
+            l,
+        )
+    ]
+    full_text = "\n".join(clean_lines)
 
     # Estratto minimo: deve contenere testo legale sostanziale
     if len(full_text) < 500 or not any(
@@ -1446,8 +1465,7 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
     ):
         return None
 
-    # Prova a isolare la motivazione (testo dopo "FATTO" o "DIRITTO")
-    # Le sentenze italiane hanno sezioni ben marcate in maiuscolo
+    # Isola la motivazione (testo dopo "FATTO" o "DIRITTO")
     body = full_text
     for marker in ("MOTIVI DELLA DECISIONE", "DIRITTO", "FATTO E DIRITTO", "FATTO"):
         idx = full_text.upper().find(marker)
@@ -1457,7 +1475,7 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
 
     body = clean_text(body)
     if len(body) < 300:
-        body = clean_text(full_text)  # usa tutto se il ritaglio è troppo corto
+        body = clean_text(full_text)
 
     if len(body) < 300:
         return None
