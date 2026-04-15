@@ -1419,13 +1419,19 @@ def _fetch_cassazione_homepage_static(source: CassazioneSource) -> list[dict]:
 
 
 def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict]:
-    """Estrae il testo da una pagina sentenza di cortedicassazione.it.
+    """Estrae testo strutturato da una pagina sentenza di cortedicassazione.it.
 
-    Le sentenze hanno struttura:
-      - Header: sezione, numero, data
-      - Sezioni "FATTO", "DIRITTO"/"MOTIVI", "P.Q.M."
+    La pagina contiene: metadata (sezione, numero, data, materia, oggetto,
+    presidente, relatore) + "L'esito in sintesi" (riassunto redatto dalla Corte).
+    Il testo integrale è nel PDF allegato — non scaricato qui.
 
-    Per il training estraiamo l'intera motivazione (DIRITTO + FATTO).
+    Struttura estratta:
+      Dettaglio Sentenza <tipo>
+      <sezione> | Data: <data> | Numero: <num>
+      Oggetto: <oggetto>
+      Presidente: <nome> | Relatore: <nome>
+      L'esito in sintesi
+      <testo sintesi>
     """
     try:
         from bs4 import BeautifulSoup
@@ -1434,55 +1440,49 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Rimuovi chrome UI: nav, header, footer, script, style, sezione allegati
-    for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
+    # Rimuovi chrome: nav, header, footer, script, style, form di ricerca
+    for tag in soup.find_all(["nav", "header", "footer", "script", "style",
+                               "noscript", "form"]):
         tag.decompose()
-    # Rimuovi sezioni allegati / download (contengono "Scarica Documento", dimensioni file)
-    for tag in soup.find_all(True):
-        txt = tag.get_text(strip=True).lower()
-        if any(x in txt for x in ("scarica documento", "allegato", "scarica il documento")):
-            if len(txt) < 200:  # solo tag piccoli (non rimuove l'intera pagina)
-                tag.decompose()
 
     full_text = soup.get_text(separator="\n", strip=True)
 
-    # Rimuovi righe di UI residue (dimensioni file, etichette bottoni)
-    import re as _re
-    lines = full_text.splitlines()
-    clean_lines = [
-        l for l in lines
-        if not _re.match(
-            r"^\s*(\d+\s*[KkMm][Bb]|Allegato|Scarica|VAI AL DOCUMENTO|Home|Cookie|Privacy"
-            r"|Cerca\b|Menu|Torna|Condividi|Stampa|Follow)\b",
+    # Ritaglia dalla riga "Dettaglio Sentenza" (inizio contenuto reale)
+    start_markers = ("Dettaglio Sentenza", "DETTAGLIO SENTENZA")
+    body_start = -1
+    for m in start_markers:
+        idx = full_text.find(m)
+        if idx != -1:
+            body_start = idx
+            break
+    if body_start == -1:
+        return None  # pagina non riconosciuta
+    content = full_text[body_start:]
+
+    # Ferma prima della sezione allegati
+    for stop in ("Allegato\n", "Scarica Documento", "Questo sito utilizza cookie",
+                 "Privacy Policy", "Torna su"):
+        idx = content.find(stop)
+        if idx != -1:
+            content = content[:idx]
+
+    # Pulizia righe boilerplate residue
+    lines = [
+        l for l in content.splitlines()
+        if l.strip() and not re.match(
+            r"^\s*(Vai al|Cerca\b|Menu\b|Home\b|Cookie\b|Condividi|Stampa|Follow"
+            r"|\d+\s*[KkMm][Bb])\b",
             l,
         )
     ]
-    full_text = "\n".join(clean_lines)
+    body = clean_text("\n".join(lines))
 
-    # Estratto minimo: deve contenere testo legale sostanziale
-    if len(full_text) < 500 or not any(
-        kw in full_text for kw in ("Corte di Cassazione", "Cassazione", "ricorso", "motivo")
-    ):
+    if len(body) < 200:
         return None
 
-    # Isola la motivazione (testo dopo "FATTO" o "DIRITTO")
-    body = full_text
-    for marker in ("MOTIVI DELLA DECISIONE", "DIRITTO", "FATTO E DIRITTO", "FATTO"):
-        idx = full_text.upper().find(marker)
-        if idx != -1:
-            body = full_text[idx:]
-            break
-
-    body = clean_text(body)
-    if len(body) < 300:
-        body = clean_text(full_text)
-
-    if len(body) < 300:
-        return None
-
-    # Numero sentenza dall'URL o dall'HTML
-    sentence_id = re.search(r"[/=](\d{4,})", url)
-    sid = sentence_id.group(1) if sentence_id else url.split("/")[-1]
+    # Numero sentenza dall'URL
+    sentence_id = re.search(r"contentId=([A-Z0-9]+)", url)
+    sid = sentence_id.group(1) if sentence_id else url.split("=")[-1]
 
     return {
         "text": body,
