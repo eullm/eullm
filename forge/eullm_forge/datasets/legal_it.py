@@ -153,8 +153,10 @@ class CassazioneSource:
     description: str = ""
 
 
-# italgiure.giustizia.it richiede abbonamento a pagamento — non usabile.
 # Sorgenti gratuite per giurisprudenza italiana:
+#   - italgiure.giustizia.it/sncass/ (SentenzeWeb): full-text di tutte le
+#     sentenze Cassazione civili+penali dal 2011, accesso pubblico gratuito.
+#     Vedi modulo datasets.italgiure (fetch massivo via Solr).
 #   - cortedicassazione.it  : sentenze selezionate + massimario (libero)
 #   - cortecostituzionale.it: TUTTE le sentenze CC, API pubblica ECLI (libero)
 CASSAZIONE_SOURCES: list[CassazioneSource] = [
@@ -1117,10 +1119,11 @@ def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Giurisprudenza — sorgenti gratuite
 #
-# italgiure.giustizia.it richiede abbonamento a pagamento → non usabile.
-# Sorgenti libere:
-#   1. cortedicassazione.it — sentenze selezionate Cassazione (HTML)
-#   2. cortecostituzionale.it — TUTTE le sentenze CC (API pubblica)
+# Sorgenti libere con full-text:
+#   1. italgiure.giustizia.it/sncass/ (SentenzeWeb) — full-text Cassazione
+#      civili+penali dal 2011. Vedi datasets.italgiure.fetch_italgiure().
+#   2. cortedicassazione.it — sentenze selezionate Cassazione (solo sintesi HTML)
+#   3. cortecostituzionale.it — TUTTE le sentenze CC (API pubblica ECLI)
 # ---------------------------------------------------------------------------
 
 def fetch_cassazione(source: CassazioneSource) -> list[dict]:
