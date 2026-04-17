@@ -1,15 +1,25 @@
 """Fetch Cassazione sentences from italgiure.giustizia.it (SentenzeWeb).
 
 Public, free, no-registration access to the full text of every civil and
-criminal Cassazione ruling from 2011 onwards. The JSON response already
-contains the OCR'd full text in the ``ocr`` field — no PDF download needed.
+criminal Cassazione ruling **from 2021 onwards**. Earlier years are NOT in
+this collection — SentenzeWeb was launched in 2021 and only covers that
+window. Pre-2021 sentences exist only as Massimario summaries (``kind:sic``,
+~1.4M docs, short abstracts, not full text).
+
+The JSON response already contains the OCR'd full text in the ``ocr`` field
+— no PDF download needed.
 
 Backend: Apache Solr behind an ISAPI (hc.dll) handler on IIS.
 Endpoint: /sncass/isapi/hc.dll/sn.solr/sn-collection/select?app.query
 
+Coverage (verified via Solr facets, April 2026):
+    snciv (civili): 185,994 docs   snpen (penali): 237,310 docs
+    2021: 64,968    2022: 87,936    2023: 88,409
+    2024: 83,024    2025: 76,917    2026: 22,050 (in progress)
+    Total full-text corpus: ~423K sentences, ~2.8 GB JSONL.
+
 Design notes:
-  * Dataset size is ~1.2M documents, ~15 GB of text. Records are streamed to
-    a JSONL file, never accumulated in memory.
+  * Records are streamed to a JSONL file, never accumulated in memory.
   * Progress is checkpointed by (kind, anno, start) so runs can be resumed.
   * A warmup GET to /sncass/ establishes the ASP.NET session cookie.
   * Rate-limited (default 1.5s between requests) to be a polite client.
@@ -286,7 +296,7 @@ def _iter_query_docs(
 def fetch_italgiure(
     output_dir: str | Path,
     *,
-    years: Iterable[int] = range(2011, 2027),
+    years: Iterable[int] = range(2021, 2027),
     kinds: Iterable[str] = DEFAULT_KINDS,
     sezione: Optional[int] = None,
     max_docs_per_query: Optional[int] = None,
@@ -407,6 +417,14 @@ def fetch_italgiure(
                     progress_path.write_text(
                         json.dumps(progress, indent=2), encoding="utf-8"
                     )
+                    # Legit empty slice (pre-2021): drop the 0-byte file so
+                    # the output directory doesn't fill with noise.
+                    if written == 0 and out_path.exists() and out_path.stat().st_size == 0:
+                        out_path.unlink()
+                        logger.info(
+                            "italgiure [%s] numFound=0 — removed empty JSONL",
+                            slug,
+                        )
                 else:
                     logger.warning(
                         "italgiure [%s] stopped at offset=%d/%d — "

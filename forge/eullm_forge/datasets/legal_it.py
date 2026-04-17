@@ -171,8 +171,9 @@ class CassazioneSource:
 
 
 # Sorgenti gratuite per giurisprudenza italiana:
-#   - italgiure.giustizia.it/sncass/ (SentenzeWeb): full-text di tutte le
-#     sentenze Cassazione civili+penali dal 2011, accesso pubblico gratuito.
+#   - italgiure.giustizia.it/sncass/ (SentenzeWeb): full-text delle sentenze
+#     Cassazione civili+penali dal 2021 (~423K doc, ~2.8GB). Pre-2021 non
+#     disponibile su SentenzeWeb — solo massime (kind:sic, sintesi brevi).
 #     Vedi modulo datasets.italgiure (fetch massivo via Solr).
 #   - cortedicassazione.it  : sentenze selezionate + massimario (libero)
 #   - cortecostituzionale.it: TUTTE le sentenze CC, API pubblica ECLI (libero)
@@ -1138,7 +1139,8 @@ def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
 #
 # Sorgenti libere con full-text:
 #   1. italgiure.giustizia.it/sncass/ (SentenzeWeb) — full-text Cassazione
-#      civili+penali dal 2011. Vedi datasets.italgiure.fetch_italgiure().
+#      civili+penali dal 2021 (SentenzeWeb non copre anni precedenti).
+#      Vedi datasets.italgiure.fetch_italgiure().
 #   2. cortedicassazione.it — sentenze selezionate Cassazione (solo sintesi HTML)
 #   3. cortecostituzionale.it — TUTTE le sentenze CC (API pubblica ECLI)
 # ---------------------------------------------------------------------------
