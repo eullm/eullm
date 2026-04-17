@@ -68,19 +68,35 @@ class ItalgiureQuery:
         return s
 
 
-def make_italgiure_session():
-    """Create a requests.Session warmed up with an ASP.NET session cookie."""
+def make_italgiure_session(verify: bool | str = True):
+    """Create a requests.Session warmed up with an ASP.NET session cookie.
+
+    Args:
+        verify: Passed to requests. ``True`` verifies TLS certificates using
+            the system/certifi CA bundle (default, recommended). A string is
+            treated as a path to a custom CA bundle. ``False`` disables
+            verification entirely — use only as a last resort on machines
+            with a broken CA store; the session attacker can MITM you.
+    """
     import requests
 
     from .base import DEFAULT_HEADERS
 
     sess = requests.Session()
+    sess.verify = verify
     sess.headers.update({
         **DEFAULT_HEADERS,
         "Accept": "application/json,text/plain,*/*",
         "X-Requested-With": "XMLHttpRequest",
         "Referer": WARMUP_URL,
     })
+    if verify is False:
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        logger.warning(
+            "italgiure: TLS verification DISABLED — fix your CA store "
+            "(pip install -U certifi) instead of relying on this."
+        )
     # Warmup: the Solr endpoint rejects requests without cookiesession1
     try:
         r = sess.get(WARMUP_URL, timeout=30)
@@ -248,6 +264,7 @@ def fetch_italgiure(
     rate_limit_sec: float = 1.5,
     rows: int = SOLR_MAX_ROWS,
     session=None,
+    verify: bool | str = True,
 ) -> Path:
     """Download Cassazione sentences from italgiure.giustizia.it.
 
@@ -264,6 +281,10 @@ def fetch_italgiure(
         rows: Rows per Solr page (max 1000 verified).
         session: Optional pre-built requests.Session; a warmed-up session is
             created if not supplied.
+        verify: TLS verification for the auto-created session (ignored if
+            ``session`` is supplied). ``True`` (default) uses the system CA
+            bundle; a string is a custom CA bundle path; ``False`` disables
+            verification entirely.
 
     Returns:
         Path to the output directory.
@@ -280,7 +301,7 @@ def fetch_italgiure(
             progress = {}
 
     if session is None:
-        session = make_italgiure_session()
+        session = make_italgiure_session(verify=verify)
 
     logger.warning(
         "italgiure download will fetch personal data (names of parties, judges, "
