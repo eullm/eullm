@@ -1473,11 +1473,11 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
 
     # Pulizia righe boilerplate residue
     lines = [
-        l for l in content.splitlines()
-        if l.strip() and not re.match(
+        line for line in content.splitlines()
+        if line.strip() and not re.match(
             r"^\s*(Vai al|Cerca\b|Menu\b|Home\b|Cookie\b|Condividi|Stampa|Follow"
             r"|\d+\s*[KkMm][Bb])\b",
-            l,
+            line,
         )
     ]
     body = clean_text("\n".join(lines))
