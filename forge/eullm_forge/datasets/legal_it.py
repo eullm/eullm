@@ -138,10 +138,27 @@ _ITALGIURE_DB: dict[str, dict[str, str]] = {
     "tributaria": {"sentenze": "snciv", "massime": "civile"},
 }
 
-# Fallback: massime pubbliche dal sito ufficiale Cassazione
-CASSAZIONE_MASSIME_URL = (
-    "https://www.cortedicassazione.it/corte-di-cassazione/it/sentenze.page"
+# URL reali verificati dal DOM (struttura /it/, non /corte-di-cassazione/it/)
+CASSAZIONE_BASE = "https://www.cortedicassazione.it"
+# URL listing verificati dal DOM reale — paginazione via frame3_item=N
+# Totali indicativi: civile ~301, penale ~448 (aggiornati periodicamente)
+CASSAZIONE_LISTING_URLS = {
+    "civile": f"{CASSAZIONE_BASE}/it/giurisprudenza_civile.page",
+    "penale": f"{CASSAZIONE_BASE}/it/giurisprudenza_penale.page",
+    "lavoro": f"{CASSAZIONE_BASE}/it/giurisprudenza_civile.page",  # sezione lavoro → civile
+}
+# Pattern href per sentenze individuali
+CASSAZIONE_DETAIL_PATTERNS = (
+    "civile_dettaglio",
+    "penale_dettaglio",
+    "quc_dettaglio",
+    "rlc_dettaglio",
 )
+CASSAZIONE_SEZIONE_PATTERN = {
+    "civile": "civile_dettaglio",
+    "penale": "penale_dettaglio",
+    "lavoro": "civile_dettaglio",
+}
 
 # Sentenze Cassazione (uso interno — non pubblicare il dataset grezzo, GDPR)
 @dataclass
@@ -1175,61 +1192,160 @@ def fetch_cassazione(source: CassazioneSource) -> list[dict]:
 
 
 def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
-    """Scarica sentenze dal sito ufficiale cortedicassazione.it (accesso libero).
+    """Scarica sentenze da cortedicassazione.it via paginazione frame3_item.
 
-    Il sito pubblica sentenze selezionate in HTML senza richiedere login.
+    Le listing page /it/giurisprudenza_*.page sono accessibili via requests
+    (HTML statico con link baked). Paginazione: ?frame3_item=N (N=1,2,3,...).
+    ~9-12 sentenze per pagina, nessun JS richiesto.
+    """
+    records = _fetch_cassazione_paged(source)
+    if not records:
+        # Fallback Playwright se requests è bloccato
+        records = _fetch_cassazione_playwright(source)
+    return records
+
+
+def _fetch_cassazione_paged(source: CassazioneSource) -> list[dict]:
+    """Scarica sentenze paginando /it/giurisprudenza_*.page?frame3_item=N.
+
+    Nessun JS richiesto — le listing page servono HTML statico con link baked.
+    Itera finché la pagina non restituisce link nuovi.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    listing_url = CASSAZIONE_LISTING_URLS.get(
+        source.sezione, CASSAZIONE_LISTING_URLS["penale"]
+    )
+    detail_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+    })
+
+    all_links: list[str] = []
+    seen_links: set[str] = set()
+
+    logger.info("  cortedicassazione.it paginazione: %s", listing_url)
+    for page_n in range(1, 200):  # max 200 pagine (~2400 sentenze)
+        try:
+            resp = session.get(
+                listing_url, params={"frame3_item": page_n}, timeout=20
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("  cortedicassazione.it pagina %d errore: %s", page_n, exc)
+            break
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        page_links = [
+            a["href"] for a in soup.find_all("a", href=True)
+            if detail_pattern in a.get("href", "") and "contentId" in a.get("href", "")
+        ]
+        # Deduplicazione
+        new_links = [h for h in page_links if h not in seen_links]
+        for h in new_links:
+            seen_links.add(h)
+        if not new_links:
+            logger.info("  cortedicassazione.it: fine a pagina %d (%d link totali)",
+                        page_n, len(all_links))
+            break
+        all_links.extend(new_links)
+        logger.info("  cortedicassazione.it: pagina %d → +%d link (%d totali)",
+                    page_n, len(new_links), len(all_links))
+        if len(all_links) >= source.max_sentences:
+            break
+
+    # Scarica testo di ogni sentenza
+    records: list[dict] = []
+    for href in all_links[: source.max_sentences]:
+        full_url = href if href.startswith("http") else f"{CASSAZIONE_BASE}{href}"
+        try:
+            r2 = session.get(full_url, timeout=20)
+            r2.raise_for_status()
+            rec = _parse_cassazione_page(r2.text, source.id, full_url)
+            if rec:
+                records.append(rec)
+        except Exception:
+            continue
+
+    logger.info("  cortedicassazione.it: %d sentenze scaricate", len(records))
+    return records
+
+
+def _fetch_cassazione_playwright(source: CassazioneSource) -> list[dict]:
+    """Scarica sentenze da cortedicassazione.it con Playwright.
+
+    La listing page è JS-rendered e restituisce pagina blank — usiamo la
+    HOMEPAGE come entry point: ha le ultime ~9 sentenze come HTML statico
+    baked direttamente, poi le seguiamo con Playwright per il testo completo.
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return []
 
+    sezione_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
     records: list[dict] = []
-    # URL sezione-specifica per cortedicassazione.it
-    sezione_urls = {
-        "civile": (
-            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
-            "sentenze_civili.page"
-        ),
-        "penale": (
-            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
-            "sentenze_penali.page"
-        ),
-        "lavoro": (
-            "https://www.cortedicassazione.it/corte-di-cassazione/it/"
-            "sentenze_lavoro.page"
-        ),
-    }
-    url = sezione_urls.get(source.sezione, CASSAZIONE_MASSIME_URL)
-    logger.info("  cortedicassazione.it: %s", url)
 
+    logger.info("  cortedicassazione.it (Playwright homepage): %s", CASSAZIONE_BASE)
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            page = browser.new_page(locale="it-IT")
-            page.goto(url, wait_until="networkidle", timeout=60_000)
+            page = browser.new_page(
+                locale="it-IT",
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            # Homepage: HTML statico con le ultime sentenze baked nel DOM
+            page.goto(CASSAZIONE_BASE, wait_until="domcontentloaded", timeout=45_000)
+            page.wait_for_timeout(1500)
 
-            # Raccoglie link a sentenze individuali
+            # Raccoglie link alle sentenze della sezione richiesta
+            js_filter = f"h.includes('{sezione_pattern}') && h.includes('contentId')"
             links = page.eval_on_selector_all(
                 "a[href]",
-                "els => els.map(e => e.href).filter("
-                "h => h && (h.includes('sentenz') || h.includes('ordinanz') "
-                "|| h.includes('pronunce') || h.includes('decisioni')))",
+                f"els => els.map(e => e.href).filter(h => h && ({js_filter}))",
             )
+            # Fallback: qualsiasi link dettaglio sentenza
             if not links:
-                # Diagnostica: mostra tutti i link della pagina
-                all_links = page.eval_on_selector_all(
-                    "a[href]", "els => els.slice(0,15).map(e => e.href)"
+                all_patterns = " || ".join(
+                    f"h.includes('{p}')" for p in CASSAZIONE_DETAIL_PATTERNS
                 )
-                logger.info("  cortedicassazione.it: 0 link sentenze. "
-                            "Sample link pagina: %s", all_links)
+                links = page.eval_on_selector_all(
+                    "a[href]",
+                    f"els => els.map(e => e.href).filter(h => h && ({all_patterns}))",
+                )
+            if not links:
+                all_links = page.eval_on_selector_all(
+                    "a[href]", "els => els.slice(0, 20).map(e => e.href)"
+                )
+                logger.warning(
+                    "  cortedicassazione.it: 0 link trovati in homepage. "
+                    "Sample: %s", all_links
+                )
             else:
                 logger.info("  cortedicassazione.it: %d link trovati", len(links))
 
-            for href in links[: source.max_sentences]:
+            # Deduplicazione (ogni link appare due volte nel DOM)
+            seen: set[str] = set()
+            unique_links = [h for h in links if h not in seen and not seen.add(h)]
+
+            for href in unique_links[: source.max_sentences]:
                 full_url = (
                     href if href.startswith("http")
-                    else f"https://www.cortedicassazione.it{href}"
+                    else f"{CASSAZIONE_BASE}{href}"
                 )
                 try:
                     page.goto(full_url, wait_until="domcontentloaded", timeout=30_000)
@@ -1241,19 +1357,84 @@ def _fetch_cassazione_cortedicassazione(source: CassazioneSource) -> list[dict]:
 
             browser.close()
     except Exception as exc:
-        logger.warning("cortedicassazione.it errore: %s", exc)
+        logger.warning("cortedicassazione.it Playwright errore: %s", exc)
+
+    return records
+
+
+def _fetch_cassazione_homepage_static(source: CassazioneSource) -> list[dict]:
+    """Fallback: estrae sentenze baked nell'homepage (HTML statico, no JS).
+
+    La homepage cortedicassazione.it include sempre le ultime ~9 sentenze
+    come HTML statico, accessibili anche senza JS.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    sezione_pattern = CASSAZIONE_SEZIONE_PATTERN.get(source.sezione, "dettaglio")
+    records: list[dict] = []
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    try:
+        session = requests.Session()
+        session.headers.update(_HEADERS)
+        resp = session.get(CASSAZIONE_BASE, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        links = [
+            a["href"] for a in soup.find_all("a", href=True)
+            if sezione_pattern in a["href"] and "contentId" in a["href"]
+        ]
+        seen: set[str] = set()
+        unique_links = [h for h in links if h not in seen and not seen.add(h)]
+        logger.info(
+            "  cortedicassazione.it (homepage fallback): %d link %s",
+            len(unique_links), sezione_pattern
+        )
+
+        for href in unique_links[: source.max_sentences]:
+            full_url = href if href.startswith("http") else f"{CASSAZIONE_BASE}{href}"
+            try:
+                r2 = session.get(full_url, timeout=20)
+                r2.raise_for_status()
+                rec = _parse_cassazione_page(r2.text, source.id, full_url)
+                if rec:
+                    records.append(rec)
+            except Exception:
+                continue
+    except Exception as exc:
+        logger.warning("cortedicassazione.it homepage fallback errore: %s", exc)
 
     return records
 
 
 def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict]:
-    """Estrae il testo da una pagina sentenza di italgiure.
+    """Estrae testo strutturato da una pagina sentenza di cortedicassazione.it.
 
-    Le sentenze hanno struttura:
-      - Header: sezione, numero, data
-      - Sezioni "FATTO", "DIRITTO"/"MOTIVI", "P.Q.M."
+    La pagina contiene: metadata (sezione, numero, data, materia, oggetto,
+    presidente, relatore) + "L'esito in sintesi" (riassunto redatto dalla Corte).
+    Il testo integrale è nel PDF allegato — non scaricato qui.
 
-    Per il training estraiamo l'intera motivazione (DIRITTO + FATTO).
+    Struttura estratta:
+      Dettaglio Sentenza <tipo>
+      <sezione> | Data: <data> | Numero: <num>
+      Oggetto: <oggetto>
+      Presidente: <nome> | Relatore: <nome>
+      L'esito in sintesi
+      <testo sintesi>
     """
     try:
         from bs4 import BeautifulSoup
@@ -1262,37 +1443,49 @@ def _parse_cassazione_page(html: str, source_id: str, url: str) -> Optional[dict
 
     soup = BeautifulSoup(html, "html.parser")
 
-    # Rimuovi nav/script/style
-    for tag in soup.find_all(["nav", "header", "footer", "script", "style", "noscript"]):
+    # Rimuovi chrome: nav, header, footer, script, style, form di ricerca
+    for tag in soup.find_all(["nav", "header", "footer", "script", "style",
+                               "noscript", "form"]):
         tag.decompose()
 
     full_text = soup.get_text(separator="\n", strip=True)
 
-    # Estratto minimo: deve contenere testo legale sostanziale
-    if len(full_text) < 500 or not any(
-        kw in full_text for kw in ("Corte di Cassazione", "Cassazione", "ricorso", "motivo")
-    ):
-        return None
-
-    # Prova a isolare la motivazione (testo dopo "FATTO" o "DIRITTO")
-    # Le sentenze italiane hanno sezioni ben marcate in maiuscolo
-    body = full_text
-    for marker in ("MOTIVI DELLA DECISIONE", "DIRITTO", "FATTO E DIRITTO", "FATTO"):
-        idx = full_text.upper().find(marker)
+    # Ritaglia dalla riga "Dettaglio Sentenza" (inizio contenuto reale)
+    start_markers = ("Dettaglio Sentenza", "DETTAGLIO SENTENZA")
+    body_start = -1
+    for m in start_markers:
+        idx = full_text.find(m)
         if idx != -1:
-            body = full_text[idx:]
+            body_start = idx
             break
+    if body_start == -1:
+        return None  # pagina non riconosciuta
+    content = full_text[body_start:]
 
-    body = clean_text(body)
-    if len(body) < 300:
-        body = clean_text(full_text)  # usa tutto se il ritaglio è troppo corto
+    # Ferma prima della sezione allegati
+    for stop in ("Allegato\n", "Scarica Documento", "Questo sito utilizza cookie",
+                 "Privacy Policy", "Torna su"):
+        idx = content.find(stop)
+        if idx != -1:
+            content = content[:idx]
 
-    if len(body) < 300:
+    # Pulizia righe boilerplate residue
+    lines = [
+        l for l in content.splitlines()
+        if l.strip() and not re.match(
+            r"^\s*(Vai al|Cerca\b|Menu\b|Home\b|Cookie\b|Condividi|Stampa|Follow"
+            r"|\d+\s*[KkMm][Bb])\b",
+            l,
+        )
+    ]
+    body = clean_text("\n".join(lines))
+
+    if len(body) < 200:
         return None
 
-    # Numero sentenza dall'URL o dall'HTML
-    sentence_id = re.search(r"[/=](\d{4,})", url)
-    sid = sentence_id.group(1) if sentence_id else url.split("/")[-1]
+    # Numero sentenza dall'URL
+    sentence_id = re.search(r"contentId=([A-Z0-9]+)", url)
+    sid = sentence_id.group(1) if sentence_id else url.split("=")[-1]
 
     return {
         "text": body,
