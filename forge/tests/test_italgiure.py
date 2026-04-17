@@ -207,5 +207,55 @@ def test_fetch_italgiure_skips_complete_slices(tmp_path: Path):
     assert session.get_calls == []
 
 
+def test_fetch_italgiure_heals_empty_slice_marked_complete(tmp_path: Path):
+    # Simulate a previous run that marked the slice complete but wrote 0
+    # records (server glitch). The next run must reset progress and retry.
+    (tmp_path / "_progress.json").write_text(
+        json.dumps({"snpen_2026": -1}), encoding="utf-8"
+    )
+    (tmp_path / "italgiure_snpen_2026.jsonl").write_text("", encoding="utf-8")
+
+    pages = [_make_solr_response([SAMPLE_DOC], 1)]
+    session = _FakeSession(pages)
+    fetch_italgiure(
+        tmp_path,
+        years=[2026],
+        kinds=["snpen"],
+        rate_limit_sec=0.0,
+        session=session,
+    )
+
+    # Should have been retried from offset 0 and written the record
+    assert session.get_calls[0]["params"]["start"] == "0"
+    records = load_italgiure_jsonl(tmp_path)
+    assert len(records) == 1
+    progress = json.loads((tmp_path / "_progress.json").read_text())
+    assert progress["snpen_2026"] == -1  # re-marked complete after successful refetch
+
+
+def test_fetch_italgiure_keeps_progress_when_server_returns_empty(tmp_path: Path):
+    # numFound says 10 but docs come back empty — two times in a row.
+    # Progress must NOT be marked -1.
+    empty_with_found = {
+        "responseHeader": {"status": 0, "QTime": 5},
+        "response": {"numFound": 10, "start": 0, "docs": []},
+    }
+    # Same response returned on retry inside _iter_query_docs + any further calls
+    session = _FakeSession([empty_with_found, empty_with_found, empty_with_found])
+    fetch_italgiure(
+        tmp_path,
+        years=[2026],
+        kinds=["snpen"],
+        rate_limit_sec=0.0,
+        session=session,
+    )
+    progress_path = tmp_path / "_progress.json"
+    progress = (
+        json.loads(progress_path.read_text()) if progress_path.exists() else {}
+    )
+    # Not -1 — the slice is retriable on the next run.
+    assert progress.get("snpen_2026", 0) != -1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

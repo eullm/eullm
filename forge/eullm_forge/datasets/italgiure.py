@@ -207,11 +207,13 @@ def _iter_query_docs(
     rows: int = SOLR_MAX_ROWS,
     rate_limit_sec: float = 1.5,
     max_docs: Optional[int] = None,
-) -> Iterator[tuple[int, list[dict]]]:
-    """Yield (next_start, batch_records) tuples for a single query.
+) -> Iterator[tuple[int, list[dict], int]]:
+    """Yield (next_start, batch_records, num_found) tuples for a single query.
 
     Performs pagination via Solr ``start`` / ``rows``. Stops when ``numFound``
-    is reached or ``max_docs`` records have been produced.
+    is reached or ``max_docs`` records have been produced. A sentinel tuple
+    ``(start, [], 0)`` is yielded for legitimately empty slices so the caller
+    can distinguish "year really has 0 docs" from "server returned nothing".
     """
     cur = start
     emitted = 0
@@ -231,8 +233,35 @@ def _iter_query_docs(
         response = resp.get("response") or {}
         num_found = int(response.get("numFound", 0))
         docs = response.get("docs") or []
-        if not docs:
+
+        # Legit empty slice: emit a sentinel so the caller can mark it complete.
+        if num_found == 0 and cur == start:
+            yield cur, [], 0
             return
+
+        # numFound > 0 but docs empty at an in-range offset = server glitch.
+        # Back off hard and retry once before giving up (leaves progress intact).
+        if not docs and cur < num_found:
+            backoff = 0.0 if rate_limit_sec <= 0 else max(rate_limit_sec * 5, 10.0)
+            logger.warning(
+                "italgiure [%s] empty docs at start=%d but numFound=%d — "
+                "backing off %.1fs and retrying",
+                query.slug(), cur, num_found, backoff,
+            )
+            time.sleep(backoff)
+            resp = _solr_get(session, query, start=cur, rows=want)
+            if resp is None:
+                return
+            response = resp.get("response") or {}
+            num_found = int(response.get("numFound", 0))
+            docs = response.get("docs") or []
+            if not docs:
+                logger.error(
+                    "italgiure [%s] still empty after retry at start=%d, "
+                    "numFound=%d — aborting slice (progress kept for retry)",
+                    query.slug(), cur, num_found,
+                )
+                return
 
         records: list[dict] = []
         for doc in docs:
@@ -241,7 +270,7 @@ def _iter_query_docs(
                 records.append(rec)
 
         next_start = cur + len(docs)
-        yield next_start, records
+        yield next_start, records, num_found
         emitted += len(records)
         cur = next_start
 
@@ -315,12 +344,27 @@ def fetch_italgiure(
             out_path = output_dir / f"italgiure_{slug}.jsonl"
             start = progress.get(slug, 0)
             if start == -1:
-                logger.info("italgiure [%s] already complete — skipping", slug)
-                continue
+                # Self-heal: if marked complete but the JSONL is empty, a
+                # previous run hit a server glitch that was silently swallowed.
+                # Reset to offset 0 and retry.
+                if out_path.exists() and out_path.stat().st_size == 0:
+                    logger.warning(
+                        "italgiure [%s] marked complete but file is empty — "
+                        "resetting progress and retrying",
+                        slug,
+                    )
+                    start = 0
+                    progress.pop(slug, None)
+                else:
+                    logger.info("italgiure [%s] already complete — skipping", slug)
+                    continue
 
             logger.info("italgiure [%s] downloading from offset %d", slug, start)
             mode = "a" if start > 0 and out_path.exists() else "w"
             written = 0
+            had_batch = False
+            last_num_found: Optional[int] = None
+            final_offset = start
             with open(out_path, mode, encoding="utf-8") as f:
                 iterator = _iter_query_docs(
                     session,
@@ -330,7 +374,10 @@ def fetch_italgiure(
                     rate_limit_sec=rate_limit_sec,
                     max_docs=max_docs_per_query,
                 )
-                for next_start, batch in iterator:
+                for next_start, batch, num_found in iterator:
+                    had_batch = True
+                    last_num_found = num_found
+                    final_offset = next_start
                     for rec in batch:
                         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                         written += 1
@@ -339,19 +386,33 @@ def fetch_italgiure(
                     progress_path.write_text(
                         json.dumps(progress, indent=2), encoding="utf-8"
                     )
-                    logger.info(
-                        "  [%s] offset=%d (+%d records, %d in this run)",
-                        slug, next_start, len(batch), written,
-                    )
+                    if batch:
+                        logger.info(
+                            "  [%s] offset=%d/%d (+%d records, %d in this run)",
+                            slug, next_start, num_found, len(batch), written,
+                        )
 
             # Mark slice as complete only when the iterator exited naturally
-            # (max_docs_per_query truncates it, so in that case we keep the
-            #  resume offset intact).
+            # after confirming we reached numFound (or numFound==0). If we
+            # never got a batch, leave progress intact so the next run retries.
             if max_docs_per_query is None:
-                progress[slug] = -1
-                progress_path.write_text(
-                    json.dumps(progress, indent=2), encoding="utf-8"
-                )
+                if not had_batch:
+                    logger.error(
+                        "italgiure [%s] aborted before any response — "
+                        "keeping progress=%d for retry",
+                        slug, start,
+                    )
+                elif last_num_found == 0 or final_offset >= (last_num_found or 0):
+                    progress[slug] = -1
+                    progress_path.write_text(
+                        json.dumps(progress, indent=2), encoding="utf-8"
+                    )
+                else:
+                    logger.warning(
+                        "italgiure [%s] stopped at offset=%d/%d — "
+                        "keeping progress for retry",
+                        slug, final_offset, last_num_found,
+                    )
 
     return output_dir
 
