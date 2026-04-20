@@ -50,3 +50,19 @@ Thumbs.db
 *.sqlite
 *.db
 vendor/
+
+# Datasets / corpora (GDPR-sensitive, never commit)
+*.jsonl
+*.parquet
+*.arrow
+/data/
+/datasets/
+/corpus/
+/corpora/
+italgiure_corpus/
+legal_it_corpus/
+_progress.json
+
+# Engine binaries downloaded from GitHub releases
+/eullm
+/eullm-tq
