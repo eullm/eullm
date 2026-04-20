@@ -26,6 +26,7 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.31",
     "beautifulsoup4>=4.12",
+    "spacy>=3.7,<4",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,12 @@ distill = [
 ]
 datasets-browser = [
     "playwright>=1.40",
+]
+# Italian legal-domain NER: pulls the spaCy model from the official
+# release page so `pip install eullm-forge[legal]` is self-sufficient.
+# If the pinned URL 404s, fall back to: python -m spacy download it_core_news_lg
+legal = [
+    "it-core-news-lg @ https://github.com/explosion/spacy-models/releases/download/it_core_news_lg-3.7.0/it_core_news_lg-3.7.0-py3-none-any.whl",
 ]
 
 [tool.setuptools.packages.find]

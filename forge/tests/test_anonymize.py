@@ -70,6 +70,34 @@ def test_redacts_address():
     assert stats.address >= 1
 
 
+def test_redacts_address_ocr_variants():
+    # All of these appear in italgiure OCR text with slightly different
+    # spacing / abbreviations. None of them should leak through.
+    cases = [
+        "domiciliato in ROMA P.ZZA ADRIANA 5, presso",
+        "con studio in Milano P. ZZA CAVOUR n. 10",
+        "ROMA P.le CLODIO 2",
+        "Torino V.le RE UMBERTO 8",
+        "sede in Napoli C.so UMBERTO I",
+        "in loc. SAN MARTINO snc",
+    ]
+    for text in cases:
+        out, _ = anonymize_text(text)
+        assert "[INDIRIZZO]" in out, f"address not redacted in: {text!r}"
+
+
+def test_whitelist_keeps_procedural_all_caps():
+    text = (
+        "udita in CAMERA di CONSIGLIO del 27/11/2023; "
+        "CORTE D'APPELLO SEZ DIST di LECCE pronunciò sentenza; "
+        "domiciliazione TELEMATICA presso lo studio"
+    )
+    out, stats = anonymize_text(text)
+    for keep in ("CAMERA", "CONSIGLIO", "D'APPELLO", "LECCE", "TELEMATICA"):
+        assert keep in out, f"{keep} wrongly redacted"
+    assert stats.person_allcaps == 0
+
+
 def test_allcaps_name_heuristic_catches_party():
     text = "ricorso proposto da CARLOMAGNO FRANCESCO avverso la sentenza"
     out, stats = anonymize_text(text)

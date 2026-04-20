@@ -84,12 +84,21 @@ RE_BIRTH_CLAUSE = re.compile(
 )
 
 # Street address: "via/viale/piazza/corso/largo/vicolo NAME[, n. NUM]".
-# The body must stop at a comma/semicolon/period/newline (or start a civic
-# number) so the match doesn't spill into the next clause.
+# Accepts many OCR variants of the street keyword: "V.LE", "V. LE", "P.ZZA",
+# "P. ZZA", "P.ZA", "P.LE", "C.SO". The body must stop at a comma/semicolon/
+# period/newline (or start a civic number) so the match doesn't spill into
+# the next clause.
 RE_ADDRESS = re.compile(
-    r"\b(?:via|viale|v\.le|piazza|p\.?zza|corso|c\.so|largo|vicolo|strada)\s+"
+    r"\b(?:"
+    r"via|viale|v\.\s?le|"
+    r"piazza|piazzale|p\.\s?zza|p\.\s?za|p\.\s?le|"
+    r"corso|c\.\s?so|"
+    r"largo|l\.\s?go|"
+    r"vicolo|vico|strada|contrada|loc\.|localit[aà]"
+    r")\s+"
     r"[^,;.\n]{2,80}?"
-    r"(?:,?\s*(?:n\.?|numero|nr\.?)\s*\d{1,4}[A-Za-z]?|(?=[,;.\n]))",
+    r"(?:,?\s*(?:n\.?|numero|nr\.?|civico)?\s*\d{1,4}[A-Za-z]?(?=[\s,;.\n]|$)"
+    r"|(?=[,;.\n])|$)",
     re.IGNORECASE,
 )
 
@@ -159,26 +168,36 @@ class AnonymiserConfig:
 _ALLCAPS_WHITELIST = frozenset(
     {
         # Courts and procedural entities
-        "CORTE", "CASSAZIONE", "SUPREMA", "APPELLO", "TRIBUNALE", "SEZIONE",
-        "SEZIONI", "UNITE", "PENALE", "CIVILE", "LAVORO", "TRIBUTARIA",
-        "REPUBBLICA", "ITALIANA", "CONSIGLIERE", "PRESIDENTE", "RELATORE",
-        "PUBBLICO", "MINISTERO", "PROCURA", "PROCURATORE", "GENERALE",
-        "SOSTITUTO", "AVVOCATO", "AVVOCATI", "DIFENSORE", "DIFENSORI",
-        "IMPUTATO", "IMPUTATA", "RICORRENTE", "CONTRORICORRENTE",
+        "CORTE", "CASSAZIONE", "SUPREMA", "APPELLO", "D'APPELLO", "TRIBUNALE",
+        "SEZIONE", "SEZIONI", "UNITE", "PENALE", "CIVILE", "LAVORO",
+        "TRIBUTARIA", "REPUBBLICA", "ITALIANA", "CONSIGLIERE", "PRESIDENTE",
+        "RELATORE", "PUBBLICO", "MINISTERO", "PROCURA", "PROCURATORE",
+        "GENERALE", "SOSTITUTO", "AVVOCATO", "AVVOCATI", "DIFENSORE",
+        "DIFENSORI", "IMPUTATO", "IMPUTATA", "RICORRENTE", "CONTRORICORRENTE",
         "RICORSO", "SENTENZA", "ORDINANZA", "DECRETO", "MOTIVI", "FATTO",
         "DIRITTO", "CONSIDERATO", "RITENUTO", "RILEVATO", "OSSERVATO",
-        "LIBERTA", "LIBERTÀ",
+        "LIBERTA", "LIBERTÀ", "CAMERA", "CONSIGLIO", "UDIENZA", "UDITA",
+        "PRONUNCIATA", "PRONUNCIATO", "DISTACCATA", "DIST", "COLLEGIO",
+        "TELEMATICA", "TELEMATICO",
         # Common Italian agencies / public entities
         "AGENZIA", "ENTRATE", "RISCOSSIONE", "EQUITALIA", "INPS", "INAIL",
-        "ENEL", "RAI", "POSTE", "ITALIANE", "FERROVIE", "STATO",
+        "ENEL", "RAI", "POSTE", "ITALIANE", "FERROVIE", "STATO", "MINISTERO",
+        "COMUNE", "PROVINCIA", "REGIONE",
         # Company forms
-        "SPA", "SRL", "SNC", "SAS", "SCARL", "SCRL", "SPAF",
-        # Geographic filler commonly appearing uppercase
+        "SPA", "SRL", "SNC", "SAS", "SCARL", "SCRL", "SPAF", "GROUP", "HOLDING",
+        # Geographic filler commonly appearing uppercase (capoluoghi + città
+        # grandi; avoids redacting place-of-court mentions).
         "ROMA", "MILANO", "NAPOLI", "TORINO", "PALERMO", "BARI", "GENOVA",
         "FIRENZE", "BOLOGNA", "CATANIA", "VENEZIA", "VERONA", "PADOVA",
-        "PERUGIA", "ITALIA", "ITALY",
+        "PERUGIA", "LECCE", "POTENZA", "CATANZARO", "COSENZA", "REGGIO",
+        "CALABRIA", "TRIESTE", "CAGLIARI", "BRINDISI", "TARANTO", "SALERNO",
+        "MESSINA", "SIRACUSA", "L'AQUILA", "PESCARA", "CHIETI", "TERAMO",
+        "CAMPOBASSO", "ANCONA", "PARMA", "MODENA", "VICENZA", "TREVISO",
+        "RAVENNA", "FORLI", "RIMINI", "UDINE", "BRESCIA", "BERGAMO",
+        "MONZA", "COMO", "VARESE", "SASSARI", "LATINA", "FROSINONE",
+        "ITALIA", "ITALY",
         # Misc procedural acronyms
-        "ECLI", "IT", "CASS", "PEN", "CIV", "SEZ",
+        "ECLI", "IT", "CASS", "PEN", "CIV", "SEZ", "ART", "RG", "PQM",
     }
 )
 
