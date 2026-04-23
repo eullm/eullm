@@ -164,6 +164,52 @@ class AnonymiserConfig:
     use_ner: bool = False
 
 
+# Italian stopwords / particles that spaCy NER occasionally mis-tags as PER.
+# Never use these as replacement keys — a 1-2 char key combined with
+# case-insensitive global replace nukes the whole document.
+_NER_STOPWORDS = frozenset(
+    {
+        "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
+        "di", "a", "da", "in", "con", "su", "per", "tra", "fra",
+        "del", "dello", "della", "dei", "degli", "delle",
+        "al", "allo", "alla", "ai", "agli", "alle",
+        "dal", "dallo", "dalla", "dai", "dagli", "dalle",
+        "nel", "nello", "nella", "nei", "negli", "nelle",
+        "sul", "sullo", "sulla", "sui", "sugli", "sulle",
+        "e", "o", "ma", "se", "che", "non", "è", "sono",
+        "l", "dell", "nell", "sull", "all", "dall",
+        "re", "st", "pr", "cd", "ed", "od", "ne", "io", "tu", "lui", "lei",
+        "art", "dott", "avv", "sig", "ing", "prof",
+    }
+)
+
+
+def _is_valid_ner_span(name: str) -> bool:
+    """Filter obviously broken NER spans before using them for replacement.
+
+    spaCy's it_core_news_lg occasionally tags isolated characters, particles,
+    titles, or punctuation as PER — and feeding those into a regex replace
+    erases entire documents. Reject anything we wouldn't want to redact even
+    if the tag were correct.
+    """
+    name = name.strip(" .,;:'\"")
+    if len(name) < 3:
+        return False
+    if not re.search(r"[A-Za-zÀ-ÿ]", name):
+        return False
+    # All-lowercase tokens are almost never personal names in legal text,
+    # which is Title-Case or UPPERCASE for parties. Rejecting lowercase
+    # also removes Italian articles/particles.
+    if name == name.lower():
+        return False
+    if name.lower() in _NER_STOPWORDS:
+        return False
+    # At least one alphabetic token of 3+ chars (rejects "L.", "A.", "J.R.").
+    if not any(len(tok) >= 3 and tok.isalpha() for tok in re.split(r"[\s.'-]+", name)):
+        return False
+    return True
+
+
 # Whitelist of ALL-CAPS tokens that must NOT be treated as person names.
 _ALLCAPS_WHITELIST = frozenset(
     {
@@ -246,9 +292,8 @@ def anonymize_text(
     #    birth clauses get a stable token before the clause is nuked).
     if cfg.use_ner and ner is not None:
         person_map: dict[str, str] = {}
-        # Collect entities and dedupe by normalised name.
-        entities = ner(text)
-        # Sort by start so we get stable numbering in text order.
+        # Collect entities, drop junk spans, sort by start for stable numbering.
+        entities = [e for e in ner(text) if _is_valid_ner_span(e[0])]
         entities = sorted(set(entities), key=lambda e: e[1])
         for name, _s, _e in entities:
             key = _normalise_name(name)
@@ -256,10 +301,15 @@ def anonymize_text(
                 person_map[key] = f"[PERSONA_{len(person_map) + 1}]"
         if person_map:
             # Replace longest names first to avoid partial overlap bugs.
+            # Use word-boundary anchors (\w lookaround) so "Mario" doesn't
+            # eat the "mar" inside "marzo" and so short surnames don't
+            # bleed into longer words.
             for key in sorted(person_map, key=len, reverse=True):
                 token = person_map[key]
-                # Replace with case-insensitive boundary match.
-                pattern = re.compile(re.escape(key), re.IGNORECASE)
+                pattern = re.compile(
+                    r"(?<!\w)" + re.escape(key) + r"(?!\w)",
+                    re.IGNORECASE,
+                )
                 new_text, n = pattern.subn(token, text)
                 if n:
                     stats.person_ner += n
@@ -366,7 +416,7 @@ def load_spacy_ner(
         return [
             (ent.text, ent.start_char, ent.end_char)
             for ent in doc.ents
-            if ent.label_ == "PER"
+            if ent.label_ == "PER" and _is_valid_ner_span(ent.text)
         ]
 
     return _extract

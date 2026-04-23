@@ -184,6 +184,52 @@ def test_ner_callback_assigns_stable_tokens():
     assert len(calls) == 1
 
 
+def test_ner_ignores_junk_spans():
+    """Regression test: spaCy sometimes returns 1-2 char junk spans
+    (stopwords, single letters, articles). These must never be used as
+    replacement keys — a case-insensitive global replace of "l" would
+    nuke every occurrence of that letter in the document.
+    """
+    text = "La Corte di Cassazione, con ordinanza, dichiara l'inammissibile"
+
+    def junk_ner(t: str) -> list[tuple[str, int, int]]:
+        return [
+            ("l", 48, 49),
+            ("La", 0, 2),
+            ("di", 10, 12),
+            ("re", 0, 2),
+        ]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=junk_ner)
+    assert "[PERSONA" not in out
+    assert stats.person_ner == 0
+    assert "Cassazione" in out
+    assert "ordinanza" in out
+
+
+def test_ner_respects_word_boundaries():
+    """A short surname must not eat substrings inside longer words:
+    'Monte' should not redact 'montepremi' or 'Monteverdi'.
+    """
+    text = "Il signor Monte ricorre; al montepremi si aggiunge Monteverdi."
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Monte")
+        return [("Monte", idx, idx + 5)]
+
+    cfg = AnonymiserConfig(
+        use_ner=True,
+        redact_allcaps_names=False,
+        redact_address=False,
+    )
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA_1]" in out
+    assert "montepremi" in out
+    assert "Monteverdi" in out
+    assert stats.person_ner == 1
+
+
 def test_redaction_stats_total():
     stats = RedactionStats(codice_fiscale=2, email=1, person_allcaps=3)
     assert stats.total() == 6
