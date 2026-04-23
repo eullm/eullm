@@ -57,6 +57,15 @@ RE_PIVA = re.compile(
     re.IGNORECASE,
 )
 
+# Codice fiscale of entities/companies: "C.F." or "cod. fisc." followed by
+# 11 digits. Must be caught BEFORE RE_PHONE, since 11-digit landline-like
+# sequences (e.g. '06363391001' for the Agenzia delle Entrate) would
+# otherwise be swallowed by the phone regex.
+RE_CF_AZIENDA = re.compile(
+    r"\b(?:C\.?\s*F\.?|cod(?:ice)?\s*fisc(?:ale)?)[:\s]*\d{11}\b",
+    re.IGNORECASE,
+)
+
 # Italian IBAN: starts with IT + 2 check digits + CIN letter + 5 ABI + 5 CAB
 # + 12 account chars. 27 chars total.
 RE_IBAN = re.compile(
@@ -197,6 +206,8 @@ _NER_STOPWORDS = frozenset(
         "l", "dell", "nell", "sull", "all", "dall",
         "re", "st", "pr", "cd", "ed", "od", "ne", "io", "tu", "lui", "lei",
         "art", "dott", "avv", "sig", "ing", "prof",
+        # Legal / procedural abbreviations that spaCy keeps tagging as PER.
+        "cost", "ric", "sent", "ord", "cass", "trib", "cod", "cons",
     }
 )
 
@@ -214,6 +225,9 @@ _NER_INSTITUTIONAL = frozenset(
         "commissione", "direttore", "direzione", "ufficio", "servizio",
         "ordine", "albo", "curatore", "commissario", "sindaco", "perito",
         "giudice", "magistrato", "cancelleria", "cancelliere",
+        "costituzionale", "costituzione", "suprema", "superiore",
+        "regionale", "provinciale", "nazionale", "tributaria", "civile",
+        "penale", "amministrativo", "costituente", "consulta",
     }
 )
 
@@ -247,6 +261,12 @@ def _is_valid_ner_span(name: str) -> bool:
     significant = [t.lower() for t in tokens if t.lower() not in _NER_STOPWORDS]
     if significant and all(t in _NER_INSTITUTIONAL for t in significant):
         return False
+    # Single ALL-CAPS acronym (2-6 chars, no internal whitespace) is almost
+    # always an agency/entity code ('ARIF', 'ENEA', 'CNEL', 'CCNL'), not a
+    # person. Italian surnames of this form are rare and anyway caught by
+    # the all-caps name heuristic when combined with a given name.
+    if len(tokens) == 1 and tokens[0].isupper() and 2 <= len(tokens[0]) <= 6:
+        return False
     return True
 
 
@@ -278,6 +298,9 @@ _ALLCAPS_WHITELIST = frozenset(
         "COMMA", "LETTERA", "TITOLO", "CAPO", "LIBRO", "CODICE",
         "PROCEDURA", "PROCESSO", "RICORSO", "APPELLO", "GRAVAME",
         "DOMANDA", "DIFESA", "ECCEZIONE", "CENSURA", "MOTIVAZIONE",
+        "RAGIONI", "DECISIONE", "IMPUGNAZIONE", "INAMMISSIBILE",
+        "INAMMISSIBILITÀ", "INAMMISSIBILITA", "INFONDATO", "INFONDATA",
+        "ACCOLTO", "RIGETTATO", "CASSAZIONE",
         # Geographic filler commonly appearing uppercase (capoluoghi + città
         # grandi; avoids redacting place-of-court mentions).
         "ROMA", "MILANO", "NAPOLI", "TORINO", "PALERMO", "BARI", "GENOVA",
@@ -367,6 +390,11 @@ def anonymize_text(
         text, n = RE_CF.subn("[CODICE_FISCALE]", text)
         stats.codice_fiscale += n
     if cfg.redact_piva:
+        # Company C.F. (11-digit numeric) before the phone regex, since an
+        # 11-digit landline-like sequence starting with 0 would be captured
+        # by RE_PHONE otherwise.
+        text, n = RE_CF_AZIENDA.subn("[CODICE_FISCALE]", text)
+        stats.codice_fiscale += n
         text, n = RE_PIVA.subn("[PARTITA_IVA]", text)
         stats.partita_iva += n
     if cfg.redact_iban:
@@ -382,8 +410,23 @@ def anonymize_text(
         text, n = RE_BIRTH_CLAUSE.subn("[DATI_NASCITA]", text)
         stats.birth_clause += n
     if cfg.redact_address:
-        text, n = RE_ADDRESS.subn("[INDIRIZZO]", text)
-        stats.address += n
+        def _addr_sub(m: re.Match[str]) -> str:
+            body = m.group(0)
+            # Split street-keyword off from its name; the first alphabetic
+            # character of the name must be uppercase. Locutions like "in
+            # via esclusiva", "in via telematica", "via libera" have a
+            # lowercase name and must NOT be redacted.
+            parts = body.split(None, 1)
+            if len(parts) == 2:
+                first_alpha = next(
+                    (c for c in parts[1] if c.isalpha()), None
+                )
+                if first_alpha and first_alpha.islower():
+                    return body
+            stats.address += 1
+            return "[INDIRIZZO]"
+
+        text = RE_ADDRESS.sub(_addr_sub, text)
 
     # 3) All-caps name heuristic (last, on text with structured PII already
     #    stripped so we don't double-count).

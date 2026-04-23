@@ -184,6 +184,53 @@ def test_ner_callback_assigns_stable_tokens():
     assert len(calls) == 1
 
 
+def test_redacts_cf_azienda_before_phone():
+    """11-digit company C.F. starting with 0 must be captured by the C.F.
+    regex, not by the phone regex."""
+    text = "AGENZIA DELLE ENTRATE (C.F. 06363391001), in persona del Direttore"
+    out, stats = anonymize_text(text)
+    assert "06363391001" not in out
+    assert "[CODICE_FISCALE]" in out
+    assert "[TELEFONO]" not in out
+    assert stats.codice_fiscale == 1
+    assert stats.phone == 0
+
+
+def test_address_ignores_lowercase_locutions():
+    """'in via esclusiva', 'via telematica', 'via breve' are locutions,
+    not addresses. They must NOT be redacted to [INDIRIZZO]."""
+    cases = [
+        "attribuita in via esclusiva al legislatore statale",
+        "notificato a mezzo via telematica",
+        "la via libera è stata concessa",
+        "per via breve e informalmente",
+    ]
+    for text in cases:
+        out, stats = anonymize_text(text)
+        assert "[INDIRIZZO]" not in out, f"locution redacted: {text!r}"
+        assert stats.address == 0, f"counted: {text!r}"
+
+
+def test_ner_ignores_allcaps_acronym():
+    """Single ALL-CAPS acronyms (ARIF, ENEA, CNEL) are agencies, not
+    persons. spaCy tags them as PER — filter them out."""
+    text = "l'ente pubblico ARIF ricorre. Anche ENEA partecipa al giudizio."
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("ARIF", "ENEA"):
+            idx = t.find(name)
+            if idx >= 0:
+                spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "ARIF" in out
+    assert "ENEA" in out
+    assert stats.person_ner == 0
+
+
 def test_ner_ignores_institutional_spans():
     """spaCy frequently mis-tags institutional references ("La Corte",
     "Cass.", "Direttore", "Tribunale") as PER. Those must not be redacted.
