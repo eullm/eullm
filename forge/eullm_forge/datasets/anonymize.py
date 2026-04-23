@@ -117,6 +117,23 @@ RE_ALLCAPS_NAME = re.compile(
     r"[A-ZÀ-Ÿ]{2,}\b"
 )
 
+# Company-form markers that, when they follow an all-caps run, signal that
+# the run is a ragione sociale rather than a person name (e.g.
+# "BANCA MONTE DEI PASCHI DI SIENA S.P.A.").
+_COMPANY_TAIL_RE = re.compile(
+    r"\s*(?:"
+    r"S\.?\s?P\.?\s?A\.?|"
+    r"S\.?\s?R\.?\s?L\.?|"
+    r"S\.?\s?A\.?\s?S\.?|"
+    r"S\.?\s?N\.?\s?C\.?|"
+    r"S\.?C\.?A\.?R\.?L\.?|"
+    r"SCARL|SCRL|SPA|SRL|SAS|SNC|"
+    r"Spa|Srl|Sas|Snc|"
+    r"GROUP|HOLDING|LTD|LIMITED|GMBH|INC"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -184,6 +201,23 @@ _NER_STOPWORDS = frozenset(
 )
 
 
+# Institutional / procedural tokens that spaCy's it_core_news_lg regularly
+# mis-tags as PER in legal text ("Cass.", "La Corte", "Direttore",
+# "Tribunale", ...). If *every* significant token of a candidate span is
+# drawn from this set, we reject the span.
+_NER_INSTITUTIONAL = frozenset(
+    {
+        "cass", "corte", "tribunale", "cassazione", "sezione", "sezioni",
+        "camera", "consiglio", "collegio", "udienza", "adunanza",
+        "consigliere", "presidente", "relatore", "procura", "procuratore",
+        "avvocatura", "avvocato", "ministero", "ministro", "agenzia",
+        "commissione", "direttore", "direzione", "ufficio", "servizio",
+        "ordine", "albo", "curatore", "commissario", "sindaco", "perito",
+        "giudice", "magistrato", "cancelleria", "cancelliere",
+    }
+)
+
+
 def _is_valid_ner_span(name: str) -> bool:
     """Filter obviously broken NER spans before using them for replacement.
 
@@ -205,7 +239,13 @@ def _is_valid_ner_span(name: str) -> bool:
     if name.lower() in _NER_STOPWORDS:
         return False
     # At least one alphabetic token of 3+ chars (rejects "L.", "A.", "J.R.").
-    if not any(len(tok) >= 3 and tok.isalpha() for tok in re.split(r"[\s.'-]+", name)):
+    tokens = [t for t in re.split(r"[\s.'-]+", name) if t]
+    if not any(len(tok) >= 3 and tok.isalpha() for tok in tokens):
+        return False
+    # Drop spans where every significant token is an institutional /
+    # procedural word ("La Corte", "Cass.", "Direttore", "Tribunale di ...").
+    significant = [t.lower() for t in tokens if t.lower() not in _NER_STOPWORDS]
+    if significant and all(t in _NER_INSTITUTIONAL for t in significant):
         return False
     return True
 
@@ -229,8 +269,15 @@ _ALLCAPS_WHITELIST = frozenset(
         "AGENZIA", "ENTRATE", "RISCOSSIONE", "EQUITALIA", "INPS", "INAIL",
         "ENEL", "RAI", "POSTE", "ITALIANE", "FERROVIE", "STATO", "MINISTERO",
         "COMUNE", "PROVINCIA", "REGIONE",
-        # Company forms
+        # Company forms and frequent company-name tokens
         "SPA", "SRL", "SNC", "SAS", "SCARL", "SCRL", "SPAF", "GROUP", "HOLDING",
+        "BANCA", "BANCO", "ASSICURAZIONI", "IMMOBILIARE", "COSTRUZIONI",
+        "SERVIZI", "COMMERCIO", "INDUSTRIE", "EDIZIONI", "FINANZIARIA",
+        # Frequent legal / procedural all-caps phrases that are NOT names
+        "ONERE", "PROVA", "CAUSA", "MERITO", "LEGGE", "NORMA", "ARTICOLO",
+        "COMMA", "LETTERA", "TITOLO", "CAPO", "LIBRO", "CODICE",
+        "PROCEDURA", "PROCESSO", "RICORSO", "APPELLO", "GRAVAME",
+        "DOMANDA", "DIFESA", "ECCEZIONE", "CENSURA", "MOTIVAZIONE",
         # Geographic filler commonly appearing uppercase (capoluoghi + città
         # grandi; avoids redacting place-of-court mentions).
         "ROMA", "MILANO", "NAPOLI", "TORINO", "PALERMO", "BARI", "GENOVA",
@@ -343,10 +390,16 @@ def anonymize_text(
     if cfg.redact_allcaps_names:
         def _sub(m: re.Match[str]) -> str:
             s = m.group(0)
-            if _is_likely_person(s):
-                stats.person_allcaps += 1
-                return "[PERSONA]"
-            return s
+            if not _is_likely_person(s):
+                return s
+            # Suppress when the match is immediately followed by a company
+            # marker (S.P.A., S.R.L., S.N.C., S.A.S., SCARL, SPA, ...): the
+            # uppercase run is a ragione sociale, not a person name.
+            tail = text[m.end():m.end() + 30]
+            if _COMPANY_TAIL_RE.match(tail):
+                return s
+            stats.person_allcaps += 1
+            return "[PERSONA]"
 
         text = RE_ALLCAPS_NAME.sub(_sub, text)
 

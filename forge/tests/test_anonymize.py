@@ -184,6 +184,60 @@ def test_ner_callback_assigns_stable_tokens():
     assert len(calls) == 1
 
 
+def test_ner_ignores_institutional_spans():
+    """spaCy frequently mis-tags institutional references ("La Corte",
+    "Cass.", "Direttore", "Tribunale") as PER. Those must not be redacted.
+    """
+    text = (
+        "La Corte di Cassazione ha stabilito che Cass. 19/08/2020 n. 17313 "
+        "si applica. Il Direttore dell'Agenzia ha ricorso."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("La Corte", "Cass", "Direttore", "Tribunale"):
+            idx = t.find(name)
+            if idx >= 0:
+                spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert stats.person_ner == 0
+    assert "La Corte" in out
+    assert "Direttore" in out
+
+
+def test_allcaps_not_redacted_before_company_marker():
+    """'BANCA MONTE DEI PASCHI DI SIENA S.P.A.' is a company, not a person.
+    The S.P.A. suffix must suppress the all-caps person heuristic.
+    """
+    cases = [
+        "contro BANCA MONTE DEI PASCHI DI SIENA S.P.A., sedente in Siena",
+        "la GENERALI ASSICURAZIONI S.p.A. propone ricorso",
+        "UNICREDIT BANCA Spa ricorre",
+        "contro INTESA SANPAOLO S.R.L. per il tramite",
+    ]
+    for text in cases:
+        out, stats = anonymize_text(text)
+        assert "[PERSONA]" not in out, f"false positive on: {text!r}"
+        assert stats.person_allcaps == 0, f"stats wrong on: {text!r}"
+
+
+def test_allcaps_whitelist_keeps_legal_terms():
+    """Phrases like 'ONERE PROVA', 'CAUSA PETENDI' are legal terms, not
+    persons. The extended whitelist must keep them.
+    """
+    text = (
+        "un ONERE PROVA censura valut importo; la CAUSA PETENDI non "
+        "è mutata; LEGGE FALLIMENTARE; RICORSO INAMMISSIBILE"
+    )
+    out, stats = anonymize_text(text)
+    for keep in ("ONERE PROVA", "CAUSA", "LEGGE", "RICORSO"):
+        assert keep in out, f"{keep!r} wrongly redacted in: {out!r}"
+
+
 def test_ner_ignores_junk_spans():
     """Regression test: spaCy sometimes returns 1-2 char junk spans
     (stopwords, single letters, articles). These must never be used as
