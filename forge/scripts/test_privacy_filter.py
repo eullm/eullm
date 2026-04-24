@@ -22,7 +22,7 @@ Usage
         ~/italgiure_corpus/italgiure_snciv_2023.jsonl --n 3 --device cuda
 
 Requirements (install in the conda env, no pyproject change yet):
-    pip install transformers torch
+    pip install git+https://github.com/openai/privacy-filter.git
 """
 
 from __future__ import annotations
@@ -67,34 +67,41 @@ def _sample_lines(path: Path, n: int, seed: int) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Privacy Filter backend
+# Privacy Filter backend (via the official ``opf`` package)
 # ---------------------------------------------------------------------------
 
 
 def _load_privacy_filter(device: str):
-    from transformers import pipeline
+    """Return an OPF redactor instance.
 
-    kwargs: dict = {"task": "token-classification", "model": PF_MODEL,
-                    "aggregation_strategy": "simple"}
-    if device == "cpu":
-        kwargs["device"] = -1
-    elif device == "cuda":
-        kwargs["device"] = 0
-    return pipeline(**kwargs)
+    The Privacy Filter ships as a standalone package (`opf`) rather than a
+    stock HF architecture, so we import from there. ``device`` is informational
+    only — OPF picks the device automatically (CUDA if available).
+    """
+    from opf._api import OPF  # type: ignore
+
+    _ = device  # unused; OPF auto-selects
+    return OPF(output_text_only=False)
 
 
-def _run_pf(pipe, text: str) -> list[tuple[str, str, int, int, float]]:
-    """Run Privacy Filter and return (label, span_text, start, end, score)."""
-    out = pipe(text)
-    results: list[tuple[str, str, int, int, float]] = []
-    for item in out:
-        label = item.get("entity_group") or item.get("entity", "")
-        word = item.get("word", "")
-        start = int(item.get("start", 0))
-        end = int(item.get("end", 0))
-        score = float(item.get("score", 0.0))
-        results.append((label, word, start, end, score))
-    return results
+def _run_pf(redactor, text: str) -> list[tuple[str, str, int, int, float]]:
+    """Run Privacy Filter and return (label, span_text, start, end, score).
+
+    OPF doesn't expose per-span confidence scores in the public API, so we
+    report 1.0 as a placeholder — the model only emits spans it's already
+    confident about after Viterbi decoding.
+    """
+    result = redactor.redact(text)
+    spans = []
+    for span in result.detected_spans:
+        spans.append((
+            str(span.label),
+            str(span.text),
+            int(span.start),
+            int(span.end),
+            1.0,
+        ))
+    return spans
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
     except ImportError as exc:
         print(
             "ERROR: missing dependency. Install with:\n"
-            "    pip install transformers torch\n"
+            "    pip install git+https://github.com/openai/privacy-filter.git\n"
             f"({exc})",
             file=sys.stderr,
         )
