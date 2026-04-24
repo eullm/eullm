@@ -184,6 +184,153 @@ def test_ner_callback_assigns_stable_tokens():
     assert len(calls) == 1
 
 
+def test_redacts_cf_azienda_before_phone():
+    """11-digit company C.F. starting with 0 must be captured by the C.F.
+    regex, not by the phone regex."""
+    text = "AGENZIA DELLE ENTRATE (C.F. 06363391001), in persona del Direttore"
+    out, stats = anonymize_text(text)
+    assert "06363391001" not in out
+    assert "[CODICE_FISCALE]" in out
+    assert "[TELEFONO]" not in out
+    assert stats.codice_fiscale == 1
+    assert stats.phone == 0
+
+
+def test_address_ignores_lowercase_locutions():
+    """'in via esclusiva', 'via telematica', 'via breve' are locutions,
+    not addresses. They must NOT be redacted to [INDIRIZZO]."""
+    cases = [
+        "attribuita in via esclusiva al legislatore statale",
+        "notificato a mezzo via telematica",
+        "la via libera è stata concessa",
+        "per via breve e informalmente",
+    ]
+    for text in cases:
+        out, stats = anonymize_text(text)
+        assert "[INDIRIZZO]" not in out, f"locution redacted: {text!r}"
+        assert stats.address == 0, f"counted: {text!r}"
+
+
+def test_ner_ignores_allcaps_acronym():
+    """Single ALL-CAPS acronyms (ARIF, ENEA, CNEL) are agencies, not
+    persons. spaCy tags them as PER — filter them out."""
+    text = "l'ente pubblico ARIF ricorre. Anche ENEA partecipa al giudizio."
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("ARIF", "ENEA"):
+            idx = t.find(name)
+            if idx >= 0:
+                spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "ARIF" in out
+    assert "ENEA" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_ignores_institutional_spans():
+    """spaCy frequently mis-tags institutional references ("La Corte",
+    "Cass.", "Direttore", "Tribunale") as PER. Those must not be redacted.
+    """
+    text = (
+        "La Corte di Cassazione ha stabilito che Cass. 19/08/2020 n. 17313 "
+        "si applica. Il Direttore dell'Agenzia ha ricorso."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("La Corte", "Cass", "Direttore", "Tribunale"):
+            idx = t.find(name)
+            if idx >= 0:
+                spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert stats.person_ner == 0
+    assert "La Corte" in out
+    assert "Direttore" in out
+
+
+def test_allcaps_not_redacted_before_company_marker():
+    """'BANCA MONTE DEI PASCHI DI SIENA S.P.A.' is a company, not a person.
+    The S.P.A. suffix must suppress the all-caps person heuristic.
+    """
+    cases = [
+        "contro BANCA MONTE DEI PASCHI DI SIENA S.P.A., sedente in Siena",
+        "la GENERALI ASSICURAZIONI S.p.A. propone ricorso",
+        "UNICREDIT BANCA Spa ricorre",
+        "contro INTESA SANPAOLO S.R.L. per il tramite",
+    ]
+    for text in cases:
+        out, stats = anonymize_text(text)
+        assert "[PERSONA]" not in out, f"false positive on: {text!r}"
+        assert stats.person_allcaps == 0, f"stats wrong on: {text!r}"
+
+
+def test_allcaps_whitelist_keeps_legal_terms():
+    """Phrases like 'ONERE PROVA', 'CAUSA PETENDI' are legal terms, not
+    persons. The extended whitelist must keep them.
+    """
+    text = (
+        "un ONERE PROVA censura valut importo; la CAUSA PETENDI non "
+        "è mutata; LEGGE FALLIMENTARE; RICORSO INAMMISSIBILE"
+    )
+    out, stats = anonymize_text(text)
+    for keep in ("ONERE PROVA", "CAUSA", "LEGGE", "RICORSO"):
+        assert keep in out, f"{keep!r} wrongly redacted in: {out!r}"
+
+
+def test_ner_ignores_junk_spans():
+    """Regression test: spaCy sometimes returns 1-2 char junk spans
+    (stopwords, single letters, articles). These must never be used as
+    replacement keys — a case-insensitive global replace of "l" would
+    nuke every occurrence of that letter in the document.
+    """
+    text = "La Corte di Cassazione, con ordinanza, dichiara l'inammissibile"
+
+    def junk_ner(t: str) -> list[tuple[str, int, int]]:
+        return [
+            ("l", 48, 49),
+            ("La", 0, 2),
+            ("di", 10, 12),
+            ("re", 0, 2),
+        ]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=junk_ner)
+    assert "[PERSONA" not in out
+    assert stats.person_ner == 0
+    assert "Cassazione" in out
+    assert "ordinanza" in out
+
+
+def test_ner_respects_word_boundaries():
+    """A short surname must not eat substrings inside longer words:
+    'Monte' should not redact 'montepremi' or 'Monteverdi'.
+    """
+    text = "Il signor Monte ricorre; al montepremi si aggiunge Monteverdi."
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Monte")
+        return [("Monte", idx, idx + 5)]
+
+    cfg = AnonymiserConfig(
+        use_ner=True,
+        redact_allcaps_names=False,
+        redact_address=False,
+    )
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA_1]" in out
+    assert "montepremi" in out
+    assert "Monteverdi" in out
+    assert stats.person_ner == 1
+
+
 def test_redaction_stats_total():
     stats = RedactionStats(codice_fiscale=2, email=1, person_allcaps=3)
     assert stats.total() == 6

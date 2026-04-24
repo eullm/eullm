@@ -57,6 +57,15 @@ RE_PIVA = re.compile(
     re.IGNORECASE,
 )
 
+# Codice fiscale of entities/companies: "C.F." or "cod. fisc." followed by
+# 11 digits. Must be caught BEFORE RE_PHONE, since 11-digit landline-like
+# sequences (e.g. '06363391001' for the Agenzia delle Entrate) would
+# otherwise be swallowed by the phone regex.
+RE_CF_AZIENDA = re.compile(
+    r"\b(?:C\.?\s*F\.?|cod(?:ice)?\s*fisc(?:ale)?)[:\s]*\d{11}\b",
+    re.IGNORECASE,
+)
+
 # Italian IBAN: starts with IT + 2 check digits + CIN letter + 5 ABI + 5 CAB
 # + 12 account chars. 27 chars total.
 RE_IBAN = re.compile(
@@ -117,6 +126,23 @@ RE_ALLCAPS_NAME = re.compile(
     r"[A-ZÀ-Ÿ]{2,}\b"
 )
 
+# Company-form markers that, when they follow an all-caps run, signal that
+# the run is a ragione sociale rather than a person name (e.g.
+# "BANCA MONTE DEI PASCHI DI SIENA S.P.A.").
+_COMPANY_TAIL_RE = re.compile(
+    r"\s*(?:"
+    r"S\.?\s?P\.?\s?A\.?|"
+    r"S\.?\s?R\.?\s?L\.?|"
+    r"S\.?\s?A\.?\s?S\.?|"
+    r"S\.?\s?N\.?\s?C\.?|"
+    r"S\.?C\.?A\.?R\.?L\.?|"
+    r"SCARL|SCRL|SPA|SRL|SAS|SNC|"
+    r"Spa|Srl|Sas|Snc|"
+    r"GROUP|HOLDING|LTD|LIMITED|GMBH|INC"
+    r")\b",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -164,6 +190,86 @@ class AnonymiserConfig:
     use_ner: bool = False
 
 
+# Italian stopwords / particles that spaCy NER occasionally mis-tags as PER.
+# Never use these as replacement keys — a 1-2 char key combined with
+# case-insensitive global replace nukes the whole document.
+_NER_STOPWORDS = frozenset(
+    {
+        "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
+        "di", "a", "da", "in", "con", "su", "per", "tra", "fra",
+        "del", "dello", "della", "dei", "degli", "delle",
+        "al", "allo", "alla", "ai", "agli", "alle",
+        "dal", "dallo", "dalla", "dai", "dagli", "dalle",
+        "nel", "nello", "nella", "nei", "negli", "nelle",
+        "sul", "sullo", "sulla", "sui", "sugli", "sulle",
+        "e", "o", "ma", "se", "che", "non", "è", "sono",
+        "l", "dell", "nell", "sull", "all", "dall",
+        "re", "st", "pr", "cd", "ed", "od", "ne", "io", "tu", "lui", "lei",
+        "art", "dott", "avv", "sig", "ing", "prof",
+        # Legal / procedural abbreviations that spaCy keeps tagging as PER.
+        "cost", "ric", "sent", "ord", "cass", "trib", "cod", "cons",
+    }
+)
+
+
+# Institutional / procedural tokens that spaCy's it_core_news_lg regularly
+# mis-tags as PER in legal text ("Cass.", "La Corte", "Direttore",
+# "Tribunale", ...). If *every* significant token of a candidate span is
+# drawn from this set, we reject the span.
+_NER_INSTITUTIONAL = frozenset(
+    {
+        "cass", "corte", "tribunale", "cassazione", "sezione", "sezioni",
+        "camera", "consiglio", "collegio", "udienza", "adunanza",
+        "consigliere", "presidente", "relatore", "procura", "procuratore",
+        "avvocatura", "avvocato", "ministero", "ministro", "agenzia",
+        "commissione", "direttore", "direzione", "ufficio", "servizio",
+        "ordine", "albo", "curatore", "commissario", "sindaco", "perito",
+        "giudice", "magistrato", "cancelleria", "cancelliere",
+        "costituzionale", "costituzione", "suprema", "superiore",
+        "regionale", "provinciale", "nazionale", "tributaria", "civile",
+        "penale", "amministrativo", "costituente", "consulta",
+    }
+)
+
+
+def _is_valid_ner_span(name: str) -> bool:
+    """Filter obviously broken NER spans before using them for replacement.
+
+    spaCy's it_core_news_lg occasionally tags isolated characters, particles,
+    titles, or punctuation as PER — and feeding those into a regex replace
+    erases entire documents. Reject anything we wouldn't want to redact even
+    if the tag were correct.
+    """
+    name = name.strip(" .,;:'\"")
+    if len(name) < 3:
+        return False
+    if not re.search(r"[A-Za-zÀ-ÿ]", name):
+        return False
+    # All-lowercase tokens are almost never personal names in legal text,
+    # which is Title-Case or UPPERCASE for parties. Rejecting lowercase
+    # also removes Italian articles/particles.
+    if name == name.lower():
+        return False
+    if name.lower() in _NER_STOPWORDS:
+        return False
+    # At least one alphabetic token of 3+ chars (rejects "L.", "A.", "J.R.").
+    tokens = [t for t in re.split(r"[\s.'-]+", name) if t]
+    if not any(len(tok) >= 3 and tok.isalpha() for tok in tokens):
+        return False
+    # Drop spans where every significant token is an institutional /
+    # procedural word ("La Corte", "Cass.", "Direttore", "Tribunale di ...").
+    significant = [t.lower() for t in tokens if t.lower() not in _NER_STOPWORDS]
+    if significant and all(t in _NER_INSTITUTIONAL for t in significant):
+        return False
+    # Single ALL-CAPS acronym (2-6 chars, no internal whitespace) is almost
+    # always an agency/entity code ('ARIF', 'ENEA', 'CNEL', 'CCNL'), not a
+    # person. Italian surnames of this form are rare and anyway caught by
+    # the all-caps name heuristic when combined with a given name.
+    if len(tokens) == 1 and tokens[0].isupper() and 2 <= len(tokens[0]) <= 6:
+        return False
+    return True
+
+
 # Whitelist of ALL-CAPS tokens that must NOT be treated as person names.
 _ALLCAPS_WHITELIST = frozenset(
     {
@@ -183,8 +289,18 @@ _ALLCAPS_WHITELIST = frozenset(
         "AGENZIA", "ENTRATE", "RISCOSSIONE", "EQUITALIA", "INPS", "INAIL",
         "ENEL", "RAI", "POSTE", "ITALIANE", "FERROVIE", "STATO", "MINISTERO",
         "COMUNE", "PROVINCIA", "REGIONE",
-        # Company forms
+        # Company forms and frequent company-name tokens
         "SPA", "SRL", "SNC", "SAS", "SCARL", "SCRL", "SPAF", "GROUP", "HOLDING",
+        "BANCA", "BANCO", "ASSICURAZIONI", "IMMOBILIARE", "COSTRUZIONI",
+        "SERVIZI", "COMMERCIO", "INDUSTRIE", "EDIZIONI", "FINANZIARIA",
+        # Frequent legal / procedural all-caps phrases that are NOT names
+        "ONERE", "PROVA", "CAUSA", "MERITO", "LEGGE", "NORMA", "ARTICOLO",
+        "COMMA", "LETTERA", "TITOLO", "CAPO", "LIBRO", "CODICE",
+        "PROCEDURA", "PROCESSO", "RICORSO", "APPELLO", "GRAVAME",
+        "DOMANDA", "DIFESA", "ECCEZIONE", "CENSURA", "MOTIVAZIONE",
+        "RAGIONI", "DECISIONE", "IMPUGNAZIONE", "INAMMISSIBILE",
+        "INAMMISSIBILITÀ", "INAMMISSIBILITA", "INFONDATO", "INFONDATA",
+        "ACCOLTO", "RIGETTATO", "CASSAZIONE",
         # Geographic filler commonly appearing uppercase (capoluoghi + città
         # grandi; avoids redacting place-of-court mentions).
         "ROMA", "MILANO", "NAPOLI", "TORINO", "PALERMO", "BARI", "GENOVA",
@@ -246,9 +362,8 @@ def anonymize_text(
     #    birth clauses get a stable token before the clause is nuked).
     if cfg.use_ner and ner is not None:
         person_map: dict[str, str] = {}
-        # Collect entities and dedupe by normalised name.
-        entities = ner(text)
-        # Sort by start so we get stable numbering in text order.
+        # Collect entities, drop junk spans, sort by start for stable numbering.
+        entities = [e for e in ner(text) if _is_valid_ner_span(e[0])]
         entities = sorted(set(entities), key=lambda e: e[1])
         for name, _s, _e in entities:
             key = _normalise_name(name)
@@ -256,10 +371,15 @@ def anonymize_text(
                 person_map[key] = f"[PERSONA_{len(person_map) + 1}]"
         if person_map:
             # Replace longest names first to avoid partial overlap bugs.
+            # Use word-boundary anchors (\w lookaround) so "Mario" doesn't
+            # eat the "mar" inside "marzo" and so short surnames don't
+            # bleed into longer words.
             for key in sorted(person_map, key=len, reverse=True):
                 token = person_map[key]
-                # Replace with case-insensitive boundary match.
-                pattern = re.compile(re.escape(key), re.IGNORECASE)
+                pattern = re.compile(
+                    r"(?<!\w)" + re.escape(key) + r"(?!\w)",
+                    re.IGNORECASE,
+                )
                 new_text, n = pattern.subn(token, text)
                 if n:
                     stats.person_ner += n
@@ -270,6 +390,11 @@ def anonymize_text(
         text, n = RE_CF.subn("[CODICE_FISCALE]", text)
         stats.codice_fiscale += n
     if cfg.redact_piva:
+        # Company C.F. (11-digit numeric) before the phone regex, since an
+        # 11-digit landline-like sequence starting with 0 would be captured
+        # by RE_PHONE otherwise.
+        text, n = RE_CF_AZIENDA.subn("[CODICE_FISCALE]", text)
+        stats.codice_fiscale += n
         text, n = RE_PIVA.subn("[PARTITA_IVA]", text)
         stats.partita_iva += n
     if cfg.redact_iban:
@@ -285,18 +410,39 @@ def anonymize_text(
         text, n = RE_BIRTH_CLAUSE.subn("[DATI_NASCITA]", text)
         stats.birth_clause += n
     if cfg.redact_address:
-        text, n = RE_ADDRESS.subn("[INDIRIZZO]", text)
-        stats.address += n
+        def _addr_sub(m: re.Match[str]) -> str:
+            body = m.group(0)
+            # Split street-keyword off from its name; the first alphabetic
+            # character of the name must be uppercase. Locutions like "in
+            # via esclusiva", "in via telematica", "via libera" have a
+            # lowercase name and must NOT be redacted.
+            parts = body.split(None, 1)
+            if len(parts) == 2:
+                first_alpha = next(
+                    (c for c in parts[1] if c.isalpha()), None
+                )
+                if first_alpha and first_alpha.islower():
+                    return body
+            stats.address += 1
+            return "[INDIRIZZO]"
+
+        text = RE_ADDRESS.sub(_addr_sub, text)
 
     # 3) All-caps name heuristic (last, on text with structured PII already
     #    stripped so we don't double-count).
     if cfg.redact_allcaps_names:
         def _sub(m: re.Match[str]) -> str:
             s = m.group(0)
-            if _is_likely_person(s):
-                stats.person_allcaps += 1
-                return "[PERSONA]"
-            return s
+            if not _is_likely_person(s):
+                return s
+            # Suppress when the match is immediately followed by a company
+            # marker (S.P.A., S.R.L., S.N.C., S.A.S., SCARL, SPA, ...): the
+            # uppercase run is a ragione sociale, not a person name.
+            tail = text[m.end():m.end() + 30]
+            if _COMPANY_TAIL_RE.match(tail):
+                return s
+            stats.person_allcaps += 1
+            return "[PERSONA]"
 
         text = RE_ALLCAPS_NAME.sub(_sub, text)
 
@@ -366,7 +512,7 @@ def load_spacy_ner(
         return [
             (ent.text, ent.start_char, ent.end_char)
             for ent in doc.ents
-            if ent.label_ == "PER"
+            if ent.label_ == "PER" and _is_valid_ner_span(ent.text)
         ]
 
     return _extract
