@@ -331,6 +331,118 @@ def test_ner_respects_word_boundaries():
     assert stats.person_ner == 1
 
 
+def test_ner_drops_pqm_locution():
+    """`P.Q.M. La Corte` (Per Questi Motivi + La Corte) is the dispositive
+    formula in Cassazione rulings. spaCy NER bundles it as a single PER
+    span. Must not be redacted: P.Q.M. is fixed legalese, La Corte is
+    institutional.
+    """
+    text = (
+        "...n. 1778). P. Q. M. La Corte dichiara l'inammissibilità del "
+        "ricorso. Condanna l'Agenzia ricorrente al pagamento."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("P. Q. M. La Corte")
+        return [("P. Q. M. La Corte", idx, idx + len("P. Q. M. La Corte"))]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert "P. Q. M. La Corte" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_drops_org_prefix_spans():
+    """Long organisational names like 'Agenzia Regionale per le Attività
+    Irrigue e Forestali' must not be redacted as PER, regardless of how
+    many tokens they contain.
+    """
+    text = (
+        "L'Agenzia Regionale per le Attività Irrigue e Forestali "
+        "(ARIF) il cui rapporto è regolato dal CCNL."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Agenzia Regionale per le Attività Irrigue e Forestali")
+        return [(
+            "Agenzia Regionale per le Attività Irrigue e Forestali",
+            idx, idx + len(
+                "Agenzia Regionale per le Attività Irrigue e Forestali"
+            ),
+        )]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert "Agenzia Regionale" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_drops_acronym_inside_multi_token_span():
+    """spaCy occasionally bundles 'ACRONYM lowerword' as a PER span.
+    Reject when an all-caps 2-6 char token is glued to a mixed-case one.
+    Must NOT reject 'PASQUALE ROSSI' (both all-caps).
+    """
+    text = "Il signor PASQUALE ROSSI ricorre."
+
+    def junk_ner(t: str) -> list[tuple[str, int, int]]:
+        return [
+            ("ARIF siaente", 0, 12),
+            ("Cass MT", 12, 19),
+        ]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, _stats = anonymize_text(text, config=cfg, ner=junk_ner)
+    # Junk spans must never produce a [PERSONA] tag.
+    assert "[PERSONA" not in out
+
+    # Sanity check: the lexical filter alone must still let real all-caps
+    # surnames through. Run the validator directly.
+    from eullm_forge.datasets.anonymize import _is_valid_ner_span
+    assert _is_valid_ner_span("PASQUALE ROSSI")
+    assert not _is_valid_ner_span("ARIF siaente")
+    assert not _is_valid_ner_span("Cass MT")
+
+
+def test_ner_drops_titlecase_when_acronym_in_doc():
+    """If the document contains 'ARIF' (all-caps), a NER span 'Arif'
+    elsewhere is the same acronym — never a person.
+    """
+    text = (
+        "L'ARIF è ente pubblico non economico. Il personale "
+        "inquadrato in Arif a tempo indeterminato è disciplinato "
+        "dal CCNL del comparto."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Arif")
+        return [("Arif", idx, idx + 4)]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert "Arif" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_drops_capitalised_gerunds():
+    """`Aggiungendosi`, `Avverso`, `Udita`, `Rilevato` start sentences in
+    italgiure OCR text and get tagged PER by spaCy. They are participles /
+    gerunds, not names.
+    """
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    for word in ("Aggiungendosi", "Avverso", "Udita", "Rilevato"):
+        text = f"{word} la sentenza, la Corte ha disposto."
+
+        def ner(t: str, w: str = word) -> list[tuple[str, int, int]]:
+            return [(w, 0, len(w))]
+
+        out, _stats = anonymize_text(text, config=cfg, ner=ner)
+        assert "[PERSONA" not in out, f"false positive on: {word!r}"
+        assert word in out
+
+
 def test_redaction_stats_total():
     stats = RedactionStats(codice_fiscale=2, email=1, person_allcaps=3)
     assert stats.total() == 6

@@ -208,6 +208,42 @@ _NER_STOPWORDS = frozenset(
         "art", "dott", "avv", "sig", "ing", "prof",
         # Legal / procedural abbreviations that spaCy keeps tagging as PER.
         "cost", "ric", "sent", "ord", "cass", "trib", "cod", "cons",
+        # Procedural locutions / gerunds in italgiure OCR that come out
+        # capitalised and slip past spaCy as PER.
+        "pqm", "p.q.m", "p.q.m.", "p. q. m.", "p. q. m",
+        "aggiungendosi", "avverso", "udita", "rilevato", "ritenuto",
+        "considerato", "premesso", "osservato", "letto",
+    }
+)
+
+
+# Organisational prefixes — when a span STARTS with one of these, capitalised,
+# it is the name of an entity / public body, never a person ("Agenzia Regionale
+# per le Attività Irrigue e Forestali", "Ministero dell'Economia",
+# "Direzione Provinciale di Bari", "Tribunale di Lecce", "Avvocatura Generale
+# dello Stato", ...). Reject regardless of what follows.
+_NER_ORG_PREFIXES = frozenset(
+    {
+        "agenzia", "ministero", "regione", "comune", "provincia",
+        "città", "citta", "direzione", "dipartimento", "ufficio", "servizio",
+        "commissione", "autorità", "autorita", "consiglio", "corte",
+        "tribunale", "procura", "avvocatura", "consulta", "garante",
+        "sovrintendenza", "soprintendenza", "ispettorato", "questura",
+        "prefettura", "ente", "istituto", "azienda", "fondazione",
+        "associazione", "federazione", "ordine", "albo", "camera",
+        "università", "universita", "scuola", "accademia", "centro",
+        "osservatorio",
+    }
+)
+
+
+# Particles allowed inside multi-token person spans ("DI ROSSI", "DE LUCA").
+# When the acronym filter scans a span, all-caps tokens equal to one of these
+# are NOT counted as acronyms.
+_PARTICLES = frozenset(
+    {
+        "DI", "DE", "DA", "DEL", "DELLA", "DELLE", "DEGLI", "DEI",
+        "LA", "LO", "LE", "LI", "VAN", "VON", "DU", "MAC", "MC", "AL",
     }
 )
 
@@ -250,7 +286,13 @@ def _is_valid_ner_span(name: str) -> bool:
     # also removes Italian articles/particles.
     if name == name.lower():
         return False
-    if name.lower() in _NER_STOPWORDS:
+    # Stopword check both on the raw span and on a punctuation-stripped
+    # variant ("P. Q. M." -> "pqm" / "p.q.m." / "p. q. m.").
+    name_norm = name.lower()
+    if name_norm in _NER_STOPWORDS:
+        return False
+    name_compact = re.sub(r"\s+", "", name_norm)
+    if name_compact in _NER_STOPWORDS:
         return False
     # At least one alphabetic token of 3+ chars (rejects "L.", "A.", "J.R.").
     tokens = [t for t in re.split(r"[\s.'-]+", name) if t]
@@ -258,8 +300,19 @@ def _is_valid_ner_span(name: str) -> bool:
         return False
     # Drop spans where every significant token is an institutional /
     # procedural word ("La Corte", "Cass.", "Direttore", "Tribunale di ...").
-    significant = [t.lower() for t in tokens if t.lower() not in _NER_STOPWORDS]
+    # Filter out single-character tokens too — "P. Q. M. La Corte" tokenises
+    # as ['P', 'Q', 'M', 'La', 'Corte']; without this filter the single
+    # letters survive as 'significant' and shield the span from rejection.
+    significant = [
+        t.lower() for t in tokens
+        if len(t) >= 2 and t.lower() not in _NER_STOPWORDS
+    ]
     if significant and all(t in _NER_INSTITUTIONAL for t in significant):
+        return False
+    # Drop spans whose first significant token is an organisational prefix
+    # ("Agenzia Regionale ...", "Ministero dell'Economia", "Direzione
+    # Provinciale di Bari"). spaCy mis-tags long entity names as PER.
+    if significant and significant[0] in _NER_ORG_PREFIXES:
         return False
     # Single ALL-CAPS acronym (2-6 chars, no internal whitespace) is almost
     # always an agency/entity code ('ARIF', 'ENEA', 'CNEL', 'CCNL'), not a
@@ -267,6 +320,25 @@ def _is_valid_ner_span(name: str) -> bool:
     # the all-caps name heuristic when combined with a given name.
     if len(tokens) == 1 and tokens[0].isupper() and 2 <= len(tokens[0]) <= 6:
         return False
+    # Multi-token spans that mix an acronym-shaped token with a mixed-case
+    # token ("ARIF siaente", "Cass MT", "INPS gestione") are NER bundling
+    # bugs, never people. Reject when both are present.
+    # ALL-CAPS multi-token spans like "PASQUALE ROSSI" must NOT trip this:
+    # we require at least one non-acronym mixed-case token in the same span.
+    if len(tokens) >= 2:
+        has_acronym = any(
+            tok.isupper() and tok.isalpha()
+            and 2 <= len(tok) <= 6
+            and tok not in _PARTICLES
+            for tok in tokens
+        )
+        has_mixed = any(
+            (not tok.isupper())
+            and any(c.isalpha() for c in tok)
+            for tok in tokens
+        )
+        if has_acronym and has_mixed:
+            return False
     return True
 
 
@@ -361,9 +433,23 @@ def anonymize_text(
     #    substitute; we do this before regex so that person names inside
     #    birth clauses get a stable token before the clause is nuked).
     if cfg.use_ner and ner is not None:
+        # Pre-scan: collect 2-6 char ALL-CAPS tokens that appear in the doc.
+        # If a NER span (typically a 'Title Case' token like 'Arif' that
+        # spaCy mis-tags) matches one of these in uppercase, it's the same
+        # acronym and must not be redacted as a person.
+        doc_acronyms = {
+            tok for tok in re.findall(r"\b[A-Z]{2,6}\b", text)
+            if tok not in _PARTICLES
+        }
         person_map: dict[str, str] = {}
         # Collect entities, drop junk spans, sort by start for stable numbering.
         entities = [e for e in ner(text) if _is_valid_ner_span(e[0])]
+        # Drop entities whose uppercase form matches a document acronym
+        # ('Arif' when 'ARIF' is in the same doc, 'Inps' when 'INPS' is, ...).
+        entities = [
+            e for e in entities
+            if _normalise_name(e[0]).upper() not in doc_acronyms
+        ]
         entities = sorted(set(entities), key=lambda e: e[1])
         for name, _s, _e in entities:
             key = _normalise_name(name)
