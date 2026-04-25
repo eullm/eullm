@@ -443,6 +443,96 @@ def test_ner_drops_capitalised_gerunds():
         assert word in out
 
 
+def test_role_aware_token_avvocato():
+    """A NER span preceded by 'avv.' / 'Avv.' / 'avvocato' is mapped to
+    `[AVVOCATO_N]`, not `[PERSONA_N]`. Role context is preserved.
+    """
+    text = (
+        "rappresentata e difesa dagli avv. Pasquale Russo, "
+        "Guglielmo Fransoni e Francesco Padovani, come da procura"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("Pasquale Russo", "Guglielmo Fransoni",
+                     "Francesco Padovani"):
+            idx = t.find(name)
+            spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[AVVOCATO_1]" in out
+    assert "[AVVOCATO_2]" in out
+    assert "[AVVOCATO_3]" in out
+    assert "[PERSONA_1]" not in out
+    assert "Pasquale Russo" not in out
+    assert stats.person_ner == 3
+
+
+def test_role_aware_token_consigliere():
+    """`Consigliere Relatore Dott. LORENZO DELLI PRISCOLI` and similar
+    phrasings produce `[CONSIGLIERE_N]`.
+    """
+    text = (
+        "udita la relazione svolta dal consigliere Alberto Crivelli, "
+        "ha pronunciato la seguente ordinanza"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Alberto Crivelli")
+        return [("Alberto Crivelli", idx, idx + len("Alberto Crivelli"))]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[CONSIGLIERE_1]" in out
+    assert "Alberto Crivelli" not in out
+    assert stats.person_ner == 1
+
+
+def test_role_aware_token_default_is_persona():
+    """A NER span without role context falls back to `[PERSONA_N]`."""
+    text = "il signor De Simone ha ricorso contro la decisione."
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("De Simone")
+        return [("De Simone", idx, idx + len("De Simone"))]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA_1]" in out
+    assert "De Simone" not in out
+    assert stats.person_ner == 1
+
+
+def test_role_aware_per_role_counters_are_independent():
+    """Each role has its own counter: two avvocati and two consiglieri
+    produce AVVOCATO_1/AVVOCATO_2 and CONSIGLIERE_1/CONSIGLIERE_2.
+    """
+    text = (
+        "difesa dall'avv. Mario Rossi e dall'avv. Luigi Bianchi; "
+        "udita la relazione del consigliere Anna Verdi, "
+        "presieduta dal Presidente Carlo Neri"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("Mario Rossi", "Luigi Bianchi",
+                     "Anna Verdi", "Carlo Neri"):
+            idx = t.find(name)
+            spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, _stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[AVVOCATO_1]" in out
+    assert "[AVVOCATO_2]" in out
+    assert "[CONSIGLIERE_1]" in out
+    assert "[PRESIDENTE_1]" in out
+    # No cross-contamination of numbering.
+    assert "[AVVOCATO_3]" not in out
+
+
 def test_redaction_stats_total():
     stats = RedactionStats(codice_fiscale=2, email=1, person_allcaps=3)
     assert stats.total() == 6

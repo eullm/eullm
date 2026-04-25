@@ -442,6 +442,9 @@ def anonymize_text(
             if tok not in _PARTICLES
         }
         person_map: dict[str, str] = {}
+        # Per-role counters so each role gets its own 1-indexed numbering
+        # ([AVVOCATO_1], [AVVOCATO_2], [CONSIGLIERE_1], [PERSONA_1], ...).
+        role_counters: dict[str, int] = {}
         # Collect entities, drop junk spans, sort by start for stable numbering.
         entities = [e for e in ner(text) if _is_valid_ner_span(e[0])]
         # Drop entities whose uppercase form matches a document acronym
@@ -451,10 +454,29 @@ def anonymize_text(
             if _normalise_name(e[0]).upper() not in doc_acronyms
         ]
         entities = sorted(set(entities), key=lambda e: e[1])
-        for name, _s, _e in entities:
+        # Track the most recent assigned role and the previous span's end so
+        # that "avv. A, B e C" chains all three names under AVVOCATO. A
+        # subsequent name inherits the role only if (a) its own lookback
+        # detected no role, and (b) the gap is purely a list connector.
+        last_role: Optional[str] = None
+        last_entity_end: int = -1
+        for name, span_start, span_end in entities:
+            role = _detect_role(text, span_start)
+            if (
+                role == "PERSONA"
+                and last_role is not None
+                and last_entity_end >= 0
+            ):
+                gap = text[last_entity_end:span_start]
+                if _ROLE_CONNECTOR_RE.fullmatch(gap):
+                    role = last_role
+            last_role = role
+            last_entity_end = span_end
+
             key = _normalise_name(name)
             if key and key not in person_map:
-                person_map[key] = f"[PERSONA_{len(person_map) + 1}]"
+                role_counters[role] = role_counters.get(role, 0) + 1
+                person_map[key] = f"[{role}_{role_counters[role]}]"
         if person_map:
             # Replace longest names first to avoid partial overlap bugs.
             # Use word-boundary anchors (\w lookaround) so "Mario" doesn't
@@ -563,6 +585,51 @@ def _normalise_name(name: str) -> str:
     """Strip trailing punctuation / collapse whitespace for map key."""
     name = re.sub(r"\s+", " ", name).strip(" ,.;:")
     return name
+
+
+# Role markers detected in the ~30 chars BEFORE a NER person span. Replace
+# the generic `[PERSONA_N]` token with a role-specific one so the model
+# preserves structural context (who is the lawyer, who is the judge, who is
+# the party) without leaking the actual identity.
+#
+# Order matters: the first matching pattern wins, so longer/more specific
+# patterns come first ("consigliere relatore" before "consigliere").
+_ROLE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"consigliere\s+relatore[\s,]*$", re.IGNORECASE), "CONSIGLIERE"),
+    (re.compile(r"\b(?:cons|consigliere)\.?\s*$", re.IGNORECASE), "CONSIGLIERE"),
+    (re.compile(r"\b(?:pres|presidente)\.?\s*$", re.IGNORECASE), "PRESIDENTE"),
+    (re.compile(r"\bavv\.?\s*$", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bavvocat[oi]\s*$", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bdifensor[ei]\s*$", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\b(?:dott|dr)\.?\s*$", re.IGNORECASE), "DOTT"),
+    (re.compile(r"\bdottor[ei]?\s*$", re.IGNORECASE), "DOTT"),
+)
+
+_ROLE_LOOKBACK_CHARS = 30
+
+# Connector patterns used to chain multiple names under the same role marker:
+# "avv. A, B e C" means all three are avvocati. The regex must match the
+# ENTIRE gap between two adjacent NER spans for the inheritance to fire.
+_ROLE_CONNECTOR_RE = re.compile(
+    r"\s*(?:"
+    r"[,;]\s*(?:e[d]?\s+|o\s+)?"
+    r"|\s+e[d]?\s+"
+    r"|\s+o\s+"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _detect_role(text: str, span_start: int) -> str:
+    """Look at the chars immediately before ``span_start`` and return the
+    matching role tag, or ``"PERSONA"`` if none of the patterns fits.
+    """
+    left = max(0, span_start - _ROLE_LOOKBACK_CHARS)
+    prefix = text[left:span_start]
+    for pat, role in _ROLE_RULES:
+        if pat.search(prefix):
+            return role
+    return "PERSONA"
 
 
 # ---------------------------------------------------------------------------
