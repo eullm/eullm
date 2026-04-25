@@ -102,8 +102,67 @@ def test_allcaps_name_heuristic_catches_party():
     text = "ricorso proposto da CARLOMAGNO FRANCESCO avverso la sentenza"
     out, stats = anonymize_text(text)
     assert "CARLOMAGNO FRANCESCO" not in out
-    assert "[PERSONA]" in out
+    assert "[PERSONA_1]" in out
     assert stats.person_allcaps == 1
+
+
+def test_allcaps_role_aware_avvocato():
+    """An ALL-CAPS name preceded by 'avvocato' / 'avv.' becomes
+    [AVVOCATO_N] just like the NER layer.
+    """
+    text = "rappresentata e difesa dall'avvocato PAOLO DOGLIOTTI"
+    out, stats = anonymize_text(text)
+    assert "PAOLO DOGLIOTTI" not in out
+    assert "[AVVOCATO_1]" in out
+    assert stats.person_allcaps == 1
+
+
+def test_allcaps_role_aware_consigliere():
+    """An ALL-CAPS name preceded by 'Consigliere Relatore Dott.' becomes
+    [CONSIGLIERE_N], not [DOTT_N] — first matching role rule wins.
+    """
+    text = (
+        "dal Consigliere Relatore Dott. LORENZO DELLI PRISCOLI. "
+        "Esposti i fatti, il collegio decide."
+    )
+    out, _stats = anonymize_text(text)
+    assert "LORENZO DELLI PRISCOLI" not in out
+    assert "[CONSIGLIERE_1]" in out
+
+
+def test_allcaps_per_doc_stability():
+    """The same ALL-CAPS name appearing twice gets the SAME token."""
+    text = (
+        "il sig. CARLOMAGNO FRANCESCO ricorre contro la sentenza. "
+        "CARLOMAGNO FRANCESCO chiede inoltre la sospensione."
+    )
+    out, stats = anonymize_text(text)
+    assert "CARLOMAGNO FRANCESCO" not in out
+    assert out.count("[PERSONA_1]") == 2
+    assert stats.person_allcaps == 2
+
+
+def test_allcaps_shares_counter_with_ner():
+    """When NER assigns [AVVOCATO_1] and [AVVOCATO_2], a third all-caps
+    avvocato in the same doc must be [AVVOCATO_3], not start over at _1.
+    """
+    text = (
+        "difesa dagli avv. Mario Rossi, Luigi Bianchi e dall'avvocato "
+        "PAOLO DOGLIOTTI; controricorrente"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("Mario Rossi", "Luigi Bianchi"):
+            idx = t.find(name)
+            spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True)
+    out, _stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[AVVOCATO_1]" in out
+    assert "[AVVOCATO_2]" in out
+    assert "[AVVOCATO_3]" in out
 
 
 def test_allcaps_whitelist_keeps_courts_and_agencies():
@@ -268,7 +327,11 @@ def test_allcaps_not_redacted_before_company_marker():
     ]
     for text in cases:
         out, stats = anonymize_text(text)
-        assert "[PERSONA]" not in out, f"false positive on: {text!r}"
+        assert "[PERSONA" not in out, f"false positive on: {text!r}"
+        assert "[AVVOCATO" not in out, f"false positive on: {text!r}"
+        assert "[CONSIGLIERE" not in out, f"false positive on: {text!r}"
+        assert "[PRESIDENTE" not in out, f"false positive on: {text!r}"
+        assert "[DOTT_" not in out, f"false positive on: {text!r}"
         assert stats.person_allcaps == 0, f"stats wrong on: {text!r}"
 
 

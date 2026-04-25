@@ -276,7 +276,7 @@ def _is_valid_ner_span(name: str) -> bool:
     erases entire documents. Reject anything we wouldn't want to redact even
     if the tag were correct.
     """
-    name = name.strip(" .,;:'\"")
+    name = name.strip(" .,;:'\"-–—")
     if len(name) < 3:
         return False
     if not re.search(r"[A-Za-zÀ-ÿ]", name):
@@ -429,6 +429,11 @@ def anonymize_text(
     cfg = config or AnonymiserConfig()
     stats = RedactionStats()
 
+    # Per-role counters shared across the NER and all-caps layers so a name
+    # that appears as 'Paolo Dogliotti' in one place and 'PAOLO DOGLIOTTI'
+    # elsewhere ends up under a single, consistent [ROLE_N] token.
+    role_counters: dict[str, int] = {}
+
     # 1) NER first (runs on original text so offsets are valid, then we
     #    substitute; we do this before regex so that person names inside
     #    birth clauses get a stable token before the clause is nuked).
@@ -442,9 +447,6 @@ def anonymize_text(
             if tok not in _PARTICLES
         }
         person_map: dict[str, str] = {}
-        # Per-role counters so each role gets its own 1-indexed numbering
-        # ([AVVOCATO_1], [AVVOCATO_2], [CONSIGLIERE_1], [PERSONA_1], ...).
-        role_counters: dict[str, int] = {}
         # Collect entities, drop junk spans, sort by start for stable numbering.
         entities = [e for e in ner(text) if _is_valid_ner_span(e[0])]
         # Drop entities whose uppercase form matches a document acronym
@@ -537,8 +539,13 @@ def anonymize_text(
         text = RE_ADDRESS.sub(_addr_sub, text)
 
     # 3) All-caps name heuristic (last, on text with structured PII already
-    #    stripped so we don't double-count).
+    #    stripped so we don't double-count). Role-aware: a match preceded by
+    #    "avvocato"/"consigliere"/"presidente"/"dott." gets the matching
+    #    [ROLE_N] token instead of the bare [PERSONA_N], sharing counters
+    #    with the NER layer for cross-layer consistency.
     if cfg.redact_allcaps_names:
+        allcaps_map: dict[str, str] = {}
+
         def _sub(m: re.Match[str]) -> str:
             s = m.group(0)
             if not _is_likely_person(s):
@@ -549,8 +556,17 @@ def anonymize_text(
             tail = text[m.end():m.end() + 30]
             if _COMPANY_TAIL_RE.match(tail):
                 return s
+            # Per-doc stability: same all-caps name → same token throughout.
+            key = _normalise_name(s).upper()
+            if key in allcaps_map:
+                stats.person_allcaps += 1
+                return allcaps_map[key]
+            role = _detect_role(text, m.start())
+            role_counters[role] = role_counters.get(role, 0) + 1
+            token = f"[{role}_{role_counters[role]}]"
+            allcaps_map[key] = token
             stats.person_allcaps += 1
-            return "[PERSONA]"
+            return token
 
         text = RE_ALLCAPS_NAME.sub(_sub, text)
 
@@ -594,15 +610,20 @@ def _normalise_name(name: str) -> str:
 #
 # Order matters: the first matching pattern wins, so longer/more specific
 # patterns come first ("consigliere relatore" before "consigliere").
+# Pattern matching is done unanchored: the 30-char lookback window already
+# bounds how far before the name we look, so requiring an end anchor only
+# breaks chains like "Consigliere Relatore Dott. NAME" where the specific
+# role marker is shielded from the name by a generic honorific.
 _ROLE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"consigliere\s+relatore[\s,]*$", re.IGNORECASE), "CONSIGLIERE"),
-    (re.compile(r"\b(?:cons|consigliere)\.?\s*$", re.IGNORECASE), "CONSIGLIERE"),
-    (re.compile(r"\b(?:pres|presidente)\.?\s*$", re.IGNORECASE), "PRESIDENTE"),
-    (re.compile(r"\bavv\.?\s*$", re.IGNORECASE), "AVVOCATO"),
-    (re.compile(r"\bavvocat[oi]\s*$", re.IGNORECASE), "AVVOCATO"),
-    (re.compile(r"\bdifensor[ei]\s*$", re.IGNORECASE), "AVVOCATO"),
-    (re.compile(r"\b(?:dott|dr)\.?\s*$", re.IGNORECASE), "DOTT"),
-    (re.compile(r"\bdottor[ei]?\s*$", re.IGNORECASE), "DOTT"),
+    (re.compile(r"\bconsiglier[ei]\b", re.IGNORECASE), "CONSIGLIERE"),
+    (re.compile(r"\bcons\.", re.IGNORECASE), "CONSIGLIERE"),
+    (re.compile(r"\bpresident[ei]\b", re.IGNORECASE), "PRESIDENTE"),
+    (re.compile(r"\bpres\.", re.IGNORECASE), "PRESIDENTE"),
+    (re.compile(r"\bavvocat[oi]\b", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bavv\.", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bdifensor[ei]\b", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bdottor[ei]?\b", re.IGNORECASE), "DOTT"),
+    (re.compile(r"\bdott\.|\bdr\.", re.IGNORECASE), "DOTT"),
 )
 
 _ROLE_LOOKBACK_CHARS = 30
@@ -623,13 +644,21 @@ _ROLE_CONNECTOR_RE = re.compile(
 def _detect_role(text: str, span_start: int) -> str:
     """Look at the chars immediately before ``span_start`` and return the
     matching role tag, or ``"PERSONA"`` if none of the patterns fits.
+
+    When a specific role (avvocato / consigliere / presidente) AND a generic
+    honorific (dott. / dr.) are both visible in the lookback window — as in
+    "Consigliere Relatore Dott. X" — the specific role wins, since the title
+    is a courtesy, not a procedural position.
     """
     left = max(0, span_start - _ROLE_LOOKBACK_CHARS)
     prefix = text[left:span_start]
-    for pat, role in _ROLE_RULES:
-        if pat.search(prefix):
-            return role
-    return "PERSONA"
+    matches = [role for pat, role in _ROLE_RULES if pat.search(prefix)]
+    if not matches:
+        return "PERSONA"
+    specific = [r for r in matches if r != "DOTT"]
+    if specific:
+        return specific[0]
+    return matches[0]
 
 
 # ---------------------------------------------------------------------------
