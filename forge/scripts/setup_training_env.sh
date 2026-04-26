@@ -9,12 +9,12 @@
 #
 # Required env vars (set BEFORE running):
 #   HF_TOKEN        — HuggingFace access token with repo read permission.
-#   HF_DATASET      — Private dataset repo, e.g. 'primoco/legal-it-pretraining'.
+#   HF_DATASET      — Private dataset repo, e.g. 'primoco/legal_it_pretraining'.
 #   WANDB_API_KEY   — (optional) for live training metrics.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/eullm/eullm/feat/legal-it/forge/scripts/setup_training_env.sh \
-#       | HF_TOKEN=hf_xxx HF_DATASET=primoco/legal-it-pretraining bash
+#       | HF_TOKEN=hf_xxx HF_DATASET=primoco/legal_it_pretraining bash
 #
 # Idempotent: re-running it will pick up where the previous run left off.
 
@@ -35,7 +35,7 @@ log() { printf '\033[34m[..]\033[0m  %s\n' "$*"; }
 # -----------------------------------------------------------------------------
 
 [ -n "${HF_TOKEN:-}" ]   || err "HF_TOKEN must be set (HF read-permission token)"
-[ -n "${HF_DATASET:-}" ] || err "HF_DATASET must be set (e.g. primoco/legal-it-pretraining)"
+[ -n "${HF_DATASET:-}" ] || err "HF_DATASET must be set (e.g. primoco/legal_it_pretraining)"
 
 command -v nvidia-smi >/dev/null || err "nvidia-smi not found — wrong instance image?"
 log "GPU detected:"

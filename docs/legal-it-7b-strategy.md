@@ -185,17 +185,17 @@ tar -czf legal_it_pretraining.tar.gz \
 ```
 
 Upload to a private HuggingFace Hub Dataset repo (e.g.
-`primoco/legal-it-pretraining`):
+`primoco/legal_it_pretraining`):
 
 ```bash
-huggingface-cli upload primoco/legal-it-pretraining \
+huggingface-cli upload primoco/legal_it_pretraining \
     legal_it_pretraining.tar.gz --repo-type dataset --private
 ```
 
 Download on the instance:
 
 ```bash
-huggingface-cli download primoco/legal-it-pretraining \
+huggingface-cli download primoco/legal_it_pretraining \
     legal_it_pretraining.tar.gz --repo-type dataset \
     --local-dir ~/datasets/legal_it
 tar -xzf ~/datasets/legal_it/legal_it_pretraining.tar.gz \
@@ -213,7 +213,7 @@ When the pipeline finishes we publish:
   model card + AI-Act compliance card.
 - **`eullm/legal-it-7b-bf16`** (HF Hub model repo, public): full BF16
   weights for downstream fine-tuners.
-- **`primoco/legal-it-pretraining`** (HF Hub dataset, private): the
+- **`primoco/legal_it_pretraining`** (HF Hub dataset, private): the
   GDPR-safe training corpus.
 - **`docs/legal-it-7b-strategy.md`** (this file, updated with measured
   numbers).
