@@ -9,10 +9,10 @@
   <a href="https://eullm.eu">Website</a> ·
   <a href="docs/getting-started.md">Getting Started</a> ·
   <a href="#quickstart">Quickstart</a> ·
-  <a href="#components">Components</a> ·
+  <a href="#the-solution">Components</a> ·
   <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
   <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
-  <a href="#demo-models">Demo Models</a> ·
+  <a href="#planned-verticalized-models-q4-2026-roadmap">Planned Models</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#contributing">Contributing</a>
 </p>
@@ -71,6 +71,8 @@ EULLM is an open-source platform with three components:
 ### EULLM Engine
 
 Run sovereign LLMs locally with **real llama.cpp inference**, built-in audit trail, and full API compatibility. Single Rust binary, no Python runtime, no Docker required.
+
+Built on llama.cpp (MIT, EU-developed) with **TurboQuant** integration — a KV cache compression algorithm published by Google Research at ICLR 2026 (implementation by AmesianX, MIT fork). Delivers ~50% KV cache memory reduction (TQ4_0) and **4x more context length** on the same hardware — 131K tokens on a 16GB consumer GPU. Trades ~19% throughput at 4 concurrent requests for ~4x more concurrent users; quality degradation ~1% (isolated to matrix operations). See the [TurboQuant section](#turboquant-kv-cache-compression-experimental) for full benchmarks.
 
 ```bash
 # Run any GGUF model — local file or from the EU registry
@@ -140,6 +142,8 @@ eullm-forge profiles
 
 Pre-verticalizzati models for European domains and languages. Download and run immediately. Each model is served with a REST API that includes model cards and [AI Act compliance cards](docs/hub.md).
 
+> **Models below are planned (Q4 2026), not yet released.** [Join the waitlist](https://eullm.eu) to be notified at launch.
+
 | Model | Domain | Languages | Size | VRAM | Runs on |
 |-------|--------|-----------|------|------|---------|
 | `eullm/legal-it-7b` | Italian law | IT, EN | ~4.5GB | 6GB | Laptop |
@@ -160,7 +164,7 @@ Every model will ship with:
 
 ## Quickstart
 
-**EULLM Engine compiles and runs today.** If you have a GGUF model, you can use it right now.
+> **EuLLM Engine is in active development (Q2 2026).** The commands below show the current and target CLI experience. Some commands work today (`eullm run`, `eullm serve`); others (Forge verticalization, Hub registry pull) are on the Q3-Q4 2026 roadmap. Star this repo to track progress.
 
 ### Prebuilt binaries (easiest)
 
@@ -430,7 +434,9 @@ Available types:
 
 > **Experimental.** TurboQuant is a working prototype. API, type names, and performance may change between releases. Not recommended for production. See [docs/engine.md](docs/engine.md) for technical details. Raw benchmark data: [bench/results/](bench/results/turboquant_20260329_224511/).
 
-## Demo models (planned)
+## Planned verticalized models (Q4 2026 roadmap)
+
+> **These models are not yet released.** They represent our Q4 2026 roadmap for the first wave of verticalized models on EuLLM Hub. Star this repo and join the waitlist at [eullm.eu](https://eullm.eu) to be notified when each model becomes available.
 
 Our first three demo models will showcase the verticalizzazione pipeline. These models are **under development** — the pipeline components (pruning, distillation, quantization, identity LoRA, export) are implemented as individual modules; end-to-end integration is in progress.
 
@@ -469,45 +475,41 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 
 ## Roadmap
 
-### Phase 1: Foundation (March–April 2026) — We are here
-- [x] Domain registration (eullm.eu, eullm.it)
-- [x] Vision document and roadmap
-- [x] GitHub repository and community setup
-- [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm list`, `eullm show`, `eullm serve`)
-- [x] Engine API: OpenAI-compatible (`/v1/chat/completions`) + native EULLM API
-- [x] **Continuous batching scheduler** — parallel multi-request inference with per-sequence KV cache
-- [x] **Token streaming** — NDJSON on `/api/*` (Ollama-compatible), SSE on `/v1/*` (OpenAI-compatible)
-- [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
-- [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
-- [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
-- [x] Hub API with model cards and AI Act compliance cards
-- [x] Real inference engine (llama.cpp via llama-cpp-2, CUDA/ROCm/Vulkan/Metal)
-- [x] **Docker support** — docker-compose.yml with Engine, Hub, Forge, GPU profiles
-- [x] **CI/CD** — GitHub Actions CI + cross-platform release workflow (Linux x64/arm64, macOS x64/arm64)
-- [x] Technical documentation (`docs/`)
-- [x] Getting started guide (`docs/getting-started.md`)
-- [x] First Colab notebook: identity LoRA on Qwen3-14B
-- [x] **TurboQuant KV cache** — experimental WHT + Lloyd-Max KV cache compression (tq3_0, tq4_0)
-- [x] **Transparent web browsing** — `--web` flag: URLs in messages auto-fetched, HTML stripped, content injected before inference; works on any GGUF model with no model changes
-- [ ] First verticalizzato model: `eullm/legal-it-7b`
-- [ ] Landing page with waitlist
-- [ ] Public launch (HN, Reddit, community)
+### Phase 1: Engine Public (Q2 2026) — We are here
 
-### Phase 2: Platform (May–June 2026)
-- [x] EULLM Engine v0.1 with llama.cpp inference
-- [ ] EU model registry on Hetzner (Nuremberg, DE)
-- [ ] First 3 pre-verticalizzati models on Hub
-- [ ] Integration with RAG Enterprise Pro
-- [ ] AI Act compliance documentation per model
-- [ ] First EU cloud GPU partnership (Hetzner or OVH)
+* EuLLM Engine v0.x — Rust runtime + llama.cpp + TurboQuant integration
+* OpenAI + Ollama API compatibility (drop-in replacement)
+* Single binary distribution (Linux/macOS, CUDA/ROCm/Vulkan/Metal)
+* GGUF model support, transparent web browsing, audit trail
+* Public launch on HackerNews, [dev.to](http://dev.to), Hashnode, LinkedIn
+* GitHub repository active, contributor onboarding
+* Community feedback collection
 
-### Phase 3: Growth (July–August 2026)
-- [ ] EULLM Enterprise service launch (done-for-you verticalizzazione)
-- [ ] 10+ domain-specific models on Hub
-- [ ] MCP server for Claude Code / Cursor / OpenCode integration
-- [ ] AI Act compliance toolkit
-- [ ] EULLM Champions community program
-- [ ] EU accelerator program application
+### Phase 2: Forge Beta (Q3 2026)
+
+* EuLLM Forge v0.1 — verticalization pipeline (pruning + distillation + quantization + identity)
+* First verticalization profiles: legal-it, medical-de, finance-fr
+* First Colab notebook: identity LoRA on Qwen3-14B
+* Synthetic dataset generation from European corpora
+* GGUF export pipeline
+* Documentation and tutorials
+
+### Phase 3: Hub Launch + First Verticalized Models (Q4 2026)
+
+* EuLLM Hub — EU-hosted model registry (Hetzner DE / OVH FR)
+* AI Act compliance cards per model
+* First verticalized model published: `eullm/legal-it-7b` (Italian law)
+* Followed by: `eullm/medical-de-7b`, `eullm/finance-fr-7b`
+* Deeper integration with RAG Enterprise Pro 2.0
+* EU AI Act compliance toolkit (audit trail + documentation generator)
+
+### Phase 4: Scale (2027+)
+
+* EuLLM Enterprise service (done-for-you verticalization)
+* 10+ domain-specific models on Hub
+* MCP server for Claude Code / Cursor / OpenCode integration
+* EU accelerator graduation (EIC Accelerator 2026 outcome)
+* EuLLM Champions community program
 
 ## Architecture
 
@@ -548,7 +550,7 @@ EULLM Forge — Verticalizzazione Pipeline:
 
 | Component | Technology | Why |
 |-----------|-----------|-----|
-| Engine (CLI/Runtime) | Rust + llama.cpp | Performance, single binary |
+| Engine (CLI/Runtime) | Rust + llama.cpp + TurboQuant | Performance, single binary, 3-bit KV cache compression |
 | Forge (verticalizzazione) | Python + PyTorch + NVIDIA ModelOpt | ML ecosystem standard |
 | Hub (registry) | Rust API + S3-compatible storage | Fast, hostable on any EU cloud |
 | Website | Next.js | SSR, SEO optimized |
@@ -632,11 +634,13 @@ We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Be 
 
 ## Who's behind this
 
-EULLM is built by **[I3K Technologies](https://i3k.eu)** — a Milan-based AI company focused on sovereign AI infrastructure for European businesses.
+EuLLM is built by **[I3K Technologies](https://i3k.eu)** — a Milan-based deep-tech studio focused on EU-sovereign AI infrastructure for regulated sectors (legal, healthcare, finance, public administration).
 
-- **Francesco Marchetti** — CEO/CTO, full-stack AI engineer
-- Building [RAG Enterprise Pro](https://github.com/rag-enterprise) — sovereign document intelligence platform
-- EIC Accelerator 2026 candidate
+* **[Francesco Marchetti](https://www.linkedin.com/in/francesco-marchetti-4a7b8149/)** — Founder, CEO & Lead Engineer (27+ years in EU IT/telecommunications infrastructure)
+* Building [RAG Enterprise](https://github.com/I3K-IT/RAG-Enterprise) — sovereign on-premise document intelligence (45+ stars, AGPL-3.0)
+* EIC Accelerator 2026 applicant (Proposal ID 101335975)
+
+Adjacent products operated by I3K Technologies: [CRM81](https://crm81.it) (workplace safety vertical SaaS), [LetsAI](https://letsai.it) (multi-provider generative AI platform).
 
 ## License
 
