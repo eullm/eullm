@@ -12,7 +12,7 @@
   <a href="#components">Components</a> ·
   <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
   <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
-  <a href="#demo-models">Demo Models</a> ·
+  <a href="#planned-verticalized-models-q4-2026-roadmap">Planned Models</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="#contributing">Contributing</a>
 </p>
@@ -142,6 +142,8 @@ eullm-forge profiles
 ### EULLM Hub
 
 Pre-verticalizzati models for European domains and languages. Download and run immediately. Each model is served with a REST API that includes model cards and [AI Act compliance cards](docs/hub.md).
+
+> **Models below are planned (Q4 2026), not yet released.** [Join the waitlist](https://eullm.eu) to be notified at launch.
 
 | Model | Domain | Languages | Size | VRAM | Runs on |
 |-------|--------|-----------|------|------|---------|
@@ -433,7 +435,9 @@ Available types:
 
 > **Experimental.** TurboQuant is a working prototype. API, type names, and performance may change between releases. Not recommended for production. See [docs/engine.md](docs/engine.md) for technical details. Raw benchmark data: [bench/results/](bench/results/turboquant_20260329_224511/).
 
-## Demo models (planned)
+## Planned verticalized models (Q4 2026 roadmap)
+
+> **These models are not yet released.** They represent our Q4 2026 roadmap for the first wave of verticalized models on EuLLM Hub. Star this repo and join the waitlist at [eullm.eu](https://eullm.eu) to be notified when each model becomes available.
 
 Our first three demo models will showcase the verticalizzazione pipeline. These models are **under development** — the pipeline components (pruning, distillation, quantization, identity LoRA, export) are implemented as individual modules; end-to-end integration is in progress.
 
