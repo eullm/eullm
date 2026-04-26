@@ -93,7 +93,6 @@ eullm serve                               # Start API server without loading a m
 ```
 
 Key features:
-- **TurboQuant 3-bit KV cache** — 5x memory reduction, longer contexts on consumer hardware
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
