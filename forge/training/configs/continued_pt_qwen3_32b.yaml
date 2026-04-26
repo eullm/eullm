@@ -1,0 +1,59 @@
+# Phase 1 — Continued pre-training of the teacher.
+#
+# Target: Qwen3-32B-Base + LoRA r=128 on the full 700M-token Italian
+# legal corpus (Cassazione + codici + Costituzione). Runs on a single
+# GPU of the 96 GB class.
+#
+# Expected wall time: 2.5–3.5 days on a 96 GB GPU.
+# Expected peak VRAM: ~78 GB (see docs/legal-it-7b-strategy.md §4.1).
+
+### model
+model_name_or_path: Qwen/Qwen3-32B-Base
+trust_remote_code: false
+
+### method (continued pre-training with LoRA)
+stage: pt
+do_train: true
+finetuning_type: lora
+# Cover the full attention block + the down_proj of MLP — empirical
+# sweet spot from Qwen3 fine-tuning recipes for domain adaptation.
+lora_target: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
+lora_rank: 128
+lora_alpha: 256
+lora_dropout: 0.05
+
+### dataset
+# dataset_dir is set by forge/scripts/train.sh.
+dataset: legal_it_train
+eval_dataset: legal_it_val
+cutoff_len: 2048
+preprocessing_num_workers: 8
+overwrite_cache: false
+
+### training
+output_dir: ./checkpoints/qwen3_32b_legal_it_continued_pt
+overwrite_output_dir: false
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16        # effective batch ≈ 16
+learning_rate: 1.0e-5
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_ratio: 0.03
+weight_decay: 0.01
+max_grad_norm: 1.0
+bf16: true
+gradient_checkpointing: true
+optim: adamw_torch_8bit
+
+### checkpointing (every 500 steps as per strategy doc §6)
+logging_steps: 10
+save_steps: 500
+save_total_limit: 2
+save_strategy: steps
+plot_loss: true
+
+### eval (perplexity on val every 500 steps)
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 500
+val_size: 0

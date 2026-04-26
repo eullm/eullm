@@ -1,0 +1,61 @@
+# Smoke test: validate the training pipeline on a 5070 Ti before
+# provisioning the production GPU.
+#
+# Goal:
+#   * confirm LLaMA-Factory + dataset_info.json + our train.sh launcher
+#     all wire up correctly
+#   * confirm LoRA continued pre-training runs on Qwen3-1.7B-Base
+#     (proxy for the full Qwen3-32B teacher)
+#   * confirm checkpoints are written and resume_from_checkpoint works
+#
+# Expected wall time: ~5-8 min on RTX 5070 Ti (16 GB VRAM).
+# Expected peak VRAM: ~5-6 GB (Qwen3-1.7B BF16 + LoRA r=8 + grad ckpt).
+
+### model
+model_name_or_path: Qwen/Qwen3-1.7B-Base
+trust_remote_code: false
+
+### method (continued pre-training with LoRA)
+stage: pt
+do_train: true
+finetuning_type: lora
+lora_target: q_proj,k_proj,v_proj,o_proj
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+
+### dataset
+# dataset_dir is set by forge/scripts/train.sh (overrides this YAML).
+dataset: legal_it_train
+eval_dataset: legal_it_val
+cutoff_len: 1024
+max_samples: 5000          # smoke: only first 5k records of train.jsonl
+preprocessing_num_workers: 4
+overwrite_cache: false
+
+### training
+output_dir: ./checkpoints/smoke_qwen3_1.7b
+overwrite_output_dir: false
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 5.0e-5
+num_train_epochs: 1
+max_steps: 100
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+bf16: true
+gradient_checkpointing: true
+optim: adamw_torch_8bit
+
+### checkpointing (every 50 steps so we can test resume by ctrl-c)
+logging_steps: 5
+save_steps: 50
+save_total_limit: 2
+save_strategy: steps
+plot_loss: true
+
+### eval (light — every 50 steps on val.jsonl head)
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 50
+val_size: 0
