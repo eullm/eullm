@@ -72,6 +72,8 @@ EULLM is an open-source platform with three components:
 
 Run sovereign LLMs locally with **real llama.cpp inference**, built-in audit trail, and full API compatibility. Single Rust binary, no Python runtime, no Docker required.
 
+Built on llama.cpp (MIT, EU-developed) with **TurboQuant** integration — a 3-bit KV cache compression algorithm published by Google Research at ICLR 2026 (implementation by AmesianX, MIT fork). Delivers ~5x KV cache memory reduction and ~12% throughput improvement at 8K context, enabling longer contexts and more concurrent users on the same hardware.
+
 ```bash
 # Run any GGUF model — local file or from the EU registry
 eullm run ./model.gguf                    # Local GGUF file
@@ -91,6 +93,7 @@ eullm serve                               # Start API server without loading a m
 ```
 
 Key features:
+- **TurboQuant 3-bit KV cache** — 5x memory reduction, longer contexts on consumer hardware
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
