@@ -165,7 +165,7 @@ Every model will ship with:
 
 ## Quickstart
 
-**EULLM Engine compiles and runs today.** If you have a GGUF model, you can use it right now.
+> **EuLLM Engine is in active development (Q2 2026).** The commands below show the current and target CLI experience. Some commands work today (`eullm run`, `eullm serve`); others (Forge verticalization, Hub registry pull) are on the Q3-Q4 2026 roadmap. Star this repo to track progress.
 
 ### Prebuilt binaries (easiest)
 
