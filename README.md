@@ -635,11 +635,13 @@ We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Be 
 
 ## Who's behind this
 
-EULLM is built by **[I3K Technologies](https://i3k.eu)** — a Milan-based AI company focused on sovereign AI infrastructure for European businesses.
+EuLLM is built by **[I3K Technologies](https://i3k.eu)** — a Milan-based deep-tech studio focused on EU-sovereign AI infrastructure for regulated sectors (legal, healthcare, finance, public administration).
 
-- **Francesco Marchetti** — CEO/CTO, full-stack AI engineer
-- Building [RAG Enterprise Pro](https://github.com/rag-enterprise) — sovereign document intelligence platform
-- EIC Accelerator 2026 candidate
+* **[Francesco Marchetti](https://www.linkedin.com/in/francesco-marchetti-4a7b8149/)** — Founder, CEO & Lead Engineer (27+ years in EU IT/telecommunications infrastructure)
+* Building [RAG Enterprise](https://github.com/I3K-IT/RAG-Enterprise) — sovereign on-premise document intelligence (45+ stars, AGPL-3.0)
+* EIC Accelerator 2026 applicant (Proposal ID 101335975)
+
+Adjacent products operated by I3K Technologies: [CRM81](https://crm81.it) (workplace safety vertical SaaS), [LetsAI](https://letsai.it) (multi-provider generative AI platform).
 
 ## License
 
