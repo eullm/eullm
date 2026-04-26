@@ -9,7 +9,7 @@
   <a href="https://eullm.eu">Website</a> ·
   <a href="docs/getting-started.md">Getting Started</a> ·
   <a href="#quickstart">Quickstart</a> ·
-  <a href="#components">Components</a> ·
+  <a href="#the-solution">Components</a> ·
   <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
   <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
   <a href="#planned-verticalized-models-q4-2026-roadmap">Planned Models</a> ·
