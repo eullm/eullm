@@ -551,7 +551,7 @@ EULLM Forge — Verticalizzazione Pipeline:
 
 | Component | Technology | Why |
 |-----------|-----------|-----|
-| Engine (CLI/Runtime) | Rust + llama.cpp | Performance, single binary |
+| Engine (CLI/Runtime) | Rust + llama.cpp + TurboQuant | Performance, single binary, 3-bit KV cache compression |
 | Forge (verticalizzazione) | Python + PyTorch + NVIDIA ModelOpt | ML ecosystem standard |
 | Hub (registry) | Rust API + S3-compatible storage | Fast, hostable on any EU cloud |
 | Website | Next.js | SSR, SEO optimized |
