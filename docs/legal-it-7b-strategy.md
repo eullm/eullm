@@ -28,9 +28,13 @@ Engine.
 |-----------|--------------|
 | Qwen3-72B (dense) | 144 GB BF16 — does not fit a single 96 GB GPU. |
 | Qwen3-30B-A3B (MoE) | Forward is faster but routing introduces logit variance that hurts distillation precision. |
+| Qwen3.5-27B + Qwen3.5-9B-Base (hybrid) | Newer (Feb 2026), longer 1 M context, but Gated-DeltaNet + sparse-MoE hybrid architecture introduces logit-routing variance that hurts KL distillation. Tooling is also less mature: LLaMA-Factory / trl / llama.cpp / GGUF Q4_K_M all have stable paths for Qwen3 dense, while support for Qwen3.5 hybrid is still landing (open vLLM compat issues on the 4B variant). Revisit for v0.2 once the toolchain settles. |
+| Qwen3.6-27B + Qwen3.6 7B-class | Same hybrid-architecture concern, plus Qwen3.6 has no 7B-class student in its open-weights lineup (only 27B and 35B-A3B). |
 | NVIDIA Nemotron 3 Nano 30B A3B | NVIDIA Open Model License — violates the project-wide Apache-2.0-only constraint (see `CLAUDE.md`). |
 | Mistral-Small-3 24B | Different tokenizer family, would force sub-token alignment for distillation. |
 | Llama 3.x | "Built with Llama" branding requirement — explicitly excluded by the EULLM catalog. |
+
+Qwen3 and Qwen3.5/3.6 have **incompatible tokenizers** (vocab 151,646 vs 248,320), so teacher and student must be picked from the same family — they cannot be mixed.
 
 ## 3. Pipeline
 
@@ -244,3 +248,4 @@ When the pipeline finishes we publish:
 | Date | Author | Change |
 |------|--------|--------|
 | 2026-04-26 | primoco | Initial strategy committed. |
+| 2026-04-26 | primoco | Add Qwen3.5/3.6 to alternatives evaluated; clarify tokenizer incompatibility between Qwen3 and Qwen3.5/3.6 families. |
