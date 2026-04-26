@@ -208,6 +208,42 @@ _NER_STOPWORDS = frozenset(
         "art", "dott", "avv", "sig", "ing", "prof",
         # Legal / procedural abbreviations that spaCy keeps tagging as PER.
         "cost", "ric", "sent", "ord", "cass", "trib", "cod", "cons",
+        # Procedural locutions / gerunds in italgiure OCR that come out
+        # capitalised and slip past spaCy as PER.
+        "pqm", "p.q.m", "p.q.m.", "p. q. m.", "p. q. m",
+        "aggiungendosi", "avverso", "udita", "rilevato", "ritenuto",
+        "considerato", "premesso", "osservato", "letto",
+    }
+)
+
+
+# Organisational prefixes — when a span STARTS with one of these, capitalised,
+# it is the name of an entity / public body, never a person ("Agenzia Regionale
+# per le Attività Irrigue e Forestali", "Ministero dell'Economia",
+# "Direzione Provinciale di Bari", "Tribunale di Lecce", "Avvocatura Generale
+# dello Stato", ...). Reject regardless of what follows.
+_NER_ORG_PREFIXES = frozenset(
+    {
+        "agenzia", "ministero", "regione", "comune", "provincia",
+        "città", "citta", "direzione", "dipartimento", "ufficio", "servizio",
+        "commissione", "autorità", "autorita", "consiglio", "corte",
+        "tribunale", "procura", "avvocatura", "consulta", "garante",
+        "sovrintendenza", "soprintendenza", "ispettorato", "questura",
+        "prefettura", "ente", "istituto", "azienda", "fondazione",
+        "associazione", "federazione", "ordine", "albo", "camera",
+        "università", "universita", "scuola", "accademia", "centro",
+        "osservatorio",
+    }
+)
+
+
+# Particles allowed inside multi-token person spans ("DI ROSSI", "DE LUCA").
+# When the acronym filter scans a span, all-caps tokens equal to one of these
+# are NOT counted as acronyms.
+_PARTICLES = frozenset(
+    {
+        "DI", "DE", "DA", "DEL", "DELLA", "DELLE", "DEGLI", "DEI",
+        "LA", "LO", "LE", "LI", "VAN", "VON", "DU", "MAC", "MC", "AL",
     }
 )
 
@@ -240,7 +276,7 @@ def _is_valid_ner_span(name: str) -> bool:
     erases entire documents. Reject anything we wouldn't want to redact even
     if the tag were correct.
     """
-    name = name.strip(" .,;:'\"")
+    name = name.strip(" .,;:'\"-–—")
     if len(name) < 3:
         return False
     if not re.search(r"[A-Za-zÀ-ÿ]", name):
@@ -250,7 +286,13 @@ def _is_valid_ner_span(name: str) -> bool:
     # also removes Italian articles/particles.
     if name == name.lower():
         return False
-    if name.lower() in _NER_STOPWORDS:
+    # Stopword check both on the raw span and on a punctuation-stripped
+    # variant ("P. Q. M." -> "pqm" / "p.q.m." / "p. q. m.").
+    name_norm = name.lower()
+    if name_norm in _NER_STOPWORDS:
+        return False
+    name_compact = re.sub(r"\s+", "", name_norm)
+    if name_compact in _NER_STOPWORDS:
         return False
     # At least one alphabetic token of 3+ chars (rejects "L.", "A.", "J.R.").
     tokens = [t for t in re.split(r"[\s.'-]+", name) if t]
@@ -258,8 +300,19 @@ def _is_valid_ner_span(name: str) -> bool:
         return False
     # Drop spans where every significant token is an institutional /
     # procedural word ("La Corte", "Cass.", "Direttore", "Tribunale di ...").
-    significant = [t.lower() for t in tokens if t.lower() not in _NER_STOPWORDS]
+    # Filter out single-character tokens too — "P. Q. M. La Corte" tokenises
+    # as ['P', 'Q', 'M', 'La', 'Corte']; without this filter the single
+    # letters survive as 'significant' and shield the span from rejection.
+    significant = [
+        t.lower() for t in tokens
+        if len(t) >= 2 and t.lower() not in _NER_STOPWORDS
+    ]
     if significant and all(t in _NER_INSTITUTIONAL for t in significant):
+        return False
+    # Drop spans whose first significant token is an organisational prefix
+    # ("Agenzia Regionale ...", "Ministero dell'Economia", "Direzione
+    # Provinciale di Bari"). spaCy mis-tags long entity names as PER.
+    if significant and significant[0] in _NER_ORG_PREFIXES:
         return False
     # Single ALL-CAPS acronym (2-6 chars, no internal whitespace) is almost
     # always an agency/entity code ('ARIF', 'ENEA', 'CNEL', 'CCNL'), not a
@@ -267,6 +320,25 @@ def _is_valid_ner_span(name: str) -> bool:
     # the all-caps name heuristic when combined with a given name.
     if len(tokens) == 1 and tokens[0].isupper() and 2 <= len(tokens[0]) <= 6:
         return False
+    # Multi-token spans that mix an acronym-shaped token with a mixed-case
+    # token ("ARIF siaente", "Cass MT", "INPS gestione") are NER bundling
+    # bugs, never people. Reject when both are present.
+    # ALL-CAPS multi-token spans like "PASQUALE ROSSI" must NOT trip this:
+    # we require at least one non-acronym mixed-case token in the same span.
+    if len(tokens) >= 2:
+        has_acronym = any(
+            tok.isupper() and tok.isalpha()
+            and 2 <= len(tok) <= 6
+            and tok not in _PARTICLES
+            for tok in tokens
+        )
+        has_mixed = any(
+            (not tok.isupper())
+            and any(c.isalpha() for c in tok)
+            for tok in tokens
+        )
+        if has_acronym and has_mixed:
+            return False
     return True
 
 
@@ -357,18 +429,56 @@ def anonymize_text(
     cfg = config or AnonymiserConfig()
     stats = RedactionStats()
 
+    # Per-role counters shared across the NER and all-caps layers so a name
+    # that appears as 'Paolo Dogliotti' in one place and 'PAOLO DOGLIOTTI'
+    # elsewhere ends up under a single, consistent [ROLE_N] token.
+    role_counters: dict[str, int] = {}
+
     # 1) NER first (runs on original text so offsets are valid, then we
     #    substitute; we do this before regex so that person names inside
     #    birth clauses get a stable token before the clause is nuked).
     if cfg.use_ner and ner is not None:
+        # Pre-scan: collect 2-6 char ALL-CAPS tokens that appear in the doc.
+        # If a NER span (typically a 'Title Case' token like 'Arif' that
+        # spaCy mis-tags) matches one of these in uppercase, it's the same
+        # acronym and must not be redacted as a person.
+        doc_acronyms = {
+            tok for tok in re.findall(r"\b[A-Z]{2,6}\b", text)
+            if tok not in _PARTICLES
+        }
         person_map: dict[str, str] = {}
         # Collect entities, drop junk spans, sort by start for stable numbering.
         entities = [e for e in ner(text) if _is_valid_ner_span(e[0])]
+        # Drop entities whose uppercase form matches a document acronym
+        # ('Arif' when 'ARIF' is in the same doc, 'Inps' when 'INPS' is, ...).
+        entities = [
+            e for e in entities
+            if _normalise_name(e[0]).upper() not in doc_acronyms
+        ]
         entities = sorted(set(entities), key=lambda e: e[1])
-        for name, _s, _e in entities:
+        # Track the most recent assigned role and the previous span's end so
+        # that "avv. A, B e C" chains all three names under AVVOCATO. A
+        # subsequent name inherits the role only if (a) its own lookback
+        # detected no role, and (b) the gap is purely a list connector.
+        last_role: Optional[str] = None
+        last_entity_end: int = -1
+        for name, span_start, span_end in entities:
+            role = _detect_role(text, span_start)
+            if (
+                role == "PERSONA"
+                and last_role is not None
+                and last_entity_end >= 0
+            ):
+                gap = text[last_entity_end:span_start]
+                if _ROLE_CONNECTOR_RE.fullmatch(gap):
+                    role = last_role
+            last_role = role
+            last_entity_end = span_end
+
             key = _normalise_name(name)
             if key and key not in person_map:
-                person_map[key] = f"[PERSONA_{len(person_map) + 1}]"
+                role_counters[role] = role_counters.get(role, 0) + 1
+                person_map[key] = f"[{role}_{role_counters[role]}]"
         if person_map:
             # Replace longest names first to avoid partial overlap bugs.
             # Use word-boundary anchors (\w lookaround) so "Mario" doesn't
@@ -429,8 +539,13 @@ def anonymize_text(
         text = RE_ADDRESS.sub(_addr_sub, text)
 
     # 3) All-caps name heuristic (last, on text with structured PII already
-    #    stripped so we don't double-count).
+    #    stripped so we don't double-count). Role-aware: a match preceded by
+    #    "avvocato"/"consigliere"/"presidente"/"dott." gets the matching
+    #    [ROLE_N] token instead of the bare [PERSONA_N], sharing counters
+    #    with the NER layer for cross-layer consistency.
     if cfg.redact_allcaps_names:
+        allcaps_map: dict[str, str] = {}
+
         def _sub(m: re.Match[str]) -> str:
             s = m.group(0)
             if not _is_likely_person(s):
@@ -441,8 +556,17 @@ def anonymize_text(
             tail = text[m.end():m.end() + 30]
             if _COMPANY_TAIL_RE.match(tail):
                 return s
+            # Per-doc stability: same all-caps name → same token throughout.
+            key = _normalise_name(s).upper()
+            if key in allcaps_map:
+                stats.person_allcaps += 1
+                return allcaps_map[key]
+            role = _detect_role(text, m.start())
+            role_counters[role] = role_counters.get(role, 0) + 1
+            token = f"[{role}_{role_counters[role]}]"
+            allcaps_map[key] = token
             stats.person_allcaps += 1
-            return "[PERSONA]"
+            return token
 
         text = RE_ALLCAPS_NAME.sub(_sub, text)
 
@@ -477,6 +601,64 @@ def _normalise_name(name: str) -> str:
     """Strip trailing punctuation / collapse whitespace for map key."""
     name = re.sub(r"\s+", " ", name).strip(" ,.;:")
     return name
+
+
+# Role markers detected in the ~30 chars BEFORE a NER person span. Replace
+# the generic `[PERSONA_N]` token with a role-specific one so the model
+# preserves structural context (who is the lawyer, who is the judge, who is
+# the party) without leaking the actual identity.
+#
+# Order matters: the first matching pattern wins, so longer/more specific
+# patterns come first ("consigliere relatore" before "consigliere").
+# Pattern matching is done unanchored: the 30-char lookback window already
+# bounds how far before the name we look, so requiring an end anchor only
+# breaks chains like "Consigliere Relatore Dott. NAME" where the specific
+# role marker is shielded from the name by a generic honorific.
+_ROLE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"\bconsiglier[ei]\b", re.IGNORECASE), "CONSIGLIERE"),
+    (re.compile(r"\bcons\.", re.IGNORECASE), "CONSIGLIERE"),
+    (re.compile(r"\bpresident[ei]\b", re.IGNORECASE), "PRESIDENTE"),
+    (re.compile(r"\bpres\.", re.IGNORECASE), "PRESIDENTE"),
+    (re.compile(r"\bavvocat[oi]\b", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bavv\.", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bdifensor[ei]\b", re.IGNORECASE), "AVVOCATO"),
+    (re.compile(r"\bdottor[ei]?\b", re.IGNORECASE), "DOTT"),
+    (re.compile(r"\bdott\.|\bdr\.", re.IGNORECASE), "DOTT"),
+)
+
+_ROLE_LOOKBACK_CHARS = 30
+
+# Connector patterns used to chain multiple names under the same role marker:
+# "avv. A, B e C" means all three are avvocati. The regex must match the
+# ENTIRE gap between two adjacent NER spans for the inheritance to fire.
+_ROLE_CONNECTOR_RE = re.compile(
+    r"\s*(?:"
+    r"[,;]\s*(?:e[d]?\s+|o\s+)?"
+    r"|\s+e[d]?\s+"
+    r"|\s+o\s+"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _detect_role(text: str, span_start: int) -> str:
+    """Look at the chars immediately before ``span_start`` and return the
+    matching role tag, or ``"PERSONA"`` if none of the patterns fits.
+
+    When a specific role (avvocato / consigliere / presidente) AND a generic
+    honorific (dott. / dr.) are both visible in the lookback window — as in
+    "Consigliere Relatore Dott. X" — the specific role wins, since the title
+    is a courtesy, not a procedural position.
+    """
+    left = max(0, span_start - _ROLE_LOOKBACK_CHARS)
+    prefix = text[left:span_start]
+    matches = [role for pat, role in _ROLE_RULES if pat.search(prefix)]
+    if not matches:
+        return "PERSONA"
+    specific = [r for r in matches if r != "DOTT"]
+    if specific:
+        return specific[0]
+    return matches[0]
 
 
 # ---------------------------------------------------------------------------

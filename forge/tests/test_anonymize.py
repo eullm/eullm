@@ -102,8 +102,67 @@ def test_allcaps_name_heuristic_catches_party():
     text = "ricorso proposto da CARLOMAGNO FRANCESCO avverso la sentenza"
     out, stats = anonymize_text(text)
     assert "CARLOMAGNO FRANCESCO" not in out
-    assert "[PERSONA]" in out
+    assert "[PERSONA_1]" in out
     assert stats.person_allcaps == 1
+
+
+def test_allcaps_role_aware_avvocato():
+    """An ALL-CAPS name preceded by 'avvocato' / 'avv.' becomes
+    [AVVOCATO_N] just like the NER layer.
+    """
+    text = "rappresentata e difesa dall'avvocato PAOLO DOGLIOTTI"
+    out, stats = anonymize_text(text)
+    assert "PAOLO DOGLIOTTI" not in out
+    assert "[AVVOCATO_1]" in out
+    assert stats.person_allcaps == 1
+
+
+def test_allcaps_role_aware_consigliere():
+    """An ALL-CAPS name preceded by 'Consigliere Relatore Dott.' becomes
+    [CONSIGLIERE_N], not [DOTT_N] — first matching role rule wins.
+    """
+    text = (
+        "dal Consigliere Relatore Dott. LORENZO DELLI PRISCOLI. "
+        "Esposti i fatti, il collegio decide."
+    )
+    out, _stats = anonymize_text(text)
+    assert "LORENZO DELLI PRISCOLI" not in out
+    assert "[CONSIGLIERE_1]" in out
+
+
+def test_allcaps_per_doc_stability():
+    """The same ALL-CAPS name appearing twice gets the SAME token."""
+    text = (
+        "il sig. CARLOMAGNO FRANCESCO ricorre contro la sentenza. "
+        "CARLOMAGNO FRANCESCO chiede inoltre la sospensione."
+    )
+    out, stats = anonymize_text(text)
+    assert "CARLOMAGNO FRANCESCO" not in out
+    assert out.count("[PERSONA_1]") == 2
+    assert stats.person_allcaps == 2
+
+
+def test_allcaps_shares_counter_with_ner():
+    """When NER assigns [AVVOCATO_1] and [AVVOCATO_2], a third all-caps
+    avvocato in the same doc must be [AVVOCATO_3], not start over at _1.
+    """
+    text = (
+        "difesa dagli avv. Mario Rossi, Luigi Bianchi e dall'avvocato "
+        "PAOLO DOGLIOTTI; controricorrente"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("Mario Rossi", "Luigi Bianchi"):
+            idx = t.find(name)
+            spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True)
+    out, _stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[AVVOCATO_1]" in out
+    assert "[AVVOCATO_2]" in out
+    assert "[AVVOCATO_3]" in out
 
 
 def test_allcaps_whitelist_keeps_courts_and_agencies():
@@ -268,7 +327,11 @@ def test_allcaps_not_redacted_before_company_marker():
     ]
     for text in cases:
         out, stats = anonymize_text(text)
-        assert "[PERSONA]" not in out, f"false positive on: {text!r}"
+        assert "[PERSONA" not in out, f"false positive on: {text!r}"
+        assert "[AVVOCATO" not in out, f"false positive on: {text!r}"
+        assert "[CONSIGLIERE" not in out, f"false positive on: {text!r}"
+        assert "[PRESIDENTE" not in out, f"false positive on: {text!r}"
+        assert "[DOTT_" not in out, f"false positive on: {text!r}"
         assert stats.person_allcaps == 0, f"stats wrong on: {text!r}"
 
 
@@ -329,6 +392,208 @@ def test_ner_respects_word_boundaries():
     assert "montepremi" in out
     assert "Monteverdi" in out
     assert stats.person_ner == 1
+
+
+def test_ner_drops_pqm_locution():
+    """`P.Q.M. La Corte` (Per Questi Motivi + La Corte) is the dispositive
+    formula in Cassazione rulings. spaCy NER bundles it as a single PER
+    span. Must not be redacted: P.Q.M. is fixed legalese, La Corte is
+    institutional.
+    """
+    text = (
+        "...n. 1778). P. Q. M. La Corte dichiara l'inammissibilità del "
+        "ricorso. Condanna l'Agenzia ricorrente al pagamento."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("P. Q. M. La Corte")
+        return [("P. Q. M. La Corte", idx, idx + len("P. Q. M. La Corte"))]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert "P. Q. M. La Corte" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_drops_org_prefix_spans():
+    """Long organisational names like 'Agenzia Regionale per le Attività
+    Irrigue e Forestali' must not be redacted as PER, regardless of how
+    many tokens they contain.
+    """
+    text = (
+        "L'Agenzia Regionale per le Attività Irrigue e Forestali "
+        "(ARIF) il cui rapporto è regolato dal CCNL."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Agenzia Regionale per le Attività Irrigue e Forestali")
+        return [(
+            "Agenzia Regionale per le Attività Irrigue e Forestali",
+            idx, idx + len(
+                "Agenzia Regionale per le Attività Irrigue e Forestali"
+            ),
+        )]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert "Agenzia Regionale" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_drops_acronym_inside_multi_token_span():
+    """spaCy occasionally bundles 'ACRONYM lowerword' as a PER span.
+    Reject when an all-caps 2-6 char token is glued to a mixed-case one.
+    Must NOT reject 'PASQUALE ROSSI' (both all-caps).
+    """
+    text = "Il signor PASQUALE ROSSI ricorre."
+
+    def junk_ner(t: str) -> list[tuple[str, int, int]]:
+        return [
+            ("ARIF siaente", 0, 12),
+            ("Cass MT", 12, 19),
+        ]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, _stats = anonymize_text(text, config=cfg, ner=junk_ner)
+    # Junk spans must never produce a [PERSONA] tag.
+    assert "[PERSONA" not in out
+
+    # Sanity check: the lexical filter alone must still let real all-caps
+    # surnames through. Run the validator directly.
+    from eullm_forge.datasets.anonymize import _is_valid_ner_span
+    assert _is_valid_ner_span("PASQUALE ROSSI")
+    assert not _is_valid_ner_span("ARIF siaente")
+    assert not _is_valid_ner_span("Cass MT")
+
+
+def test_ner_drops_titlecase_when_acronym_in_doc():
+    """If the document contains 'ARIF' (all-caps), a NER span 'Arif'
+    elsewhere is the same acronym — never a person.
+    """
+    text = (
+        "L'ARIF è ente pubblico non economico. Il personale "
+        "inquadrato in Arif a tempo indeterminato è disciplinato "
+        "dal CCNL del comparto."
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Arif")
+        return [("Arif", idx, idx + 4)]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA" not in out
+    assert "Arif" in out
+    assert stats.person_ner == 0
+
+
+def test_ner_drops_capitalised_gerunds():
+    """`Aggiungendosi`, `Avverso`, `Udita`, `Rilevato` start sentences in
+    italgiure OCR text and get tagged PER by spaCy. They are participles /
+    gerunds, not names.
+    """
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    for word in ("Aggiungendosi", "Avverso", "Udita", "Rilevato"):
+        text = f"{word} la sentenza, la Corte ha disposto."
+
+        def ner(t: str, w: str = word) -> list[tuple[str, int, int]]:
+            return [(w, 0, len(w))]
+
+        out, _stats = anonymize_text(text, config=cfg, ner=ner)
+        assert "[PERSONA" not in out, f"false positive on: {word!r}"
+        assert word in out
+
+
+def test_role_aware_token_avvocato():
+    """A NER span preceded by 'avv.' / 'Avv.' / 'avvocato' is mapped to
+    `[AVVOCATO_N]`, not `[PERSONA_N]`. Role context is preserved.
+    """
+    text = (
+        "rappresentata e difesa dagli avv. Pasquale Russo, "
+        "Guglielmo Fransoni e Francesco Padovani, come da procura"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("Pasquale Russo", "Guglielmo Fransoni",
+                     "Francesco Padovani"):
+            idx = t.find(name)
+            spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[AVVOCATO_1]" in out
+    assert "[AVVOCATO_2]" in out
+    assert "[AVVOCATO_3]" in out
+    assert "[PERSONA_1]" not in out
+    assert "Pasquale Russo" not in out
+    assert stats.person_ner == 3
+
+
+def test_role_aware_token_consigliere():
+    """`Consigliere Relatore Dott. LORENZO DELLI PRISCOLI` and similar
+    phrasings produce `[CONSIGLIERE_N]`.
+    """
+    text = (
+        "udita la relazione svolta dal consigliere Alberto Crivelli, "
+        "ha pronunciato la seguente ordinanza"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("Alberto Crivelli")
+        return [("Alberto Crivelli", idx, idx + len("Alberto Crivelli"))]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[CONSIGLIERE_1]" in out
+    assert "Alberto Crivelli" not in out
+    assert stats.person_ner == 1
+
+
+def test_role_aware_token_default_is_persona():
+    """A NER span without role context falls back to `[PERSONA_N]`."""
+    text = "il signor De Simone ha ricorso contro la decisione."
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        idx = t.find("De Simone")
+        return [("De Simone", idx, idx + len("De Simone"))]
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[PERSONA_1]" in out
+    assert "De Simone" not in out
+    assert stats.person_ner == 1
+
+
+def test_role_aware_per_role_counters_are_independent():
+    """Each role has its own counter: two avvocati and two consiglieri
+    produce AVVOCATO_1/AVVOCATO_2 and CONSIGLIERE_1/CONSIGLIERE_2.
+    """
+    text = (
+        "difesa dall'avv. Mario Rossi e dall'avv. Luigi Bianchi; "
+        "udita la relazione del consigliere Anna Verdi, "
+        "presieduta dal Presidente Carlo Neri"
+    )
+
+    def ner(t: str) -> list[tuple[str, int, int]]:
+        spans = []
+        for name in ("Mario Rossi", "Luigi Bianchi",
+                     "Anna Verdi", "Carlo Neri"):
+            idx = t.find(name)
+            spans.append((name, idx, idx + len(name)))
+        return spans
+
+    cfg = AnonymiserConfig(use_ner=True, redact_allcaps_names=False)
+    out, _stats = anonymize_text(text, config=cfg, ner=ner)
+    assert "[AVVOCATO_1]" in out
+    assert "[AVVOCATO_2]" in out
+    assert "[CONSIGLIERE_1]" in out
+    assert "[PRESIDENTE_1]" in out
+    # No cross-contamination of numbering.
+    assert "[AVVOCATO_3]" not in out
 
 
 def test_redaction_stats_total():

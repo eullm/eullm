@@ -27,6 +27,7 @@ dependencies = [
     "requests>=2.31",
     "beautifulsoup4>=4.12",
     "spacy>=3.7,<4",
+    "datasketch>=1.6",
 ]
 
 [project.optional-dependencies]
