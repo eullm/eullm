@@ -472,45 +472,41 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 
 ## Roadmap
 
-### Phase 1: Foundation (March–April 2026) — We are here
-- [x] Domain registration (eullm.eu, eullm.it)
-- [x] Vision document and roadmap
-- [x] GitHub repository and community setup
-- [x] Engine CLI skeleton (`eullm pull`, `eullm run`, `eullm list`, `eullm show`, `eullm serve`)
-- [x] Engine API: OpenAI-compatible (`/v1/chat/completions`) + native EULLM API
-- [x] **Continuous batching scheduler** — parallel multi-request inference with per-sequence KV cache
-- [x] **Token streaming** — NDJSON on `/api/*` (Ollama-compatible), SSE on `/v1/*` (OpenAI-compatible)
-- [x] Forge pipeline architecture (pruning, distillation, quantization, identity, export)
-- [x] Forge CLI (`eullm-forge forge`, `eullm-forge profiles`, `eullm-forge estimate`, `eullm-forge export`)
-- [x] Verticalizzazione profiles (legal-it, medical-de, finance-fr)
-- [x] Hub API with model cards and AI Act compliance cards
-- [x] Real inference engine (llama.cpp via llama-cpp-2, CUDA/ROCm/Vulkan/Metal)
-- [x] **Docker support** — docker-compose.yml with Engine, Hub, Forge, GPU profiles
-- [x] **CI/CD** — GitHub Actions CI + cross-platform release workflow (Linux x64/arm64, macOS x64/arm64)
-- [x] Technical documentation (`docs/`)
-- [x] Getting started guide (`docs/getting-started.md`)
-- [x] First Colab notebook: identity LoRA on Qwen3-14B
-- [x] **TurboQuant KV cache** — experimental WHT + Lloyd-Max KV cache compression (tq3_0, tq4_0)
-- [x] **Transparent web browsing** — `--web` flag: URLs in messages auto-fetched, HTML stripped, content injected before inference; works on any GGUF model with no model changes
-- [ ] First verticalizzato model: `eullm/legal-it-7b`
-- [ ] Landing page with waitlist
-- [ ] Public launch (HN, Reddit, community)
+### Phase 1: Engine Public (Q2 2026) — We are here
 
-### Phase 2: Platform (May–June 2026)
-- [x] EULLM Engine v0.1 with llama.cpp inference
-- [ ] EU model registry on Hetzner (Nuremberg, DE)
-- [ ] First 3 pre-verticalizzati models on Hub
-- [ ] Integration with RAG Enterprise Pro
-- [ ] AI Act compliance documentation per model
-- [ ] First EU cloud GPU partnership (Hetzner or OVH)
+* EuLLM Engine v0.x — Rust runtime + llama.cpp + TurboQuant integration
+* OpenAI + Ollama API compatibility (drop-in replacement)
+* Single binary distribution (Linux/macOS, CUDA/ROCm/Vulkan/Metal)
+* GGUF model support, transparent web browsing, audit trail
+* Public launch on HackerNews, [dev.to](http://dev.to), Hashnode, LinkedIn
+* GitHub repository active, contributor onboarding
+* Community feedback collection
 
-### Phase 3: Growth (July–August 2026)
-- [ ] EULLM Enterprise service launch (done-for-you verticalizzazione)
-- [ ] 10+ domain-specific models on Hub
-- [ ] MCP server for Claude Code / Cursor / OpenCode integration
-- [ ] AI Act compliance toolkit
-- [ ] EULLM Champions community program
-- [ ] EU accelerator program application
+### Phase 2: Forge Beta (Q3 2026)
+
+* EuLLM Forge v0.1 — verticalization pipeline (pruning + distillation + quantization + identity)
+* First verticalization profiles: legal-it, medical-de, finance-fr
+* First Colab notebook: identity LoRA on Qwen3-14B
+* Synthetic dataset generation from European corpora
+* GGUF export pipeline
+* Documentation and tutorials
+
+### Phase 3: Hub Launch + First Verticalized Models (Q4 2026)
+
+* EuLLM Hub — EU-hosted model registry (Hetzner DE / OVH FR)
+* AI Act compliance cards per model
+* First verticalized model published: `eullm/legal-it-7b` (Italian law)
+* Followed by: `eullm/medical-de-7b`, `eullm/finance-fr-7b`
+* Deeper integration with RAG Enterprise Pro 2.0
+* EU AI Act compliance toolkit (audit trail + documentation generator)
+
+### Phase 4: Scale (2027+)
+
+* EuLLM Enterprise service (done-for-you verticalization)
+* 10+ domain-specific models on Hub
+* MCP server for Claude Code / Cursor / OpenCode integration
+* EU accelerator graduation (EIC Accelerator 2026 outcome)
+* EuLLM Champions community program
 
 ## Architecture
 
