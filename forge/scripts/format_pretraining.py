@@ -119,11 +119,21 @@ def main(argv: list[str] | None = None) -> int:
     if not args.corpus_dir.is_dir():
         parser.error(f"{args.corpus_dir} is not a directory")
 
-    sources = sorted(args.corpus_dir.glob("italgiure_*.dedup.jsonl"))
+    # Two input families live side-by-side in the corpus directory:
+    #
+    #   italgiure_*.dedup.jsonl     — Cassazione sentenze, dedup'd
+    #   legislazione_*.chunks.jsonl — codici from Normattiva, no dedup needed
+    #
+    # Mix everything in the train/val split.
+    sources = sorted(
+        list(args.corpus_dir.glob("italgiure_*.dedup.jsonl"))
+        + list(args.corpus_dir.glob("legislazione_*.chunks.jsonl"))
+    )
     if not sources:
         parser.error(
-            f"No italgiure_*.dedup.jsonl files under {args.corpus_dir} — "
-            "run dedup_corpus.py first."
+            f"No italgiure_*.dedup.jsonl or legislazione_*.chunks.jsonl "
+            f"files under {args.corpus_dir} — run dedup_corpus.py and/or "
+            "prepare_legislation.py first."
         )
 
     out_dir = args.output or (args.corpus_dir / "pretraining")
