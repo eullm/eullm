@@ -33,12 +33,20 @@ else
     git clone --depth 1 "$LF_REPO" "$LF_DIR"
 fi
 
-# 2. Install LLaMA-Factory in editable mode + the extras we need.
-#    torch       — already installed by the eullm-forge dep, so this is a no-op
-#    metrics     — required for eval (rouge / bleu / perplexity)
-#    bitsandbytes— for 8-bit optimizer + future QLoRA
-log "Installing LLaMA-Factory + extras (torch, metrics, bitsandbytes)"
-(cd "$LF_DIR" && $PYTHON -m pip install --quiet -e ".[torch,metrics,bitsandbytes]")
+# 2. Install LLaMA-Factory in editable mode. The optional extras
+#    [torch,metrics,bitsandbytes] were renamed/removed in LLaMA-Factory
+#    0.9.5+, so we install the base package and add the missing
+#    runtime deps explicitly afterwards.
+log "Installing LLaMA-Factory (base)"
+(cd "$LF_DIR" && $PYTHON -m pip install --quiet -e ".")
+
+# 3. Add the runtime deps the smoke and production YAMLs assume:
+#    bitsandbytes — needed by `optim: adamw_torch_8bit` (8-bit Adam,
+#                   keeps the optimizer state ~3× smaller in VRAM).
+#    rouge-score + nltk — only used by the eval metrics, but
+#                         transformers will warn loudly without them.
+log "Installing eval + 8-bit-optim runtime deps (bitsandbytes, rouge-score, nltk)"
+$PYTHON -m pip install --quiet bitsandbytes rouge-score nltk
 
 # 3. Sanity check.
 if command -v llamafactory-cli >/dev/null; then
