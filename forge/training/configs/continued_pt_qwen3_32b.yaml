@@ -23,7 +23,8 @@ lora_alpha: 256
 lora_dropout: 0.05
 
 ### dataset
-# dataset_dir is set by forge/scripts/train.sh.
+# __DATASET_DIR__ is replaced by forge/scripts/train.sh at launch time.
+dataset_dir: __DATASET_DIR__
 dataset: legal_it_train
 eval_dataset: legal_it_val
 cutoff_len: 2048

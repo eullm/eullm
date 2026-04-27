@@ -25,7 +25,10 @@ lora_alpha: 16
 lora_dropout: 0.0
 
 ### dataset
-# dataset_dir is set by forge/scripts/train.sh (overrides this YAML).
+# __DATASET_DIR__ is replaced by forge/scripts/train.sh at launch time
+# with the absolute path to the directory containing train.jsonl,
+# val.jsonl and the dataset_info.json registration.
+dataset_dir: __DATASET_DIR__
 dataset: legal_it_train
 eval_dataset: legal_it_val
 cutoff_len: 1024
