@@ -78,6 +78,24 @@ class DistillConfig:
     teacher_load_in_8bit: bool = False     # bitsandbytes 8-bit teacher
     teacher_load_in_4bit: bool = False     # bitsandbytes 4-bit teacher (NF4)
 
+    # Student fine-tuning method:
+    #   "lora" (default) — wrap student in PEFT LoRA, only LoRA params
+    #                     trainable. Keeps total VRAM ≤ 95 GB on a 94-96 GB
+    #                     GPU even with a 32B BF16 teacher in the same
+    #                     process. Recommended for v0.1 PoC.
+    #   "full" — train all 7B params. Needs ≥ 130 GB total VRAM (so
+    #            multi-GPU FSDP, or H200 141 GB + teacher quantised).
+    student_finetune: str = "lora"
+    student_lora_rank: int = 128
+    student_lora_alpha: int = 256
+    student_lora_dropout: float = 0.0
+    # Default LoRA targets cover attention + MLP — empirical sweet spot
+    # for Qwen-family domain adaptation.
+    student_lora_target_modules: tuple[str, ...] = (
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    )
+
     # Data
     dataset_dir: str = "~/datasets/legal_it"
     train_file: str = "train.jsonl"
@@ -199,12 +217,44 @@ def load_teacher(cfg: DistillConfig, dtype: torch.dtype, device: str):
 
 
 def load_student(cfg: DistillConfig, dtype: torch.dtype, device: str):
-    print(f"[student] loading {cfg.student_model}", file=sys.stderr)
+    print(f"[student] loading {cfg.student_model} "
+          f"(finetune={cfg.student_finetune})", file=sys.stderr)
     model = AutoModelForCausalLM.from_pretrained(
         cfg.student_model,
         torch_dtype=dtype,
         device_map={"": device},
     )
+
+    if cfg.student_finetune == "lora":
+        from peft import LoraConfig, get_peft_model
+        lora_cfg = LoraConfig(
+            r=cfg.student_lora_rank,
+            lora_alpha=cfg.student_lora_alpha,
+            lora_dropout=cfg.student_lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=list(cfg.student_lora_target_modules),
+        )
+        model = get_peft_model(model, lora_cfg)
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total = sum(p.numel() for p in model.parameters())
+        print(f"[student] LoRA r={cfg.student_lora_rank}: "
+              f"trainable={trainable / 1e6:.1f}M / total={total / 1e9:.2f}B "
+              f"({100 * trainable / total:.3f}%)",
+              file=sys.stderr)
+    elif cfg.student_finetune == "full":
+        # All params trainable (default behaviour). VRAM-heavy: needs a
+        # 141 GB+ GPU or multi-GPU FSDP.
+        for p in model.parameters():
+            p.requires_grad_(True)
+        print("[student] full fine-tune: ALL params trainable",
+              file=sys.stderr)
+    else:
+        raise ValueError(
+            f"student_finetune must be 'lora' or 'full', "
+            f"got {cfg.student_finetune!r}"
+        )
+
     if cfg.gradient_checkpointing:
         model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False},

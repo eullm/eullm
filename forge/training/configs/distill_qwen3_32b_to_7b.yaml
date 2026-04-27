@@ -6,19 +6,33 @@
 #
 # Loss = α · KL(student || teacher) · T² + (1-α) · CE(student, y)
 #
-# Expected memory on a 96 GB GPU (BF16 throughout, no quantisation):
-#   teacher 32B (frozen, no grad)        ~64 GB
-#   student 7B + grad + Adam             ~28 GB
-#   activations + KL buffers (seq 2048)   ~6 GB
-#   ----                                 ----
-#   total                               ~98 GB    (tight; see below)
+# ─── Memory budget ─────────────────────────────────────────────────────
+# DEFAULT (LoRA student r=128 on 7B + teacher BF16): targets a 94-96 GB
+# single GPU (H100 NVL, RTX PRO 6000 Blackwell). Numbers below are
+# back-of-envelope, gradient checkpointing on, cutoff_len 2048.
 #
-# If the run OOMs, set teacher_load_in_8bit: true to drop the teacher to
-# ~16 GB at the cost of slightly noisier logits — the distillation
-# literature shows this is acceptable.
+#   teacher 32B BF16 (frozen, no grad)            ~64 GB
+#   student 7B BF16 (frozen base)                 ~14 GB
+#   student LoRA r=128 + grad + 8-bit Adam         ~6 GB
+#   activations + KL buffers                       ~10 GB
+#   misc / fragmentation                           ~2 GB
+#   ────────                                      ─────
+#   total                                         ~96 GB ✅
 #
-# Expected wall time: 5-7 days on one 96 GB GPU at ~1500 effective
-# tokens/sec (forward of 32B teacher dominates).
+# If memory is still tight on 94 GB, set teacher_load_in_4bit: true to
+# drop the teacher to ~16 GB. The distillation literature shows this is
+# acceptable — the student copies the teacher's distribution shape, not
+# the high-precision logit tail.
+#
+# For FULL fine-tuning of the student (7B, no LoRA), VRAM peak is
+# ~155 GB — out of reach for any single 96 GB GPU. Switch to:
+#   * an H200 141 GB instance + teacher_load_in_4bit (fits ~115 GB), or
+#   * a multi-GPU setup with FSDP (out of scope for v0.1)
+# and set student_finetune: full below.
+#
+# Expected wall time: 5-7 days on a 94-96 GB single GPU at
+# ~1500 effective tokens/sec (forward of the 32B teacher dominates).
+# ───────────────────────────────────────────────────────────────────────
 
 ### models
 teacher_model: Qwen/Qwen3-32B-Base
@@ -27,8 +41,25 @@ teacher_model: Qwen/Qwen3-32B-Base
 # behaves like a single legal-tuned 32B without runtime LoRA overhead.
 teacher_adapter: ~/checkpoints/qwen3_32b_legal_it_continued_pt
 student_model: Qwen/Qwen3-7B-Base
-teacher_load_in_8bit: false   # flip to true if memory is tight
-teacher_load_in_4bit: false
+teacher_load_in_8bit: false
+teacher_load_in_4bit: false   # flip to true if 94 GB GPU is still tight
+
+### student fine-tuning method
+# v0.1: LoRA student keeps total VRAM ≤ 96 GB and gives ~95% of the
+# quality of full fine-tuning at ~5% of the trainable params count.
+# Switch to "full" only on a 141 GB+ GPU or a multi-GPU FSDP setup.
+student_finetune: lora
+student_lora_rank: 128
+student_lora_alpha: 256
+student_lora_dropout: 0.0
+student_lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
 
 ### data
 dataset_dir: ~/datasets/legal_it
