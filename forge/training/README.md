@@ -15,8 +15,9 @@ The end-to-end strategy lives in
 
 | Config | Phase | Model | Hardware target | Wall time |
 |--------|-------|-------|-----------------|----------:|
-| `smoke_qwen3_1.7b.yaml` | smoke | `Qwen/Qwen3-1.7B-Base` + LoRA r=8 | RTX 5070 Ti 16 GB | ~5-8 min |
+| `smoke_qwen3_1.7b.yaml` | smoke | `Qwen/Qwen3-1.7B-Base` + LoRA r=8 | RTX 5070 Ti 16 GB | ~5-15 min |
 | `continued_pt_qwen3_32b.yaml` | Phase 1 | `Qwen/Qwen3-32B-Base` + LoRA r=128 | 96 GB GPU | 2.5-3.5 days |
+| `distill_qwen3_32b_to_7b.yaml` | Phase 2 | `Qwen/Qwen3-32B` (frozen) + `Qwen/Qwen3-7B-Base` (trainable) | 96 GB GPU | 5-7 days |
 
 The smoke config exists only to validate the wiring (dataset registration,
 checkpoint write, resume-from-checkpoint). Train it once, kill it
@@ -24,6 +25,9 @@ mid-run with Ctrl-C, run the same command again — the launcher should
 auto-detect the most recent checkpoint and resume. If both runs produce
 a final adapter under `checkpoints/smoke_qwen3_1.7b/`, the production
 config will work the same way on the rented instance.
+
+Phase 3 (quantize → GGUF) has no YAML — it's just a shell script
+wrapping llama.cpp tools (`forge/scripts/quantize_to_gguf.sh`).
 
 ## First-time setup
 
@@ -96,17 +100,51 @@ Prereq: instance bootstrapped via `forge/scripts/setup_training_env.sh`
 (clones the repo, installs deps, downloads dataset tarball from HF Hub,
 extracts to `~/datasets/legal_it/`).
 
+### Phase 1 — continued pre-training of the teacher
+
 ```bash
 bash forge/scripts/train.sh \
     forge/training/configs/continued_pt_qwen3_32b.yaml \
     ~/datasets/legal_it
 ```
 
-The launcher passes `--resume_from_checkpoint <last>` automatically
-whenever it finds a checkpoint under the YAML's `output_dir`. So if the
-instance is preempted, just re-run the same command on the new instance
-after pulling the latest checkpoint from the off-instance backup
-(see strategy doc §6).
+LLaMA-Factory under the hood. Output: a LoRA adapter at
+`./checkpoints/qwen3_32b_legal_it_continued_pt/`. The launcher
+auto-resumes from the most recent checkpoint inside that dir, so a
+re-run after preemption is idempotent.
+
+### Phase 2 — distillation teacher → student
+
+```bash
+bash forge/scripts/distill.sh \
+    forge/training/configs/distill_qwen3_32b_to_7b.yaml \
+    ~/datasets/legal_it
+```
+
+Custom Python script (`forge/scripts/distill.py`) under the hood:
+loads the Phase-1 LoRA-merged 32B as a frozen teacher, loads
+`Qwen/Qwen3-7B-Base` as the trainable student, optimises a
+KL+CE distillation loss. Output: full 7B HF-format weights at
+`./checkpoints/qwen3_7b_legal_it_distilled/`. Resume semantics
+identical to Phase 1.
+
+If the run OOMs, set `teacher_load_in_8bit: true` in the YAML to
+drop the teacher to ~16 GB.
+
+### Phase 3 — quantize to GGUF Q4_K_M
+
+```bash
+bash forge/scripts/quantize_to_gguf.sh \
+    ./checkpoints/qwen3_7b_legal_it_distilled \
+    ./gguf/legal-it-7b
+```
+
+CPU-only, no GPU needed. Clones llama.cpp on first run, builds the
+conversion + quantize binaries, writes `legal-it-7b-f16.gguf`
+(~14 GB) and `legal-it-7b-q4_k_m.gguf` (~4.5 GB), then runs a smoke
+prompt to confirm the GGUF loads correctly.
+
+The Q4_K_M GGUF is the final shippable artifact for `eullm/legal-it-7b`.
 
 ## Troubleshooting
 

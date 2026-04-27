@@ -1,0 +1,62 @@
+# Phase 2 — Knowledge distillation Qwen3-32B-legal-it → Qwen3-7B-Base.
+#
+# A frozen teacher (Phase-1 LoRA-merged 32B) generates soft probability
+# distributions over each next token; the student (7B) is trained to
+# imitate them via KL divergence plus a fraction of standard CE.
+#
+# Loss = α · KL(student || teacher) · T² + (1-α) · CE(student, y)
+#
+# Expected memory on a 96 GB GPU (BF16 throughout, no quantisation):
+#   teacher 32B (frozen, no grad)        ~64 GB
+#   student 7B + grad + Adam             ~28 GB
+#   activations + KL buffers (seq 2048)   ~6 GB
+#   ----                                 ----
+#   total                               ~98 GB    (tight; see below)
+#
+# If the run OOMs, set teacher_load_in_8bit: true to drop the teacher to
+# ~16 GB at the cost of slightly noisier logits — the distillation
+# literature shows this is acceptable.
+#
+# Expected wall time: 5-7 days on one 96 GB GPU at ~1500 effective
+# tokens/sec (forward of 32B teacher dominates).
+
+### models
+teacher_model: Qwen/Qwen3-32B-Base
+# Phase-1 LoRA adapter directory; the script loads it with PeftModel and
+# merge_and_unload's it into the base before forward, so the teacher
+# behaves like a single legal-tuned 32B without runtime LoRA overhead.
+teacher_adapter: ~/checkpoints/qwen3_32b_legal_it_continued_pt
+student_model: Qwen/Qwen3-7B-Base
+teacher_load_in_8bit: false   # flip to true if memory is tight
+teacher_load_in_4bit: false
+
+### data
+dataset_dir: ~/datasets/legal_it
+train_file: train.jsonl
+val_file: val.jsonl
+cutoff_len: 2048
+max_train_samples: null   # null = full corpus
+
+### training
+output_dir: ~/checkpoints/qwen3_7b_legal_it_distilled
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 5.0e-5
+weight_decay: 0.01
+max_grad_norm: 1.0
+num_train_epochs: 1
+max_steps: -1             # -1 = unlimited (full epoch)
+warmup_steps: 1000
+save_steps: 1000
+eval_steps: 1000
+logging_steps: 20
+
+### distillation
+kl_temperature: 2.0
+kl_alpha: 0.7   # 0.7 KL + 0.3 CE — KL-heavy at the start, can be
+                # decreased later if the student plateaus on CE.
+
+### hardware
+bf16: true
+gradient_checkpointing: true
+seed: 42
