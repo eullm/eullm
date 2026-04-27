@@ -1,17 +1,15 @@
 {
-  "_README": "LLaMA-Factory dataset registration. Copied next to train.jsonl/val.jsonl by forge/scripts/train.sh so LLaMA-Factory can discover the corpus. The 'pretrain' formatting tells LF to treat the 'text' column as raw text for next-token-prediction (no instruction/response template).",
+  "_README": "LLaMA-Factory dataset registration. Copied next to train.jsonl/val.jsonl by forge/scripts/train.sh so LLaMA-Factory can discover the corpus. We omit the 'formatting' field on purpose: LLaMA-Factory 0.9.5 dropped the explicit 'pretrain' converter and now infers the data shape from the stage (stage: pt → reads only the 'prompt' column for next-token prediction).",
   "legal_it_train": {
     "file_name": "train.jsonl",
     "columns": {
       "prompt": "text"
-    },
-    "formatting": "pretrain"
+    }
   },
   "legal_it_val": {
     "file_name": "val.jsonl",
     "columns": {
       "prompt": "text"
-    },
-    "formatting": "pretrain"
+    }
   }
 }
