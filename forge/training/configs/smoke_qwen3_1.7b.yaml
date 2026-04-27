@@ -45,10 +45,12 @@ learning_rate: 5.0e-5
 num_train_epochs: 1
 max_steps: 100
 lr_scheduler_type: cosine
-warmup_ratio: 0.05
+warmup_steps: 5            # = max_steps * 0.05; warmup_ratio is deprecated
 bf16: true
 gradient_checkpointing: true
-optim: adamw_torch_8bit
+optim: adamw_torch         # standard Adam, no extra deps (8-bit Adam
+                           # would need torchao OR bitsandbytes
+                           # depending on transformers version)
 
 ### checkpointing (every 50 steps so we can test resume by ctrl-c)
 logging_steps: 5

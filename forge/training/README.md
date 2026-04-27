@@ -35,6 +35,28 @@ bash forge/scripts/install_training_deps.sh
 This clones LLaMA-Factory into `~/LLaMA-Factory` (override via `LF_DIR`)
 and installs `llamafactory-cli` plus the training stack.
 
+## Pre-flight check (avoid finding deps issues mid-training)
+
+```bash
+python forge/scripts/check_training_env.py
+```
+
+Verifies:
+- Python ≥ 3.10 and the package versions the YAMLs assume
+- `llamafactory-cli` is on PATH
+- CUDA + GPU + BF16 support
+- The dataset directory exists and has `train.jsonl` / `val.jsonl`
+- The Qwen3 tokenizer can be fetched from HF Hub (catches auth issues
+  before they surface mid-download)
+
+Exit code is non-zero on the first missing piece, so it can be chained:
+
+```bash
+python forge/scripts/check_training_env.py \
+    && bash forge/scripts/train.sh \
+        forge/training/configs/smoke_qwen3_1.7b.yaml
+```
+
 ## Smoke test (5070 Ti)
 
 Prereq: anonymized + chunked corpus already at

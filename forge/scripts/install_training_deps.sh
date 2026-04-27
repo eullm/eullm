@@ -40,13 +40,16 @@ fi
 log "Installing LLaMA-Factory (base)"
 (cd "$LF_DIR" && $PYTHON -m pip install --quiet -e ".")
 
-# 3. Add the runtime deps the smoke and production YAMLs assume:
-#    bitsandbytes — needed by `optim: adamw_torch_8bit` (8-bit Adam,
-#                   keeps the optimizer state ~3× smaller in VRAM).
-#    rouge-score + nltk — only used by the eval metrics, but
-#                         transformers will warn loudly without them.
-log "Installing eval + 8-bit-optim runtime deps (bitsandbytes, rouge-score, nltk)"
-$PYTHON -m pip install --quiet bitsandbytes rouge-score nltk
+# 3. Add the runtime deps the YAMLs assume:
+#    rouge-score + nltk — used by the eval metrics; transformers
+#                         warns loudly without them.
+# Note: we deliberately do NOT install bitsandbytes / torchao here.
+# The YAMLs use plain `optim: adamw_torch` so neither is needed; if
+# we ever switch to an 8-bit/4-bit optimizer we'll add the dep AND
+# the install line together to avoid the version-skew mess we hit
+# with `adamw_torch_8bit` on transformers 4.5x.
+log "Installing eval runtime deps (rouge-score, nltk)"
+$PYTHON -m pip install --quiet rouge-score nltk
 
 # 3. Sanity check.
 if command -v llamafactory-cli >/dev/null; then
@@ -68,9 +71,12 @@ cat <<EOF
    LLaMA-Factory: $LF_DIR
 
  Next:
-   bash forge/scripts/train.sh \\
-       forge/training/configs/smoke_qwen3_1.7b.yaml \\
-       ~/italgiure_corpus/pretraining
+   1) Run the pre-flight check (deps + GPU + dataset + tokenizer):
+        python forge/scripts/check_training_env.py
+
+   2) When the pre-flight is green, launch the smoke test:
+        bash forge/scripts/train.sh \\
+            forge/training/configs/smoke_qwen3_1.7b.yaml
 
  See forge/training/README.md for the full flow.
 ================================================================================
