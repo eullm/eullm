@@ -33,12 +33,23 @@ else
     git clone --depth 1 "$LF_REPO" "$LF_DIR"
 fi
 
-# 2. Install LLaMA-Factory in editable mode + the extras we need.
-#    torch       — already installed by the eullm-forge dep, so this is a no-op
-#    metrics     — required for eval (rouge / bleu / perplexity)
-#    bitsandbytes— for 8-bit optimizer + future QLoRA
-log "Installing LLaMA-Factory + extras (torch, metrics, bitsandbytes)"
-(cd "$LF_DIR" && $PYTHON -m pip install --quiet -e ".[torch,metrics,bitsandbytes]")
+# 2. Install LLaMA-Factory in editable mode. The optional extras
+#    [torch,metrics,bitsandbytes] were renamed/removed in LLaMA-Factory
+#    0.9.5+, so we install the base package and add the missing
+#    runtime deps explicitly afterwards.
+log "Installing LLaMA-Factory (base)"
+(cd "$LF_DIR" && $PYTHON -m pip install --quiet -e ".")
+
+# 3. Add the runtime deps the YAMLs assume:
+#    rouge-score + nltk — used by the eval metrics; transformers
+#                         warns loudly without them.
+# Note: we deliberately do NOT install bitsandbytes / torchao here.
+# The YAMLs use plain `optim: adamw_torch` so neither is needed; if
+# we ever switch to an 8-bit/4-bit optimizer we'll add the dep AND
+# the install line together to avoid the version-skew mess we hit
+# with `adamw_torch_8bit` on transformers 4.5x.
+log "Installing eval runtime deps (rouge-score, nltk)"
+$PYTHON -m pip install --quiet rouge-score nltk
 
 # 3. Sanity check.
 if command -v llamafactory-cli >/dev/null; then
@@ -60,9 +71,12 @@ cat <<EOF
    LLaMA-Factory: $LF_DIR
 
  Next:
-   bash forge/scripts/train.sh \\
-       forge/training/configs/smoke_qwen3_1.7b.yaml \\
-       ~/italgiure_corpus/pretraining
+   1) Run the pre-flight check (deps + GPU + dataset + tokenizer):
+        python forge/scripts/check_training_env.py
+
+   2) When the pre-flight is green, launch the smoke test:
+        bash forge/scripts/train.sh \\
+            forge/training/configs/smoke_qwen3_1.7b.yaml
 
  See forge/training/README.md for the full flow.
 ================================================================================

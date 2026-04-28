@@ -4,9 +4,11 @@
 # Handles three things on top of `llamafactory-cli train`:
 #   1. Copies forge/training/configs/dataset_info.json next to the
 #      dataset files so LLaMA-Factory can discover the corpus.
-#   2. Auto-detects the most recent checkpoint inside the YAML's
-#      output_dir and passes --resume_from_checkpoint, so a re-run
-#      after a preemption picks up where it left off.
+#   2. Materialises a temporary YAML with __DATASET_DIR__ replaced by
+#      the runtime data dir, and (when an existing checkpoint is
+#      found) appends `resume_from_checkpoint: <path>`. LLaMA-Factory
+#      0.9.5 rejects extra CLI args when a YAML is given, so we keep
+#      everything in the YAML.
 #   3. Logs the resolved command before launching, so you can copy/
 #      paste it later for debugging.
 #
@@ -19,17 +21,17 @@
 #
 # Examples:
 #   # Smoke test on the local 5070 Ti workstation
-#   bash forge/scripts/train.sh \\
+#   bash forge/scripts/train.sh \
 #       forge/training/configs/smoke_qwen3_1.7b.yaml
 #
 #   # Production continued PT on a rented 96 GB instance
-#   bash forge/scripts/train.sh \\
-#       forge/training/configs/continued_pt_qwen3_32b.yaml \\
+#   bash forge/scripts/train.sh \
+#       forge/training/configs/continued_pt_qwen3_32b.yaml \
 #       ~/datasets/legal_it
 #
 #   # Resume after a preemption — same command, no special flag needed
-#   bash forge/scripts/train.sh \\
-#       forge/training/configs/continued_pt_qwen3_32b.yaml \\
+#   bash forge/scripts/train.sh \
+#       forge/training/configs/continued_pt_qwen3_32b.yaml \
 #       ~/datasets/legal_it
 
 set -euo pipefail
@@ -53,30 +55,39 @@ DATASET_INFO_SRC="$REPO_ROOT/forge/training/configs/dataset_info.json"
 DATASET_INFO_DST="$DATA_DIR/dataset_info.json"
 
 [ -f "$DATASET_INFO_SRC" ] || err "missing $DATASET_INFO_SRC"
-
-# Copy the LLaMA-Factory dataset registration next to the dataset
-# files. cp is unconditional so a doc-update on dataset_info.json
-# always propagates.
 cp "$DATASET_INFO_SRC" "$DATASET_INFO_DST"
 ok "dataset_info.json copied to $DATASET_INFO_DST"
 
-# Extract output_dir from the YAML to look for an existing checkpoint
-# WITHOUT requiring yaml/python deps.
-OUTPUT_DIR=$(grep -E '^output_dir:' "$CONFIG" \
+# Materialise a runtime YAML with __DATASET_DIR__ filled in (and
+# resume_from_checkpoint appended if applicable). The temp file is
+# cleaned up on exit, including on Ctrl-C.
+TMP_YAML=$(mktemp --suffix=.yaml)
+trap 'rm -f "$TMP_YAML"' EXIT
+
+# Use a delimiter that can't appear in a Unix path (|) and an absolute
+# DATA_DIR so the substitution is unambiguous.
+ABS_DATA_DIR="$(cd "$DATA_DIR" && pwd)"
+sed "s|__DATASET_DIR__|$ABS_DATA_DIR|g" "$CONFIG" > "$TMP_YAML"
+
+# Extract output_dir from the resolved YAML to look for an existing
+# checkpoint.
+OUTPUT_DIR=$(grep -E '^output_dir:' "$TMP_YAML" \
     | head -1 | sed -E 's/output_dir:[[:space:]]*//; s/[[:space:]]+#.*$//; s/^["'\'']//; s/["'\'']$//')
 
 if [ -z "$OUTPUT_DIR" ]; then
     err "could not extract output_dir from $CONFIG"
 fi
 
-RESUME_ARG=()
+# Resolve ~ expansion
+OUTPUT_DIR="${OUTPUT_DIR/#\~/$HOME}"
+
 if [ -d "$OUTPUT_DIR" ]; then
     LATEST_CKPT=$(find "$OUTPUT_DIR" -maxdepth 1 -type d -name 'checkpoint-*' \
         -printf '%T@ %p\n' 2>/dev/null \
         | sort -rn | awk 'NR==1{print $2}')
     if [ -n "$LATEST_CKPT" ]; then
         log "found existing checkpoint: $LATEST_CKPT — resuming"
-        RESUME_ARG=(--resume_from_checkpoint "$LATEST_CKPT")
+        echo "resume_from_checkpoint: $LATEST_CKPT" >> "$TMP_YAML"
     else
         log "$OUTPUT_DIR exists but no checkpoint inside — starting fresh"
     fi
@@ -84,13 +95,9 @@ else
     log "no $OUTPUT_DIR yet — starting fresh"
 fi
 
-CMD=(llamafactory-cli train "$CONFIG"
-     --dataset_dir "$DATA_DIR"
-     "${RESUME_ARG[@]}")
-
 echo
-log "Launching:"
-printf '   %s\n' "${CMD[*]}"
+log "Resolved YAML at $TMP_YAML — launching:"
+printf '   llamafactory-cli train %s\n' "$TMP_YAML"
 echo
 
-exec "${CMD[@]}"
+exec llamafactory-cli train "$TMP_YAML"

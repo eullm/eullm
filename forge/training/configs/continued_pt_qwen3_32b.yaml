@@ -23,7 +23,8 @@ lora_alpha: 256
 lora_dropout: 0.05
 
 ### dataset
-# dataset_dir is set by forge/scripts/train.sh.
+# __DATASET_DIR__ is replaced by forge/scripts/train.sh at launch time.
+dataset_dir: __DATASET_DIR__
 dataset: legal_it_train
 eval_dataset: legal_it_val
 cutoff_len: 2048
@@ -38,12 +39,17 @@ gradient_accumulation_steps: 16        # effective batch ≈ 16
 learning_rate: 1.0e-5
 num_train_epochs: 1
 lr_scheduler_type: cosine
-warmup_ratio: 0.03
+warmup_steps: 2000         # ≈ 3% of one epoch (1.12M chunks /
+                           # batch 16 ≈ 70k steps); explicit warmup
+                           # avoids the deprecated warmup_ratio.
 weight_decay: 0.01
 max_grad_norm: 1.0
 bf16: true
 gradient_checkpointing: true
-optim: adamw_torch_8bit
+optim: adamw_torch         # standard Adam; on a 96 GB GPU we have
+                           # ~16 GB headroom over the 78 GB target,
+                           # so the extra 1.7 GB vs adamw_torch_8bit
+                           # is not worth a torchao/bnb dep risk
 
 ### checkpointing (every 500 steps as per strategy doc §6)
 logging_steps: 10

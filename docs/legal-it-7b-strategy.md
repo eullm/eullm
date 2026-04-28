@@ -93,16 +93,29 @@ shaves wall-clock but is not required for this size class.
 | Headroom | 18 GB |
 | **Total** | **78 GB / 96 GB** ✅ |
 
-### Phase 2 — distillation
+### Phase 2 — distillation (default: LoRA student on a 94-96 GB GPU)
 
 | Component | Memory |
 |-----------|-------:|
-| Qwen3-32B teacher (FP8, frozen) | 32 GB |
-| Qwen3-7B student (BF16) | 14 GB |
-| Student grad + 8-bit Adam | 7 GB |
-| Activations (seq len 2048, both nets) | 10 GB |
-| Headroom | 33 GB |
-| **Total** | **63 GB / 96 GB** ✅ |
+| Qwen3-32B teacher BF16 (frozen, no grad) | 64 GB |
+| Qwen3-7B student BF16 (frozen base) | 14 GB |
+| Student LoRA r=128 + grad + 8-bit Adam | 6 GB |
+| Activations + KL buffers (seq len 2048) | 10 GB |
+| Misc / fragmentation | 2 GB |
+| **Total** | **96 GB / 96 GB** ✅ (tight but fits) |
+
+A pure full fine-tune on the 7B student would need ~155 GB total
+(student + grad + Adam master/state in FP32 + 64 GB teacher + activations),
+out of reach for any 94-96 GB single GPU. The pipeline therefore defaults
+to a LoRA student (rank 128, ~250 M trainable params, ~95 % of the
+quality of full FT in published distillation results).
+
+For full fine-tuning of the student, the path is:
+* an H200 141 GB single GPU + `teacher_load_in_4bit: true` (puts the
+  teacher at ~16 GB → fits ~115 GB total), or
+* a multi-GPU FSDP setup (out of scope for v0.1).
+Switch `student_finetune` from `lora` to `full` in the YAML when running
+on either of those.
 
 ### Phase 3 — quantize + export
 
@@ -249,3 +262,4 @@ When the pipeline finishes we publish:
 |------|--------|--------|
 | 2026-04-26 | primoco | Initial strategy committed. |
 | 2026-04-26 | primoco | Add Qwen3.5/3.6 to alternatives evaluated; clarify tokenizer incompatibility between Qwen3 and Qwen3.5/3.6 families. |
+| 2026-04-27 | primoco | Phase 2 memory budget rewritten — full FT student does not fit a single 96 GB GPU; default switched to LoRA r=128 student (with `student_finetune: full` documented as the H200/multi-GPU upgrade path). |
