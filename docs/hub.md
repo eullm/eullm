@@ -242,7 +242,7 @@ The Hub provides built-in compliance documentation for every model, covering:
 - **Data governance** — GDPR compliance, data origin, personal data handling
 - **Technical documentation** — Architecture, compression methods, requirements
 - **Human oversight** — Audit trail mechanism via EULLM Engine
-- **Infrastructure** — EU-only hosting, zero non-EU telemetry
+- **Infrastructure** — EU-only hosting, no telemetry of any kind (audit trail stored locally on the client running the Engine)
 
 This is designed to satisfy Articles 53-55 of the EU AI Act for general-purpose AI models.
 
