@@ -32,7 +32,7 @@
 
 ## The problem
 
-95% of AI infrastructure used in Europe depends on American or Chinese companies. Every API call sends data outside the EU. Every model download comes from US servers. Even self-hosted solutions route through American infrastructure.
+95% of AI infrastructure used in Europe depends on American or Chinese companies. Hosted APIs (OpenAI, Anthropic, Google) send every prompt outside the EU. Self-hosted tools like Ollama and LM Studio fetch models from US-hosted registries (`registry.ollama.ai`, `huggingface.co`) and many ping these endpoints for update checks by default.
 
 The **EU AI Act** (Regulation 2024/1689) takes effect August 2, 2026. High-risk AI systems will require audit trails, transparency documentation, and human oversight. Existing open-source tools were not designed with this in mind.
 
@@ -105,7 +105,7 @@ Key features:
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - **Cross-platform binaries** — prebuilt releases for Linux x64/arm64 and macOS x64/arm64
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
-- Zero telemetry to non-EU servers
+- **No network telemetry** — no analytics, no crash reports, no usage stats; audit trail is written locally to `~/.eullm/audit/audit.jsonl` and never transmitted
 
 ### EULLM Forge
 
@@ -268,7 +268,7 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | Model verticalizzazione | Manual, requires ML expertise | Forge CLI + pipeline modules (end-to-end integration in progress) |
 | Domain-specific EU models | None | Hub catalog (demo models in development) |
 | White-label branding | System prompt only (bypassable) | Fine-tuned into weights |
-| Telemetry | Varies | Zero non-EU telemetry by design |
+| Telemetry | Varies | **None.** No analytics, no crash reports, no usage stats. Audit trail stored locally at `~/.eullm/audit/audit.jsonl`, never transmitted |
 | Migration effort | — | **Zero.** Same API, same port, same tools |
 
 EULLM aims to be the sovereign AI stack for Europe — engine, tools, and models in one platform.

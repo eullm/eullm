@@ -1,6 +1,6 @@
 # EULLM Engine
 
-The EULLM Engine is a CLI + API server for running GGUF models locally, with real llama.cpp inference, built-in EU model catalog, AI Act audit trail, and zero non-EU telemetry. Single Rust binary — no Python, no Docker.
+The EULLM Engine is a CLI + API server for running GGUF models locally, with real llama.cpp inference, built-in EU model catalog, local-only AI Act audit trail, and no network telemetry of any kind. Single Rust binary — no Python, no Docker.
 
 ## Installation
 
