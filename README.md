@@ -481,6 +481,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 * OpenAI + Ollama API compatibility (drop-in replacement)
 * Single binary distribution (Linux/macOS, CUDA/ROCm/Vulkan/Metal)
 * GGUF model support, transparent web browsing, audit trail
+* **Planned — auto GPU layer fitting** (`--fit` flag): query available VRAM at startup, estimate per-layer + KV cache memory cost from the GGUF header, compute the maximum `n-gpu-layers` that fits, fall back to partial CPU offload otherwise. Targets large dense models (14B–32B at Q4) and MoE models (e.g. Qwen3-30B-A3B, Gemma-4-26B-A4B) on consumer GPUs without manual tuning. Cross-platform (CUDA/ROCm/Vulkan/Metal).
 * Public launch on HackerNews, [dev.to](http://dev.to), Hashnode, LinkedIn
 * GitHub repository active, contributor onboarding
 * Community feedback collection
