@@ -78,15 +78,6 @@ Base model (14B–72B)
 Output: 7B Q4 model (~4.5GB) that runs on any laptop with 8GB RAM
 ```
 
-### Compression Tiers
-
-| Source → Target | GPU Required | Time | Estimated Cost |
-|-----------------|-------------|------|---------------|
-| 14B → 7B | 2x A100 80GB | 2-3 days | ~$300-500 |
-| 30B → 7B | 4x A100 80GB | 4-5 days | ~$1000-2000 |
-| 70B → 14B | 4-8x A100 80GB | 5-7 days | ~$3000-5000 |
-| 70B → 7B (iterative) | 4-8x A100 80GB | 7-10 days | ~$5000-8000 |
-
 ### Demo Models (Phase 1)
 
 | Model | Domain | Source | Target | Languages |
@@ -152,7 +143,8 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 
 ```
 eullm/
-├── CLAUDE.md
+├── .claude/
+│   └── CLAUDE.md             # Project context (this file)
 ├── README.md
 ├── LICENSE
 ├── docker-compose.yml     # All services (engine, hub, forge)
