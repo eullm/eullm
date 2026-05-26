@@ -78,15 +78,6 @@ Base model (14B–72B)
 Output: 7B Q4 model (~4.5GB) that runs on any laptop with 8GB RAM
 ```
 
-### Compression Tiers
-
-| Source → Target | GPU Required | Time | Estimated Cost |
-|-----------------|-------------|------|---------------|
-| 14B → 7B | 2x A100 80GB | 2-3 days | ~$300-500 |
-| 30B → 7B | 4x A100 80GB | 4-5 days | ~$1000-2000 |
-| 70B → 14B | 4-8x A100 80GB | 5-7 days | ~$3000-5000 |
-| 70B → 7B (iterative) | 4-8x A100 80GB | 7-10 days | ~$5000-8000 |
-
 ### Demo Models (Phase 1)
 
 | Model | Domain | Source | Target | Languages |
@@ -95,34 +86,12 @@ Output: 7B Q4 model (~4.5GB) that runs on any laptop with 8GB RAM
 | `eullm/medical-de-7b` | German medicine | Qwen3-14B | 7B Q4 | DE, EN |
 | `eullm/finance-fr-7b` | French finance | Qwen3-14B | 7B Q4 | FR, EN |
 
-### Business Model
-
-| Tier | What | For | Price |
-|------|------|-----|-------|
-| **Open** | Pre-verticalizzati models, downloadable | Community, developers | Free (Apache 2.0) |
-| **Self-service** | Forge tools: do it yourself | Tech-savvy companies | Free (pay your own GPU) |
-| **Done-for-you** | We verticalize YOUR model | Enterprise, SMEs | Project-based (from EUR 2K) |
-
 ## Compute Infrastructure
 
-### For Development (Forge pipeline development)
-- **HuggingFace Inference Endpoints**: A100 80GB at $2.50/h, pay-as-you-go
-- **Google Colab Pro+**: $49.99/month, ~40h A100, good for LoRA and testing only
-
-### For Production (Model verticalizzazione)
-- **HuggingFace**: Multi-GPU A100/H100 endpoints
-- **EU Cloud (preferred)**: Hetzner GPU servers (A100/H100), OVH/Scaleway
-- **Key requirement**: distillation needs teacher+student in VRAM simultaneously
-
-### What Colab Pro+ CAN do
-- Pruning calibration (minutes, 1x A100)
-- Identity LoRA fine-tuning (1-2h, 1x A100)
-- Quantization (minutes)
-- GGUF export (minutes, CPU)
-
-### What Colab Pro+ CANNOT do
-- Knowledge distillation from 14B+ teacher (needs multi-GPU, days of runtime)
-- Any pipeline on 70B+ models (doesn't fit in 80GB)
+- **EU Cloud (preferred)**: Seeweb (IT), Hetzner (DE), OVH/Scaleway (FR) — GPU servers with A100/H100/RTX PRO 6000
+- **Fallback**: HuggingFace Inference Endpoints, dedicated GPU hosting (GPU-Mart and similar)
+- **Single-GPU budget**: 94-96 GB VRAM hosts (H100 NVL, RTX PRO 6000 Blackwell) — fits LoRA distillation pipeline up to 32B teacher + 7B student
+- **Key constraint**: distillation needs teacher + student in VRAM simultaneously; consumer GPUs (≤24 GB) handle only LoRA fine-tuning and quantization
 
 ## Base Models
 
@@ -152,7 +121,8 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 
 ```
 eullm/
-├── CLAUDE.md
+├── .claude/
+│   └── CLAUDE.md             # Project context (this file)
 ├── README.md
 ├── LICENSE
 ├── docker-compose.yml     # All services (engine, hub, forge)
@@ -201,20 +171,13 @@ eullm/
 - **Docs:** Every public API documented
 - **No vendor lock-in:** Abstract external services behind interfaces
 
-## Current Phase: Foundation (March–April 2026)
+## Current Phase: Forge pipeline + first demo models
 
-Priority tasks:
-1. ~~Create project directory structure (engine/, forge/, hub/)~~
-2. ~~EULLM CLI skeleton (eullm pull, eullm run)~~
-3. ~~SSE streaming on all Engine endpoints (Ollama + OpenAI format)~~
-4. ~~Continuous batching scheduler for multi-request inference~~
-5. ~~CI/CD: GitHub Actions CI + cross-platform release workflow~~
-6. ~~Docker support: docker-compose.yml with GPU profiles~~
-7. ~~Getting started guide (docs/getting-started.md)~~
-8. Full Forge pipeline with verticalizzazione profiles
-9. Demo notebook: verticalizzazione Qwen3-14B → legal-it-7b
-10. First 3 demo models on Hub (legal-it, medical-de, finance-fr)
-11. Proof of concept: verticalizzato model running locally on consumer GPU
+Outstanding tasks:
+1. Full Forge pipeline with verticalizzazione profiles (legal-it, medical-de, finance-fr)
+2. End-to-end run: Qwen3-32B → legal-it-7b GGUF Q4_K_M
+3. First 3 demo models on Hub
+4. Proof of concept: verticalizzato model running locally on consumer GPU
 
 ## What NOT to do
 
