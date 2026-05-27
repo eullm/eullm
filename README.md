@@ -22,6 +22,7 @@
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
   <img src="https://img.shields.io/badge/status-Early%20Development-orange" alt="Status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://doi.org/10.5281/zenodo.20412980"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412980.svg" alt="DOI" /></a>
 </p>
 
 <p align="center">
@@ -642,6 +643,32 @@ EuLLM is built by **[I3K Technologies](https://i3k.eu)** — a Milan-based deep-
 * EIC Accelerator 2026 applicant (Proposal ID 101335975)
 
 Adjacent products operated by I3K Technologies: [CRM81](https://crm81.it) (workplace safety vertical SaaS), [LetsAI](https://letsai.it) (multi-provider generative AI platform).
+
+## How to cite
+
+If you use EuLLM in academic research, EU grant proposals, or technical publications, please cite it as:
+
+**APA**:
+> Marchetti, F. (2026). *EuLLM — Open-source sovereign LLM platform* (Version 0.4.4) [Software]. Zenodo. https://doi.org/10.5281/zenodo.20412980
+
+**BibTeX**:
+
+```bibtex
+@software{marchetti2026eullm,
+  author       = {Marchetti, Francesco},
+  title        = {EuLLM: Open-source sovereign LLM platform},
+  year         = {2026},
+  publisher    = {Zenodo},
+  version      = {v0.4.4},
+  doi          = {10.5281/zenodo.20412980},
+  url          = {https://doi.org/10.5281/zenodo.20412980},
+  license      = {Apache-2.0},
+  note         = {Inference engine, verticalization pipeline, and EU-hosted model registry for sovereign EU LLM deployment}
+}
+```
+
+**Plain text**:
+> Francesco Marchetti. (2026). EuLLM — Open-source sovereign LLM platform (v0.4.4) [Software]. https://doi.org/10.5281/zenodo.20412980
 
 ## License
 
