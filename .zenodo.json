@@ -1,0 +1,57 @@
+{
+  "title": "EuLLM — Open-source sovereign LLM platform",
+  "description": "<p>EuLLM is an open-source platform for creating, distributing, and running sovereign EU-compliant Large Language Models, designed for verticalization across domains, languages, and brands while ensuring AI Act compliance.</p><p>The platform consists of three components: <strong>Engine</strong> — a Rust-based inference runtime built on top of llama.cpp, exposing OpenAI-compatible and Ollama-compatible APIs on the same port, with TurboQuant KV cache compression for up to 4× context length on consumer GPUs and a continuous batching scheduler for parallel decode of multiple concurrent requests; <strong>Forge</strong> — a verticalization pipeline written in Python that compresses 14B-30B foundation models down to specialized 7B domain experts via structural pruning, knowledge distillation, quantization, and identity LoRA fine-tuning; <strong>Hub</strong> — an EU-hosted model registry providing AI Act compliance cards, provenance documentation, and verifiable model lineage tracking, distributed via European cloud infrastructure to ensure data sovereignty.</p><p>Use cases include sovereign EU LLM deployment for regulated industries (legal, healthcare, finance), domain-specific verticalized models, and EU AI Act compliant inference infrastructure.</p>",
+  "license": "Apache-2.0",
+  "upload_type": "software",
+  "creators": [
+    {
+      "name": "Marchetti, Francesco",
+      "affiliation": "I3K Technologies",
+      "orcid": "0009-0003-8613-3065"
+    }
+  ],
+  "keywords": [
+    "large language models",
+    "LLM",
+    "inference engine",
+    "llama.cpp",
+    "Rust",
+    "open source",
+    "EU sovereignty",
+    "AI Act",
+    "GDPR",
+    "verticalization",
+    "knowledge distillation",
+    "quantization",
+    "KV cache compression",
+    "TurboQuant",
+    "sovereign AI",
+    "self-hosted",
+    "on-premises",
+    "model hub",
+    "fine-tuning",
+    "LoRA"
+  ],
+  "language": "eng",
+  "access_right": "open",
+  "communities": [
+    {
+      "identifier": "eu"
+    }
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/eullm/eullm",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    },
+    {
+      "identifier": "https://eullm.eu",
+      "relation": "isDocumentedBy",
+      "resource_type": "other",
+      "scheme": "url"
+    }
+  ],
+  "notes": "Maintained by I3K Technologies, Milan, Italy. Project website: https://eullm.eu"
+}
