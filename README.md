@@ -3,18 +3,18 @@
 </p>
 
 <p align="center"><strong>The European Sovereign LLM Platform</strong></p>
-<p align="center">Verticalize, compress and run sovereign AI models on European infrastructure.<br>Open source. Designed for EU AI Act compliance. Runs on your hardware.</p>
+<p align="center"><strong>The inference Engine is ready today.</strong> Drop-in Ollama replacement, Apache 2.0, EU-sovereign, AI Act-ready audit trail, zero telemetry.<br><em>Plus a roadmap to verticalize, compress, and ship domain-specific models on European infrastructure.</em></p>
 
 <p align="center">
-  <a href="https://eullm.eu">Website</a> ·
-  <a href="docs/getting-started.md">Getting Started</a> ·
-  <a href="#quickstart">Quickstart</a> ·
-  <a href="#the-solution">Components</a> ·
-  <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
+  <a href="#try-it-now">Try it now</a> ·
+  <a href="#whats-ready-today-whats-coming">Status</a> ·
+  <a href="#the-solution">Engine</a> ·
   <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
-  <a href="#planned-verticalized-models-q4-2026-roadmap">Planned Models</a> ·
-  <a href="#roadmap">Roadmap</a> ·
-  <a href="#contributing">Contributing</a>
+  <a href="#why-eullm">vs Ollama</a> ·
+  <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
+  <a href="#planned-verticalized-models-q4-2026-roadmap">Roadmap</a> ·
+  <a href="#contributing">Contributing</a> ·
+  <a href="https://eullm.eu">Website</a>
 </p>
 
 <p align="center">
@@ -31,6 +31,70 @@
 
 ---
 
+## Try it now
+
+**EULLM Engine is a drop-in Ollama replacement built in Rust.** Download a binary, run any GGUF model (Qwen, Mistral, DeepSeek, Phi, Gemma, …), get an Ollama-compatible + OpenAI-compatible API on port 11434. No Python, no Docker, no telemetry.
+
+```bash
+# Linux x64 with NVIDIA GPU (RTX 3000 / 4000 / 5000 — Ampere/Ada/Blackwell)
+curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64-cuda-12.8 -o eullm
+chmod +x eullm
+./eullm run your-model.gguf
+
+# In another terminal — same API your existing tooling already speaks:
+curl http://localhost:11434/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3", "messages": [{"role": "user", "content": "Ciao!"}]}'
+```
+
+**All prebuilt binaries** — pick yours from the [latest release](https://github.com/eullm/eullm/releases/latest):
+
+| Platform | File | Notes |
+|----------|------|-------|
+| 🐧 Linux x64 (CPU) | `eullm-linux-x64` | – |
+| 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | RTX 3000/4000/5000 |
+| 🐧 Linux x64 (NVIDIA + TurboQuant) | `eullm-linux-x64-cuda12.8-turboquant-exp` | 4× context length 🔥 |
+| 🐧 Linux ARM64 | `eullm-linux-arm64` | – |
+| 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | – |
+| 🍎 macOS Apple Silicon (Metal + TurboQuant) | `eullm-macos-arm64-turboquant-exp` | – |
+| 🍎 macOS Intel | `eullm-macos-x64` | – |
+| 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | – |
+| 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
+| 🪟 Windows 11 x64 (NVIDIA + TurboQuant) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
+
+### Already using Ollama? Switch in 60 seconds
+
+Same port, same API, same models. **Zero code changes.**
+
+```bash
+# Was:   ollama run llama3
+# Now:   eullm run ./your-model.gguf --port 11434
+# Done. Open WebUI, LangChain, n8n, any OpenAI client — all work unchanged.
+```
+
+| | Ollama | **EULLM Engine** |
+|---|--------|------------------|
+| Backend | llama.cpp | llama.cpp (same) |
+| API | Ollama | Ollama **+ OpenAI** (same port) |
+| Concurrency | Sequential | **Continuous batching** (~2× at 4+ concurrent) |
+| Long context | F16 KV | **TurboQuant KV** — 4× context on consumer GPUs |
+| AI Act audit | None | Built-in, local-only, never transmitted |
+| Telemetry | Varies | **Zero** — no analytics, no crash reports |
+| Migration cost | — | **Drop-in** |
+
+[→ Full benchmarks](#benchmarks--continuous-batching-in-action) · [→ Detailed comparison](#why-eullm) · [→ Engine deep dive](#the-solution)
+
+## What's ready today, what's coming
+
+| Component | Status | Use today? |
+|-----------|--------|------------|
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, multi-GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant, audit trail | ✅ **Ready (v0.5.1)** | **Yes** — drop-in for Ollama |
+| **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
+| **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
+| **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
+
+> The Engine works **today, standalone, with any GGUF model** on Hugging Face. You don't need to wait for the Hub or Forge to use it. Star this repo to follow Forge & Hub releases.
+
 ## The problem
 
 95% of AI infrastructure used in Europe depends on American or Chinese companies. Hosted APIs (OpenAI, Anthropic, Google) send every prompt outside the EU. Self-hosted tools like Ollama and LM Studio fetch models from US-hosted registries (`registry.ollama.ai`, `huggingface.co`) and many ping these endpoints for update checks by default.
@@ -46,24 +110,6 @@ European SMEs need AI models that:
 - **Cost nothing** in ongoing API fees
 
 EULLM is the missing infrastructure.
-
-## Project status
-
-> **EULLM Engine is ready to use.** Download the binary, run it. No compilation, no setup, no Docker. Works on any GGUF model.
-
-| Component | Status | What works today | Next |
-|-----------|--------|-----------------|------|
-| **Engine** | **Ready to use** | Local GGUF inference, Ollama + OpenAI APIs, continuous batching, GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant KV cache compression, transparent web browsing, audit trail, prebuilt binaries (Linux/macOS) | Full Ollama parity, performance tuning |
-| **Hub** | Prototype | REST API, model catalog, AI Act compliance cards | DB-backed catalog, S3 storage |
-| **Forge** | Modules ready | Pruning, distillation, quantization, identity LoRA, GGUF export; CLI; 3 domain profiles | End-to-end pipeline, first demo model |
-| **Demo models** | Not yet | Pipeline components exist individually | `eullm/legal-it-7b` |
-
-```bash
-# This works right now. No compilation needed.
-curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64-cuda-12.8 -o eullm
-chmod +x eullm
-./eullm run your-model.gguf
-```
 
 ## The solution
 
@@ -303,7 +349,7 @@ With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23
 
 **14B model. 131K context. 16GB consumer GPU. No compilation. No patches. 30 seconds.**
 
-### Try it now
+### Try TurboQuant
 
 ```bash
 # Download (single binary, ~850MB with CUDA)
