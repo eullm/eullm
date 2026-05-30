@@ -433,8 +433,273 @@ jobs:
           name: eullm-macos-arm64-turboquant-exp
           path: eullm-macos-arm64-turboquant-exp
 
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install LLVM (libclang for bindgen)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "17.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc
+
+      # sccache persisted via actions/cache
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Mozilla\sccache
+          key: sccache-x86_64-pc-windows-msvc-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sccache-x86_64-pc-windows-msvc-
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $SCCACHE_VER = "0.8.0"
+          $url = "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VER/sccache-v$SCCACHE_VER-x86_64-pc-windows-msvc.tar.gz"
+          $tmp = New-Item -ItemType Directory -Path "$env:TEMP\sccache-install" -Force
+          Invoke-WebRequest -Uri $url -OutFile "$tmp\sccache.tar.gz"
+          tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
+          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          sccache --version
+
+      - name: Build engine
+        run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
+
+      - name: Package binary
+        shell: pwsh
+        run: |
+          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "eullm-windows-x64.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eullm-windows-x64
+          path: eullm-windows-x64.exe
+
+  build-windows-cuda:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install LLVM (libclang for bindgen)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "17.0"
+
+      - name: Install CUDA toolkit 12.8
+        uses: Jimver/cuda-toolkit@v0.2.19
+        id: cuda-toolkit
+        with:
+          cuda: "12.8.0"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "curand", "curand_dev", "cufft", "cufft_dev", "cuda_runtime", "cuda_cudart"]'
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc-cuda-12.8
+
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Mozilla\sccache
+          key: sccache-windows-cuda-${{ hashFiles('Cargo.lock') }}
+          restore-keys: sccache-windows-cuda-
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $SCCACHE_VER = "0.8.0"
+          $url = "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VER/sccache-v$SCCACHE_VER-x86_64-pc-windows-msvc.tar.gz"
+          $tmp = New-Item -ItemType Directory -Path "$env:TEMP\sccache-install" -Force
+          Invoke-WebRequest -Uri $url -OutFile "$tmp\sccache.tar.gz"
+          tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
+          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          sccache --version
+
+      - name: Build engine with CUDA
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc --features cuda -p eullm-engine
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CMAKE_CUDA_ARCHITECTURES: "120"
+
+      - name: Package binary
+        shell: pwsh
+        run: |
+          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "eullm-windows-x64-cuda-12.8.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eullm-windows-x64-cuda-12.8
+          path: eullm-windows-x64-cuda-12.8.exe
+
+  build-windows-cuda-turboquant:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install LLVM (libclang for bindgen)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "17.0"
+
+      - name: Install CUDA toolkit 12.8
+        uses: Jimver/cuda-toolkit@v0.2.19
+        id: cuda-toolkit
+        with:
+          cuda: "12.8.0"
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "curand", "curand_dev", "cufft", "cufft_dev", "cuda_runtime", "cuda_cudart"]'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cargo\registry
+            ~\.cargo\git
+          key: cargo-registry-windows-cuda-tq-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-windows-cuda-tq-
+
+      - uses: actions/cache@v4
+        id: vendor-cache-win
+        with:
+          path: engine/vendor
+          key: tq-vendor-windows-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
+
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-windows-cuda-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: |
+            target-windows-cuda-tq-
+
+      - uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\Mozilla\sccache
+          key: sccache-windows-cuda-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          restore-keys: |
+            sccache-windows-cuda-tq-
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $SCCACHE_VER = "0.8.0"
+          $url = "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VER/sccache-v$SCCACHE_VER-x86_64-pc-windows-msvc.tar.gz"
+          $tmp = New-Item -ItemType Directory -Path "$env:TEMP\sccache-install" -Force
+          Invoke-WebRequest -Uri $url -OutFile "$tmp\sccache.tar.gz"
+          tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
+          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          sccache --version
+
+      - name: Setup TurboQuant backend
+        shell: bash
+        working-directory: engine
+        run: |
+          cargo fetch
+          if [ "${{ steps.vendor-cache-win.outputs.cache-hit }}" != "true" ]; then
+            bash scripts/setup-turboquant.sh
+          else
+            echo "Vendor cache hit — skipping TurboQuant clone."
+            if ! grep -q '^\[patch.crates-io\]' ../Cargo.toml; then
+              bash scripts/setup-turboquant.sh
+            fi
+          fi
+          echo "--- Verifying patch (workspace root) ---"
+          grep -A2 'patch.crates-io' ../Cargo.toml || echo "NO PATCH FOUND"
+          cargo tree -i llama-cpp-sys-2 2>&1 | head -5
+
+      - name: Create NCCL stub (TurboQuant v1.5.3 multi-GPU support)
+        shell: pwsh
+        run: |
+          # TurboQuant v1.5.3 added multi-GPU AllReduce via NCCL.
+          # NCCL is Linux-only — on Windows we provide no-op stubs so the
+          # linker is satisfied; these are never called at runtime for
+          # single-GPU inference (the only mode supported on Windows).
+          $stub = @"
+          #include <stddef.h>
+          typedef int ncclResult_t;
+          typedef void* ncclComm_t;
+          typedef int ncclDataType_t;
+          typedef int ncclRedOp_t;
+          typedef void* cudaStream_t;
+          __declspec(dllexport) ncclResult_t ncclCommInitAll(ncclComm_t* c, int n, const int* d) { (void)c;(void)n;(void)d; return 0; }
+          __declspec(dllexport) const char* ncclGetErrorString(ncclResult_t r) { (void)r; return "nccl-stub"; }
+          __declspec(dllexport) ncclResult_t ncclGroupStart(void) { return 0; }
+          __declspec(dllexport) ncclResult_t ncclAllReduce(const void* s, void* r, size_t n, ncclDataType_t t, ncclRedOp_t op, ncclComm_t c, cudaStream_t st) { (void)s;(void)r;(void)n;(void)t;(void)op;(void)c;(void)st; return 0; }
+          __declspec(dllexport) ncclResult_t ncclGroupEnd(void) { return 0; }
+          "@
+          $stubDir = "$env:GITHUB_WORKSPACE\nccl-stub"
+          New-Item -ItemType Directory -Path $stubDir -Force | Out-Null
+          $stub | Out-File -FilePath "$stubDir\nccl_stub.c" -Encoding ASCII
+          # Locate cl.exe from the MSVC toolchain
+          $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vsPath\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64"
+          Push-Location $stubDir
+          cl.exe /c /nologo nccl_stub.c /Fonccl_stub.obj
+          Pop-Location
+          "RUSTFLAGS=-C link-arg=$stubDir\nccl_stub.obj" | Add-Content -Path $env:GITHUB_ENV
+
+      - name: Build engine with CUDA + TurboQuant
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc --features "cuda turboquant_native" -p eullm-engine
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          CMAKE_CUDA_ARCHITECTURES: "120"
+
+      - name: Test TurboQuant module
+        shell: pwsh
+        run: cargo test --target x86_64-pc-windows-msvc --features turboquant_native -p eullm-engine
+
+      - name: Package binary
+        shell: pwsh
+        run: |
+          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "eullm-windows-x64-cuda12.8-turboquant-exp.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eullm-windows-x64-cuda12.8-turboquant-exp
+          path: eullm-windows-x64-cuda12.8-turboquant-exp.exe
+
   release:
-    needs: [build, build-cuda, build-cuda-turboquant, build-metal-turboquant]
+    needs:
+      - build
+      - build-cuda
+      - build-cuda-turboquant
+      - build-metal-turboquant
+      - build-windows
+      - build-windows-cuda
+      - build-windows-cuda-turboquant
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -466,6 +731,9 @@ jobs:
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
+            artifacts/eullm-windows-x64/eullm-windows-x64.exe
+            artifacts/eullm-windows-x64-cuda-12.8/eullm-windows-x64-cuda-12.8.exe
+            artifacts/eullm-windows-x64-cuda12.8-turboquant-exp/eullm-windows-x64-cuda12.8-turboquant-exp.exe
             artifacts/checksums.txt
           body: |
             ## EULLM Engine ${{ github.ref_name }}
@@ -488,6 +756,14 @@ jobs:
             chmod +x eullm
             ```
 
+            ```powershell
+            # Windows x64 (CPU only) — PowerShell
+            Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64.exe -OutFile eullm.exe
+
+            # Windows x64 with NVIDIA GPU (CUDA 12.8 — supports RTX 3000/4000/5000)
+            Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64-cuda-12.8.exe -OutFile eullm.exe
+            ```
+
             ### Which binary to download?
 
             | Binary | GPU Support | Requirements |
@@ -499,6 +775,9 @@ jobs:
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
             | `eullm-macos-arm64-turboquant-exp` | Metal + TurboQuant KV cache | macOS Apple Silicon |
+            | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 |
+            | `eullm-windows-x64-cuda-12.8.exe` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ for Windows |
+            | `eullm-windows-x64-cuda12.8-turboquant-exp.exe` | NVIDIA GPU + TurboQuant KV cache | NVIDIA driver 570+ for Windows |
 
             ### TurboQuant (experimental)
 
