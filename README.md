@@ -224,7 +224,7 @@ chmod +x eullm
 ./eullm run ./your-model.gguf
 ```
 
-Available for: Linux x64, Linux arm64, macOS x64, macOS Apple Silicon.
+Available for: Linux x64, Linux arm64, macOS x64, macOS Apple Silicon, Windows x64 (CPU, CUDA, CUDA + TurboQuant).
 
 ### Build from source
 
