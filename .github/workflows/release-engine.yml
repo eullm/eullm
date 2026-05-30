@@ -11,6 +11,14 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Force any JS-based action still pinned to Node 20 to run on Node 24.
+  # Documented escape hatch from GitHub's Node 20 deprecation notice
+  # (https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/).
+  # Needed today because KyleMayes/install-llvm-action has not yet shipped
+  # a v3 with a Node 24 runtime — without this flag the workflow emits a
+  # deprecation warning on every run and would break on June 16, 2026 when
+  # Node 20 is forced off.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
   build:
