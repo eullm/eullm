@@ -230,8 +230,14 @@ fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> 
                         turboquant::types::TurboquantType::TQP4_4 => ggml_ids::TBQP4_4,
                     };
                     tracing::info!("TurboQuant {tq} → GGML type {raw_id} (native backend)");
-                    // Pass the raw GGML type ID via KvCacheType.
-                    // The llama-cpp-2 crate maps Unknown(n) to the raw C enum value.
+                    // Pass the raw GGML type ID via KvCacheType. llama-cpp-2 maps
+                    // Unknown(n) to the raw C enum value, whose Rust type bindgen
+                    // generates as `u32` on Linux/GCC but `i32` on Windows/MSVC.
+                    // Our IDs are small positive constants, so cast to whatever
+                    // the target's `ggml_type` is. The clippy allow covers the
+                    // targets where `as _` resolves to an identity (u32 -> u32).
+                    #[allow(clippy::unnecessary_cast)]
+                    let raw_id = raw_id as _;
                     Ok(KvCacheType::Unknown(raw_id))
                 }
                 ResolvedCacheType::Fallback { fallback, .. } => {
