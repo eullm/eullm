@@ -649,7 +649,7 @@ Adjacent products operated by I3K Technologies: [CRM81](https://crm81.it) (workp
 If you use EuLLM in academic research, EU grant proposals, or technical publications, please cite it as:
 
 **APA**:
-> Marchetti, F. (2026). *EuLLM — Open-source sovereign LLM platform* (Version 0.4.4) [Software]. Zenodo. https://doi.org/10.5281/zenodo.20412980
+> Marchetti, F. (2026). *EuLLM — Open-source sovereign LLM platform* (Version 0.5.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.20412980
 
 **BibTeX**:
 
@@ -659,7 +659,7 @@ If you use EuLLM in academic research, EU grant proposals, or technical publicat
   title        = {EuLLM: Open-source sovereign LLM platform},
   year         = {2026},
   publisher    = {Zenodo},
-  version      = {v0.4.4},
+  version      = {v0.5.0},
   doi          = {10.5281/zenodo.20412980},
   url          = {https://doi.org/10.5281/zenodo.20412980},
   license      = {Apache-2.0},
@@ -668,7 +668,7 @@ If you use EuLLM in academic research, EU grant proposals, or technical publicat
 ```
 
 **Plain text**:
-> Francesco Marchetti. (2026). EuLLM — Open-source sovereign LLM platform (v0.4.4) [Software]. https://doi.org/10.5281/zenodo.20412980
+> Francesco Marchetti. (2026). EuLLM — Open-source sovereign LLM platform (v0.5.0) [Software]. https://doi.org/10.5281/zenodo.20412980
 
 ## License
 

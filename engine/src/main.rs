@@ -15,6 +15,16 @@ use models::{catalog, ModelStore};
 
 use crate::inference::{BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig};
 
+// Cross-platform default pidfile location. On Unix `/tmp` always exists and
+// is the canonical place; on Windows there is no `/tmp`, so we fall back to
+// the current working directory (the daemon writer will create the file
+// there). The path is materialised at clap-parse time, so it must be a
+// compile-time `&'static str`.
+#[cfg(unix)]
+const DEFAULT_PIDFILE: &str = "/tmp/eullm.pid";
+#[cfg(not(unix))]
+const DEFAULT_PIDFILE: &str = "eullm.pid";
+
 #[derive(Parser)]
 #[command(name = "eullm")]
 #[command(about = "eullm — sovereign LLM runtime for Europe")]
@@ -87,7 +97,7 @@ enum Commands {
         daemon: bool,
 
         /// PID file path (used with --daemon)
-        #[arg(long, default_value = "/tmp/eullm.pid")]
+        #[arg(long, default_value = DEFAULT_PIDFILE)]
         pidfile: String,
     },
     /// List locally available models
@@ -116,7 +126,7 @@ enum Commands {
         daemon: bool,
 
         /// PID file path (used with --daemon)
-        #[arg(long, default_value = "/tmp/eullm.pid")]
+        #[arg(long, default_value = DEFAULT_PIDFILE)]
         pidfile: String,
     },
     /// Import a model from a local Ollama installation
@@ -204,7 +214,7 @@ async fn main() {
                         .find(|a| a.starts_with("--pidfile="))
                         .map(|a| a.strip_prefix("--pidfile=").unwrap())
                 })
-                .unwrap_or("/tmp/eullm.pid");
+                .unwrap_or(DEFAULT_PIDFILE);
             daemonize(pidfile);
             // daemonize exits the parent — child continues below without --daemon.
         }
@@ -892,7 +902,9 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
     let ollama_root = if let Some(dir) = ollama_dir {
         PathBuf::from(dir)
     } else {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
         PathBuf::from(home).join(".ollama")
     };
 
