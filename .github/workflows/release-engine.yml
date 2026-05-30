@@ -188,7 +188,14 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          CMAKE_CUDA_ARCHITECTURES: "120"
+          # Fat binary covering the three consumer NVIDIA generations:
+          #   sm_86  = Ampere      (RTX 3000 series)
+          #   sm_89  = Ada Lovelace (RTX 4000 series)
+          #   sm_120 = Blackwell    (RTX 5000 series)
+          # cuBLAS static is the bulk of the binary and is shared across
+          # archs, so adding two more arches grows the file by ~kernel
+          # cubins only (~50-80 MB each), not 3x.
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
 
       - name: Package binary
         run: |
@@ -330,7 +337,14 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          CMAKE_CUDA_ARCHITECTURES: "120"
+          # Same three consumer generations as build-cuda (Ampere/Ada/Blackwell).
+          # WATCH POINT: TurboQuant v1.5.3 compiles 100+ fattn-vec kernel
+          # instantiations with high register/shared-memory pressure. Older
+          # arches (sm_86/sm_89) have less shared memory than sm_120, so if a
+          # variant overflows shmem the nvcc compile will fail here. If that
+          # happens, narrow this list (e.g. "89;120") and document Ampere
+          # TurboQuant as build-from-source.
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
 
       - name: Test TurboQuant module
         run: |
@@ -553,7 +567,8 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-msvc --features cuda -p eullm-engine
         env:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
-          CMAKE_CUDA_ARCHITECTURES: "120"
+          # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
 
       - name: Package binary
         shell: pwsh
@@ -688,7 +703,10 @@ jobs:
         run: cargo build --release --target x86_64-pc-windows-msvc --features "cuda turboquant_native" -p eullm-engine
         env:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
-          CMAKE_CUDA_ARCHITECTURES: "120"
+          # Same Ampere/Ada/Blackwell coverage as the Linux TurboQuant job.
+          # See the WATCH POINT note there: older arches may overflow shmem
+          # on the heavier TurboQuant kernels; narrow this list if nvcc fails.
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
 
       - name: Test TurboQuant module
         shell: pwsh
