@@ -570,16 +570,33 @@ jobs:
           # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
 
-      - name: Package binary
+      - name: Package binary + bundle CUDA runtime DLLs
         shell: pwsh
         run: |
-          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "eullm-windows-x64-cuda-12.8.exe"
+          # Windows links CUDA dynamically (NVIDIA ships DLLs, not static
+          # libs), so eullm.exe needs the CUDA runtime DLLs next to it to
+          # launch. We ship a ZIP containing the exe + the three DLLs that
+          # llama.cpp inference actually loads. The user extracts and runs
+          # eullm.exe from the same folder — no CUDA Toolkit install needed.
+          $bundle = "eullm-windows-x64-cuda-12.8"
+          New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "$bundle\eullm.exe"
+          $cudaBin = "$env:CUDA_PATH\bin"
+          # Copy by glob so we are resilient to the exact minor-version
+          # suffix (cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll).
+          Copy-Item "$cudaBin\cudart64_*.dll"   -Destination $bundle
+          Copy-Item "$cudaBin\cublas64_*.dll"   -Destination $bundle
+          Copy-Item "$cudaBin\cublasLt64_*.dll" -Destination $bundle
+          Get-ChildItem $bundle | Format-Table Name, Length
+          Compress-Archive -Path "$bundle\*" -DestinationPath "$bundle.zip" -Force
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: eullm-windows-x64-cuda-12.8
-          path: eullm-windows-x64-cuda-12.8.exe
+          path: eullm-windows-x64-cuda-12.8.zip
 
   build-windows-cuda-turboquant:
     runs-on: windows-2022
@@ -712,16 +729,28 @@ jobs:
         shell: pwsh
         run: cargo test --target x86_64-pc-windows-msvc --features turboquant_native -p eullm-engine
 
-      - name: Package binary
+      - name: Package binary + bundle CUDA runtime DLLs
         shell: pwsh
         run: |
-          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "eullm-windows-x64-cuda12.8-turboquant-exp.exe"
+          # Same dynamic-linking rationale as build-windows-cuda: ship the
+          # exe with the CUDA runtime DLLs it loads at launch, zipped.
+          $bundle = "eullm-windows-x64-cuda12.8-turboquant-exp"
+          New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "$bundle\eullm.exe"
+          $cudaBin = "$env:CUDA_PATH\bin"
+          Copy-Item "$cudaBin\cudart64_*.dll"   -Destination $bundle
+          Copy-Item "$cudaBin\cublas64_*.dll"   -Destination $bundle
+          Copy-Item "$cudaBin\cublasLt64_*.dll" -Destination $bundle
+          Get-ChildItem $bundle | Format-Table Name, Length
+          Compress-Archive -Path "$bundle\*" -DestinationPath "$bundle.zip" -Force
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
           name: eullm-windows-x64-cuda12.8-turboquant-exp
-          path: eullm-windows-x64-cuda12.8-turboquant-exp.exe
+          path: eullm-windows-x64-cuda12.8-turboquant-exp.zip
 
   release:
     needs:
@@ -764,8 +793,8 @@ jobs:
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
             artifacts/eullm-windows-x64/eullm-windows-x64.exe
-            artifacts/eullm-windows-x64-cuda-12.8/eullm-windows-x64-cuda-12.8.exe
-            artifacts/eullm-windows-x64-cuda12.8-turboquant-exp/eullm-windows-x64-cuda12.8-turboquant-exp.exe
+            artifacts/eullm-windows-x64-cuda-12.8/eullm-windows-x64-cuda-12.8.zip
+            artifacts/eullm-windows-x64-cuda12.8-turboquant-exp/eullm-windows-x64-cuda12.8-turboquant-exp.zip
             artifacts/checksums.txt
           body: |
             ## EULLM Engine ${{ github.ref_name }}
@@ -793,7 +822,12 @@ jobs:
             Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64.exe -OutFile eullm.exe
 
             # Windows x64 with NVIDIA GPU (CUDA 12.8 — supports RTX 3000/4000/5000)
-            Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64-cuda-12.8.exe -OutFile eullm.exe
+            # This is a ZIP: eullm.exe + the CUDA runtime DLLs it needs.
+            Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64-cuda-12.8.zip -OutFile eullm-cuda.zip
+            Expand-Archive eullm-cuda.zip -DestinationPath eullm-cuda
+            # Run eullm.exe from inside the extracted folder (the DLLs must
+            # stay next to it).
+            .\eullm-cuda\eullm.exe run model.gguf
             ```
 
             ### Which binary to download?
@@ -808,8 +842,8 @@ jobs:
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
             | `eullm-macos-arm64-turboquant-exp` | Metal + TurboQuant KV cache | macOS Apple Silicon |
             | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 |
-            | `eullm-windows-x64-cuda-12.8.exe` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ for Windows |
-            | `eullm-windows-x64-cuda12.8-turboquant-exp.exe` | NVIDIA GPU + TurboQuant KV cache | NVIDIA driver 570+ for Windows |
+            | `eullm-windows-x64-cuda-12.8.zip` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ for Windows. ZIP bundles eullm.exe + CUDA DLLs — run from the extracted folder |
+            | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | NVIDIA GPU + TurboQuant KV cache | NVIDIA driver 570+ for Windows. ZIP bundles eullm.exe + CUDA DLLs |
 
             ### TurboQuant (experimental)
 
