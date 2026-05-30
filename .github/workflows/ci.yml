@@ -23,8 +23,8 @@ jobs:
       hub: ${{ steps.filter.outputs.hub }}
       forge: ${{ steps.filter.outputs.forge }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v5
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -42,7 +42,7 @@ jobs:
     if: needs.changes.outputs.engine == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -66,7 +66,7 @@ jobs:
     if: needs.changes.outputs.hub == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -85,11 +85,11 @@ jobs:
     if: needs.changes.outputs.forge == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: pip-forge-${{ hashFiles('forge/pyproject.toml') }}
@@ -111,11 +111,11 @@ jobs:
     if: needs.changes.outputs.engine == 'true' || github.event_name == 'push'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
 
       # Cache cargo registry + git sources
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -125,7 +125,7 @@ jobs:
 
       # Cache vendored TurboQuant llama.cpp only (small, ~100 MB)
       # Key includes setup script hash so a version bump invalidates cache
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         id: vendor-cache
         with:
           path: engine/vendor
@@ -133,7 +133,7 @@ jobs:
           restore-keys: tq-vendor-${{ runner.os }}-
 
       # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
-      - uses: actions/cache@v4
+      - uses: actions/cache@v5
         with:
           path: ~/.cache/sccache
           key: sccache-tq-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
