@@ -509,7 +509,11 @@ jobs:
         with:
           cuda: "12.8.0"
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "curand", "curand_dev", "cufft", "cufft_dev", "cuda_runtime", "cuda_cudart"]'
+          # Sub-package filtering is deliberately omitted: NVIDIA's Windows
+          # installer uses component names like "cudart_12.8" which differ
+          # from Linux ("cudart"). Providing a Linux-style allowlist makes
+          # the installer exit with code 3772776473. Letting Jimver install
+          # the default set (~5 GB) is the most reliable path on Windows.
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -575,7 +579,9 @@ jobs:
         with:
           cuda: "12.8.0"
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "cublas_dev", "curand", "curand_dev", "cufft", "cufft_dev", "cuda_runtime", "cuda_cudart"]'
+          # See note in build-windows-cuda: sub-package filtering is unsafe
+          # on Windows because component names differ from Linux. Default
+          # set installs cleanly.
 
       - uses: actions/cache@v5
         with:
