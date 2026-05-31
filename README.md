@@ -9,8 +9,8 @@
   <a href="#try-it-now">Try it now</a> ·
   <a href="#whats-ready-today-whats-coming">Status</a> ·
   <a href="#the-solution">Engine</a> ·
-  <a href="#benchmarks--continuous-batching-in-action">Benchmarks</a> ·
-  <a href="#why-eullm">vs Ollama</a> ·
+  <a href="#benchmarks--continuous-batching-scaling">Benchmarks</a> ·
+  <a href="#why-eullm">Why EULLM</a> ·
   <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
   <a href="#planned-verticalized-models-q4-2026-roadmap">Roadmap</a> ·
   <a href="#contributing">Contributing</a> ·
@@ -20,7 +20,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/status-Early%20Development-orange" alt="Status" />
+  <img src="https://img.shields.io/badge/Engine-v0.5.1%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412980"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412980.svg" alt="DOI" /></a>
 </p>
@@ -64,27 +65,27 @@ curl http://localhost:11434/v1/chat/completions \
 
 > **Windows note:** the binaries are not yet code-signed, so SmartScreen may show *"Windows protected your PC"* on first run. Click **More info → Run anyway**. CUDA builds ship as a `.zip` that already bundles the required CUDA DLLs (`cudart`, `cublas`, `cublasLt`) — just extract and run `eullm-windows-x64.exe`, no CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
 
-### Already using Ollama? Switch in 60 seconds
+### Drop-in for Ollama-compatible clients
 
-Same port, same API, same models. **Zero code changes.**
+Same port (11434), same Ollama API, plus OpenAI-compatible API on the same binary. Existing tooling (Open WebUI, LangChain, n8n, any OpenAI client) works without code changes:
 
 ```bash
 # Was:   ollama run llama3
 # Now:   eullm run ./your-model.gguf --port 11434
-# Done. Open WebUI, LangChain, n8n, any OpenAI client — all work unchanged.
 ```
 
-| | Ollama | **EULLM Engine** |
-|---|--------|------------------|
-| Backend | llama.cpp | llama.cpp (same) |
-| API | Ollama | Ollama **+ OpenAI** (same port) |
-| Concurrency | Manual via `OLLAMA_NUM_PARALLEL` (low default) | **Continuous batching, on by default** |
-| Long context | F16 KV | **TurboQuant KV** — 4× context on consumer GPUs |
-| AI Act audit | None | Built-in, local-only, never transmitted |
-| Telemetry | Varies | **Zero** — no analytics, no crash reports |
-| Migration cost | — | **Drop-in** |
+What you get on top of the Ollama-compatible API:
 
-[→ Full benchmarks](#benchmarks--continuous-batching-in-action) · [→ Detailed comparison](#why-eullm) · [→ Engine deep dive](#the-solution)
+| Capability | EULLM Engine |
+|---|---|
+| **Continuous batching** scheduler — single-pass parallel decode across all active slots, shared KV pool (no per-slot KV pre-allocation) | ✅ on by default |
+| **TurboQuant KV cache compression** — 4× context length on the same GPU (~1% accuracy delta on matrix ops only) | ✅ flag `--cache-type-k tq4_0` |
+| **AI Act audit trail** — local-only JSONL of every request/response, never transmitted | ✅ on by default |
+| **Zero telemetry** — no analytics, no crash reports, no usage stats | ✅ enforced |
+| **Single binary** — Rust, no Go runtime, no Python runtime, no Docker | ✅ |
+| **EU-hosted model registry** (Forge/Hub) | 🚧 in development |
+
+[→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm) · [→ TurboQuant](#turboquant-kv-cache-compression-experimental)
 
 ## What's ready today, what's coming
 
@@ -322,32 +323,29 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 
 EULLM aims to be the sovereign AI stack for Europe — engine, tools, and models in one platform.
 
-## Benchmarks — Continuous batching in action
+## Benchmarks — Continuous batching scaling
 
-EULLM Engine's continuous batching scheduler decodes all active sequences in a single GPU pass, so total throughput keeps scaling as concurrency rises.
-
-> ⚠️ **Comparison being re-measured.** The Ollama column below is being re-run at **matched parallelism** (`OLLAMA_NUM_PARALLEL=16`, equal to the Engine's 16 slots) and will be republished with the exact Ollama version. The EULLM figures are the Engine's own measured continuous-batching scaling on a consumer GPU.
+EULLM Engine's continuous batching scheduler decodes all active sequences in a single GPU pass, so total throughput scales with concurrency instead of being capped by a per-slot pre-allocated KV cache.
 
 <p align="center">
-  <img src="docs/assets/bench-throughput.svg" alt="Throughput: EULLM Engine vs Ollama" width="680" />
+  <img src="docs/assets/bench-throughput.svg" alt="EULLM Engine throughput scaling 1→16 concurrent" width="680" />
 </p>
 
-| Concurrent requests | EULLM Engine | Ollama | Speedup |
+| Concurrent requests | EULLM Engine throughput | Per-request | Wall time (16×150 tok) |
 |:---:|:---:|:---:|:---:|
-| 1 | 94 tok/s | 93 tok/s | 1.0× |
-| 2 | 143 tok/s | 97 tok/s | **1.5×** |
-| 4 | 183 tok/s | 100 tok/s | **1.8×** |
-| 8 | 206 tok/s | 101 tok/s | **2.0×** |
-| 16 | 259 tok/s | 102 tok/s | **2.5×** |
+| 1 | 94 tok/s | 94 tok/s | 1.6 s |
+| 2 | 143 tok/s | ~71 tok/s | 2.1 s |
+| 4 | 183 tok/s | ~46 tok/s | 3.3 s |
+| 8 | 206 tok/s | ~26 tok/s | 5.8 s |
+| 16 | **259 tok/s** | ~16.5 tok/s | **9.3 s** |
 
 <p align="center">
-  <img src="docs/assets/bench-latency.svg" alt="Latency: EULLM Engine vs Ollama" width="680" />
+  <img src="docs/assets/bench-latency.svg" alt="EULLM wall time vs concurrency" width="680" />
 </p>
 
-On EULLM, throughput scales from **94 tok/s** (1 request) to **259 tok/s** (16 concurrent) as the scheduler batches active sequences, and the last of 16 responses arrives in **9.3s**. The side-by-side Ollama figures are being re-measured at matched parallelism (see note above).
+Throughput scales **2.75×** from 1 to 16 concurrent requests, and with 16 active requests every user starts receiving tokens immediately via SSE streaming instead of queueing for a slot.
 
-> **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request. EULLM with continuous batching (16 slots); Ollama with `OLLAMA_NUM_PARALLEL=16` — exact Ollama version recorded in [docs/benchmarks.md](docs/benchmarks.md).
-> Reproduce with `./bench.sh`. Full results in [docs/benchmarks.md](docs/benchmarks.md).
+> **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request, continuous batching with 16 slots. Reproduce with `./bench.sh`. Methodology in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## TurboQuant KV Cache Compression (Experimental)
 
@@ -422,21 +420,25 @@ No compilation. No patch to llama.cpp. Download the binary, add two flags, done.
   <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TTFT comparison" width="680" />
 </p>
 
-### Quality impact
+### Quality impact — at equal bit-width
 
-100 verified tests, temperature=0. The only variable: KV cache type.
+100 verified tests, temperature=0, fixed seed, identical prompts. **The only variable is the KV cache type.** The interesting comparison is at equal bit-width: **TQ4_0 (4-bit TurboQuant) vs Q4_0 (4-bit native llama.cpp)** — same memory budget, different quantization algorithm (Walsh-Hadamard + Lloyd-Max vs round-to-nearest). Q8_0 is included as a near-lossless reference.
 
 <p align="center">
-  <img src="bench/results/chart_quality_comparison.png" alt="Quality: F16=86%, TQ4_0=85%, TQ3_0=85%" width="720" />
+  <img src="bench/results/chart_quality_comparison.png" alt="KV cache quality comparison across F16, Q8_0, Q4_0, TQ4_0, TQ3_0" width="720" />
 </p>
 
-| Cache | Score | Matrix | Math | Factual | Logic | Code |
-|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| F16 | **86%** | 18/20 | 18/20 | 15/20 | 17/20 | 18/20 |
-| TQ4_0 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
-| TQ3_0 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
+| Cache | Bits | Score | Matrix | Math | Factual | Logic | Code |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| F16 (baseline) | 16 | **86%** | 18/20 | 18/20 | 15/20 | 17/20 | 18/20 |
+| Q8_0 (native) | 8 | _re-measuring_ | – | – | – | – | – |
+| Q4_0 (native) | 4 | _re-measuring_ | – | – | – | – | – |
+| **TQ4_0** (TurboQuant) | 4 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
+| TQ3_0 (TurboQuant) | 3 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
 
-**1% degradation, isolated to matrix operations.** Math, factual, logic, and code are identical across all cache types. Full test-by-test analysis: [docs/turboquant-quality-report.md](docs/turboquant-quality-report.md).
+> The Q8_0 and Q4_0 rows are being measured with the same harness — see `bench/run_quality_arms.sh` to reproduce on your own hardware. The comparison that matters for TurboQuant's claim is **TQ4_0 vs Q4_0** (same 4-bit memory budget); if TQ4_0 does not beat Q4_0 at the same bit budget, the numbers will be published unmodified.
+
+Full test-by-test analysis: [docs/turboquant-quality-report.md](docs/turboquant-quality-report.md).
 
 ### Trade-off
 
