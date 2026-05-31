@@ -26,10 +26,34 @@ const DEFAULT_PIDFILE: &str = "/tmp/eullm.pid";
 #[cfg(not(unix))]
 const DEFAULT_PIDFILE: &str = "eullm.pid";
 
+// `eullm -V` output reflects the build variant so users immediately know
+// which backend they are running, e.g.
+//   eullm 0.5.2 (CUDA + TurboQuant)
+//   eullm 0.5.2 (Metal)
+//   eullm 0.5.2 (CPU)
+// Only one branch matches per build because feature flags are mutually
+// exclusive (set by the release matrix).
+#[cfg(all(feature = "cuda", feature = "turboquant_native"))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CUDA + TurboQuant)");
+#[cfg(all(feature = "cuda", not(feature = "turboquant_native")))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CUDA)");
+#[cfg(all(feature = "metal", feature = "turboquant_native"))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Metal + TurboQuant)");
+#[cfg(all(feature = "metal", not(feature = "turboquant_native")))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Metal)");
+#[cfg(all(feature = "rocm", not(feature = "turboquant_native")))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (ROCm)");
+#[cfg(all(feature = "vulkan", not(feature = "turboquant_native")))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Vulkan)");
+#[cfg(all(feature = "turboquant_native", not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan"))))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU + TurboQuant)");
+#[cfg(not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan", feature = "turboquant_native")))]
+const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
+
 #[derive(Parser)]
 #[command(name = "eullm")]
 #[command(about = "eullm — sovereign LLM runtime for Europe")]
-#[command(version)]
+#[command(version = VERSION_STRING)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
