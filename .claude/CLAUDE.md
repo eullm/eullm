@@ -15,6 +15,7 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 - `Swatinem/rust-cache@v2` on `engine` and `hub` jobs — caches `target/` and `~/.cargo`. Removing it adds ~25 min per run.
 - `actions/cache` for pip on `forge` job.
 - `engine-turboquant` job uses TWO cache layers: cargo registry + vendor dir + target/. The vendor cache is keyed on `setup-turboquant.sh` hash — this avoids re-cloning TurboQuant llama.cpp when the version hasn't changed.
+- **Vendor cache-hit path**: do NOT call `setup-turboquant.sh` to "re-activate the patch". The script assumes a clean slate and tries to find llama-cpp-sys-2 in the registry's extracted `src/` dir, which isn't there on the cache-hit path. Just append `[patch.crates-io]` to the workspace `Cargo.toml` with one `printf` — engine/vendor/ is already restored from cache.
 
 ### `.github/workflows/release-engine.yml`
 - All `build` matrix jobs use `Swatinem/rust-cache@v2` keyed by target triple.
