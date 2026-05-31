@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/Engine-v0.5.1%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://doi.org/10.5281/zenodo.20412980"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412980.svg" alt="DOI" /></a>
+  <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
 </p>
 
 <p align="center">
@@ -698,12 +698,12 @@ Adjacent products operated by I3K Technologies: [CRM81](https://crm81.it) (workp
 
 ## How to cite
 
-If you use EuLLM in academic research, EU grant proposals, or technical publications, please cite it as:
+If you use EuLLM in academic research, EU grant proposals, or technical publications, please cite the **specific version** you used. The DOIs below are version-pinned (immutable, recommended for reproducibility). To cite "all versions" of the project, use the **concept DOI** `10.5281/zenodo.20412979` (resolves to the latest release on Zenodo).
 
-**APA**:
+**APA** (this version, v0.5.1):
 > Marchetti, F. (2026). *EuLLM — Open-source sovereign LLM platform* (Version 0.5.1) [Software]. Zenodo. https://doi.org/10.5281/zenodo.20412980
 
-**BibTeX**:
+**BibTeX** (this version, v0.5.1):
 
 ```bibtex
 @software{marchetti2026eullm,
@@ -719,8 +719,11 @@ If you use EuLLM in academic research, EU grant proposals, or technical publicat
 }
 ```
 
-**Plain text**:
+**Plain text** (this version, v0.5.1):
 > Francesco Marchetti. (2026). EuLLM — Open-source sovereign LLM platform (v0.5.1) [Software]. https://doi.org/10.5281/zenodo.20412980
+
+**Concept DOI** (always resolves to the latest release):
+> `10.5281/zenodo.20412979` — use this when you want the citation to track the most recent version automatically. https://doi.org/10.5281/zenodo.20412979
 
 ## License
 
