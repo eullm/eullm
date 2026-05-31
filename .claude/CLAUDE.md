@@ -72,6 +72,10 @@ Two patterns to remember:
 - `vswhere` from VS Installer is in the (x86) Program Files: `& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"`.
 - Single-line over multi-line: if a step crosses many lines with `` ` `` continuation, sanity check that braces survive YAML parsing. Prefer single-line when possible.
 
+### Validate Inno Setup scripts BEFORE pushing a tag
+
+The `installer-preflight` job in `ci.yml` compiles all 3 installers with dummy 100-byte staging files on every push. **Trust it, don't bypass it.** Two bugs (`$env:ProgramFiles(x86)` then `{userprofile}`) ate two 2h+ release builds before this preflight existed. Inno Setup has no built-in `{userprofile}` constant — use `{userdocs}` or `{%USERPROFILE}` for the user's home area. Full list of built-ins: https://jrsoftware.org/ishelp/index.php?topic=consts
+
 
 ## What is EULLM
 
