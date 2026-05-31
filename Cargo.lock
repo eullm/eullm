@@ -436,7 +436,7 @@ dependencies = [
 
 [[package]]
 name = "eullm-engine"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "assert_cmd",
  "async-stream",
