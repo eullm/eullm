@@ -266,7 +266,15 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: /tmp/sccache-store
-          key: sccache-cuda-tq-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          # sccache is content-addressed and caches C++/CUDA object files.
+          # Those depend on llama.cpp source (pinned via setup-turboquant.sh)
+          # and the matrix CUDA version — NOT on Cargo.lock. Keeping
+          # Cargo.lock in the key meant every Rust-side version bump
+          # invalidated 2+ hours of C++ kernel compilation. The restore-keys
+          # prefix still matches caches saved under the old (Cargo.lock-
+          # parametrised) key, so the warm cache from earlier builds is
+          # picked up on the first run with the new key.
+          key: sccache-cuda-tq-${{ matrix.cuda }}-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
           restore-keys: |
             sccache-cuda-tq-${{ matrix.cuda }}-
             sccache-cuda-tq-
@@ -397,11 +405,15 @@ jobs:
             target-macos-arm64-tq-
             target-macos-arm64-
 
-      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
+      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime.
+      # Key intentionally excludes Cargo.lock so Rust-side version bumps don't
+      # invalidate the C++/Metal object cache. See identical rationale on the
+      # CUDA TurboQuant job above. The restore-keys prefix catches caches saved
+      # under the old (Cargo.lock-parametrised) key on the first run.
       - uses: actions/cache@v5
         with:
           path: ~/.cache/sccache
-          key: sccache-macos-arm64-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          key: sccache-macos-arm64-tq-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
           restore-keys: sccache-macos-arm64-tq-
 
       - name: Install sccache
@@ -544,7 +556,12 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: ~\AppData\Local\Mozilla\sccache
-          key: sccache-windows-cuda-${{ hashFiles('Cargo.lock') }}
+          # See sccache rationale comments on the Linux + Windows TurboQuant
+          # jobs: Cargo.lock is removed from the key so Rust version bumps
+          # don't bust the C++/CUDA object cache. The restore-keys prefix
+          # catches caches saved under the previous (Cargo.lock-parametrised)
+          # key on the first run.
+          key: sccache-windows-cuda-stable
           restore-keys: sccache-windows-cuda-
 
       - name: Install sccache
@@ -644,10 +661,14 @@ jobs:
           restore-keys: |
             target-windows-cuda-tq-
 
+      # sccache key intentionally excludes Cargo.lock — see rationale on the
+      # Linux CUDA TurboQuant job. This is the long-pole build (~2h cold,
+      # ~10-15 min warm) and a stable key across Rust version bumps is
+      # critical to keep release latency low.
       - uses: actions/cache@v5
         with:
           path: ~\AppData\Local\Mozilla\sccache
-          key: sccache-windows-cuda-tq-${{ hashFiles('Cargo.lock', 'engine/scripts/setup-turboquant.sh') }}
+          key: sccache-windows-cuda-tq-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
           restore-keys: |
             sccache-windows-cuda-tq-
 
@@ -763,6 +784,11 @@ jobs:
       - build-windows-cuda
       - build-windows-cuda-turboquant
     runs-on: windows-2022
+    # Installer compilation is best-effort: if it fails, the release job
+    # still publishes the 9 binaries (Linux x3, Linux arm64, macOS x3,
+    # Windows x3) that did build. Without this flag a single Inno Setup
+    # mistake would block the entire release after 2+ hours of CI.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v5
 
@@ -824,7 +850,7 @@ jobs:
         shell: pwsh
         working-directory: installer
         run: |
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
               /DMyVariant=CPU `
               /DMyAppVersion=${{ steps.ver.outputs.version }} `
               /DMyStagingDir=staging\cpu `
@@ -834,7 +860,7 @@ jobs:
         shell: pwsh
         working-directory: installer
         run: |
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
               /DMyVariant=CUDA `
               /DMyAppVersion=${{ steps.ver.outputs.version }} `
               /DMyStagingDir=staging\cuda `
@@ -844,7 +870,7 @@ jobs:
         shell: pwsh
         working-directory: installer
         run: |
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
               /DMyVariant=CUDA-TurboQuant `
               /DMyAppVersion=${{ steps.ver.outputs.version }} `
               /DMyStagingDir=staging\tq `
@@ -871,6 +897,11 @@ jobs:
       - build-windows-cuda
       - build-windows-cuda-turboquant
       - build-windows-installers
+    # Run as long as at least one upstream job built something. We never
+    # want a single failing job (typically the long-pole TurboQuant or
+    # the installer) to nuke a release after 2+ hours of CI on the other
+    # 8 binaries.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -894,6 +925,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          # Skip files that did not get produced (e.g. installer failed) so
+          # the release still publishes the binaries that built. The matrix
+          # also tolerates entire upstream jobs being missing thanks to the
+          # `if: !cancelled()` guard above.
+          fail_on_unmatched_files: false
           files: |
             artifacts/eullm-linux-x64/eullm-linux-x64
             artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
