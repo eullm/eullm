@@ -50,27 +50,37 @@ curl http://localhost:11434/v1/chat/completions \
 
 **All prebuilt binaries** — pick yours from the [latest release](https://github.com/eullm/eullm/releases/latest):
 
-| Platform | File | Notes |
-|----------|------|-------|
-| 🐧 Linux x64 (CPU) | `eullm-linux-x64` | – |
-| 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | RTX 3000/4000/5000 |
-| 🐧 Linux x64 (NVIDIA + TurboQuant) | `eullm-linux-x64-cuda12.8-turboquant-exp` | 4× context length 🔥 |
-| 🐧 Linux ARM64 | `eullm-linux-arm64` | – |
-| 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | – |
-| 🍎 macOS Apple Silicon (Metal + TurboQuant) | `eullm-macos-arm64-turboquant-exp` | – |
-| 🍎 macOS Intel | `eullm-macos-x64` | – |
-| 🪟 **Windows 11 x64 — One-click installer (CPU)** | **`EuLLM-Setup-CPU-<version>.exe`** | **Recommended for desktop.** Start Menu, browser chat included |
-| 🪟 **Windows 11 x64 — One-click installer (NVIDIA)** | **`EuLLM-Setup-CUDA-<version>.exe`** | **Recommended for desktop with GPU.** Includes CUDA DLLs |
-| 🪟 **Windows 11 x64 — One-click installer (NVIDIA + TurboQuant)** | **`EuLLM-Setup-CUDA-TurboQuant-<version>.exe`** | **4× context length 🔥** |
-| 🪟 Windows 11 x64 (CPU, standalone) | `eullm-windows-x64.exe` | Just the binary, for CLI/server use |
-| 🪟 Windows 11 x64 (NVIDIA, standalone) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
-| 🪟 Windows 11 x64 (NVIDIA + TurboQuant, standalone) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
+| Platform | File | Status | Notes |
+|----------|------|:------:|-------|
+| 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
+| 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | ✅ Tested | RTX 3000/4000/5000 |
+| 🐧 Linux x64 (NVIDIA + TurboQuant) | `eullm-linux-x64-cuda12.8-turboquant-exp` | ✅ Tested | 4× context length 🔥 |
+| 🐧 Linux ARM64 | `eullm-linux-arm64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | RPi 4/5, Orange Pi 5+, Jetson, etc. |
+| 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | M1/M2/M3/M4 |
+| 🍎 macOS Apple Silicon (Metal + TurboQuant) | `eullm-macos-arm64-turboquant-exp` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | M1/M2/M3/M4 |
+| 🍎 macOS Intel | `eullm-macos-x64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | Pre-Apple-Silicon Macs |
+| 🪟 **Windows 11 x64 — One-click installer (CPU)** | **`EuLLM-Setup-CPU-<version>.exe`** | ✅ Tested | **Recommended for desktop.** Start Menu, browser chat included |
+| 🪟 **Windows 11 x64 — One-click installer (NVIDIA)** | **`EuLLM-Setup-CUDA-<version>.exe`** | ✅ Tested | **Recommended for desktop with GPU.** Includes CUDA DLLs |
+| 🪟 **Windows 11 x64 — One-click installer (NVIDIA + TurboQuant)** | **`EuLLM-Setup-CUDA-TurboQuant-<version>.exe`** | ✅ Tested | **4× context length 🔥** |
+| 🪟 Windows 11 x64 (CPU, standalone) | `eullm-windows-x64.exe` | ✅ Tested | Just the binary, for CLI/server use |
+| 🪟 Windows 11 x64 (NVIDIA, standalone) | `eullm-windows-x64-cuda-12.8.zip` | ✅ Tested | ZIP bundles CUDA DLLs — extract, run |
+| 🪟 Windows 11 x64 (NVIDIA + TurboQuant, standalone) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | ✅ Tested | – |
 
 > **Embedded chat UI — cross-platform.** Every `eullm` binary (Linux, macOS, Windows — CPU, CUDA, Metal, all variants) ships with a built-in browser chat. Just run `eullm run model.gguf` and open **`http://localhost:11435/`** — same OpenAI/Ollama API on `:11434`, separate chat UI port `:11435` so it never collides with RAG / OpenAI-client routes on `/`. Turn it off with `--no-ui` for headless deployments.
 >
 > **Windows specifics**: the **one-click installers** above wrap the same engine into an `.exe` setup that creates a Start Menu shortcut "EuLLM Chat" (with a GGUF file picker), an optional PATH entry, and a launcher that opens the chat in your default browser automatically. The **standalone** binaries are the same engine without the installer wrapping — useful for headless servers or CLI-only workflows.
 >
 > **SmartScreen note:** the Windows binaries are not yet code-signed, so first launch may show *"Windows protected your PC"*. Click **More info → Run anyway**. CUDA bundles ship the required CUDA DLLs alongside — no separate CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
+
+### 🧪 Platform status / help us test
+
+The Linux x64 and Windows x64 binaries are validated end-to-end by the maintainer. The **macOS** (Intel + Apple Silicon) and **Linux ARM64** binaries compile in CI but the maintainer doesn't own that hardware — so they're shipped as **Experimental — untested**.
+
+If you run local LLMs on a Mac or an ARM64 board (Raspberry Pi 4/5, Orange Pi 5+, Rock 5B, Jetson, …), **your help validating these binaries is hugely appreciated**. See the open testing call:
+
+→ **[Issue #140 — Help wanted: testing on macOS & ARM64 Linux](https://github.com/eullm/eullm/issues/140)** (`help wanted`, `testing`)
+
+Priority order: macOS Apple Silicon (Metal backend) → Linux ARM64 (Raspberry Pi 5) → macOS Intel. Reports with `eullm --version` output, model used, and what worked/broke go a long way.
 
 ### Drop-in for Ollama-compatible clients
 
@@ -98,7 +108,7 @@ What you get on top of the Ollama-compatible API:
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, multi-GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant, audit trail | ✅ **Ready (v0.5.2)** | **Yes** — drop-in for Ollama |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, CUDA (RTX 3000/4000/5000), TurboQuant, audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.2)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
 | **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.2)** | **Yes** — auto-opens after install on Windows |
 | **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | ✅ **Ready (v0.5.2)** | **Yes** — three variants: CPU / CUDA / CUDA+TurboQuant |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
@@ -155,14 +165,14 @@ Key features:
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
-- **GPU acceleration** — NVIDIA CUDA, AMD ROCm, Vulkan, Apple Metal
+- **GPU acceleration** — NVIDIA CUDA *(tested)*, AMD ROCm / Vulkan / Apple Metal *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
 - **[TurboQuant KV cache compression](#turboquant-kv-cache-compression-experimental)** *(experimental)* — **4x context length, 4x concurrent users.** Run Qwen3-14B with 131K context on a 16GB consumer GPU. Projected 2M+ context on H100. Saves up to EUR 180K/month on enterprise clusters
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
-- **Cross-platform binaries** — prebuilt releases for Linux x64/arm64 and macOS x64/arm64
+- **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64, macOS x64, macOS ARM64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
 - **No network telemetry** — no analytics, no crash reports, no usage stats; audit trail is written locally to `~/.eullm/audit/audit.jsonl` and never transmitted
 
@@ -236,7 +246,7 @@ chmod +x eullm
 ./eullm run ./your-model.gguf
 ```
 
-Available for: Linux x64, Linux arm64, macOS x64, macOS Apple Silicon, Windows x64 (CPU, CUDA, CUDA + TurboQuant).
+Available for: Linux x64 ✅ · Windows x64 (CPU, CUDA, CUDA + TurboQuant) ✅ · Linux ARM64, macOS x64, macOS Apple Silicon (Intel + Metal + TurboQuant) 🧪 [community testing wanted](#-platform-status--help-us-test).
 
 ### Build from source
 
