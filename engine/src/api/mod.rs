@@ -268,6 +268,11 @@ pub struct ServeConfig {
     pub batch_size: usize,
     pub web_enabled: bool,
     pub store: ModelStore,
+    /// Optional embedded chat UI. When `Some(port)`, a second listener is
+    /// spawned on that port serving the chat at `/` (plus the API on the
+    /// same port for same-origin fetches). When `None`, only the API
+    /// listener on `cfg.port` is started — pure API surface, nothing on `/`.
+    pub ui_port: Option<u16>,
 }
 
 /// Start the API server on the given port with graceful shutdown support.
@@ -294,15 +299,66 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         web_enabled: cfg.web_enabled,
         store: cfg.store,
     });
-    let port = cfg.port;
-    let app = router(state);
-    let addr = format!("0.0.0.0:{port}");
-    tracing::info!("eullm listening on {addr}");
+    let api_port = cfg.port;
+    let ui_port_opt = cfg.ui_port;
 
-    let listener = TcpListener::bind(&addr).await?;
-    axum::serve(listener, app)
+    let api_app = api_router(state.clone());
+    let api_addr = format!("0.0.0.0:{api_port}");
+    let api_listener = TcpListener::bind(&api_addr).await?;
+    tracing::info!("eullm API listening on {api_addr}");
+
+    // Spawn the optional chat-UI listener on a separate port. It exposes the
+    // same API surface (so the embedded JS can call same-origin) plus the
+    // HTML/CSS/JS for the chat at `/`. Disabled by default for `eullm serve`
+    // (headless) and enabled by default for `eullm run` (interactive).
+    let ui_handle = if let Some(ui_port) = ui_port_opt {
+        if ui_port == api_port {
+            tracing::warn!(
+                "ui_port == api_port ({ui_port}); refusing to bind UI to avoid collision. \
+                 Pick a different --ui-port or pass --no-ui."
+            );
+            None
+        } else {
+            let ui_app = ui_router(state.clone());
+            let ui_addr = format!("0.0.0.0:{ui_port}");
+            match TcpListener::bind(&ui_addr).await {
+                Ok(ui_listener) => {
+                    tracing::info!(
+                        "eullm chat UI listening on {ui_addr}  (open http://localhost:{ui_port}/)"
+                    );
+                    Some(tokio::spawn(async move {
+                        if let Err(e) = axum::serve(ui_listener, ui_app)
+                            .with_graceful_shutdown(shutdown_signal())
+                            .await
+                        {
+                            tracing::error!("UI listener failed: {e}");
+                        }
+                    }))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Could not bind chat UI on {ui_addr}: {e}. \
+                         API still served on {api_addr}; pass --ui-port to override."
+                    );
+                    None
+                }
+            }
+        }
+    } else {
+        None
+    };
+
+    axum::serve(api_listener, api_app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    if let Some(h) = ui_handle {
+        // The UI server listens for the same shutdown signal, but the signal
+        // is observed by whichever task wakes first. Abort the leftover task
+        // on the way out to avoid lingering listeners during repeated runs
+        // (notably in tests).
+        h.abort();
+    }
 
     tracing::info!("Server shut down gracefully.");
     Ok(())
@@ -330,8 +386,13 @@ async fn shutdown_signal() {
     }
 }
 
-/// Build the EULLM API router with CORS enabled for Open WebUI and other frontends.
-fn router(state: Arc<AppState>) -> Router {
+/// Build the EULLM API router (Ollama + OpenAI compat) with CORS enabled
+/// for Open WebUI and other frontends.
+///
+/// This router never serves the chat UI — clients hitting the API port get
+/// only `/api/*` and `/v1/*`, so RAG systems and OpenAI-compatible tooling
+/// see a pure API surface with no HTML on `/`.
+fn api_router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
@@ -340,6 +401,25 @@ fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
+        .layer(cors)
+        .with_state(state)
+}
+
+/// Build the chat-UI router. Includes the same API routes (so the embedded
+/// JS can fetch same-origin), plus `/` and `/eullm-ui/*` for HTML/CSS/JS.
+///
+/// Always served on a separate port from the API so the two surfaces are
+/// independently togglable and never collide.
+fn ui_router(state: Arc<AppState>) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
+    Router::new()
+        .nest("/api", routes::api_routes())
+        .nest("/v1", routes::openai_routes())
+        .merge(crate::ui::router())
         .layer(cors)
         .with_state(state)
 }

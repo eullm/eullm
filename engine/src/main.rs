@@ -6,6 +6,7 @@ mod inference;
 mod models;
 mod registry;
 mod tools;
+mod ui;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -92,6 +93,17 @@ enum Commands {
         #[arg(long)]
         web: bool,
 
+        /// Disable the embedded chat UI (otherwise served on --ui-port).
+        /// Use this for headless / backend / RAG deployments where you only
+        /// want the OpenAI/Ollama API surface exposed.
+        #[arg(long)]
+        no_ui: bool,
+
+        /// Port for the embedded chat UI (separate from the API port so
+        /// the API surface on --port stays pure). Default 11435.
+        #[arg(long, default_value_t = 11435)]
+        ui_port: u16,
+
         /// Run as a background daemon (writes PID to --pidfile)
         #[arg(long)]
         daemon: bool,
@@ -120,6 +132,15 @@ enum Commands {
         /// Enable continuous batching with N max concurrent requests (0 = sequential)
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
+
+        /// Enable the embedded chat UI (off by default for headless serve).
+        /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
+        #[arg(long)]
+        ui: bool,
+
+        /// Port for the embedded chat UI when --ui is set. Default 11435.
+        #[arg(long, default_value_t = 11435)]
+        ui_port: u16,
 
         /// Run as a background daemon (writes PID to --pidfile)
         #[arg(long)]
@@ -257,6 +278,8 @@ async fn main() {
             cache_type_k,
             cache_type_v,
             web,
+            no_ui,
+            ui_port,
             daemon,
             pidfile,
         } => {
@@ -306,13 +329,15 @@ async fn main() {
                 ctk = inference::KvCacheType::F16;
                 ctv = inference::KvCacheType::F16;
             }
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web).await;
+            let ui_port_opt = if no_ui { None } else { Some(ui_port) };
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
-        Commands::Serve { port, replace, batch_size: _, daemon, pidfile } => {
+        Commands::Serve { port, replace, batch_size: _, ui, ui_port, daemon, pidfile } => {
             let _ = (daemon, pidfile);
-            cmd_serve(port, replace).await;
+            let ui_port_opt = if ui { Some(ui_port) } else { None };
+            cmd_serve(port, replace, ui_port_opt).await;
         }
         Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
         Commands::Forge {
@@ -592,8 +617,12 @@ async fn cmd_run(
     cache_type_k: inference::KvCacheType,
     cache_type_v: inference::KvCacheType,
     web: bool,
+    ui_port: Option<u16>,
 ) {
     ensure_port_available(port, replace).await;
+    if let Some(p) = ui_port {
+        ensure_port_available(p, replace).await;
+    }
 
     let model_name: String;
     let mut engine: Option<Arc<InferenceEngine>> = None;
@@ -702,6 +731,9 @@ async fn cmd_run(
     println!("eullm ready.  [v{}]", env!("CARGO_PKG_VERSION"));
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
+    if let Some(p) = ui_port {
+        println!("  Chat UI:       http://localhost:{p}/");
+    }
     println!("  Model:         {short}");
     if engine.is_some() || scheduler.is_some() {
         let gpu_backend = if cfg!(feature = "cuda") {
@@ -775,6 +807,7 @@ async fn cmd_run(
             batch_size,
             web_enabled: web,
             store: api_store,
+            ui_port,
         })
         .await
         {
@@ -798,8 +831,11 @@ async fn cmd_run(
     }
 }
 
-async fn cmd_serve(port: u16, replace: bool) {
+async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>) {
     ensure_port_available(port, replace).await;
+    if let Some(p) = ui_port {
+        ensure_port_available(p, replace).await;
+    }
 
     let threads = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
@@ -808,6 +844,9 @@ async fn cmd_serve(port: u16, replace: bool) {
     println!("eullm ready (no model loaded — send a request with a \"model\" field to load one).");
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
+    if let Some(p) = ui_port {
+        println!("  Chat UI:       http://localhost:{p}/");
+    }
     println!("\nPress Ctrl+C to stop.\n");
 
     let store = ModelStore::default_store().expect("model store");
@@ -827,6 +866,7 @@ async fn cmd_serve(port: u16, replace: bool) {
         batch_size: 8,
         web_enabled: false,
         store,
+        ui_port,
     })
     .await
     {
