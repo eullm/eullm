@@ -62,6 +62,8 @@ curl http://localhost:11434/v1/chat/completions \
 | 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
 | 🪟 Windows 11 x64 (NVIDIA + TurboQuant) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
 
+> **Windows note:** the binaries are not yet code-signed, so SmartScreen may show *"Windows protected your PC"* on first run. Click **More info → Run anyway**. CUDA builds ship as a `.zip` that already bundles the required CUDA DLLs (`cudart`, `cublas`, `cublasLt`) — just extract and run `eullm-windows-x64.exe`, no CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
+
 ### Already using Ollama? Switch in 60 seconds
 
 Same port, same API, same models. **Zero code changes.**
@@ -76,7 +78,7 @@ Same port, same API, same models. **Zero code changes.**
 |---|--------|------------------|
 | Backend | llama.cpp | llama.cpp (same) |
 | API | Ollama | Ollama **+ OpenAI** (same port) |
-| Concurrency | Sequential | **Continuous batching** (~2× at 4+ concurrent) |
+| Concurrency | Manual via `OLLAMA_NUM_PARALLEL` (low default) | **Continuous batching, on by default** |
 | Long context | F16 KV | **TurboQuant KV** — 4× context on consumer GPUs |
 | AI Act audit | None | Built-in, local-only, never transmitted |
 | Telemetry | Varies | **Zero** — no analytics, no crash reports |
@@ -211,7 +213,7 @@ Every model will ship with:
 
 ## Quickstart
 
-> **EuLLM Engine is in active development (Q2 2026).** The commands below show the current and target CLI experience. Some commands work today (`eullm run`, `eullm serve`); others (Forge verticalization, Hub registry pull) are on the Q3-Q4 2026 roadmap. Star this repo to track progress.
+> **The Engine is usable today** (`eullm run`, `eullm serve` — a drop-in replacement for Ollama). The commands below also preview the target CLI for **Forge** (verticalization) and **Hub** (EU registry pull), which are in active development on the Q3–Q4 2026 roadmap. Star this repo to track progress.
 
 ### Prebuilt binaries (easiest)
 
@@ -306,7 +308,7 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | | Ollama / llama.cpp | EULLM |
 |---|---|---|
 | Inference engine | llama.cpp | llama.cpp (same backend, same performance) |
-| Request scheduling | Sequential (one at a time) | **Continuous batching** (parallel decode) |
+| Request scheduling | Configurable parallelism (`OLLAMA_NUM_PARALLEL`, low default, one KV-cache copy per slot) | **Continuous batching** by default — single-pass parallel decode, shared KV |
 | API compatibility | Ollama API or custom | Ollama-compatible + OpenAI-compatible |
 | GPU support | Manual build flags | `--features cuda/rocm/vulkan/metal` |
 | **Transparent web browsing** | Via function calling (model must support tool use; requires tool-capable model) | **`--web` flag — model-agnostic, works with any GGUF, no tool-use support required** |
@@ -322,7 +324,9 @@ EULLM aims to be the sovereign AI stack for Europe — engine, tools, and models
 
 ## Benchmarks — Continuous batching in action
 
-EULLM Engine's continuous batching scheduler decodes all active requests in a single GPU pass. Ollama processes them one at a time. Here's the difference on a consumer GPU:
+EULLM Engine's continuous batching scheduler decodes all active sequences in a single GPU pass, so total throughput keeps scaling as concurrency rises.
+
+> ⚠️ **Comparison being re-measured.** The Ollama column below is being re-run at **matched parallelism** (`OLLAMA_NUM_PARALLEL=16`, equal to the Engine's 16 slots) and will be republished with the exact Ollama version. The EULLM figures are the Engine's own measured continuous-batching scaling on a consumer GPU.
 
 <p align="center">
   <img src="docs/assets/bench-throughput.svg" alt="Throughput: EULLM Engine vs Ollama" width="680" />
@@ -340,9 +344,9 @@ EULLM Engine's continuous batching scheduler decodes all active requests in a si
   <img src="docs/assets/bench-latency.svg" alt="Latency: EULLM Engine vs Ollama" width="680" />
 </p>
 
-With 16 concurrent users, the last response arrives in **9.3s** on EULLM vs **23.6s** on Ollama. Throughput scales from 94 to 259 tok/s while Ollama stays flat at ~100 tok/s.
+On EULLM, throughput scales from **94 tok/s** (1 request) to **259 tok/s** (16 concurrent) as the scheduler batches active sequences, and the last of 16 responses arrives in **9.3s**. The side-by-side Ollama figures are being re-measured at matched parallelism (see note above).
 
-> **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request.
+> **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request. EULLM with continuous batching (16 slots); Ollama with `OLLAMA_NUM_PARALLEL=16` — exact Ollama version recorded in [docs/benchmarks.md](docs/benchmarks.md).
 > Reproduce with `./bench.sh`. Full results in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## TurboQuant KV Cache Compression (Experimental)
@@ -377,7 +381,7 @@ chmod +x eullm
 Startup output (real, from RTX 5070 Ti 16GB):
 
 ```
-eullm ready.  [v0.2.98]
+eullm ready.  [v0.5.1]
   Model:         qwen3-14b
   GPU backend:   CUDA
   Context:       131072 total (8192 per sequence × 16 slots)

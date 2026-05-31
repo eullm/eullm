@@ -1,8 +1,10 @@
 # Benchmarks — EULLM Engine vs Ollama
 
-EULLM Engine uses **continuous batching** to decode multiple requests in parallel within a single GPU pass. Ollama processes requests sequentially — one at a time, FIFO queue.
+EULLM Engine uses **continuous batching** to decode multiple requests in parallel within a single GPU pass, enabled by default across all slots. Ollama also serves concurrent requests via llama.cpp, but only up to `OLLAMA_NUM_PARALLEL` slots (a low default) and with one full KV-cache copy reserved per slot.
 
-This page documents real benchmark results comparing the two.
+This page documents benchmark results comparing the two.
+
+> ⚠️ **Re-measurement in progress.** The Ollama figures below are being re-run at **matched parallelism** (`OLLAMA_NUM_PARALLEL=16`, equal to the Engine's 16 slots) to make the comparison apples-to-apples. The tables will be updated with the new numbers and the exact Ollama version. The EULLM Engine figures are its own measured continuous-batching scaling.
 
 ## Test setup
 
@@ -15,6 +17,9 @@ This page documents real benchmark results comparing the two.
 | **Method** | Fire N concurrent requests, measure wall time and total tokens |
 | **EULLM port** | `localhost:11434` |
 | **Ollama port** | `localhost:11435` |
+| **EULLM parallelism** | Continuous batching, 16 slots |
+| **Ollama parallelism** | `OLLAMA_NUM_PARALLEL=16` _(matched; re-measurement in progress)_ |
+| **Ollama version** | _to record on re-run_ |
 | **Date** | March 2026 |
 
 ## Results
@@ -35,7 +40,7 @@ How many tokens per second the system produces across all concurrent requests.
 | 8 | 206 tok/s | 101 tok/s | **2.0×** |
 | 16 | 259 tok/s | 102 tok/s | **2.5×** |
 
-Ollama's throughput is flat at ~100 tok/s regardless of concurrency — it simply queues requests and processes them one by one. EULLM Engine's continuous batching scheduler decodes all active sequences in a single GPU pass, scaling throughput nearly linearly with concurrency.
+EULLM Engine's continuous batching scheduler decodes all active sequences in a single GPU pass, scaling total throughput with concurrency. The Ollama column above is being re-measured at matched parallelism (`OLLAMA_NUM_PARALLEL=16`); the prior numbers were taken at a lower Ollama parallelism setting and are not an apples-to-apples comparison.
 
 ### Time to complete all requests (wall time)
 
@@ -67,14 +72,14 @@ Individual request performance under load. Each user gets fewer tok/s as concurr
 | 8 | ~26 tok/s | 111 tok/s* |
 | 16 | ~16.5 tok/s | 111 tok/s* |
 
-\* Ollama's per-request tok/s stays constant because requests run sequentially — each request gets the full GPU, but must **wait in line**. With 16 requests, the last one starts only after the first 15 finish.
+\* These Ollama per-request figures were taken at low parallelism, where requests beyond the slot limit **wait in line** rather than batching. They are being re-measured with `OLLAMA_NUM_PARALLEL=16`.
 
 EULLM's per-request tok/s decreases with load, but all requests **start immediately** and receive tokens in real-time via streaming. At 16.5 tok/s, text still arrives faster than humans can read.
 
 ## How continuous batching works
 
 ```
-Ollama (sequential):
+Ollama (low parallelism — extra requests queue):
   req1 ████████░░░░░░░░░░░░░░░░ → done
   req2 ________████████░░░░░░░░░ → done (waited 1.5s)
   req3 ________________████████░ → done (waited 3.0s)
@@ -137,6 +142,6 @@ These results are on a consumer RTX 5070 Ti (16 GB). Results will vary by GPU, m
 
 - **More concurrent requests** — the gap widens linearly
 - **Longer generations** — more time spent in decode = more batching opportunity
-- **Faster GPUs** — the sequential bottleneck in Ollama becomes more pronounced
+- **Faster GPUs** — shared-pass decoding extracts more parallelism per GPU step
 
 On server GPUs (A100, H100) with higher memory bandwidth, the throughput scaling with concurrency is even more dramatic.
