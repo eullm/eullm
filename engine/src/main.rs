@@ -67,8 +67,13 @@ enum Commands {
         #[arg(short, long)]
         threads: Option<u32>,
 
-        /// Enable continuous batching with N max concurrent requests (0 = sequential)
-        #[arg(long, default_value_t = 8)]
+        /// Maximum concurrent requests served by the continuous-batching scheduler.
+        ///
+        /// `--ctx-size` is split evenly across these slots (so per-sequence context
+        /// = ctx_size / batch_size). Default 1 in interactive `run` mode means each
+        /// chat gets the full context; raise to 4–16 if you're using this engine as
+        /// a backend for multiple simultaneous users.
+        #[arg(long, default_value_t = 1)]
         batch_size: usize,
 
         /// Disable flash attention (enabled by default for faster inference)
@@ -752,6 +757,27 @@ async fn cmd_run(
         if batch_size > 0 {
             let per_seq = ctx_size / batch_size as u32;
             println!("  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)");
+            // The continuous-batching scheduler splits ctx_size evenly across
+            // slots, so a single conversation that builds up history can only
+            // use ctx_size / batch_size tokens before hitting "does not fit".
+            // Warn early when the per-sequence window is small enough to
+            // surprise interactive REPL users.
+            if batch_size > 1 && per_seq < 8192 {
+                println!(
+                    "  ⚠ per-sequence context is only {per_seq} tokens — long histories will fail."
+                );
+                let one_slot = ctx_size;
+                let full_per_slot = per_seq * batch_size as u32;
+                let target_per_slot = 32768u32;
+                let target_total = target_per_slot.saturating_mul(batch_size as u32);
+                println!(
+                    "    For single-chat use:   --batch-size 1   (full {one_slot} tokens)"
+                );
+                println!(
+                    "    For 32k per slot:      --ctx-size {target_total}   (= 32768 × {batch_size} slots)"
+                );
+                let _ = full_per_slot; // silence unused if we change wording later
+            }
         } else {
             println!("  Context:       {ctx_size}");
         }
