@@ -198,3 +198,72 @@ jobs:
       - name: Clippy
         working-directory: engine
         run: cargo clippy --features turboquant_native -- -D warnings -A dead-code -A unused-imports
+
+  # ── Windows installer pre-flight (FAST, <2 min, runs on every push) ──
+  # Catches Inno Setup script bugs (undefined constants, syntax errors,
+  # missing files) without waiting for a 2h+ tag-triggered release build.
+  # Uses dummy 100-byte staging files so the bundle is tiny but the
+  # installer compile exercises the full eullm.iss script.
+  installer-preflight:
+    name: Installer pre-flight (Inno Setup syntax check)
+    needs: changes
+    # Run when the installer dir or the release workflow changes; also
+    # on any push to main (to catch drift in the .iss script).
+    if: github.event_name == 'push'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+
+      - name: Stage dummy files for all 3 variants
+        shell: pwsh
+        run: |
+          foreach ($variant in @("cpu", "cuda", "tq")) {
+            New-Item -ItemType Directory -Force -Path "installer\staging\$variant" | Out-Null
+            # Dummy 100-byte exe so Inno Setup has something to package
+            [System.IO.File]::WriteAllBytes(
+              "installer\staging\$variant\eullm.exe",
+              (1..100 | ForEach-Object { 0 })
+            )
+            if ($variant -ne "cpu") {
+              foreach ($dll in @("cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll")) {
+                [System.IO.File]::WriteAllBytes(
+                  "installer\staging\$variant\$dll",
+                  (1..100 | ForEach-Object { 0 })
+                )
+              }
+            }
+          }
+          Get-ChildItem installer\staging -Recurse | Format-Table FullName, Length
+
+      - name: Compile CPU installer (syntax check only)
+        shell: pwsh
+        working-directory: installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+              /DMyVariant=CPU `
+              /DMyAppVersion=0.0.0-preflight `
+              /DMyStagingDir=staging\cpu `
+              eullm.iss
+
+      - name: Compile CUDA installer (syntax check only)
+        shell: pwsh
+        working-directory: installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+              /DMyVariant=CUDA `
+              /DMyAppVersion=0.0.0-preflight `
+              /DMyStagingDir=staging\cuda `
+              eullm.iss
+
+      - name: Compile CUDA+TurboQuant installer (syntax check only)
+        shell: pwsh
+        working-directory: installer
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+              /DMyVariant=CUDA-TurboQuant `
+              /DMyAppVersion=0.0.0-preflight `
+              /DMyStagingDir=staging\tq `
+              eullm.iss

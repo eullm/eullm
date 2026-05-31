@@ -99,7 +99,7 @@ Source: "README-installer.txt"; DestDir: "{app}"; DestName: "README.txt"; Flags:
 [Icons]
 ; Start Menu
 Name: "{userprograms}\EuLLM\EuLLM Chat";        Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyAppLauncherName}"""; IconFilename: "{app}\eullm.ico"; WorkingDir: "{app}"
-Name: "{userprograms}\EuLLM\EuLLM CLI";         Filename: "{cmd}";          Parameters: "/k cd /d ""{userprofile}"""; IconFilename: "{app}\eullm.ico"; WorkingDir: "{userprofile}"; Comment: "Open a terminal in your home directory with 'eullm' on PATH"
+Name: "{userprograms}\EuLLM\EuLLM CLI";         Filename: "{cmd}";          Parameters: "/k cd /d ""{userdocs}"""; IconFilename: "{app}\eullm.ico"; WorkingDir: "{userdocs}"; Comment: "Open a terminal in your Documents folder with 'eullm' on PATH"
 Name: "{userprograms}\EuLLM\Uninstall EuLLM";   Filename: "{uninstallexe}"
 ; Desktop (opt-in)
 Name: "{userdesktop}\EuLLM Chat";              Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\{#MyAppLauncherName}"""; IconFilename: "{app}\eullm.ico"; WorkingDir: "{app}"; Tasks: desktopicon

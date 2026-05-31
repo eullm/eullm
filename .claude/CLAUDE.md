@@ -23,6 +23,38 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 - The vendor cache (`engine/vendor`) is keyed on `hashFiles('engine/scripts/setup-turboquant.sh')` so it invalidates automatically on TurboQuant version bumps.
 - Cache hit check (`steps.vendor-cache.outputs.cache-hit != 'true'`) skips the git clone but still re-activates the Cargo `[patch]` section if needed.
 
+### Cache key design — read this before touching any sccache key
+
+**Hard lesson learned twice on v0.5.1 and v0.5.2**: putting `Cargo.lock` in the `sccache` cache key wastes 2+ hours of CI on the long-pole `build-windows-cuda-turboquant` job for every Rust-side version bump (0.5.1 → 0.5.2 → 0.5.3...). The C++/CUDA object files cached by sccache depend on llama.cpp source and compiler flags, NOT on the Rust dependency tree. Removing `Cargo.lock` from sccache keys was the structural fix.
+
+**Three-cache-layer breakdown per build job:**
+
+| Cache layer | Key includes | Purpose | Why it's correctness-safe |
+|-------------|--------------|---------|---------------------------|
+| `cargo-registry-*` | `Cargo.lock` hash | Skip re-downloading crate sources | Source code, no compilation |
+| `target-*` | `Cargo.lock` + `setup-turboquant.sh` | Skip re-compiling Rust crates | Cargo fingerprints by content; any source change → recompile |
+| `sccache-*` | **Only `setup-turboquant.sh`** (NOT `Cargo.lock`) | Skip re-compiling C++/CUDA kernels | sccache is content-addressed: SHA1(preprocessed source + includes + flags + compiler version). Source change → different hash → miss → recompile |
+
+**Why sccache MUST NOT include Cargo.lock:**
+- sccache caches `.obj` / `.o` files from llama.cpp C++/CUDA source
+- Those sources are vendored via `setup-turboquant.sh` (pinned version)
+- A Rust version bump in `engine/Cargo.toml` (and consequently `Cargo.lock`) changes ZERO bytes of C++ source
+- Including `Cargo.lock` in the sccache key wastes the cache on every Rust bump
+- The GHA cache key is just "which cache dir to restore"; sccache internally content-hashes each file. Wrong key → restore wrong dir → still get content matches for unchanged files → still safe, but missed optimisations
+
+**Why this is correctness-safe even with "wrong" keys:**
+- `sccache --show-stats` in build logs reports hit/miss rate; high rate = working
+- If a `.cu`/`.cpp` source actually changes, the content hash changes → sccache miss → recompile from scratch → fresh `.obj` linked into binary. Cannot ever produce a stale binary.
+- Cargo's fingerprint system applies the same logic for Rust crates.
+
+**Nuclear option** if cache contamination is ever suspected: bump the cache key suffix (e.g., `sccache-windows-cuda-tq-v2-...`). Full miss next run, fresh state.
+
+### Release graceful degradation (added v0.5.2)
+
+The `build-windows-installers` job has `continue-on-error: true` and the `release` job uses `if: ${{ !cancelled() }}` + `fail_on_unmatched_files: false`. **Do not remove these.**
+
+Rationale: the long-pole `build-windows-cuda-turboquant` takes 30 min – 2h depending on cache state. A single mistake in a downstream installer step (or any other late-stage failure) used to nuke the entire release after all that work. Now the release publishes whichever binaries succeeded, and a follow-up patch release can address what failed.
+
 ### Build times (approximate)
 | Job | Cold | Warm cache |
 |-----|------|------------|
@@ -30,6 +62,20 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 | CUDA plain | ~18 min | ~3-5 min |
 | CUDA TurboQuant | ~20 min | ~5-8 min |
 | macOS Metal TQ | ~18 min | ~4-6 min |
+| **Windows CUDA TurboQuant** | **~2h 40min** (cold) | **~15-30 min** (warm) |
+| Windows installers (Inno Setup) | ~5 min | ~5 min |
+
+### PowerShell gotchas in Windows CI steps
+
+Two patterns to remember:
+- `$env:ProgramFiles(x86)` is **broken** — PowerShell parses `(x86)` as a function call. Use `${env:ProgramFiles(x86)}` with braces. The Inno Setup install path needs this: `& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"`.
+- `vswhere` from VS Installer is in the (x86) Program Files: `& "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"`.
+- Single-line over multi-line: if a step crosses many lines with `` ` `` continuation, sanity check that braces survive YAML parsing. Prefer single-line when possible.
+
+### Validate Inno Setup scripts BEFORE pushing a tag
+
+The `installer-preflight` job in `ci.yml` compiles all 3 installers with dummy 100-byte staging files on every push. **Trust it, don't bypass it.** Two bugs (`$env:ProgramFiles(x86)` then `{userprofile}`) ate two 2h+ release builds before this preflight existed. Inno Setup has no built-in `{userprofile}` constant — use `{userdocs}` or `{%USERPROFILE}` for the user's home area. Full list of built-ins: https://jrsoftware.org/ishelp/index.php?topic=consts
+
 
 ## What is EULLM
 
