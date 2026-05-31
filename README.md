@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.5.1%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.5.2%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -59,11 +59,16 @@ curl http://localhost:11434/v1/chat/completions \
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | – |
 | 🍎 macOS Apple Silicon (Metal + TurboQuant) | `eullm-macos-arm64-turboquant-exp` | – |
 | 🍎 macOS Intel | `eullm-macos-x64` | – |
-| 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | – |
-| 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
-| 🪟 Windows 11 x64 (NVIDIA + TurboQuant) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
+| 🪟 **Windows 11 x64 — One-click installer (CPU)** | **`EuLLM-Setup-CPU-<version>.exe`** | **Recommended for desktop.** Start Menu, browser chat included |
+| 🪟 **Windows 11 x64 — One-click installer (NVIDIA)** | **`EuLLM-Setup-CUDA-<version>.exe`** | **Recommended for desktop with GPU.** Includes CUDA DLLs |
+| 🪟 **Windows 11 x64 — One-click installer (NVIDIA + TurboQuant)** | **`EuLLM-Setup-CUDA-TurboQuant-<version>.exe`** | **4× context length 🔥** |
+| 🪟 Windows 11 x64 (CPU, standalone) | `eullm-windows-x64.exe` | Just the binary, for CLI/server use |
+| 🪟 Windows 11 x64 (NVIDIA, standalone) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
+| 🪟 Windows 11 x64 (NVIDIA + TurboQuant, standalone) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
 
-> **Windows note:** the binaries are not yet code-signed, so SmartScreen may show *"Windows protected your PC"* on first run. Click **More info → Run anyway**. CUDA builds ship as a `.zip` that already bundles the required CUDA DLLs (`cudart`, `cublas`, `cublasLt`) — just extract and run `eullm-windows-x64.exe`, no CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
+> **Windows users**: the **one-click installers** above also include an embedded browser chat UI (opens at `http://localhost:11435/`), a Start Menu shortcut "EuLLM Chat" with a file picker for your GGUF, and an optional PATH entry. The **standalone** binaries are the same engine without the installer wrapping — useful for headless servers or CLI-only workflows. Either way, the chat UI is built into `eullm.exe` and can be turned off with `--no-ui`.
+>
+> **SmartScreen note:** the binaries are not yet code-signed, so first launch may show *"Windows protected your PC"*. Click **More info → Run anyway**. CUDA bundles ship the required CUDA DLLs alongside — no separate CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
 
 ### Drop-in for Ollama-compatible clients
 
@@ -91,7 +96,9 @@ What you get on top of the Ollama-compatible API:
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, multi-GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant, audit trail | ✅ **Ready (v0.5.1)** | **Yes** — drop-in for Ollama |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, multi-GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant, audit trail | ✅ **Ready (v0.5.2)** | **Yes** — drop-in for Ollama |
+| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.2)** | **Yes** — auto-opens after install on Windows |
+| **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | ✅ **Ready (v0.5.2)** | **Yes** — three variants: CPU / CUDA / CUDA+TurboQuant |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
 | **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
@@ -379,7 +386,7 @@ chmod +x eullm
 Startup output (real, from RTX 5070 Ti 16GB):
 
 ```
-eullm ready.  [v0.5.1]
+eullm ready.  [v0.5.2]
   Model:         qwen3-14b
   GPU backend:   CUDA
   Context:       131072 total (8192 per sequence × 16 slots)
