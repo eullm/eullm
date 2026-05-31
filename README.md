@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.5.1%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.5.2%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -59,11 +59,18 @@ curl http://localhost:11434/v1/chat/completions \
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | – |
 | 🍎 macOS Apple Silicon (Metal + TurboQuant) | `eullm-macos-arm64-turboquant-exp` | – |
 | 🍎 macOS Intel | `eullm-macos-x64` | – |
-| 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | – |
-| 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
-| 🪟 Windows 11 x64 (NVIDIA + TurboQuant) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
+| 🪟 **Windows 11 x64 — One-click installer (CPU)** | **`EuLLM-Setup-CPU-<version>.exe`** | **Recommended for desktop.** Start Menu, browser chat included |
+| 🪟 **Windows 11 x64 — One-click installer (NVIDIA)** | **`EuLLM-Setup-CUDA-<version>.exe`** | **Recommended for desktop with GPU.** Includes CUDA DLLs |
+| 🪟 **Windows 11 x64 — One-click installer (NVIDIA + TurboQuant)** | **`EuLLM-Setup-CUDA-TurboQuant-<version>.exe`** | **4× context length 🔥** |
+| 🪟 Windows 11 x64 (CPU, standalone) | `eullm-windows-x64.exe` | Just the binary, for CLI/server use |
+| 🪟 Windows 11 x64 (NVIDIA, standalone) | `eullm-windows-x64-cuda-12.8.zip` | ZIP bundles CUDA DLLs — extract, run |
+| 🪟 Windows 11 x64 (NVIDIA + TurboQuant, standalone) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | – |
 
-> **Windows note:** the binaries are not yet code-signed, so SmartScreen may show *"Windows protected your PC"* on first run. Click **More info → Run anyway**. CUDA builds ship as a `.zip` that already bundles the required CUDA DLLs (`cudart`, `cublas`, `cublasLt`) — just extract and run `eullm-windows-x64.exe`, no CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
+> **Embedded chat UI — cross-platform.** Every `eullm` binary (Linux, macOS, Windows — CPU, CUDA, Metal, all variants) ships with a built-in browser chat. Just run `eullm run model.gguf` and open **`http://localhost:11435/`** — same OpenAI/Ollama API on `:11434`, separate chat UI port `:11435` so it never collides with RAG / OpenAI-client routes on `/`. Turn it off with `--no-ui` for headless deployments.
+>
+> **Windows specifics**: the **one-click installers** above wrap the same engine into an `.exe` setup that creates a Start Menu shortcut "EuLLM Chat" (with a GGUF file picker), an optional PATH entry, and a launcher that opens the chat in your default browser automatically. The **standalone** binaries are the same engine without the installer wrapping — useful for headless servers or CLI-only workflows.
+>
+> **SmartScreen note:** the Windows binaries are not yet code-signed, so first launch may show *"Windows protected your PC"*. Click **More info → Run anyway**. CUDA bundles ship the required CUDA DLLs alongside — no separate CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
 
 ### Drop-in for Ollama-compatible clients
 
@@ -91,7 +98,9 @@ What you get on top of the Ollama-compatible API:
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, multi-GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant, audit trail | ✅ **Ready (v0.5.1)** | **Yes** — drop-in for Ollama |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, multi-GPU (CUDA/ROCm/Vulkan/Metal), TurboQuant, audit trail | ✅ **Ready (v0.5.2)** | **Yes** — drop-in for Ollama |
+| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.2)** | **Yes** — auto-opens after install on Windows |
+| **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | ✅ **Ready (v0.5.2)** | **Yes** — three variants: CPU / CUDA / CUDA+TurboQuant |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
 | **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
@@ -349,7 +358,9 @@ Throughput scales **2.75×** from 1 to 16 concurrent requests, and with 16 activ
 
 ## TurboQuant KV Cache Compression (Experimental)
 
-**14B model. 131K context. 16GB consumer GPU. No compilation. No patches. 30 seconds.**
+**Demonstrated end-to-end on Windows:** Qwen3-8B at **264 000 tokens of context, 77 tok/s, on a single 16 GB consumer GPU** (RTX 5070 Ti). F16 KV would need ~37 GB — impossible on any consumer card. With TurboQuant TQ3_0, the KV cache fits in 7 GB.
+
+> **Original headline still holds**: 14B model, 131 K context, 16 GB consumer GPU. The 264 K @ 8B demo is the practical extreme on the same hardware; below you find both curves and the trade-offs.
 
 ### Try TurboQuant
 
@@ -379,7 +390,7 @@ chmod +x eullm
 Startup output (real, from RTX 5070 Ti 16GB):
 
 ```
-eullm ready.  [v0.5.1]
+eullm ready.  [v0.5.2]
   Model:         qwen3-14b
   GPU backend:   CUDA
   Context:       131072 total (8192 per sequence × 16 slots)
@@ -419,6 +430,36 @@ No compilation. No patch to llama.cpp. Download the binary, add two flags, done.
 <p align="center">
   <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TTFT comparison" width="680" />
 </p>
+
+### Practical capacity curve (Qwen3-8B, RTX 5070 Ti 16 GB, Windows)
+
+Where is the wall? Same model, same GPU, three configurations of KV compression. Numbers are from a fresh end-to-end Windows run (driver 32.0.15.9186), measured in the interactive REPL with `/no_think`.
+
+| KV cache | Context | KV memory (K+V) | Total VRAM in use | Steady-state throughput |
+|:---:|:---:|:---:|:---:|:---:|
+| TQ4_0 | 132 K | 4.7 GB | ~10 GB / 16 GB | **75 tok/s** ✅ |
+| TQ4_0 | 264 K | 9.2 GB | 15.4 GB dedicated + **1.9 GB spilled to shared** | **0.5 tok/s** ❌ (PCIe swap) |
+| **TQ3_0** | **264 K** | **6.96 GB** | ~12.6 GB / 16 GB | **77 tok/s** ✅ |
+
+What this shows in plain terms:
+
+- **TQ4_0** is the sweet spot up to ~200K context on a 16 GB GPU; beyond that the KV cache pushes the driver into shared-memory fallback (Windows WDDM 2.0 keeps the process alive by spilling onto system RAM via PCIe — but every decode step now does a round-trip, and throughput collapses ~150×).
+- **TQ3_0** brings the same 264K context window down to ~7 GB of KV, leaving 3+ GB of headroom on a 16 GB card. Throughput stays in the same range as TQ4_0 (≈ -3% vs the 75 tok/s baseline of TQ4_0 @ 132K), so the cost of dropping a bit is far smaller than the cost of running out of dedicated VRAM.
+
+For comparison: the F16 cache at 264K would need ~37 GB of KV — impossible on any consumer GPU. TQ3_0 makes it fit on a €1k card.
+
+Multi-turn steady-state (TQ3_0 @ 264K, six consecutive turns, prompt size grows 27 → 419 tokens):
+
+| Turn | Prompt size | Throughput |
+|:---:|:---:|:---:|
+| 1 (cold) | 27 | 50.1 tok/s |
+| 2 | 63 | 64.4 tok/s |
+| 3 | 108 | 72.2 tok/s |
+| 4 | 234 | 77.1 tok/s |
+| 5 | 340 | 77.1 tok/s |
+| 6 | 419 | 69.6 tok/s |
+
+The first turn pays warm-up + prefill; from turn 3 onward throughput stabilizes in the **70–77 tok/s** band even as history grows.
 
 ### Quality impact — at equal bit-width
 

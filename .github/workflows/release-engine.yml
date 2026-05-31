@@ -752,6 +752,115 @@ jobs:
           name: eullm-windows-x64-cuda12.8-turboquant-exp
           path: eullm-windows-x64-cuda12.8-turboquant-exp.zip
 
+  # ── Windows one-click installers ─────────────────────────────────────
+  # Packages all three Windows binaries into self-contained .exe installers
+  # via Inno Setup. Each installer creates Start Menu entries, optional PATH
+  # entry, optional desktop shortcut, and a launcher that opens the embedded
+  # chat UI in the user's browser.
+  build-windows-installers:
+    needs:
+      - build-windows
+      - build-windows-cuda
+      - build-windows-cuda-turboquant
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress --yes
+
+      - name: Compute version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          # Tags look like "EuLLM-v0.5.2" or "engine-v0.5.2" -> strip the prefix
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^(EuLLM-v|engine-v)', ''
+          if (-not $version) { $version = "0.0.0" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Installer version: $version"
+
+      - name: Download CPU artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: eullm-windows-x64
+          path: dl/cpu
+      - name: Download CUDA artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: eullm-windows-x64-cuda-12.8
+          path: dl/cuda
+      - name: Download CUDA+TurboQuant artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: eullm-windows-x64-cuda12.8-turboquant-exp
+          path: dl/tq
+
+      - name: Stage CPU bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer\staging\cpu | Out-Null
+          # CPU artifact is the bare .exe (named eullm-windows-x64.exe).
+          # The installer expects it as eullm.exe.
+          Copy-Item dl\cpu\eullm-windows-x64.exe installer\staging\cpu\eullm.exe
+          Get-ChildItem installer\staging\cpu | Format-Table Name, Length
+
+      - name: Stage CUDA bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer\staging\cuda | Out-Null
+          # CUDA artifact is the .zip — already contains eullm.exe + CUDA DLLs.
+          Expand-Archive dl\cuda\eullm-windows-x64-cuda-12.8.zip -DestinationPath installer\staging\cuda -Force
+          Get-ChildItem installer\staging\cuda | Format-Table Name, Length
+
+      - name: Stage CUDA+TurboQuant bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path installer\staging\tq | Out-Null
+          Expand-Archive dl\tq\eullm-windows-x64-cuda12.8-turboquant-exp.zip -DestinationPath installer\staging\tq -Force
+          Get-ChildItem installer\staging\tq | Format-Table Name, Length
+
+      - name: Compile CPU installer
+        shell: pwsh
+        working-directory: installer
+        run: |
+          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
+              /DMyVariant=CPU `
+              /DMyAppVersion=${{ steps.ver.outputs.version }} `
+              /DMyStagingDir=staging\cpu `
+              eullm.iss
+
+      - name: Compile CUDA installer
+        shell: pwsh
+        working-directory: installer
+        run: |
+          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
+              /DMyVariant=CUDA `
+              /DMyAppVersion=${{ steps.ver.outputs.version }} `
+              /DMyStagingDir=staging\cuda `
+              eullm.iss
+
+      - name: Compile CUDA+TurboQuant installer
+        shell: pwsh
+        working-directory: installer
+        run: |
+          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
+              /DMyVariant=CUDA-TurboQuant `
+              /DMyAppVersion=${{ steps.ver.outputs.version }} `
+              /DMyStagingDir=staging\tq `
+              eullm.iss
+
+      - name: Show built installers
+        shell: pwsh
+        working-directory: installer\output
+        run: Get-ChildItem | Format-Table Name, Length
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: eullm-windows-installers
+          path: installer/output/*.exe
+
   release:
     needs:
       - build
@@ -761,6 +870,7 @@ jobs:
       - build-windows
       - build-windows-cuda
       - build-windows-cuda-turboquant
+      - build-windows-installers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -795,6 +905,9 @@ jobs:
             artifacts/eullm-windows-x64/eullm-windows-x64.exe
             artifacts/eullm-windows-x64-cuda-12.8/eullm-windows-x64-cuda-12.8.zip
             artifacts/eullm-windows-x64-cuda12.8-turboquant-exp/eullm-windows-x64-cuda12.8-turboquant-exp.zip
+            artifacts/eullm-windows-installers/EuLLM-Setup-CPU-*.exe
+            artifacts/eullm-windows-installers/EuLLM-Setup-CUDA-*.exe
+            artifacts/eullm-windows-installers/EuLLM-Setup-CUDA-TurboQuant-*.exe
             artifacts/checksums.txt
           body: |
             ## EULLM Engine ${{ github.ref_name }}
