@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-DOMAIN="${SCCACHE_DOMAIN:-host19.appedevel.com}"
+DOMAIN="${SCCACHE_DOMAIN:-host19.appsdevel.com}"
 SCCACHE_PORT="${SCCACHE_PORT:-9443}"          # MinIO S3 API port (HTTPS)
 SCCACHE_CONSOLE_PORT="${SCCACHE_CONSOLE_PORT:-9444}"  # MinIO admin console (HTTPS)
 SCCACHE_DIR="/opt/sccache"
@@ -51,11 +51,12 @@ mkdir -p "$SCCACHE_DIR"
 chmod 700 "$SCCACHE_DIR"
 CREDS_FILE="$SCCACHE_DIR/credentials.env"
 
-if [[ ! -f "$CREDS_FILE" ]]; then
-    echo "==> Generating new credentials..."
+generate_creds() {
     ROOT_USER="eullm-admin"
     ROOT_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
-    CI_ACCESS_KEY=$(openssl rand -hex 12)        # 24 hex chars
+    # MinIO accepts service-account access keys of 3-20 chars and secret
+    # keys of 8-40 chars. Stay inside both ranges to avoid validation errors.
+    CI_ACCESS_KEY=$(openssl rand -hex 8)         # 16 hex chars — within 3-20
     CI_SECRET_KEY=$(openssl rand -base64 32 | tr -d '/+=' | head -c 40)
     cat > "$CREDS_FILE" <<EOF
 MINIO_ROOT_USER=$ROOT_USER
@@ -64,8 +65,22 @@ CI_ACCESS_KEY=$CI_ACCESS_KEY
 CI_SECRET_KEY=$CI_SECRET_KEY
 EOF
     chmod 600 "$CREDS_FILE"
+}
+
+if [[ ! -f "$CREDS_FILE" ]]; then
+    echo "==> Generating new credentials..."
+    generate_creds
 else
-    echo "==> Reusing existing credentials from $CREDS_FILE"
+    # Validate existing creds: if access key length is out of MinIO's 3-20
+    # range (e.g., produced by an earlier version of this script), regenerate.
+    # shellcheck source=/dev/null
+    source "$CREDS_FILE"
+    if [[ ${#CI_ACCESS_KEY} -lt 3 || ${#CI_ACCESS_KEY} -gt 20 ]]; then
+        echo "==> Existing CI_ACCESS_KEY length (${#CI_ACCESS_KEY}) is outside MinIO's 3-20 range — regenerating..."
+        generate_creds
+    else
+        echo "==> Reusing existing credentials from $CREDS_FILE"
+    fi
 fi
 # shellcheck source=/dev/null
 source "$CREDS_FILE"
@@ -136,20 +151,29 @@ docker exec eullm-minio sh -c "
 "
 
 # ─── 7. Verify endpoint ──────────────────────────────────────────────────
-echo "==> Verifying HTTPS endpoint..."
+# Probe via 127.0.0.1 (the VPS may not resolve its own public hostname
+# from /etc/resolv.conf — this is normal). The external reachability
+# check via $DOMAIN should be done from outside the VPS, e.g. your laptop.
+echo "==> Verifying MinIO HTTPS on localhost:$SCCACHE_PORT..."
 for i in $(seq 1 20); do
-    if curl -fsS -k -o /dev/null "https://$DOMAIN:$SCCACHE_PORT/minio/health/live"; then
-        echo "✓ MinIO is reachable at https://$DOMAIN:$SCCACHE_PORT"
+    if curl -fsS -k -o /dev/null "https://127.0.0.1:$SCCACHE_PORT/minio/health/live"; then
+        echo "✓ MinIO is reachable locally at https://127.0.0.1:$SCCACHE_PORT"
+        echo "✓ External URL (from GitHub Actions / your laptop): https://$DOMAIN:$SCCACHE_PORT"
         break
     fi
     if [[ $i -eq 20 ]]; then
-        echo "⚠  Endpoint not reachable. Try:"
-        echo "   curl -k https://$DOMAIN:$SCCACHE_PORT/minio/health/live"
+        echo "⚠  MinIO not responding on localhost. Try:"
         echo "   docker logs eullm-minio --tail 30"
-        echo "   Check firewall: ufw allow $SCCACHE_PORT/tcp"
+        echo "   docker ps | grep eullm-minio"
     fi
     sleep 1
 done
+
+# Extra check: warn the user to verify from outside the VPS too
+echo ""
+echo "==> Don't forget to test from OUTSIDE the VPS (e.g., your laptop):"
+echo "    curl -k https://$DOMAIN:$SCCACHE_PORT/minio/health/live"
+echo "    If that fails, check the firewall: 'ufw allow $SCCACHE_PORT/tcp' on the VPS."
 
 # ─── 8. Print credentials to copy to GitHub repo secrets ─────────────────
 cat <<INFO
