@@ -76,10 +76,19 @@ body {
   min-width: 0;
 }
 
-.brand-name {
-  font-weight: 700;
-  font-size: 17px;
-  letter-spacing: -0.01em;
+.brand-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  /* Subtle hover lift so users discover it's a link to eullm.eu */
+  transition: opacity 0.15s;
+}
+.brand-link:hover { opacity: 0.85; }
+
+.brand-logo {
+  height: 32px;
+  width: auto;
+  display: block;
 }
 
 .brand-tag {
@@ -465,6 +474,7 @@ dialog#settings-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
 
 @media (max-width: 540px) {
   .brand-tag { display: none; }
+  .brand-logo { height: 24px; }
   .model-picker-label { display: none; }
   .model-picker select { min-width: 140px; }
   .topbar { padding: 8px 12px; }

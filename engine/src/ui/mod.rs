@@ -22,6 +22,8 @@ use axum::{
 const INDEX_HTML: &str = include_str!("index.html");
 const STYLE_CSS: &str = include_str!("style.css");
 const APP_JS: &str = include_str!("app.js");
+const LOGO_DARK_PNG: &[u8] = include_bytes!("eullm-logo-dark.png");
+const LOGO_LIGHT_PNG: &[u8] = include_bytes!("eullm-logo-light.png");
 
 /// Build the UI sub-router. Mount at `/` on the top-level router.
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
@@ -29,27 +31,47 @@ pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/", get(serve_index))
         .route("/eullm-ui/style.css", get(serve_css))
         .route("/eullm-ui/app.js", get(serve_js))
+        .route("/eullm-ui/logo-dark.png", get(serve_logo_dark))
+        .route("/eullm-ui/logo-light.png", get(serve_logo_light))
 }
 
 async fn serve_index() -> Response {
-    asset(INDEX_HTML, "text/html; charset=utf-8")
+    text_asset(INDEX_HTML, "text/html; charset=utf-8")
 }
 
 async fn serve_css() -> Response {
-    asset(STYLE_CSS, "text/css; charset=utf-8")
+    text_asset(STYLE_CSS, "text/css; charset=utf-8")
 }
 
 async fn serve_js() -> Response {
-    asset(APP_JS, "application/javascript; charset=utf-8")
+    text_asset(APP_JS, "application/javascript; charset=utf-8")
 }
 
-fn asset(body: &'static str, content_type: &'static str) -> Response {
+async fn serve_logo_dark() -> Response {
+    binary_asset(LOGO_DARK_PNG, "image/png")
+}
+
+async fn serve_logo_light() -> Response {
+    binary_asset(LOGO_LIGHT_PNG, "image/png")
+}
+
+fn text_asset(body: &'static str, content_type: &'static str) -> Response {
     (
         [
             (header::CONTENT_TYPE, content_type),
-            // Mild caching: assets change only on engine version bump,
-            // but skip the cache during local dev by validating with ETag.
             (header::CACHE_CONTROL, "public, max-age=300"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+fn binary_asset(body: &'static [u8], content_type: &'static str) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            // Logos change at most on a release tag, safe to cache longer
+            (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         body,
     )
