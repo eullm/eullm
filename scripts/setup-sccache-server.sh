@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
-# ─── Setup MinIO + Caddy for EuLLM CI sccache backend ────────────────────
+# ─── Setup MinIO for EuLLM CI sccache backend ────────────────────────────
 #
-# Run as root on the VPS (host19.appedevel.com, Ubuntu 24.04).
-# Idempotent: safe to re-run if something fails mid-way.
+# Run as root on the VPS (Ubuntu 24.04). Idempotent.
 #
 # What it does:
-#   - Installs Docker + Compose if missing
-#   - Generates random credentials for MinIO root and a dedicated CI service account
-#   - Brings up MinIO (S3-compatible storage) + Caddy (reverse proxy with auto-HTTPS)
+#   - Installs Docker if missing
+#   - Generates a self-signed TLS certificate for the configured hostname
+#   - Brings up MinIO with HTTPS on port 9443 (configurable via SCCACHE_PORT)
 #   - Creates the 'eullm-sccache' bucket
-#   - Prints the credentials to copy back to the CI maintainer
+#   - Creates a dedicated CI service account
+#   - Prints the credentials to configure GitHub Actions
+#
+# Why no Caddy / Let's Encrypt:
+#   Many VPS already have Apache/nginx on ports 80 and 443. To avoid touching
+#   the existing config, MinIO serves HTTPS directly on its own port using a
+#   self-signed certificate. sccache will verify content via its credentials
+#   (S3 access key + secret), so the TLS layer's purpose is just transport
+#   encryption — self-signed is fine when paired with SCCACHE_S3_NO_SSL_VERIFY
+#   on the client side, which we set in the workflow YAML.
 #
 # Reachable after setup:
-#   https://host19.appedevel.com   → S3 API (used by GitHub Actions sccache)
-#   https://host19.appedevel.com/console/  → MinIO web UI (optional admin)
+#   https://<HOSTNAME>:<PORT>           → S3 API (used by sccache)
+#   https://<HOSTNAME>:<CONSOLE_PORT>/  → MinIO web UI (admin only)
 
 set -euo pipefail
 
 DOMAIN="${SCCACHE_DOMAIN:-host19.appedevel.com}"
+SCCACHE_PORT="${SCCACHE_PORT:-9443}"          # MinIO S3 API port (HTTPS)
+SCCACHE_CONSOLE_PORT="${SCCACHE_CONSOLE_PORT:-9444}"  # MinIO admin console (HTTPS)
 SCCACHE_DIR="/opt/sccache"
 BUCKET_NAME="eullm-sccache"
 
@@ -30,7 +40,7 @@ fi
 if ! command -v docker &>/dev/null; then
     echo "==> Installing Docker..."
     apt-get update -qq
-    apt-get install -y -qq curl ca-certificates
+    apt-get install -y -qq curl ca-certificates openssl
     curl -fsSL https://get.docker.com | sh
 else
     echo "==> Docker already installed ($(docker --version))"
@@ -56,13 +66,32 @@ EOF
     chmod 600 "$CREDS_FILE"
 else
     echo "==> Reusing existing credentials from $CREDS_FILE"
-    # shellcheck source=/dev/null
-    source "$CREDS_FILE"
 fi
 # shellcheck source=/dev/null
 source "$CREDS_FILE"
 
-# ─── 3. Write docker-compose.yml ─────────────────────────────────────────
+# ─── 3. Generate self-signed TLS certificate ─────────────────────────────
+mkdir -p "$SCCACHE_DIR/certs"
+chmod 700 "$SCCACHE_DIR/certs"
+
+if [[ ! -f "$SCCACHE_DIR/certs/public.crt" ]]; then
+    echo "==> Generating self-signed TLS certificate for $DOMAIN (10y validity)..."
+    openssl req -x509 -nodes -days 3650 \
+        -newkey rsa:2048 \
+        -keyout "$SCCACHE_DIR/certs/private.key" \
+        -out "$SCCACHE_DIR/certs/public.crt" \
+        -subj "/CN=$DOMAIN" \
+        -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null
+    chmod 600 "$SCCACHE_DIR/certs/private.key"
+    chmod 644 "$SCCACHE_DIR/certs/public.crt"
+else
+    echo "==> Reusing existing TLS certificate"
+fi
+
+# ─── 4. Write docker-compose.yml ─────────────────────────────────────────
+# MinIO reads its TLS cert from /root/.minio/certs/{public.crt,private.key}
+# when starting. We mount our self-signed cert into that location.
+
 cat > "$SCCACHE_DIR/docker-compose.yml" <<COMPOSE
 services:
   minio:
@@ -72,82 +101,54 @@ services:
     environment:
       MINIO_ROOT_USER: \${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: \${MINIO_ROOT_PASSWORD}
-      # Show in console where Caddy routes /console to so login works through reverse proxy
-      MINIO_BROWSER_REDIRECT_URL: https://$DOMAIN/console/
+    ports:
+      - "$SCCACHE_PORT:9000"
+      - "$SCCACHE_CONSOLE_PORT:9001"
     volumes:
       - ./data:/data
+      - ./certs:/root/.minio/certs:ro
     command: server /data --console-address ":9001"
-    networks:
-      - sccache_net
-
-  caddy:
-    image: caddy:2-alpine
-    container_name: eullm-caddy
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    networks:
-      - sccache_net
-    depends_on:
-      - minio
-
-networks:
-  sccache_net:
-    driver: bridge
-
-volumes:
-  caddy_data:
-  caddy_config:
 COMPOSE
 
-# ─── 4. Write Caddyfile (auto Let's Encrypt) ─────────────────────────────
-cat > "$SCCACHE_DIR/Caddyfile" <<CADDY
-$DOMAIN {
-    # S3 API — sccache backend
-    reverse_proxy minio:9000
-
-    # MinIO admin console at /console (optional)
-    handle_path /console/* {
-        reverse_proxy minio:9001
-    }
-}
-CADDY
-
-# ─── 5. Start services ───────────────────────────────────────────────────
+# ─── 5. Start MinIO ──────────────────────────────────────────────────────
 cd "$SCCACHE_DIR"
-echo "==> Starting MinIO + Caddy..."
+
+# Clean up any partial state from a previous (failed) run before bringing up
+# the new compose. Safe because /opt/sccache/data persists across recreations.
+if docker ps -a --format '{{.Names}}' | grep -q '^eullm-minio$'; then
+    echo "==> Removing previous eullm-minio container (data in ./data persists)..."
+    docker compose down 2>/dev/null || docker rm -f eullm-minio 2>/dev/null || true
+    # Also remove the orphaned Caddy container from the first (broken) run, if any
+    docker rm -f eullm-caddy 2>/dev/null || true
+fi
+
+echo "==> Starting MinIO..."
 docker compose --env-file credentials.env up -d
-echo "==> Waiting 15s for MinIO and Caddy to come up..."
-sleep 15
+echo "==> Waiting 10s for MinIO to come up..."
+sleep 10
 
 # ─── 6. Create bucket + CI service account via mc ────────────────────────
 echo "==> Configuring bucket '$BUCKET_NAME' and CI service account..."
-
-docker run --rm --network sccache_sccache_net \
-    -e MC_HOST_local="http://${MINIO_ROOT_USER}:${MINIO_ROOT_PASSWORD}@minio:9000" \
-    minio/mc:latest sh -c "
-        mc mb -p local/$BUCKET_NAME 2>&1 || true
-        mc admin user svcacct add --access-key '$CI_ACCESS_KEY' --secret-key '$CI_SECRET_KEY' local '$MINIO_ROOT_USER' 2>&1 || true
-        mc anonymous set none local/$BUCKET_NAME
-    "
+docker exec eullm-minio sh -c "
+    mc alias set local https://localhost:9000 '$MINIO_ROOT_USER' '$MINIO_ROOT_PASSWORD' --insecure
+    mc mb -p --insecure local/$BUCKET_NAME 2>&1 || true
+    mc admin user svcacct add --access-key '$CI_ACCESS_KEY' --secret-key '$CI_SECRET_KEY' --insecure local '$MINIO_ROOT_USER' 2>&1 || true
+"
 
 # ─── 7. Verify endpoint ──────────────────────────────────────────────────
-echo "==> Verifying HTTPS endpoint (may take ~30s for Let's Encrypt to issue cert)..."
-for i in $(seq 1 30); do
-    if curl -fsS -o /dev/null "https://$DOMAIN/minio/health/live"; then
-        echo "✓ MinIO is reachable at https://$DOMAIN"
+echo "==> Verifying HTTPS endpoint..."
+for i in $(seq 1 20); do
+    if curl -fsS -k -o /dev/null "https://$DOMAIN:$SCCACHE_PORT/minio/health/live"; then
+        echo "✓ MinIO is reachable at https://$DOMAIN:$SCCACHE_PORT"
         break
     fi
-    if [[ $i -eq 30 ]]; then
-        echo "⚠  Endpoint not yet reachable. Check 'docker logs eullm-caddy' for Let's Encrypt errors."
-        echo "   This is usually because: port 80 is blocked, or DNS not resolving to this VPS yet."
+    if [[ $i -eq 20 ]]; then
+        echo "⚠  Endpoint not reachable. Try:"
+        echo "   curl -k https://$DOMAIN:$SCCACHE_PORT/minio/health/live"
+        echo "   docker logs eullm-minio --tail 30"
+        echo "   Check firewall: ufw allow $SCCACHE_PORT/tcp"
     fi
-    sleep 2
+    sleep 1
 done
 
 # ─── 8. Print credentials to copy to GitHub repo secrets ─────────────────
@@ -157,21 +158,20 @@ cat <<INFO
 ║   EuLLM CI sccache backend — READY                                       ║
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║                                                                          ║
-║   S3 endpoint    : https://$DOMAIN
+║   S3 endpoint    : https://$DOMAIN:$SCCACHE_PORT
 ║   Bucket         : $BUCKET_NAME
-║   Region         : us-east-1 (MinIO default, accepted by sccache)
+║   TLS            : self-signed (sccache configured to skip verification) ║
 ║                                                                          ║
-║   Copy these 4 values to GitHub repo secrets:                            ║
+║   Copy these to GitHub repo secrets:                                     ║
 ║   (Repo Settings → Secrets and variables → Actions → New repo secret)    ║
 ║                                                                          ║
-║   SCCACHE_ENDPOINT      : https://$DOMAIN
+║   SCCACHE_ENDPOINT      : https://$DOMAIN:$SCCACHE_PORT
 ║   SCCACHE_BUCKET        : $BUCKET_NAME
-║   SCCACHE_S3_KEY_PREFIX : sccache
 ║                                                                          ║
 ║   AWS_ACCESS_KEY_ID     : $CI_ACCESS_KEY
 ║   AWS_SECRET_ACCESS_KEY : $CI_SECRET_KEY
 ║                                                                          ║
-║   Admin console (optional): https://$DOMAIN/console/                     ║
+║   Admin console: https://$DOMAIN:$SCCACHE_CONSOLE_PORT/
 ║     username: $MINIO_ROOT_USER
 ║     password: $MINIO_ROOT_PASSWORD
 ║                                                                          ║
@@ -179,4 +179,9 @@ cat <<INFO
 
 Credentials saved to: $CREDS_FILE  (root-only, mode 600)
 
+Firewall reminder — if ufw is enabled, allow the ports:
+    ufw allow $SCCACHE_PORT/tcp
+    ufw allow $SCCACHE_CONSOLE_PORT/tcp   # optional, for admin console only
+
 INFO
+
