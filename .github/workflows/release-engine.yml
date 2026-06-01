@@ -33,10 +33,13 @@ env:
   SCCACHE_S3_USE_SSL: "true"
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  # Linux + macOS: rustls / reqwest respect SSL_CERT_FILE for the
-  # self-signed MinIO TLS cert (committed at .github/sccache-ca.crt).
-  # Windows: ignored — needs Import-Certificate to LocalMachine\Root,
-  # see the per-Windows-job "Trust sccache CA cert" step.
+  # Linux: native-tls -> OpenSSL respects SSL_CERT_FILE.
+  # Windows: native-tls -> Schannel ignores SSL_CERT_FILE — Import-
+  #   Certificate to LocalMachine\Root via per-Windows-job step.
+  # macOS:   native-tls -> Security framework ignores SSL_CERT_FILE —
+  #   'security add-trusted-cert' into the System keychain via per-
+  #   macOS-job step. (We hit this AFTER v0.5.4 release: all 3 macOS
+  #   jobs panicked at TLS handshake to MinIO; Linux + Windows worked.)
   SSL_CERT_FILE: ${{ github.workspace }}/.github/sccache-ca.crt
 
 jobs:
@@ -73,6 +76,13 @@ jobs:
 
       # sccache now uses S3 backend on our EU-hosted MinIO — no local
       # actions/cache layer needed. See workflow-level env block for config.
+
+      - name: Trust sccache CA cert (macOS Keychain)
+        if: runner.os == 'macOS'
+        run: |
+          sudo security add-trusted-cert -d -r trustRoot \
+              -k /Library/Keychains/System.keychain \
+              .github/sccache-ca.crt
 
       - name: Install sccache
         shell: bash
@@ -401,6 +411,12 @@ jobs:
             target-macos-arm64-
 
       # sccache now uses S3 backend (see workflow-level env block)
+
+      - name: Trust sccache CA cert (macOS Keychain)
+        run: |
+          sudo security add-trusted-cert -d -r trustRoot \
+              -k /Library/Keychains/System.keychain \
+              .github/sccache-ca.crt
 
       - name: Install sccache
         run: |

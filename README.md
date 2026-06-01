@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.5.4%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.5.5%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -108,9 +108,9 @@ What you get on top of the Ollama-compatible API:
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, CUDA (RTX 3000/4000/5000), TurboQuant, audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.4)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
-| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.4)** | **Yes** — auto-opens after install on Windows |
-| **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | ✅ **Ready (v0.5.4)** | **Yes** — three variants: CPU / CUDA / CUDA+TurboQuant |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, CUDA (RTX 3000/4000/5000), TurboQuant, audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.5)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
+| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.5)** | **Yes** — auto-opens after install on Windows |
+| **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | ✅ **Ready (v0.5.5)** | **Yes** — three variants: CPU / CUDA / CUDA+TurboQuant |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
 | **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
@@ -400,7 +400,7 @@ chmod +x eullm
 Startup output (real, from RTX 5070 Ti 16GB):
 
 ```
-eullm ready.  [v0.5.4]
+eullm ready.  [v0.5.5]
   Model:         qwen3-14b
   GPU backend:   CUDA
   Context:       131072 total (8192 per sequence × 16 slots)
