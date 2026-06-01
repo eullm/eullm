@@ -130,6 +130,11 @@ jobs:
       - name: Build engine
         run: cargo build --release --target ${{ matrix.target }} -p eullm-engine
 
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
+
       - name: Package binary
         run: |
           cp target/${{ matrix.target }}/release/eullm ${{ matrix.artifact }}
@@ -217,6 +222,11 @@ jobs:
           # archs, so adding two more arches grows the file by ~kernel
           # cubins only (~50-80 MB each), not 3x.
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
 
       - name: Package binary
         run: |
@@ -359,6 +369,11 @@ jobs:
           # TurboQuant as build-from-source.
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
 
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
+
       - name: Test TurboQuant module
         run: |
           . "$HOME/.cargo/env"
@@ -453,6 +468,11 @@ jobs:
       - name: Build engine with Metal + TurboQuant
         run: cargo build --release --target aarch64-apple-darwin --features "metal turboquant_native" -p eullm-engine
 
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
+
       - name: Test TurboQuant module
         run: cargo test --features turboquant_native -p eullm-engine
 
@@ -513,6 +533,11 @@ jobs:
 
       - name: Build engine
         run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
+
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
 
       - name: Package binary
         shell: pwsh
@@ -587,6 +612,11 @@ jobs:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
 
       - name: Package binary + bundle CUDA runtime DLLs
         shell: pwsh
@@ -746,6 +776,11 @@ jobs:
           # See the WATCH POINT note there: older arches may overflow shmem
           # on the heavier TurboQuant kernels; narrow this list if nvcc fails.
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+
+      - name: sccache stats (visibility into S3 hit/miss) — CRITICAL for the long-pole job
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
 
       - name: Test TurboQuant module
         shell: pwsh
