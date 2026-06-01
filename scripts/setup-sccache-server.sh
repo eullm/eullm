@@ -89,7 +89,7 @@ source "$CREDS_FILE"
 mkdir -p "$SCCACHE_DIR/certs"
 chmod 700 "$SCCACHE_DIR/certs"
 
-if [[ ! -f "$SCCACHE_DIR/certs/public.crt" ]]; then
+generate_cert() {
     echo "==> Generating self-signed TLS certificate for $DOMAIN (10y validity)..."
     openssl req -x509 -nodes -days 3650 \
         -newkey rsa:2048 \
@@ -99,8 +99,23 @@ if [[ ! -f "$SCCACHE_DIR/certs/public.crt" ]]; then
         -addext "subjectAltName=DNS:$DOMAIN" 2>/dev/null
     chmod 600 "$SCCACHE_DIR/certs/private.key"
     chmod 644 "$SCCACHE_DIR/certs/public.crt"
+}
+
+# If a cert exists, validate that its SAN matches the current DOMAIN.
+# If it doesn't (e.g., DOMAIN was changed between runs, or an earlier
+# version of this script used a typo'd default hostname), regenerate.
+if [[ -f "$SCCACHE_DIR/certs/public.crt" ]]; then
+    CERT_SAN=$(openssl x509 -in "$SCCACHE_DIR/certs/public.crt" -noout -ext subjectAltName 2>/dev/null | grep -oE 'DNS:[a-zA-Z0-9.-]+' | head -1 | cut -d: -f2)
+    if [[ "$CERT_SAN" == "$DOMAIN" ]]; then
+        echo "==> Reusing existing TLS certificate (SAN matches: $CERT_SAN)"
+    else
+        echo "==> Existing cert SAN ('$CERT_SAN') does not match DOMAIN ('$DOMAIN') — regenerating..."
+        # Container also needs a restart to pick up the new cert
+        docker rm -f eullm-minio 2>/dev/null || true
+        generate_cert
+    fi
 else
-    echo "==> Reusing existing TLS certificate"
+    generate_cert
 fi
 
 # ─── 4. Write docker-compose.yml ─────────────────────────────────────────
