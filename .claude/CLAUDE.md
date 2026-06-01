@@ -77,15 +77,23 @@ Two patterns to remember:
 
 The `installer-preflight` job in `ci.yml` compiles all 3 installers with dummy 100-byte staging files on every push. **Trust it, don't bypass it.** Two bugs (`$env:ProgramFiles(x86)` then `{userprofile}`) ate two 2h+ release builds before this preflight existed. Inno Setup has no built-in `{userprofile}` constant — use `{userdocs}` or `{%USERPROFILE}` for the user's home area. Full list of built-ins: https://jrsoftware.org/ishelp/index.php?topic=consts
 
-### Cross-platform self-signed cert trust for sccache S3 backend
+### sccache S3 endpoint: use a public-CA TLS cert, NOT self-signed
 
-`SSL_CERT_FILE` is honoured ONLY by OpenSSL/rustls (i.e. Linux). On macOS native-tls uses Security framework (Keychain), on Windows it uses Schannel — both ignore the env var and read from the OS trust store. Per-OS cert trust steps are MANDATORY for every job that talks to the MinIO sccache backend:
+The sccache S3 backend lives on MinIO (`127.0.0.1:9000`, plain HTTP) behind an
+Apache reverse proxy at **`https://ci.eullm.eu`** with a **Let's Encrypt**
+certificate. Set the `SCCACHE_ENDPOINT` secret to `https://ci.eullm.eu` (port
+443, no `:9443`). Because the cert chains to a public CA, every runner OS trusts
+it out of the box — **no per-OS cert-import steps**, no `.github/sccache-ca.crt`,
+no `SSL_CERT_FILE`.
 
-- **Linux**: `SSL_CERT_FILE` workflow-level env var (already set, no step needed)
-- **Windows**: `Import-Certificate -FilePath .github\sccache-ca.crt -CertStoreLocation Cert:\LocalMachine\Root`
-- **macOS**: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain .github/sccache-ca.crt`
-
-v0.5.4 release shipped without the macOS step → all 3 macOS jobs panicked at TLS handshake (exit 101), Linux and Windows worked. Fixed in v0.5.5. Conditional on `runner.os == 'macOS'` for matrix jobs that span multiple OSes.
+**Do NOT reintroduce self-signed cert trust steps.** We burned ~2 days on them:
+`SSL_CERT_FILE` is honoured ONLY by OpenSSL/rustls (Linux). macOS native-tls uses
+the Security framework (Keychain) and Windows uses Schannel — both ignore the env
+var. The self-signed approach silently failed sccache uploads on Windows (TLS
+probe passed but sccache used a different TLS path) and panicked all 3 macOS jobs
+at the handshake (exit 101, v0.5.4). The Let's Encrypt proxy made the entire
+problem disappear — that's the whole point. If TLS ever breaks again, fix the
+proxy/cert renewal on the server, never patch trust stores in CI.
 
 
 ## What is EULLM

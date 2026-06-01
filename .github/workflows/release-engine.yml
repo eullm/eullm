@@ -20,27 +20,25 @@ env:
   # Node 20 is forced off.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-  # ── sccache → S3 backend on EU-hosted MinIO (host19.appsdevel.com) ──────
+  # ── sccache → S3 backend on EU-hosted MinIO (ci.eullm.eu) ──────────────
   # Replaces the per-job actions/cache@v5 sccache layers (which were
   # routinely evicted by GitHub Actions' 10 GB-per-repo cap, forcing
   # 2h 40m cold rebuilds of the Windows CUDA TurboQuant job on every
   # Rust version bump). The S3 backend gives us a 95%+ stable hit rate
   # across releases for €0.30/mo of storage on EU sovereign infrastructure.
   # See .claude/CLAUDE.md "Cache key design" for the full rationale.
+  #
+  # TLS: ci.eullm.eu is an Apache reverse proxy fronting MinIO on
+  # 127.0.0.1:9000 with a public Let's Encrypt certificate. Every OS
+  # trusts it out of the box — no per-OS cert-import gymnastics needed
+  # (the old self-signed approach silently broke sccache on Windows and
+  # panicked macOS at the TLS handshake).
   SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
   SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
   SCCACHE_REGION: us-east-1
   SCCACHE_S3_USE_SSL: "true"
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-  # Linux: native-tls -> OpenSSL respects SSL_CERT_FILE.
-  # Windows: native-tls -> Schannel ignores SSL_CERT_FILE — Import-
-  #   Certificate to LocalMachine\Root via per-Windows-job step.
-  # macOS:   native-tls -> Security framework ignores SSL_CERT_FILE —
-  #   'security add-trusted-cert' into the System keychain via per-
-  #   macOS-job step. (We hit this AFTER v0.5.4 release: all 3 macOS
-  #   jobs panicked at TLS handshake to MinIO; Linux + Windows worked.)
-  SSL_CERT_FILE: ${{ github.workspace }}/.github/sccache-ca.crt
 
 jobs:
   build:
@@ -76,13 +74,6 @@ jobs:
 
       # sccache now uses S3 backend on our EU-hosted MinIO — no local
       # actions/cache layer needed. See workflow-level env block for config.
-
-      - name: Trust sccache CA cert (macOS Keychain)
-        if: runner.os == 'macOS'
-        run: |
-          sudo security add-trusted-cert -d -r trustRoot \
-              -k /Library/Keychains/System.keychain \
-              .github/sccache-ca.crt
 
       - name: Install sccache
         shell: bash
@@ -427,12 +418,6 @@ jobs:
 
       # sccache now uses S3 backend (see workflow-level env block)
 
-      - name: Trust sccache CA cert (macOS Keychain)
-        run: |
-          sudo security add-trusted-cert -d -r trustRoot \
-              -k /Library/Keychains/System.keychain \
-              .github/sccache-ca.crt
-
       - name: Install sccache
         run: |
           SCCACHE_VER=0.8.0
@@ -509,50 +494,6 @@ jobs:
 
       # sccache now uses S3 backend (see workflow-level env block)
 
-      - name: Trust sccache CA cert (Windows — belt-and-suspenders)
-        shell: pwsh
-        run: |
-          $cert = ".github\sccache-ca.crt"
-          Write-Host "=== Importing cert into Windows trust stores ==="
-
-          # Method 1: Import-Certificate to LocalMachine\Root (system-wide)
-          Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          Write-Host "  [OK] Cert:\LocalMachine\Root"
-
-          # Method 2: Import-Certificate to CurrentUser\Root (per-user; sccache may run as runner user)
-          Import-Certificate -FilePath $cert -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
-          Write-Host "  [OK] Cert:\CurrentUser\Root"
-
-          # Method 3: certutil legacy import (more compatible with older Windows TLS stacks)
-          & certutil.exe -addstore -f "Root" $cert | Out-Null
-          Write-Host "  [OK] certutil Root"
-
-          # Method 4: SSL_CERT_FILE belt-and-suspenders (if sccache's Windows
-          # build uses rustls instead of Schannel, rustls reads this env var)
-          $absCert = (Resolve-Path $cert).Path
-          "SSL_CERT_FILE=$absCert" | Add-Content -Path $env:GITHUB_ENV
-          Write-Host "  [OK] SSL_CERT_FILE=$absCert"
-
-          Write-Host ""
-          Write-Host "=== Verification: cert visible in trust stores ==="
-          $found = Get-ChildItem -Path Cert:\LocalMachine\Root | Where-Object {$_.Subject -like "*host19.appsdevel.com*"}
-          if ($found) { Write-Host "  [OK] Found in LocalMachine\Root: $($found.Thumbprint)" }
-          else { Write-Host "  [WARN] NOT found in LocalMachine\Root" }
-          $found2 = Get-ChildItem -Path Cert:\CurrentUser\Root | Where-Object {$_.Subject -like "*host19.appsdevel.com*"}
-          if ($found2) { Write-Host "  [OK] Found in CurrentUser\Root: $($found2.Thumbprint)" }
-          else { Write-Host "  [WARN] NOT found in CurrentUser\Root" }
-
-          # Method 5: quick TLS probe — does Windows now accept our MinIO endpoint?
-          Write-Host ""
-          Write-Host "=== TLS handshake probe to ${env:SCCACHE_ENDPOINT} ==="
-          try {
-              $r = Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 5
-              Write-Host "  [OK] HTTP $($r.StatusCode) — TLS handshake OK from Windows runner"
-          } catch {
-              Write-Host "  [FAIL] TLS probe failed: $($_.Exception.Message)"
-              Write-Host "  This means sccache S3 will also fail on this runner."
-          }
-
       - name: Install sccache
         shell: pwsh
         run: |
@@ -620,50 +561,6 @@ jobs:
           key: x86_64-pc-windows-msvc-cuda-12.8
 
       # sccache now uses S3 backend (see workflow-level env block)
-
-      - name: Trust sccache CA cert (Windows — belt-and-suspenders)
-        shell: pwsh
-        run: |
-          $cert = ".github\sccache-ca.crt"
-          Write-Host "=== Importing cert into Windows trust stores ==="
-
-          # Method 1: Import-Certificate to LocalMachine\Root (system-wide)
-          Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          Write-Host "  [OK] Cert:\LocalMachine\Root"
-
-          # Method 2: Import-Certificate to CurrentUser\Root (per-user; sccache may run as runner user)
-          Import-Certificate -FilePath $cert -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
-          Write-Host "  [OK] Cert:\CurrentUser\Root"
-
-          # Method 3: certutil legacy import (more compatible with older Windows TLS stacks)
-          & certutil.exe -addstore -f "Root" $cert | Out-Null
-          Write-Host "  [OK] certutil Root"
-
-          # Method 4: SSL_CERT_FILE belt-and-suspenders (if sccache's Windows
-          # build uses rustls instead of Schannel, rustls reads this env var)
-          $absCert = (Resolve-Path $cert).Path
-          "SSL_CERT_FILE=$absCert" | Add-Content -Path $env:GITHUB_ENV
-          Write-Host "  [OK] SSL_CERT_FILE=$absCert"
-
-          Write-Host ""
-          Write-Host "=== Verification: cert visible in trust stores ==="
-          $found = Get-ChildItem -Path Cert:\LocalMachine\Root | Where-Object {$_.Subject -like "*host19.appsdevel.com*"}
-          if ($found) { Write-Host "  [OK] Found in LocalMachine\Root: $($found.Thumbprint)" }
-          else { Write-Host "  [WARN] NOT found in LocalMachine\Root" }
-          $found2 = Get-ChildItem -Path Cert:\CurrentUser\Root | Where-Object {$_.Subject -like "*host19.appsdevel.com*"}
-          if ($found2) { Write-Host "  [OK] Found in CurrentUser\Root: $($found2.Thumbprint)" }
-          else { Write-Host "  [WARN] NOT found in CurrentUser\Root" }
-
-          # Method 5: quick TLS probe — does Windows now accept our MinIO endpoint?
-          Write-Host ""
-          Write-Host "=== TLS handshake probe to ${env:SCCACHE_ENDPOINT} ==="
-          try {
-              $r = Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 5
-              Write-Host "  [OK] HTTP $($r.StatusCode) — TLS handshake OK from Windows runner"
-          } catch {
-              Write-Host "  [FAIL] TLS probe failed: $($_.Exception.Message)"
-              Write-Host "  This means sccache S3 will also fail on this runner."
-          }
 
       - name: Install sccache
         shell: pwsh
@@ -771,50 +668,6 @@ jobs:
       # sccache now uses S3 backend (see workflow-level env block) —
       # the long-pole job that used to take 2h+ cold should now hit
       # the S3 cache and complete in 15-30 min.
-
-      - name: Trust sccache CA cert (Windows — belt-and-suspenders)
-        shell: pwsh
-        run: |
-          $cert = ".github\sccache-ca.crt"
-          Write-Host "=== Importing cert into Windows trust stores ==="
-
-          # Method 1: Import-Certificate to LocalMachine\Root (system-wide)
-          Import-Certificate -FilePath $cert -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-          Write-Host "  [OK] Cert:\LocalMachine\Root"
-
-          # Method 2: Import-Certificate to CurrentUser\Root (per-user; sccache may run as runner user)
-          Import-Certificate -FilePath $cert -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
-          Write-Host "  [OK] Cert:\CurrentUser\Root"
-
-          # Method 3: certutil legacy import (more compatible with older Windows TLS stacks)
-          & certutil.exe -addstore -f "Root" $cert | Out-Null
-          Write-Host "  [OK] certutil Root"
-
-          # Method 4: SSL_CERT_FILE belt-and-suspenders (if sccache's Windows
-          # build uses rustls instead of Schannel, rustls reads this env var)
-          $absCert = (Resolve-Path $cert).Path
-          "SSL_CERT_FILE=$absCert" | Add-Content -Path $env:GITHUB_ENV
-          Write-Host "  [OK] SSL_CERT_FILE=$absCert"
-
-          Write-Host ""
-          Write-Host "=== Verification: cert visible in trust stores ==="
-          $found = Get-ChildItem -Path Cert:\LocalMachine\Root | Where-Object {$_.Subject -like "*host19.appsdevel.com*"}
-          if ($found) { Write-Host "  [OK] Found in LocalMachine\Root: $($found.Thumbprint)" }
-          else { Write-Host "  [WARN] NOT found in LocalMachine\Root" }
-          $found2 = Get-ChildItem -Path Cert:\CurrentUser\Root | Where-Object {$_.Subject -like "*host19.appsdevel.com*"}
-          if ($found2) { Write-Host "  [OK] Found in CurrentUser\Root: $($found2.Thumbprint)" }
-          else { Write-Host "  [WARN] NOT found in CurrentUser\Root" }
-
-          # Method 5: quick TLS probe — does Windows now accept our MinIO endpoint?
-          Write-Host ""
-          Write-Host "=== TLS handshake probe to ${env:SCCACHE_ENDPOINT} ==="
-          try {
-              $r = Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 5
-              Write-Host "  [OK] HTTP $($r.StatusCode) — TLS handshake OK from Windows runner"
-          } catch {
-              Write-Host "  [FAIL] TLS probe failed: $($_.Exception.Message)"
-              Write-Host "  This means sccache S3 will also fail on this runner."
-          }
 
       - name: Install sccache
         shell: pwsh
