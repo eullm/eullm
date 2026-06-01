@@ -77,6 +77,16 @@ Two patterns to remember:
 
 The `installer-preflight` job in `ci.yml` compiles all 3 installers with dummy 100-byte staging files on every push. **Trust it, don't bypass it.** Two bugs (`$env:ProgramFiles(x86)` then `{userprofile}`) ate two 2h+ release builds before this preflight existed. Inno Setup has no built-in `{userprofile}` constant — use `{userdocs}` or `{%USERPROFILE}` for the user's home area. Full list of built-ins: https://jrsoftware.org/ishelp/index.php?topic=consts
 
+### Cross-platform self-signed cert trust for sccache S3 backend
+
+`SSL_CERT_FILE` is honoured ONLY by OpenSSL/rustls (i.e. Linux). On macOS native-tls uses Security framework (Keychain), on Windows it uses Schannel — both ignore the env var and read from the OS trust store. Per-OS cert trust steps are MANDATORY for every job that talks to the MinIO sccache backend:
+
+- **Linux**: `SSL_CERT_FILE` workflow-level env var (already set, no step needed)
+- **Windows**: `Import-Certificate -FilePath .github\sccache-ca.crt -CertStoreLocation Cert:\LocalMachine\Root`
+- **macOS**: `sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain .github/sccache-ca.crt`
+
+v0.5.4 release shipped without the macOS step → all 3 macOS jobs panicked at TLS handshake (exit 101), Linux and Windows worked. Fixed in v0.5.5. Conditional on `runner.os == 'macOS'` for matrix jobs that span multiple OSes.
+
 
 ## What is EULLM
 
