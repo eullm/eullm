@@ -180,10 +180,25 @@ jobs:
         if: steps.vendor-cache.outputs.cache-hit == 'true'
         working-directory: engine
         run: |
-          if ! grep -q '^\[patch.crates-io\]' ../Cargo.toml; then
-            bash scripts/setup-turboquant.sh
-          else
+          # When the vendor cache hits, engine/vendor/llama-cpp-sys-2 is
+          # restored but Cargo.toml at the workspace root is whatever was
+          # checked out from git — and we deliberately don't commit the
+          # [patch.crates-io] section (it's a runtime/build-time graft).
+          # If the patch isn't there, just append it. Don't run the full
+          # setup-turboquant.sh on this path: that script assumes a clean
+          # slate and tries to re-fetch llama-cpp-sys-2 from the registry
+          # src/ directory, which fails on the cache-hit path because the
+          # registry src/ hasn't been extracted yet.
+          if grep -q '^\[patch.crates-io\]' ../Cargo.toml; then
             echo "Cargo patch already active (vendor cache hit)."
+          elif [ -d vendor/llama-cpp-sys-2 ]; then
+            echo "Vendor cache hit but [patch.crates-io] missing in Cargo.toml; appending..."
+            printf '\n[patch.crates-io]\nllama-cpp-sys-2 = { path = "engine/vendor/llama-cpp-sys-2" }\n' >> ../Cargo.toml
+            echo "Verifying:"
+            grep -A2 '^\[patch.crates-io\]' ../Cargo.toml
+          else
+            echo "ERROR: vendor cache hit but engine/vendor/llama-cpp-sys-2 is missing"
+            exit 1
           fi
 
       - name: Build (turboquant)

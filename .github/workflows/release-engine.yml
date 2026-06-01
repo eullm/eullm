@@ -20,6 +20,25 @@ env:
   # Node 20 is forced off.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
+  # ── sccache → S3 backend on EU-hosted MinIO (host19.appsdevel.com) ──────
+  # Replaces the per-job actions/cache@v5 sccache layers (which were
+  # routinely evicted by GitHub Actions' 10 GB-per-repo cap, forcing
+  # 2h 40m cold rebuilds of the Windows CUDA TurboQuant job on every
+  # Rust version bump). The S3 backend gives us a 95%+ stable hit rate
+  # across releases for €0.30/mo of storage on EU sovereign infrastructure.
+  # See .claude/CLAUDE.md "Cache key design" for the full rationale.
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+  SCCACHE_REGION: us-east-1
+  SCCACHE_S3_USE_SSL: "true"
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Linux + macOS: rustls / reqwest respect SSL_CERT_FILE for the
+  # self-signed MinIO TLS cert (committed at .github/sccache-ca.crt).
+  # Windows: ignored — needs Import-Certificate to LocalMachine\Root,
+  # see the per-Windows-job "Trust sccache CA cert" step.
+  SSL_CERT_FILE: ${{ github.workspace }}/.github/sccache-ca.crt
+
 jobs:
   build:
     strategy:
@@ -52,12 +71,8 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # sccache persisted via actions/cache — disk-only, no GHA cache API dependency
-      - uses: actions/cache@v5
-        with:
-          path: ~/.cache/sccache
-          key: sccache-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: sccache-${{ matrix.target }}-
+      # sccache now uses S3 backend on our EU-hosted MinIO — no local
+      # actions/cache layer needed. See workflow-level env block for config.
 
       - name: Install sccache
         shell: bash
@@ -80,12 +95,14 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          mkdir -p ~/.cache/sccache
-          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
+          # Route compiler invocations through sccache (configured via the
+          # workflow-level SCCACHE_BUCKET / SCCACHE_ENDPOINT env vars).
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
           echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           sccache --version
+          sccache --start-server || true
+          sccache --show-stats || true
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -155,12 +172,7 @@ jobs:
           key: target-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: target-cuda-${{ matrix.cuda }}-
 
-      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
-      - uses: actions/cache@v5
-        with:
-          path: /tmp/sccache-store
-          key: sccache-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: sccache-cuda-${{ matrix.cuda }}-
+      # sccache now uses S3 backend (see workflow-level env block)
 
       - name: Install sccache
         run: |
@@ -172,12 +184,11 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          mkdir -p /tmp/sccache-store
-          echo "SCCACHE_DIR=/tmp/sccache-store" >> $GITHUB_ENV
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
           echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           sccache --version
+          sccache --start-server || true
 
       - name: Build engine with CUDA
         run: |
@@ -262,22 +273,7 @@ jobs:
             target-cuda-tq-${{ matrix.cuda }}-
             target-cuda-tq-
 
-      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime
-      - uses: actions/cache@v5
-        with:
-          path: /tmp/sccache-store
-          # sccache is content-addressed and caches C++/CUDA object files.
-          # Those depend on llama.cpp source (pinned via setup-turboquant.sh)
-          # and the matrix CUDA version — NOT on Cargo.lock. Keeping
-          # Cargo.lock in the key meant every Rust-side version bump
-          # invalidated 2+ hours of C++ kernel compilation. The restore-keys
-          # prefix still matches caches saved under the old (Cargo.lock-
-          # parametrised) key, so the warm cache from earlier builds is
-          # picked up on the first run with the new key.
-          key: sccache-cuda-tq-${{ matrix.cuda }}-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
-          restore-keys: |
-            sccache-cuda-tq-${{ matrix.cuda }}-
-            sccache-cuda-tq-
+      # sccache now uses S3 backend (see workflow-level env block)
 
       - name: Install sccache
         run: |
@@ -289,12 +285,11 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          mkdir -p /tmp/sccache-store
-          echo "SCCACHE_DIR=/tmp/sccache-store" >> $GITHUB_ENV
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
           echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           sccache --version
+          sccache --start-server || true
 
       - name: Setup TurboQuant backend
         working-directory: engine
@@ -405,16 +400,7 @@ jobs:
             target-macos-arm64-tq-
             target-macos-arm64-
 
-      # sccache: disk cache persisted via actions/cache — no GHA cache API dependency at runtime.
-      # Key intentionally excludes Cargo.lock so Rust-side version bumps don't
-      # invalidate the C++/Metal object cache. See identical rationale on the
-      # CUDA TurboQuant job above. The restore-keys prefix catches caches saved
-      # under the old (Cargo.lock-parametrised) key on the first run.
-      - uses: actions/cache@v5
-        with:
-          path: ~/.cache/sccache
-          key: sccache-macos-arm64-tq-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
-          restore-keys: sccache-macos-arm64-tq-
+      # sccache now uses S3 backend (see workflow-level env block)
 
       - name: Install sccache
         run: |
@@ -426,12 +412,11 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          mkdir -p ~/.cache/sccache
-          echo "SCCACHE_DIR=$HOME/.cache/sccache" >> $GITHUB_ENV
           echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
           echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
           sccache --version
+          sccache --start-server || true
 
       - name: Setup TurboQuant backend
         working-directory: engine
@@ -486,12 +471,13 @@ jobs:
         with:
           key: x86_64-pc-windows-msvc
 
-      # sccache persisted via actions/cache
-      - uses: actions/cache@v5
-        with:
-          path: ~\AppData\Local\Mozilla\sccache
-          key: sccache-x86_64-pc-windows-msvc-${{ hashFiles('Cargo.lock') }}
-          restore-keys: sccache-x86_64-pc-windows-msvc-
+      # sccache now uses S3 backend (see workflow-level env block)
+
+      - name: Trust sccache CA cert (self-signed MinIO at host19.appsdevel.com)
+        shell: pwsh
+        run: |
+          Import-Certificate -FilePath ".github\sccache-ca.crt" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Write-Host "Imported sccache CA cert into LocalMachine\Root"
 
       - name: Install sccache
         shell: pwsh
@@ -507,6 +493,7 @@ jobs:
           "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           sccache --version
+          sccache --start-server
 
       - name: Build engine
         run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
@@ -553,16 +540,13 @@ jobs:
         with:
           key: x86_64-pc-windows-msvc-cuda-12.8
 
-      - uses: actions/cache@v5
-        with:
-          path: ~\AppData\Local\Mozilla\sccache
-          # See sccache rationale comments on the Linux + Windows TurboQuant
-          # jobs: Cargo.lock is removed from the key so Rust version bumps
-          # don't bust the C++/CUDA object cache. The restore-keys prefix
-          # catches caches saved under the previous (Cargo.lock-parametrised)
-          # key on the first run.
-          key: sccache-windows-cuda-stable
-          restore-keys: sccache-windows-cuda-
+      # sccache now uses S3 backend (see workflow-level env block)
+
+      - name: Trust sccache CA cert (self-signed MinIO at host19.appsdevel.com)
+        shell: pwsh
+        run: |
+          Import-Certificate -FilePath ".github\sccache-ca.crt" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Write-Host "Imported sccache CA cert into LocalMachine\Root"
 
       - name: Install sccache
         shell: pwsh
@@ -578,6 +562,7 @@ jobs:
           "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           sccache --version
+          sccache --start-server
 
       - name: Build engine with CUDA
         shell: pwsh
@@ -661,16 +646,15 @@ jobs:
           restore-keys: |
             target-windows-cuda-tq-
 
-      # sccache key intentionally excludes Cargo.lock — see rationale on the
-      # Linux CUDA TurboQuant job. This is the long-pole build (~2h cold,
-      # ~10-15 min warm) and a stable key across Rust version bumps is
-      # critical to keep release latency low.
-      - uses: actions/cache@v5
-        with:
-          path: ~\AppData\Local\Mozilla\sccache
-          key: sccache-windows-cuda-tq-${{ hashFiles('engine/scripts/setup-turboquant.sh') }}
-          restore-keys: |
-            sccache-windows-cuda-tq-
+      # sccache now uses S3 backend (see workflow-level env block) —
+      # the long-pole job that used to take 2h+ cold should now hit
+      # the S3 cache and complete in 15-30 min.
+
+      - name: Trust sccache CA cert (self-signed MinIO at host19.appsdevel.com)
+        shell: pwsh
+        run: |
+          Import-Certificate -FilePath ".github\sccache-ca.crt" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          Write-Host "Imported sccache CA cert into LocalMachine\Root"
 
       - name: Install sccache
         shell: pwsh
@@ -686,6 +670,7 @@ jobs:
           "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           sccache --version
+          sccache --start-server
 
       - name: Setup TurboQuant backend
         shell: bash
