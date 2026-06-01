@@ -95,6 +95,26 @@ at the handshake (exit 101, v0.5.4). The Let's Encrypt proxy made the entire
 problem disappear — that's the whole point. If TLS ever breaks again, fix the
 proxy/cert renewal on the server, never patch trust stores in CI.
 
+### sccache must NEVER be a single point of failure (a build-killer)
+
+A remote sccache backend that's unreachable must **degrade** the build (compile
+without cache = slow), never **fail** it (exit 101 = hours wasted). Two guards,
+both in `release-engine.yml`, are mandatory:
+
+1. **`SCCACHE_IDLE_TIMEOUT: "0"`** (workflow-level env). The daemon's default
+   600s idle shutdown means on long jobs it dies mid-build; the next compile
+   spawns a fresh daemon that must re-handshake with S3, and a momentary backend
+   blip then prints `Timed out waiting for server startup` and kills the build.
+   Zero = the daemon that started successfully stays up for the whole run.
+2. **Reachability probe before enabling the wrapper.** Each `Install sccache`
+   step curls/Invoke-WebRequests `${SCCACHE_ENDPOINT}/minio/health/live` and only
+   sets `RUSTC_WRAPPER`/`CMAKE_*_COMPILER_LAUNCHER` (and runs `--start-server`)
+   if it responds. Otherwise it emits a `::warning::` and builds cache-less.
+
+With both, an S3 outage costs minutes (no cache), not hours (failed release).
+A mid-build cache GET/PUT failure is already non-fatal — sccache treats it as a
+miss and compiles locally. The only hard-fail was daemon *startup*, now guarded.
+
 
 ## What is EULLM
 

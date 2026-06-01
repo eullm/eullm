@@ -39,6 +39,13 @@ env:
   SCCACHE_S3_USE_SSL: "true"
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
   AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Keep the sccache daemon alive for the WHOLE build. Default idle timeout
+  # is 600s: on long jobs the daemon shuts down mid-build, and the next
+  # compile spawns a fresh daemon that must re-handshake with the S3 backend.
+  # If the backend blips at that moment, startup times out and the build dies
+  # (exactly what killed v0.5.5: "Timed out waiting for server startup",
+  # exit 101 after 1h49m). Zero = never auto-shutdown → one stable connection.
+  SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
   build:
@@ -98,9 +105,18 @@ jobs:
           rm -rf "${TMPSC}"
           # Route compiler invocations through sccache (configured via the
           # workflow-level SCCACHE_BUCKET / SCCACHE_ENDPOINT env vars).
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it. (v0.5.5 died at exit 101 when the endpoint
+          # vanished mid-build; this is the belt to that suspenders.)
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
           sccache --version
           sccache --start-server || true
           sccache --show-stats || true
@@ -190,9 +206,18 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it. (v0.5.5 died at exit 101 when the endpoint
+          # vanished mid-build; this is the belt to that suspenders.)
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
           sccache --version
           sccache --start-server || true
 
@@ -296,9 +321,18 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it. (v0.5.5 died at exit 101 when the endpoint
+          # vanished mid-build; this is the belt to that suspenders.)
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
           sccache --version
           sccache --start-server || true
 
@@ -428,9 +462,18 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it. (v0.5.5 died at exit 101 when the endpoint
+          # vanished mid-build; this is the belt to that suspenders.)
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
           sccache --version
           sccache --start-server || true
 
@@ -504,11 +547,24 @@ jobs:
           tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
           $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
           Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
-          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           sccache --version
-          sccache --start-server
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it (cf. v0.5.5: endpoint gone mid-build → exit 101).
+          $reachable = $false
+          try {
+              Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              $reachable = $true
+          } catch { $reachable = $false }
+          if ($reachable) {
+              "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              sccache --start-server
+              Write-Host "sccache: S3 backend reachable — caching enabled."
+          } else {
+              Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          }
 
       - name: Build engine
         run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
@@ -572,11 +628,24 @@ jobs:
           tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
           $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
           Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
-          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           sccache --version
-          sccache --start-server
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it (cf. v0.5.5: endpoint gone mid-build → exit 101).
+          $reachable = $false
+          try {
+              Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              $reachable = $true
+          } catch { $reachable = $false }
+          if ($reachable) {
+              "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              sccache --start-server
+              Write-Host "sccache: S3 backend reachable — caching enabled."
+          } else {
+              Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          }
 
       - name: Build engine with CUDA
         shell: pwsh
@@ -679,11 +748,24 @@ jobs:
           tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
           $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
           Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
-          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
           sccache --version
-          sccache --start-server
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it (cf. v0.5.5: endpoint gone mid-build → exit 101).
+          $reachable = $false
+          try {
+              Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              $reachable = $true
+          } catch { $reachable = $false }
+          if ($reachable) {
+              "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              sccache --start-server
+              Write-Host "sccache: S3 backend reachable — caching enabled."
+          } else {
+              Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          }
 
       - name: Setup TurboQuant backend
         shell: bash
