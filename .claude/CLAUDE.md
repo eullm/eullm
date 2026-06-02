@@ -14,31 +14,31 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 ### `.github/workflows/ci.yml`
 - `Swatinem/rust-cache@v2` on `engine` and `hub` jobs — caches `target/` and `~/.cargo`. Removing it adds ~25 min per run.
 - `actions/cache` for pip on `forge` job.
-- `engine-turboquant` job uses TWO cache layers: cargo registry + vendor dir + target/. The vendor cache is keyed on `setup-turboquant.sh` hash — this avoids re-cloning TurboQuant llama.cpp when the version hasn't changed.
-- **Vendor cache-hit path**: do NOT call `setup-turboquant.sh` to "re-activate the patch". The script assumes a clean slate and tries to find llama-cpp-sys-2 in the registry's extracted `src/` dir, which isn't there on the cache-hit path. Just append `[patch.crates-io]` to the workspace `Cargo.toml` with one `printf` — engine/vendor/ is already restored from cache.
 
 ### `.github/workflows/release-engine.yml`
 - All `build` matrix jobs use `Swatinem/rust-cache@v2` keyed by target triple.
-- `build-cuda` and `build-cuda-turboquant` jobs (container-based) use `actions/cache` manually (Swatinem doesn't work in containers) for: cargo registry, `engine/vendor`, `target/`.
-- `build-metal-turboquant` caches vendor + target similarly.
-- The vendor cache (`engine/vendor`) is keyed on `hashFiles('engine/scripts/setup-turboquant.sh')` so it invalidates automatically on TurboQuant version bumps.
-- Cache hit check (`steps.vendor-cache.outputs.cache-hit != 'true'`) skips the git clone but still re-activates the Cargo `[patch]` section if needed.
+- `build-cuda` (container-based) uses `actions/cache` manually (Swatinem doesn't work in containers) for: cargo registry, `target/`.
+- sccache routes C/C++/CUDA compile through the EU S3 backend (see the sccache subsections below).
+
+### TurboQuant removed in v0.5.8 (history note)
+
+Earlier versions (v0.5.x) shipped a TurboQuant-experimental variant via the AmesianX/llama.cpp fork. That added three jobs (`build-cuda-turboquant`, `build-metal-turboquant`, `build-windows-cuda-turboquant`), an `engine-turboquant` CI job, a vendored `engine/vendor/` dir, a `[patch.crates-io]` block, and was the multi-hour long-pole of every release. **All of it was removed in v0.5.8** — see README → Research & Experiments for the rationale. Several lessons below were learned on those jobs; they still apply to any future C++/CUDA work (e.g. when a future llama.cpp DLL strategy lands).
 
 ### Cache key design — read this before touching any sccache key
 
-**Hard lesson learned twice on v0.5.1 and v0.5.2**: putting `Cargo.lock` in the `sccache` cache key wastes 2+ hours of CI on the long-pole `build-windows-cuda-turboquant` job for every Rust-side version bump (0.5.1 → 0.5.2 → 0.5.3...). The C++/CUDA object files cached by sccache depend on llama.cpp source and compiler flags, NOT on the Rust dependency tree. Removing `Cargo.lock` from sccache keys was the structural fix.
+**Hard lesson learned twice on v0.5.1 and v0.5.2**: putting `Cargo.lock` in the `sccache` cache key wastes 2+ hours of CI on the long-pole CUDA job for every Rust-side version bump. The C++/CUDA object files cached by sccache depend on llama.cpp source and compiler flags, NOT on the Rust dependency tree. Removing `Cargo.lock` from sccache keys was the structural fix.
 
 **Three-cache-layer breakdown per build job:**
 
 | Cache layer | Key includes | Purpose | Why it's correctness-safe |
 |-------------|--------------|---------|---------------------------|
 | `cargo-registry-*` | `Cargo.lock` hash | Skip re-downloading crate sources | Source code, no compilation |
-| `target-*` | `Cargo.lock` + `setup-turboquant.sh` | Skip re-compiling Rust crates | Cargo fingerprints by content; any source change → recompile |
-| `sccache-*` | **Only `setup-turboquant.sh`** (NOT `Cargo.lock`) | Skip re-compiling C++/CUDA kernels | sccache is content-addressed: SHA1(preprocessed source + includes + flags + compiler version). Source change → different hash → miss → recompile |
+| `target-*` | `Cargo.lock` (+ any pinned C++ source manifest if vendored) | Skip re-compiling Rust crates | Cargo fingerprints by content; any source change → recompile |
+| `sccache-*` | **Pinned C++ source identity only** (NOT `Cargo.lock`) | Skip re-compiling C++/CUDA kernels | sccache is content-addressed: SHA1(preprocessed source + includes + flags + compiler version). Source change → different hash → miss → recompile |
 
 **Why sccache MUST NOT include Cargo.lock:**
 - sccache caches `.obj` / `.o` files from llama.cpp C++/CUDA source
-- Those sources are vendored via `setup-turboquant.sh` (pinned version)
+- That source moves only when the pinned llama.cpp version moves, not on Rust bumps
 - A Rust version bump in `engine/Cargo.toml` (and consequently `Cargo.lock`) changes ZERO bytes of C++ source
 - Including `Cargo.lock` in the sccache key wastes the cache on every Rust bump
 - The GHA cache key is just "which cache dir to restore"; sccache internally content-hashes each file. Wrong key → restore wrong dir → still get content matches for unchanged files → still safe, but missed optimisations
@@ -48,23 +48,21 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 - If a `.cu`/`.cpp` source actually changes, the content hash changes → sccache miss → recompile from scratch → fresh `.obj` linked into binary. Cannot ever produce a stale binary.
 - Cargo's fingerprint system applies the same logic for Rust crates.
 
-**Nuclear option** if cache contamination is ever suspected: bump the cache key suffix (e.g., `sccache-windows-cuda-tq-v2-...`). Full miss next run, fresh state.
+**Nuclear option** if cache contamination is ever suspected: bump the cache key suffix (e.g., `sccache-windows-cuda-v2-...`). Full miss next run, fresh state.
 
 ### Release graceful degradation (added v0.5.2)
 
-The `build-windows-installers` job has `continue-on-error: true` and the `release` job uses `if: ${{ !cancelled() }}` + `fail_on_unmatched_files: false`. **Do not remove these.**
+The `release` job uses `if: ${{ !cancelled() }}` + `fail_on_unmatched_files: false`. **Do not remove these.**
 
-Rationale: the long-pole `build-windows-cuda-turboquant` takes 30 min – 2h depending on cache state. A single mistake in a downstream installer step (or any other late-stage failure) used to nuke the entire release after all that work. Now the release publishes whichever binaries succeeded, and a follow-up patch release can address what failed.
+Rationale: any long-pole CUDA build can take 30 min – 1h depending on cache state. A single mistake in a late-stage step used to nuke the entire release after all that work. Now the release publishes whichever binaries succeeded, and a follow-up patch release can address what failed.
 
-### Build times (approximate)
+### Build times (approximate, v0.5.8 onwards — TurboQuant variants removed)
 | Job | Cold | Warm cache |
 |-----|------|------------|
-| Engine standard | ~6 min | ~1-2 min |
-| CUDA plain | ~18 min | ~3-5 min |
-| CUDA TurboQuant | ~20 min | ~5-8 min |
-| macOS Metal TQ | ~18 min | ~4-6 min |
-| **Windows CUDA TurboQuant** | **~2h 40min** (cold) | **~15-30 min** (warm) |
-| Windows installers (Inno Setup) | ~5 min | ~5 min |
+| Engine standard (Linux/macOS) | ~6 min | ~1-2 min |
+| Windows standard | ~10 min | ~3-5 min |
+| Linux CUDA | ~18 min | ~3-5 min |
+| **Windows CUDA** (long-pole) | **~50 min** (cold) | **~10-15 min** (warm) |
 
 ### How a release in progress looks on GitHub (don't be fooled)
 
@@ -141,10 +139,10 @@ miss and compiles locally. The only hard-fail was daemon *startup*, now guarded.
 Setting only `CMAKE_C_COMPILER_LAUNCHER=sccache` + `CMAKE_CXX_COMPILER_LAUNCHER=sccache`
 **caches C/C++ but silently leaves nvcc invocations uncached**. The heavy
 CUDA kernel template instantiations (`fattn-vec-instance-*.cu`,
-`template-instances/*.cu`, dozens per K/V cache type combination in
-TurboQuant) compile from scratch on every release. Result: sccache stats
-show 99% hit rate (on C/C++ only) but wall-clock stays at cold-build values
-because the actual long-pole is nvcc, not g++.
+`template-instances/*.cu`, many per K/V cache type combination) compile
+from scratch on every release. Result: sccache stats show 99% hit rate
+(on C/C++ only) but wall-clock stays at cold-build values because the
+actual long-pole is nvcc, not g++.
 
 **Mandatory third var alongside the other two:**
 

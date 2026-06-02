@@ -10,9 +10,6 @@
 
 pub mod scheduler;
 
-#[cfg(feature = "turboquant")]
-pub mod turboquant;
-
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
@@ -27,12 +24,6 @@ use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
-
-/// Log TurboQuant module status at startup (no-op without the feature flag).
-pub fn log_turboquant_status() {
-    #[cfg(feature = "turboquant")]
-    turboquant::log_turboquant_status();
-}
 
 /// Check if the binary was compiled with GPU support and warn if GPU was
 /// requested but is not available.  Returns true when a GPU backend is present.
@@ -165,105 +156,22 @@ impl Default for InferenceConfig {
 }
 
 /// Parse a KV cache type string (e.g. "q8_0", "q4_0", "f16") into a `KvCacheType`.
-///
-/// With the `turboquant` feature enabled, also accepts TBQ/TBQP types (tbq3_0, tbq4_0, tbqp3_0, tbqp4_0)
-/// and legacy aliases (tq3_0, tq4_0, turbo3, turbo4).
-/// If the llama.cpp backend does not support TurboQuant natively, these
-/// resolve to F16 with a warning (automatic fallback).
 pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
-    parse_cache_type_inner(s, false)
-}
-
-/// Parse a KV cache type in strict mode — errors instead of falling back.
-///
-/// Use for benchmarks where silent fallback would produce misleading results.
-#[cfg(feature = "turboquant")]
-pub fn parse_cache_type_strict(s: &str) -> Result<KvCacheType, String> {
-    parse_cache_type_inner(s, true)
-}
-
-#[allow(unused_variables)]
-fn parse_cache_type_inner(s: &str, strict: bool) -> Result<KvCacheType, String> {
-    // Standard types — always available.
     match s.to_lowercase().as_str() {
-        "f16" => return Ok(KvCacheType::F16),
-        "f32" => return Ok(KvCacheType::F32),
-        "q8_0" => return Ok(KvCacheType::Q8_0),
-        "q4_0" => return Ok(KvCacheType::Q4_0),
-        "q4_1" => return Ok(KvCacheType::Q4_1),
-        "q5_0" => return Ok(KvCacheType::Q5_0),
-        "q5_1" => return Ok(KvCacheType::Q5_1),
-        _ => {}
+        "f16" => Ok(KvCacheType::F16),
+        "f32" => Ok(KvCacheType::F32),
+        "q8_0" => Ok(KvCacheType::Q8_0),
+        "q4_0" => Ok(KvCacheType::Q4_0),
+        "q4_1" => Ok(KvCacheType::Q4_1),
+        "q5_0" => Ok(KvCacheType::Q5_0),
+        "q5_1" => Ok(KvCacheType::Q5_1),
+        _ => Err(format!(
+            "Unknown cache type '{s}'. Options: f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1"
+        )),
     }
-
-    // TurboQuant types — experimental, feature-gated.
-    #[cfg(feature = "turboquant")]
-    {
-        use turboquant::config::{resolve_turboquant_cache_type, ResolvedCacheType};
-        if let Some(resolved) = resolve_turboquant_cache_type(s, strict) {
-            return match resolved {
-                ResolvedCacheType::Native(tq) => {
-                    // Map TQ type to the GGML type ID from AmesianX/TurboQuant.
-                    // The KvCacheType::Unknown variant carries raw GGML type IDs
-                    // through to llama.cpp — no Rust enum variant needed.
-                    use turboquant::types::ggml_ids;
-                    let raw_id = match tq {
-                        turboquant::types::TurboquantType::TQ3_0  => ggml_ids::TBQ3_0,
-                        turboquant::types::TurboquantType::TQ4_0  => ggml_ids::TBQ4_0,
-                        turboquant::types::TurboquantType::TQP3_0 => ggml_ids::TBQP3_0,
-                        turboquant::types::TurboquantType::TQP4_0 => ggml_ids::TBQP4_0,
-                        turboquant::types::TurboquantType::TQ3_1  => ggml_ids::TBQ3_1,
-                        turboquant::types::TurboquantType::TQ4_1  => ggml_ids::TBQ4_1,
-                        turboquant::types::TurboquantType::TQP3_1 => ggml_ids::TBQP3_1,
-                        turboquant::types::TurboquantType::TQP4_1 => ggml_ids::TBQP4_1,
-                        turboquant::types::TurboquantType::TQ3_2  => ggml_ids::TBQ3_2,
-                        turboquant::types::TurboquantType::TQ4_2  => ggml_ids::TBQ4_2,
-                        turboquant::types::TurboquantType::TQP3_2 => ggml_ids::TBQP3_2,
-                        turboquant::types::TurboquantType::TQP4_2 => ggml_ids::TBQP4_2,
-                        turboquant::types::TurboquantType::TQ3_3  => ggml_ids::TBQ3_3,
-                        turboquant::types::TurboquantType::TQ4_3  => ggml_ids::TBQ4_3,
-                        turboquant::types::TurboquantType::TQP3_3 => ggml_ids::TBQP3_3,
-                        turboquant::types::TurboquantType::TQP4_3 => ggml_ids::TBQP4_3,
-                        turboquant::types::TurboquantType::TQ3_4  => ggml_ids::TBQ3_4,
-                        turboquant::types::TurboquantType::TQ4_4  => ggml_ids::TBQ4_4,
-                        turboquant::types::TurboquantType::TQP3_4 => ggml_ids::TBQP3_4,
-                        turboquant::types::TurboquantType::TQP4_4 => ggml_ids::TBQP4_4,
-                    };
-                    tracing::info!("TurboQuant {tq} → GGML type {raw_id} (native backend)");
-                    // Pass the raw GGML type ID via KvCacheType. llama-cpp-2 maps
-                    // Unknown(n) to the raw C enum value, whose Rust type bindgen
-                    // generates as `u32` on Linux/GCC but `i32` on Windows/MSVC.
-                    // Our IDs are small positive constants, so cast to whatever
-                    // the target's `ggml_type` is. The clippy allow covers the
-                    // targets where `as _` resolves to an identity (u32 -> u32).
-                    #[allow(clippy::unnecessary_cast)]
-                    let raw_id = raw_id as _;
-                    Ok(KvCacheType::Unknown(raw_id))
-                }
-                ResolvedCacheType::Fallback { fallback, .. } => {
-                    parse_cache_type(fallback)
-                }
-                ResolvedCacheType::Unsupported { reason, .. } => {
-                    Err(reason)
-                }
-            };
-        }
-    }
-
-    #[cfg(feature = "turboquant")]
-    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1 | \
-                   recommended: tbqp3 (K) + tbq3 (V) | \
-                   head_dim=128 (Qwen3/Llama/Mistral): tbqp3_1/tbq3_1 | \
-                   head_dim=256: tbqp3_0/tbq3_0 | \
-                   head_dim=64 (v1.5.3 fix): tbqp3_3/tbq3_3 | \
-                   head_dim=576 (GLM-4.7-Flash): tbqp3_4/tbq3_4";
-    #[cfg(not(feature = "turboquant"))]
-    let options = "f16, f32, q8_0, q4_0, q4_1, q5_0, q5_1";
-
-    Err(format!("Unknown cache type '{s}'. Options: {options}"))
 }
 
-/// Human-readable name for a KV cache type, including TurboQuant types.
+/// Human-readable name for a KV cache type.
 pub fn cache_type_display(ct: &KvCacheType) -> String {
     match ct {
         KvCacheType::F16 => "F16".to_string(),
@@ -273,27 +181,6 @@ pub fn cache_type_display(ct: &KvCacheType) -> String {
         KvCacheType::Q4_1 => "Q4_1".to_string(),
         KvCacheType::Q5_0 => "Q5_0".to_string(),
         KvCacheType::Q5_1 => "Q5_1".to_string(),
-        // TurboQuant v1.5.3 IDs (Q1_0=41 inserted before TBQ block, all +1 vs v1.5.2)
-        KvCacheType::Unknown(42) => "TBQ3_0 (TurboQuant 3-bit MSE, head_dim=256)".to_string(),
-        KvCacheType::Unknown(43) => "TBQ4_0 (TurboQuant 4-bit MSE, head_dim=256)".to_string(),
-        KvCacheType::Unknown(44) => "TBQP3_0 (TurboQuant 3-bit QJL, head_dim=256)".to_string(),
-        KvCacheType::Unknown(45) => "TBQP4_0 (TurboQuant 4-bit QJL, head_dim=256)".to_string(),
-        KvCacheType::Unknown(46) => "TBQ3_1 (TurboQuant 3-bit MSE, head_dim=128)".to_string(),
-        KvCacheType::Unknown(47) => "TBQ4_1 (TurboQuant 4-bit MSE, head_dim=128)".to_string(),
-        KvCacheType::Unknown(48) => "TBQP3_1 (TurboQuant 3-bit DirectSign, head_dim=128)".to_string(),
-        KvCacheType::Unknown(49) => "TBQP4_1 (TurboQuant 4-bit DirectSign, head_dim=128)".to_string(),
-        KvCacheType::Unknown(50) => "TBQ3_2 (TurboQuant 3-bit MSE, head_dim=64 single-WHT)".to_string(),
-        KvCacheType::Unknown(51) => "TBQ4_2 (TurboQuant 4-bit MSE, head_dim=64 single-WHT)".to_string(),
-        KvCacheType::Unknown(52) => "TBQP3_2 (TurboQuant 3-bit corrected, head_dim=64 single-WHT)".to_string(),
-        KvCacheType::Unknown(53) => "TBQP4_2 (TurboQuant 4-bit corrected, head_dim=64 single-WHT)".to_string(),
-        KvCacheType::Unknown(54) => "TBQ3_3 (TurboQuant 3-bit MSE, head_dim=64 double-WHT)".to_string(),
-        KvCacheType::Unknown(55) => "TBQ4_3 (TurboQuant 4-bit MSE, head_dim=64 double-WHT)".to_string(),
-        KvCacheType::Unknown(56) => "TBQP3_3 (TurboQuant 3-bit+QJL, head_dim=64 double-WHT)".to_string(),
-        KvCacheType::Unknown(57) => "TBQP4_3 (TurboQuant 4-bit+QJL, head_dim=64 double-WHT)".to_string(),
-        KvCacheType::Unknown(58) => "TBQ3_4 (TurboQuant 3-bit MSE, head_dim=576 GLM)".to_string(),
-        KvCacheType::Unknown(59) => "TBQ4_4 (TurboQuant 4-bit MSE, head_dim=576 GLM)".to_string(),
-        KvCacheType::Unknown(60) => "TBQP3_4 (TurboQuant 3-bit corrected, head_dim=576 GLM)".to_string(),
-        KvCacheType::Unknown(61) => "TBQP4_4 (TurboQuant 4-bit corrected, head_dim=576 GLM)".to_string(),
         KvCacheType::Unknown(id) => format!("Unknown({id})"),
         _ => format!("{ct:?}"),
     }

@@ -29,26 +29,20 @@ const DEFAULT_PIDFILE: &str = "eullm.pid";
 
 // `eullm -V` output reflects the build variant so users immediately know
 // which backend they are running, e.g.
-//   eullm 0.5.2 (CUDA + TurboQuant)
-//   eullm 0.5.2 (Metal)
-//   eullm 0.5.2 (CPU)
+//   eullm 0.5.8 (CUDA)
+//   eullm 0.5.8 (Metal)
+//   eullm 0.5.8 (CPU)
 // Only one branch matches per build because feature flags are mutually
 // exclusive (set by the release matrix).
-#[cfg(all(feature = "cuda", feature = "turboquant_native"))]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CUDA + TurboQuant)");
-#[cfg(all(feature = "cuda", not(feature = "turboquant_native")))]
+#[cfg(feature = "cuda")]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CUDA)");
-#[cfg(all(feature = "metal", feature = "turboquant_native"))]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Metal + TurboQuant)");
-#[cfg(all(feature = "metal", not(feature = "turboquant_native")))]
+#[cfg(feature = "metal")]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Metal)");
-#[cfg(all(feature = "rocm", not(feature = "turboquant_native")))]
+#[cfg(feature = "rocm")]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (ROCm)");
-#[cfg(all(feature = "vulkan", not(feature = "turboquant_native")))]
+#[cfg(feature = "vulkan")]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Vulkan)");
-#[cfg(all(feature = "turboquant_native", not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan"))))]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU + TurboQuant)");
-#[cfg(not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan", feature = "turboquant_native")))]
+#[cfg(not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan")))]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
 
 #[derive(Parser)]
@@ -399,38 +393,17 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            // Mixed TurboQuant types (e.g. K=tbqp3, V=tbq3) — both Unknown.
-            // AmesianX recommended: --cache-type-k tbqp3 --cache-type-v tbq3
-            // (corrected K for recall, MSE-only V for speed, flash-attn on by default)
-            if let (inference::KvCacheType::Unknown(k_id), inference::KvCacheType::Unknown(v_id)) = (&ctk, &ctv)
-                && k_id != v_id
-            {
-                eprintln!("Note: mixed TurboQuant KV cache (K={cache_type_k}, V={cache_type_v}).");
-                eprintln!("  This is the AmesianX recommended config (corrected K, MSE-only V).");
-            }
-            // Asymmetric F16/Q8_0-K + TurboQuant-V — may crash on models with
-            // non-standard head dimensions (e.g. Gemma 4 D=512/256 SWA).
-            // For those models, use symmetric TQ/TQ (e.g. tbq4_0/tbq4_0) instead.
-            if matches!(&ctv, inference::KvCacheType::Unknown(_))
-                && !matches!(&ctk, inference::KvCacheType::Unknown(_))
-            {
-                eprintln!("Note: asymmetric KV cache (K={cache_type_k}, V={cache_type_v}).");
-                eprintln!("  TurboQuant V with non-TQ K may crash on Gemma 4 / models with D=512.");
-                eprintln!("  If it crashes, try symmetric: --cache-type-k {cache_type_v} --cache-type-v {cache_type_v}");
-            }
-            // Standard quantized KV (q8_0, q4_0) on Gemma 4 (mixed SWA D=512/256)
-            // Gemma 4's mixed SWA architecture (25 SWA layers D=256 + 5 global D=512)
-            // is incompatible with standard KV quantization — SWA bypass to f16
-            // was added in AmesianX v1.5.1 and is active in v1.5.3.
-            // Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
+            // Gemma 4's mixed SWA architecture (25 SWA layers at head_dim=256 + 5
+            // global layers at head_dim=512) is incompatible with quantized KV
+            // cache in stock llama.cpp: the SWA bypass to f16 has not yet been
+            // merged upstream. Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
             let model_lower = model.to_lowercase();
             let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
             let needs_correction = ctk != inference::KvCacheType::F16
                 || ctv != inference::KvCacheType::F16;
             if is_gemma4 && needs_correction {
                 eprintln!("[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v}).");
-                eprintln!("[EULLM] Gemma 4's mixed SWA architecture (D=512/256) requires f16 KV cache");
-                eprintln!("[EULLM] until AmesianX TurboQuant v1.5.1 (SWA bypass) is available.");
+                eprintln!("[EULLM] Mixed SWA architecture (D=512/256) requires f16 KV cache.");
                 eprintln!("[EULLM] Auto-correcting to f16/f16.");
                 ctk = inference::KvCacheType::F16;
                 ctv = inference::KvCacheType::F16;
@@ -910,14 +883,8 @@ async fn cmd_run(
         let k_name = inference::cache_type_display(&cache_type_k);
         let v_name = inference::cache_type_display(&cache_type_v);
         println!("  KV cache:      K={k_name} V={v_name}");
-        // Show TurboQuant status if any cache type is TQ
-        let is_tq = matches!(cache_type_k, inference::KvCacheType::Unknown(41..=43))
-            || matches!(cache_type_v, inference::KvCacheType::Unknown(41..=43));
         if kv_k_mib > 0.0 || kv_v_mib > 0.0 {
             println!("  KV memory:     K={:.0} MiB, V={:.0} MiB", kv_k_mib, kv_v_mib);
-        }
-        if is_tq {
-            println!("  TurboQuant:    active (experimental)");
         }
         if web {
             println!("  Web browsing:  enabled (URLs in messages are fetched and injected)");
