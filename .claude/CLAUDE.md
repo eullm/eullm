@@ -136,6 +136,37 @@ With both, an S3 outage costs minutes (no cache), not hours (failed release).
 A mid-build cache GET/PUT failure is already non-fatal — sccache treats it as a
 miss and compiles locally. The only hard-fail was daemon *startup*, now guarded.
 
+### Three launcher vars, not two: CUDA needs sccache too
+
+Setting only `CMAKE_C_COMPILER_LAUNCHER=sccache` + `CMAKE_CXX_COMPILER_LAUNCHER=sccache`
+**caches C/C++ but silently leaves nvcc invocations uncached**. The heavy
+CUDA kernel template instantiations (`fattn-vec-instance-*.cu`,
+`template-instances/*.cu`, dozens per K/V cache type combination in
+TurboQuant) compile from scratch on every release. Result: sccache stats
+show 99% hit rate (on C/C++ only) but wall-clock stays at cold-build values
+because the actual long-pole is nvcc, not g++.
+
+**Mandatory third var alongside the other two:**
+
+```yaml
+CMAKE_CUDA_COMPILER_LAUNCHER=sccache
+```
+
+Set it in every `Install sccache` step that's followed by a CUDA build —
+both bash (Linux) and pwsh (Windows). Setting it on non-CUDA jobs is
+harmless (CMake just doesn't reference it).
+
+How to spot the issue from sccache stats: look at "Cache hits (C/C++)"
+and "Cache hits (Rust)" — if there is no separate "Cache hits (CUDA)"
+line and the long-pole build wall-clock is multi-hour, you forgot the
+CUDA launcher. v0.5.7 burned this: 387 hits, 0.282s avg read, but
+1h 41m Linux CUDA TQ wall-clock because nvcc bypassed the wrapper.
+Fixed in v0.5.8.
+
+The first run after enabling the CUDA launcher is still a cold build
+(populates the cache), so the *real* speedup only shows on the run
+*after* that.
+
 
 ## What is EULLM
 
