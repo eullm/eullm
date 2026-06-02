@@ -113,6 +113,7 @@ jobs:
             echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
             echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "sccache: S3 backend reachable — caching enabled."
           else
             echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
@@ -214,6 +215,7 @@ jobs:
             echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
             echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "sccache: S3 backend reachable — caching enabled."
           else
             echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
@@ -329,6 +331,7 @@ jobs:
             echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
             echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "sccache: S3 backend reachable — caching enabled."
           else
             echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
@@ -470,6 +473,7 @@ jobs:
             echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
             echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
             echo "sccache: S3 backend reachable — caching enabled."
           else
             echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
@@ -560,6 +564,7 @@ jobs:
               "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
               "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
               "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
               sccache --start-server
               Write-Host "sccache: S3 backend reachable — caching enabled."
           } else {
@@ -641,6 +646,7 @@ jobs:
               "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
               "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
               "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
               sccache --start-server
               Write-Host "sccache: S3 backend reachable — caching enabled."
           } else {
@@ -761,6 +767,7 @@ jobs:
               "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
               "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
               "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
               sccache --start-server
               Write-Host "sccache: S3 backend reachable — caching enabled."
           } else {

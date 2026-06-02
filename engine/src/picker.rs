@@ -22,7 +22,9 @@ pub enum Picked {
     /// A `.gguf` already on disk — just run it.
     Local(PathBuf),
     /// A catalog entry — may need to be downloaded before running.
-    Catalog(CatalogEntry),
+    /// Boxed because `CatalogEntry` is much larger than the other variants
+    /// (clippy::large_enum_variant) and we only allocate one at user choice.
+    Catalog(Box<CatalogEntry>),
     /// A direct URL the user pasted — download then run.
     Url(String),
     /// User chose to quit.
@@ -223,7 +225,7 @@ fn prompt_user(locals: &[LocalModel], catalog_models: &[CatalogEntry]) -> Picked
         {
             return match &index[n - 1] {
                 MenuItem::Local(i) => Picked::Local(locals[*i].path.clone()),
-                MenuItem::Catalog(i) => Picked::Catalog(catalog_models[*i].clone()),
+                MenuItem::Catalog(i) => Picked::Catalog(Box::new(catalog_models[*i].clone())),
             };
         }
 
