@@ -241,7 +241,7 @@ impl BatchScheduler {
 /// Build a human-readable hint for context allocation failures.
 ///
 /// Suggests smaller `--ctx-size` values and, if the requested size is large,
-/// points the user towards TurboQuant KV cache to reduce VRAM usage.
+/// recommends quantizing the KV cache to cut VRAM use.
 fn ctx_oom_hint(requested_tokens: u32) -> String {
     let smaller = [requested_tokens / 2, requested_tokens / 4]
         .iter()
@@ -250,15 +250,15 @@ fn ctx_oom_hint(requested_tokens: u32) -> String {
         .collect::<Vec<_>>()
         .join("  or  ");
 
-    let tq_tip = if requested_tokens >= 8192 {
-        "\n  Use --cache-type-k tbqp3 --cache-type-v tbq3 (TurboQuant) to cut KV-cache VRAM by ~5×."
+    let kv_tip = if requested_tokens >= 8192 {
+        "\n  Or quantize the KV cache: --cache-type-k q4_0 --cache-type-v q4_0 (cuts KV-cache VRAM by ~4×)."
     } else {
         ""
     };
 
     format!(
         "  Requested context: {requested_tokens} tokens — KV cache likely exceeds available VRAM.\
-        \n  Try a smaller context: {smaller}{tq_tip}"
+        \n  Try a smaller context: {smaller}{kv_tip}"
     )
 }
 
@@ -274,7 +274,6 @@ fn run_scheduler_loop(
     ready_tx: std::sync::mpsc::Sender<Result<ModelReadyInfo, String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     super::check_gpu_support(config.gpu_layers);
-    super::log_turboquant_status();
 
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let mut backend = LlamaBackend::init()?;
@@ -321,7 +320,7 @@ fn run_scheduler_loop(
     let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
         || config.cache_type_v != super::KvCacheType::F16;
 
-    // Detect mixed TurboQuant types (e.g. K=tq4_0, V=tq3_0) for fallback logic.
+    // Mixed unknown KV types (carry-through to raw GGML IDs) — fallback logic.
     let has_mixed_tq = matches!(
         (&config.cache_type_k, &config.cache_type_v),
         (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v)) if k != v
@@ -850,14 +849,6 @@ fn cache_type_bytes_per_elem(ct: &super::KvCacheType) -> f64 {
         super::KvCacheType::Q4_1 => 20.0 / 32.0,
         super::KvCacheType::Q5_0 => 22.0 / 32.0,
         super::KvCacheType::Q5_1 => 24.0 / 32.0,
-        // TurboQuant v1.5.3 (AmesianX fork): IDs 42–61.
-        // Q1_0=41 was inserted before the TBQ block in v1.5.3, shifting all
-        // IDs by +1 vs v1.5.2.  Within the TBQ block the pattern repeats
-        // every 4: TBQ3_x=42+4k, TBQ4_x=43+4k, TBQP3_x=44+4k, TBQP4_x=45+4k.
-        // Even IDs → 3-bit (0.375 B/elem); odd IDs → 4-bit (0.5 B/elem).
-        super::KvCacheType::Unknown(id @ 42..=61) => {
-            if id % 2 == 0 { 0.375 } else { 0.5 }
-        }
         _ => 2.0, // default to F16
     }
 }

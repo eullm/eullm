@@ -57,7 +57,7 @@ Open an issue tagged `enhancement`. Describe the use case, not just the solution
 | **Docs** | Translations (Italian, German, French, Spanish) | Easy |
 | **Docs** | Tutorials, blog posts, video walkthroughs | Medium |
 | **Engine** | Ollama API parity — find missing endpoints/fields | Medium |
-| **Engine** | TurboQuant benchmarks on different GPUs | Medium |
+| **Engine** | Benchmark quantized KV cache (Q4_0/Q5_0/Q8_0) at long contexts on different GPUs | Medium |
 | **Forge** | Test pruning/distillation pipeline on new models | Hard |
 | **Forge** | New domain profiles (legal-de, medical-it, etc.) | Hard |
 

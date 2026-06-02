@@ -11,8 +11,8 @@
   <a href="#the-solution">Engine</a> ·
   <a href="#benchmarks--continuous-batching-scaling">Benchmarks</a> ·
   <a href="#why-eullm">Why EULLM</a> ·
-  <a href="#turboquant-kv-cache-compression-experimental">TurboQuant</a> ·
   <a href="#planned-verticalized-models-q4-2026-roadmap">Roadmap</a> ·
+  <a href="#research--experiments">Research</a> ·
   <a href="#contributing">Contributing</a> ·
   <a href="https://eullm.eu">Website</a>
 </p>
@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.5.5%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.5.8%20%E2%80%94%20usable%20today-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -54,23 +54,19 @@ curl http://localhost:11434/v1/chat/completions \
 |----------|------|:------:|-------|
 | 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
 | 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | ✅ Tested | RTX 3000/4000/5000 |
-| 🐧 Linux x64 (NVIDIA + TurboQuant) | `eullm-linux-x64-cuda12.8-turboquant-exp` | ✅ Tested | 4× context length 🔥 |
 | 🐧 Linux ARM64 | `eullm-linux-arm64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | RPi 4/5, Orange Pi 5+, Jetson, etc. |
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | M1/M2/M3/M4 |
-| 🍎 macOS Apple Silicon (Metal + TurboQuant) | `eullm-macos-arm64-turboquant-exp` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | M1/M2/M3/M4 |
 | 🍎 macOS Intel | `eullm-macos-x64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | Pre-Apple-Silicon Macs |
-| 🪟 **Windows 11 x64 — One-click installer (CPU)** | **`EuLLM-Setup-CPU-<version>.exe`** | ✅ Tested | **Recommended for desktop.** Start Menu, browser chat included |
-| 🪟 **Windows 11 x64 — One-click installer (NVIDIA)** | **`EuLLM-Setup-CUDA-<version>.exe`** | ✅ Tested | **Recommended for desktop with GPU.** Includes CUDA DLLs |
-| 🪟 **Windows 11 x64 — One-click installer (NVIDIA + TurboQuant)** | **`EuLLM-Setup-CUDA-TurboQuant-<version>.exe`** | ✅ Tested | **4× context length 🔥** |
-| 🪟 Windows 11 x64 (CPU, standalone) | `eullm-windows-x64.exe` | ✅ Tested | Just the binary, for CLI/server use |
-| 🪟 Windows 11 x64 (NVIDIA, standalone) | `eullm-windows-x64-cuda-12.8.zip` | ✅ Tested | ZIP bundles CUDA DLLs — extract, run |
-| 🪟 Windows 11 x64 (NVIDIA + TurboQuant, standalone) | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | ✅ Tested | – |
+| 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | ✅ Tested | Standalone binary, CLI/server |
+| 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ✅ Tested | ZIP bundles CUDA DLLs — extract, run |
 
-> **Embedded chat UI — cross-platform.** Every `eullm` binary (Linux, macOS, Windows — CPU, CUDA, Metal, all variants) ships with a built-in browser chat. Just run `eullm run model.gguf` and open **`http://localhost:11435/`** — same OpenAI/Ollama API on `:11434`, separate chat UI port `:11435` so it never collides with RAG / OpenAI-client routes on `/`. Turn it off with `--no-ui` for headless deployments.
+> **Embedded chat UI — cross-platform.** Every `eullm` binary (Linux, macOS, Windows — CPU, CUDA, Metal) ships with a built-in browser chat. Run `eullm run model.gguf` and open **`http://localhost:11435/`** — same OpenAI/Ollama API on `:11434`, separate chat UI port `:11435` so it never collides with RAG / OpenAI-client routes on `/`. Turn it off with `--no-ui` for headless deployments.
 >
-> **Windows specifics**: the **one-click installers** above wrap the same engine into an `.exe` setup that creates a Start Menu shortcut "EuLLM Chat" (with a GGUF file picker), an optional PATH entry, and a launcher that opens the chat in your default browser automatically. The **standalone** binaries are the same engine without the installer wrapping — useful for headless servers or CLI-only workflows.
+> **Interactive picker.** Run `eullm` with no arguments (or `eullm run` with no model) and you get an interactive menu listing your locally installed GGUFs and the [EuLLM model catalog](catalog/v1/catalog.json) — pick one, the engine takes care of download + launch.
 >
-> **SmartScreen note:** the Windows binaries are not yet code-signed, so first launch may show *"Windows protected your PC"*. Click **More info → Run anyway**. CUDA bundles ship the required CUDA DLLs alongside — no separate CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
+> **SmartScreen note (Windows):** the binaries are not yet code-signed, so first launch may show *"Windows protected your PC"*. Click **More info → Run anyway**. CUDA bundles ship the required CUDA DLLs alongside — no separate CUDA toolkit install needed (an up-to-date NVIDIA driver is enough).
+>
+> **One-click installer paused.** v0.5.6 shipped an Inno Setup `.exe` installer; we pulled it from v0.5.8 onwards because the SmartScreen warning, the launcher script edge cases, and the install-time PATH handling all need a redesign before re-shipping. The standalone binaries above are the supported Windows distribution.
 
 ### 🧪 Platform status / help us test
 
@@ -96,21 +92,21 @@ What you get on top of the Ollama-compatible API:
 | Capability | EULLM Engine |
 |---|---|
 | **Continuous batching** scheduler — single-pass parallel decode across all active slots, shared KV pool (no per-slot KV pre-allocation) | ✅ on by default |
-| **TurboQuant KV cache compression** — 4× context length on the same GPU (~1% accuracy delta on matrix ops only) | ✅ flag `--cache-type-k tq4_0` |
+| **Quantized KV cache** — Q4_0, Q5_0, Q5_1, Q8_0 KV types for up to ~4× context on the same GPU | ✅ flag `--cache-type-k q4_0` |
 | **AI Act audit trail** — local-only JSONL of every request/response, never transmitted | ✅ on by default |
 | **Zero telemetry** — no analytics, no crash reports, no usage stats | ✅ enforced |
 | **Single binary** — Rust, no Go runtime, no Python runtime, no Docker | ✅ |
 | **EU-hosted model registry** (Forge/Hub) | 🚧 in development |
 
-[→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm) · [→ TurboQuant](#turboquant-kv-cache-compression-experimental)
+[→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm)
 
 ## What's ready today, what's coming
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, CUDA (RTX 3000/4000/5000), TurboQuant, audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.5)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.8)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
 | **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.5)** | **Yes** — auto-opens after install on Windows |
-| **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | ✅ **Ready (v0.5.5)** | **Yes** — three variants: CPU / CUDA / CUDA+TurboQuant |
+| **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | 🚧 Paused after v0.5.6 — needs SmartScreen / launcher redesign before re-shipping | Use the standalone Windows binaries above for now |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
 | **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
@@ -141,7 +137,7 @@ EULLM is an open-source platform with three components:
 
 Run sovereign LLMs locally with **real llama.cpp inference**, built-in audit trail, and full API compatibility. Single Rust binary, no Python runtime, no Docker required.
 
-Built on llama.cpp (MIT, EU-developed) with **TurboQuant** integration — a KV cache compression algorithm published by Google Research at ICLR 2026 (implementation by AmesianX, MIT fork). Delivers ~50% KV cache memory reduction (TQ4_0) and **4x more context length** on the same hardware — 131K tokens on a 16GB consumer GPU. Trades ~19% throughput at 4 concurrent requests for ~4x more concurrent users; quality degradation ~1% (isolated to matrix operations). See the [TurboQuant section](#turboquant-kv-cache-compression-experimental) for full benchmarks.
+Built on llama.cpp (MIT, EU-developed) with the standard set of quantized KV cache types (Q4_0, Q5_0, Q5_1, Q8_0) for ~2-4× context length on the same hardware. We also evaluated TurboQuant (Walsh-Hadamard / Lloyd-Max KV compression) end-to-end during v0.5.x but pulled it from the production build path — see [Research & Experiments](#research--experiments) for the rationale and the archived numbers.
 
 ```bash
 # Run any GGUF model — local file or from the EU registry
@@ -170,7 +166,7 @@ Key features:
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
-- **[TurboQuant KV cache compression](#turboquant-kv-cache-compression-experimental)** *(experimental)* — **4x context length, 4x concurrent users.** Run Qwen3-14B with 131K context on a 16GB consumer GPU. Projected 2M+ context on H100. Saves up to EUR 180K/month on enterprise clusters
+- **Quantized KV cache** — standard llama.cpp Q4_0/Q5_0/Q5_1/Q8_0 KV types reduce memory ~2-4× at small quality cost (`--cache-type-k q4_0 --cache-type-v q4_0`). We also tested the experimental TurboQuant approach (see [Research](#research--experiments))
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64, macOS x64, macOS ARM64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
@@ -246,7 +242,7 @@ chmod +x eullm
 ./eullm run ./your-model.gguf
 ```
 
-Available for: Linux x64 ✅ · Windows x64 (CPU, CUDA, CUDA + TurboQuant) ✅ · Linux ARM64, macOS x64, macOS Apple Silicon (Intel + Metal + TurboQuant) 🧪 [community testing wanted](#-platform-status--help-us-test).
+Available for: Linux x64 (CPU, CUDA) ✅ · Windows x64 (CPU, CUDA) ✅ · Linux ARM64, macOS x64, macOS Apple Silicon (Metal) 🧪 [community testing wanted](#-platform-status--help-us-test).
 
 ### Build from source
 
@@ -366,177 +362,23 @@ Throughput scales **2.75×** from 1 to 16 concurrent requests, and with 16 activ
 
 > **Test setup:** Qwen3.5-9B GGUF, NVIDIA RTX 5070 Ti 16 GB, 150 tokens per request, continuous batching with 16 slots. Reproduce with `./bench.sh`. Methodology in [docs/benchmarks.md](docs/benchmarks.md).
 
-## TurboQuant KV Cache Compression (Experimental)
+## Research & Experiments
 
-**Demonstrated end-to-end on Windows:** Qwen3-8B at **264 000 tokens of context, 77 tok/s, on a single 16 GB consumer GPU** (RTX 5070 Ti). F16 KV would need ~37 GB — impossible on any consumer card. With TurboQuant TQ3_0, the KV cache fits in 7 GB.
+We invest some engineering time in evaluating new techniques before deciding whether to ship them. The current results live here; nothing in this section is in the production build path.
 
-> **Original headline still holds**: 14B model, 131 K context, 16 GB consumer GPU. The 264 K @ 8B demo is the practical extreme on the same hardware; below you find both curves and the trade-offs.
+### TurboQuant KV cache compression — tested, on hold
 
-### Try TurboQuant
+Between Q1 and Q2 2026 we tested integrating TurboQuant (Google Research, ICLR 2026) — a Walsh-Hadamard rotation + Lloyd-Max codebook approach to KV cache quantization — via the [AmesianX/llama.cpp](https://github.com/AmesianX/llama.cpp) fork (v1.5.3). We shipped three experimental TurboQuant variants in v0.5.x (Linux/macOS/Windows). The reproducible benchmarks (Qwen3-8B at 264 k context on a 16 GB RTX 5070 Ti, ~77 tok/s; full quality runs on the LM Eval Harness) are archived under [`bench/results/turboquant_20260329_224511/`](bench/results/turboquant_20260329_224511/) and the engineering write-ups under [`docs/turboquant-quality-report.md`](docs/turboquant-quality-report.md) and [`docs/turboquant-kv-stress-report.md`](docs/turboquant-kv-stress-report.md).
 
-```bash
-# Download (single binary, ~850MB with CUDA)
-curl -L https://github.com/eullm/eullm/releases/latest/download/eullm-linux-x64-cuda12.8-turboquant-exp -o eullm
-chmod +x eullm
+**Why it's not in v0.5.8 onwards:**
 
-# Run
-./eullm run your-model.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 --ctx-size 131072 --batch-size 16
-```
+- The technique is **not in upstream llama.cpp** — three independent PRs ([#21089](https://github.com/ggml-org/llama.cpp/pull/21089), [#23617](https://github.com/ggml-org/llama.cpp/pull/23617), [#23962](https://github.com/ggml-org/llama.cpp/pull/23962)) are either stalled, closed, or rejected, and the main maintainer has voiced skepticism about marginal quality gains over the standard Q4_0 KV cache at the same bit-width.
+- Our integration depends on a fork maintained by a single individual (`AmesianX`); production exposure to a single-maintainer fork that may diverge or be archived isn't a trade-off we want to ship under a "sovereign" engine claim.
+- The TurboQuant variant build was the long-pole of every CI release (multi-hour Windows CUDA TurboQuant) for a feature whose practical advantage over standard quantized KV cache (`--cache-type-k q4_0 --cache-type-v q4_0`) hasn't been clearly established in our quality runs.
 
-### What happens
+**If TurboQuant (or a derivative like the "rotated activations" idea in [llama.cpp #21038](https://github.com/ggml-org/llama.cpp/pull/21038)) lands upstream**, we'll get it back through a standard `llama-cpp-2` version bump — no extra engineering required from us.
 
-**Without TurboQuant** (F16 KV cache):
-```
-./eullm run qwen3-14b.gguf --ctx-size 131072
-→ CRASHED: out of VRAM (KV cache alone needs ~10 GB, model needs ~9 GB, total > 16 GB)
-```
-
-**With TurboQuant** (TQ4_0 KV cache):
-```
-./eullm run qwen3-14b.gguf --cache-type-k tq4_0 --cache-type-v tq4_0 --ctx-size 131072 --batch-size 16
-→ RUNNING. 131K context. 16 concurrent slots. All on GPU.
-```
-
-Startup output (real, from RTX 5070 Ti 16GB):
-
-```
-eullm ready.  [v0.5.5]
-  Model:         qwen3-14b
-  GPU backend:   CUDA
-  Context:       131072 total (8192 per sequence × 16 slots)
-  Flash attn:    enabled (auto-detect)
-  KV cache:      K=TQ4_0 (TurboQuant 4-bit) V=TQ4_0 (TurboQuant 4-bit)
-  KV memory:     K=2560 MiB, V=2560 MiB
-  TurboQuant:    active (experimental)
-  Mode:          continuous batching (max 16 concurrent)
-```
-
-### KV cache memory
-
-| Cache type | KV memory (K+V) | Max context (14B, 16GB GPU) |
-|:---:|:---:|:---:|
-| F16 (default) | ~10.2 GB @ 131K | **30K** (then OOM) |
-| **TQ4_0** (4-bit) | **~5.1 GB** @ 131K | **131K** |
-| **TQ3_0** (3-bit) | **~3.8 GB** @ 131K | **131K** |
-
-No compilation. No patch to llama.cpp. Download the binary, add two flags, done.
-
-### Benchmarks (RTX 5070 Ti 16GB, Qwen3-14B)
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_context_capacity.png" alt="Max context: F16=30K vs TQ4_0=131K vs TQ3_0=131K" width="720" />
-</p>
-
-| KV Cache | Max Context | Throughput @4 conc | TTFT P50 @4 conc | Result |
-|:---:|:---:|:---:|:---:|:---:|
-| F16 | 30K | 90 tok/s | 70ms | OOM above 30K |
-| **TQ4_0** | **131K** | **73 tok/s** | **87ms** | **Runs** |
-| **TQ3_0** | **131K** | **73 tok/s** | **92ms** | **Runs** |
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_throughput.png" alt="Throughput comparison" width="680" />
-</p>
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_ttft.png" alt="TTFT comparison" width="680" />
-</p>
-
-### Practical capacity curve (Qwen3-8B, RTX 5070 Ti 16 GB, Windows)
-
-Where is the wall? Same model, same GPU, three configurations of KV compression. Numbers are from a fresh end-to-end Windows run (driver 32.0.15.9186), measured in the interactive REPL with `/no_think`.
-
-| KV cache | Context | KV memory (K+V) | Total VRAM in use | Steady-state throughput |
-|:---:|:---:|:---:|:---:|:---:|
-| TQ4_0 | 132 K | 4.7 GB | ~10 GB / 16 GB | **75 tok/s** ✅ |
-| TQ4_0 | 264 K | 9.2 GB | 15.4 GB dedicated + **1.9 GB spilled to shared** | **0.5 tok/s** ❌ (PCIe swap) |
-| **TQ3_0** | **264 K** | **6.96 GB** | ~12.6 GB / 16 GB | **77 tok/s** ✅ |
-
-What this shows in plain terms:
-
-- **TQ4_0** is the sweet spot up to ~200K context on a 16 GB GPU; beyond that the KV cache pushes the driver into shared-memory fallback (Windows WDDM 2.0 keeps the process alive by spilling onto system RAM via PCIe — but every decode step now does a round-trip, and throughput collapses ~150×).
-- **TQ3_0** brings the same 264K context window down to ~7 GB of KV, leaving 3+ GB of headroom on a 16 GB card. Throughput stays in the same range as TQ4_0 (≈ -3% vs the 75 tok/s baseline of TQ4_0 @ 132K), so the cost of dropping a bit is far smaller than the cost of running out of dedicated VRAM.
-
-For comparison: the F16 cache at 264K would need ~37 GB of KV — impossible on any consumer GPU. TQ3_0 makes it fit on a €1k card.
-
-Multi-turn steady-state (TQ3_0 @ 264K, six consecutive turns, prompt size grows 27 → 419 tokens):
-
-| Turn | Prompt size | Throughput |
-|:---:|:---:|:---:|
-| 1 (cold) | 27 | 50.1 tok/s |
-| 2 | 63 | 64.4 tok/s |
-| 3 | 108 | 72.2 tok/s |
-| 4 | 234 | 77.1 tok/s |
-| 5 | 340 | 77.1 tok/s |
-| 6 | 419 | 69.6 tok/s |
-
-The first turn pays warm-up + prefill; from turn 3 onward throughput stabilizes in the **70–77 tok/s** band even as history grows.
-
-### Quality impact — at equal bit-width
-
-100 verified tests, temperature=0, fixed seed, identical prompts. **The only variable is the KV cache type.** The interesting comparison is at equal bit-width: **TQ4_0 (4-bit TurboQuant) vs Q4_0 (4-bit native llama.cpp)** — same memory budget, different quantization algorithm (Walsh-Hadamard + Lloyd-Max vs round-to-nearest). Q8_0 is included as a near-lossless reference.
-
-<p align="center">
-  <img src="bench/results/chart_quality_comparison.png" alt="KV cache quality comparison across F16, Q8_0, Q4_0, TQ4_0, TQ3_0" width="720" />
-</p>
-
-| Cache | Bits | Score | Matrix | Math | Factual | Logic | Code |
-|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| F16 (baseline) | 16 | **86%** | 18/20 | 18/20 | 15/20 | 17/20 | 18/20 |
-| Q8_0 (native) | 8 | _re-measuring_ | – | – | – | – | – |
-| Q4_0 (native) | 4 | _re-measuring_ | – | – | – | – | – |
-| **TQ4_0** (TurboQuant) | 4 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
-| TQ3_0 (TurboQuant) | 3 | **85%** | 17/20 | 18/20 | 15/20 | 17/20 | 18/20 |
-
-> The Q8_0 and Q4_0 rows are being measured with the same harness — see `bench/run_quality_arms.sh` to reproduce on your own hardware. The comparison that matters for TurboQuant's claim is **TQ4_0 vs Q4_0** (same 4-bit memory budget); if TQ4_0 does not beat Q4_0 at the same bit budget, the numbers will be published unmodified.
-
-Full test-by-test analysis: [docs/turboquant-quality-report.md](docs/turboquant-quality-report.md).
-
-### Trade-off
-
-TurboQuant trades throughput for context capacity:
-
-- **-1% accuracy** (matrix ops only, all other categories identical)
-- **~19% less tok/s** at 4 concurrent requests (73 vs 90 tok/s)
-- **4.3x more context** (131K vs 30K)
-- **4x more concurrent users** on the same GPU
-
-For RAG, long documents, and multi-turn conversations, the context gain far outweighs the speed cost.
-
-### Enterprise scaling
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_gpu_scaling.png" alt="Concurrent users per GPU" width="720" />
-</p>
-
-| GPU | VRAM | F16 slots @8K | TQ4_0 slots @8K | Gain |
-|:---:|:---:|:---:|:---:|:---:|
-| RTX 5070 Ti | 16 GB | 5 | 21 | **4x** |
-| RTX 5090 | 32 GB | 17 | 69 | **4x** |
-| A100 | 80 GB | 54 | 215 | **4x** |
-| H100 | 80 GB | 54 | 215 | **4x** |
-
-<p align="center">
-  <img src="bench/results/turboquant_20260329_224511/chart_cost_savings.png" alt="Infrastructure cost savings" width="720" />
-</p>
-
-**3000 concurrent users on H100 80GB nodes (EUR 30K/month each):**
-
-| | F16 | TQ4_0 | Saving |
-|---|:---:|:---:|:---:|
-| Nodes needed | 56 | 14 | **-75%** |
-| Monthly cost | EUR 1,680K | EUR 420K | **EUR 1,260K/month** |
-
-### What is TurboQuant
-
-Google's ICLR 2026 algorithm (Zandieh et al.). Compresses the KV cache — **not the model weights**. Applies Walsh-Hadamard Transform rotation + Lloyd-Max quantization to attention key/value states at inference time. Model weights (Q4_K_M, etc.) stay untouched. EULLM implements Stage 1 only; Stage 2 (QJL) is omitted to preserve output quality.
-
-EULLM uses [AmesianX/TurboQuant](https://github.com/AmesianX/TurboQuant) as its llama.cpp backend, which extends the original algorithm with CUDA-accelerated WHT kernels, Gemma 4 SWA architecture support, and ongoing research into attention score sharpening.
-
-Available types:
-- **TQ4_0** — 4-bit KV cache, ~50% VRAM savings, minimal quality impact
-- **TQ3_0** — 3-bit KV cache, ~62% VRAM savings, slight quality reduction
-
-> **Experimental.** TurboQuant is a working prototype. API, type names, and performance may change between releases. Not recommended for production. See [docs/engine.md](docs/engine.md) for technical details. Raw benchmark data: [bench/results/](bench/results/turboquant_20260329_224511/).
+The R&D code lives in git history at tag [`EuLLM-v0.5.7`](https://github.com/eullm/eullm/releases/tag/EuLLM-v0.5.7); the corresponding binaries remain downloadable from that release for anyone who wants to reproduce.
 
 ## Planned verticalized models (Q4 2026 roadmap)
 
@@ -581,7 +423,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 
 ### Phase 1: Engine Public (Q2 2026) — We are here
 
-* EuLLM Engine v0.x — Rust runtime + llama.cpp + TurboQuant integration
+* EuLLM Engine v0.x — Rust runtime + llama.cpp
 * OpenAI + Ollama API compatibility (drop-in replacement)
 * Single binary distribution (Linux/macOS, CUDA/ROCm/Vulkan/Metal)
 * GGUF model support, transparent web browsing, audit trail
@@ -655,7 +497,7 @@ EULLM Forge — Verticalizzazione Pipeline:
 
 | Component | Technology | Why |
 |-----------|-----------|-----|
-| Engine (CLI/Runtime) | Rust + llama.cpp + TurboQuant | Performance, single binary, 3-bit KV cache compression |
+| Engine (CLI/Runtime) | Rust + llama.cpp | Performance, single binary, quantized KV cache |
 | Forge (verticalizzazione) | Python + PyTorch + NVIDIA ModelOpt | ML ecosystem standard |
 | Hub (registry) | Rust API + S3-compatible storage | Fast, hostable on any EU cloud |
 | Website | Next.js | SSR, SEO optimized |

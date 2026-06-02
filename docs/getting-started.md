@@ -220,25 +220,6 @@ eullm run legal-it-7b
 eullm serve
 ```
 
-### Option D: Run with TurboQuant KV cache (experimental)
-
-TurboQuant compresses the KV cache using WHT rotation + Lloyd-Max quantization, enabling large models at long context lengths on consumer GPUs. For example, Qwen3-14B with 131K context on an RTX 5070 Ti 16GB — impossible with standard F16 KV cache.
-
-```bash
-# One-time setup
-./scripts/setup-turboquant.sh
-
-# Best quality — q8_0 keys + tbq4_0 values (validated 100% on Qwen3-14B)
-# Always use --ctx-size matching the model's native context (32768 for Qwen3-14B)
-eullm-tq run ./qwen3-14b-q4_k_m.gguf \
-  --ctx-size 32768 \
-  --cache-type-k q8_0 --cache-type-v tbq4_0 \
-  --batch-size 16
-```
-
-Recommended TurboQuant type: `tbq4_0` / `tbq3_0` (empirically validated on Qwen3 and Gemma 4). See [Engine documentation](engine.md) for the full type reference and ctx-size requirements.
-
-> **Note:** TurboQuant is experimental and may change between releases.
 
 ## 5. Talk to the model
 
