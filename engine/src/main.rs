@@ -4,6 +4,7 @@ mod chat_template;
 mod gguf_patch;
 mod inference;
 mod models;
+mod picker;
 mod registry;
 mod tools;
 mod ui;
@@ -55,21 +56,31 @@ const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
 #[command(about = "eullm — sovereign LLM runtime for Europe")]
 #[command(version = VERSION_STRING)]
 struct Cli {
+    /// Subcommand to run. When omitted in an interactive terminal, an
+    /// interactive picker opens so the user can choose a local model, a
+    /// catalog model, or paste a custom path/URL.
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Pull a model from the EU registry
+    /// Pull a model from the EU catalog
+    ///
+    /// With no argument in an interactive terminal, opens the picker
+    /// filtered to catalog models only.
     Pull {
-        /// Model name (e.g., general-eu-14b)
-        model: String,
+        /// Model id (e.g., qwen3-8b) — see `eullm catalog` or the picker
+        model: Option<String>,
     },
     /// Run a model locally (starts API server)
+    ///
+    /// With no argument in an interactive terminal, opens the picker so
+    /// the user can choose a local model, a catalog model, or paste a
+    /// custom path/URL.
     Run {
-        /// Model name or path to a local GGUF file
-        model: String,
+        /// Model id (catalog), path to a local GGUF file, or URL to one
+        model: Option<String>,
 
         /// Port for the API server
         #[arg(short, long, default_value_t = 11434)]
@@ -292,8 +303,56 @@ async fn main() {
         }
     };
 
-    match cli.command {
-        Commands::Pull { model } => cmd_pull(&store, &model),
+    // No subcommand at all → open the interactive picker (if TTY) and
+    // dispatch what the user chose into the regular Run flow with default
+    // settings. Non-interactive (pipe/redirect) prints a usage hint instead.
+    let cli_command = match cli.command {
+        Some(c) => c,
+        None => match picker::pick(&store).await {
+            Some(picker::Picked::Local(path)) => Commands::Run {
+                model: Some(path.to_string_lossy().into_owned()),
+                port: 11434, replace: false, gpu_layers: -1, ctx_size: 4096,
+                threads: None, batch_size: 1, no_flash_attn: false,
+                n_batch: 2048, cache_type_k: "f16".into(),
+                cache_type_v: "f16".into(), web: false, no_ui: false,
+                ui_port: 11435, daemon: false,
+                pidfile: DEFAULT_PIDFILE.into(),
+            },
+            Some(picker::Picked::Catalog(entry)) => Commands::Run {
+                model: Some(entry.id.clone()),
+                port: 11434, replace: false, gpu_layers: -1, ctx_size: 4096,
+                threads: None, batch_size: 1, no_flash_attn: false,
+                n_batch: 2048, cache_type_k: "f16".into(),
+                cache_type_v: "f16".into(), web: false, no_ui: false,
+                ui_port: 11435, daemon: false,
+                pidfile: DEFAULT_PIDFILE.into(),
+            },
+            Some(picker::Picked::Url(_url)) => {
+                eprintln!(
+                    "URL launch from picker not yet supported. \
+                     Workaround: `eullm pull <id>` from the catalog, or \
+                     download the .gguf manually and pass its path."
+                );
+                std::process::exit(2);
+            }
+            Some(picker::Picked::Quit) => return,
+            None => {
+                eprintln!("eullm — sovereign LLM runtime for Europe");
+                eprintln!();
+                eprintln!("Usage:");
+                eprintln!("  eullm run <model.gguf | catalog-id>   Run a model");
+                eprintln!("  eullm list                            List local models");
+                eprintln!("  eullm pull <catalog-id>               Download a catalog model");
+                eprintln!("  eullm --help                          Show full help");
+                eprintln!();
+                eprintln!("Tip: launch `eullm` from an interactive terminal to pick a model from a menu.");
+                std::process::exit(1);
+            }
+        },
+    };
+
+    match cli_command {
+        Commands::Pull { model } => cmd_pull_maybe(&store, model.as_deref()).await,
         Commands::Run {
             model,
             port,
@@ -312,6 +371,24 @@ async fn main() {
             daemon,
             pidfile,
         } => {
+            // `eullm run` with no model → picker, dispatch back through the same Run.
+            let model = match model {
+                Some(m) => m,
+                None => match picker::pick(&store).await {
+                    Some(picker::Picked::Local(p)) => p.to_string_lossy().into_owned(),
+                    Some(picker::Picked::Catalog(entry)) => entry.id.clone(),
+                    Some(picker::Picked::Url(_)) => {
+                        eprintln!("URL launch from picker not yet supported.");
+                        std::process::exit(2);
+                    }
+                    Some(picker::Picked::Quit) => return,
+                    None => {
+                        eprintln!("Error: missing <MODEL> argument.");
+                        eprintln!("Usage: eullm run <model.gguf | catalog-id>");
+                        std::process::exit(1);
+                    }
+                },
+            };
             // --daemon is handled at the top of main() before tokio starts.
             let _ = (daemon, pidfile);
             let mut ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
@@ -397,6 +474,31 @@ async fn main() {
     }
 }
 
+/// `eullm pull` entry point: if `model` is `None`, open the picker filtered
+/// to catalog selections; otherwise just call `cmd_pull` synchronously.
+async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
+    if let Some(name) = model {
+        cmd_pull(store, name);
+        return;
+    }
+    match picker::pick(store).await {
+        Some(picker::Picked::Catalog(entry)) => cmd_pull(store, &entry.id),
+        Some(picker::Picked::Local(p)) => {
+            println!("That model is already local: {}", p.display());
+        }
+        Some(picker::Picked::Url(_)) => {
+            eprintln!("URL pull from picker not yet supported.");
+            std::process::exit(2);
+        }
+        Some(picker::Picked::Quit) => {}
+        None => {
+            eprintln!("Error: missing <MODEL> argument.");
+            eprintln!("Usage: eullm pull <catalog-id>");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn cmd_pull(store: &ModelStore, model: &str) {
     let entry = match catalog::find_model(model) {
         Some(e) => e,
@@ -408,7 +510,7 @@ fn cmd_pull(store: &ModelStore, model: &str) {
     };
 
     // Check if already downloaded with GGUF
-    if let Some(gguf) = store.gguf_path(&entry.name) {
+    if let Some(gguf) = store.gguf_path(&entry.id) {
         println!("Model '{}' is already downloaded.", entry.name);
         println!("  GGUF: {}", gguf.display());
         println!("\nRun with: eullm run {model}");
@@ -418,7 +520,7 @@ fn cmd_pull(store: &ModelStore, model: &str) {
     println!("Pulling {} ...", entry.name);
     println!(
         "  {} | {} | ~{}GB VRAM | {}",
-        entry.description, entry.base, entry.vram_gb, entry.license
+        entry.description, entry.base(), entry.vram_gb, entry.license
     );
 
     if entry.hf_repo.is_empty() {
@@ -436,8 +538,8 @@ fn cmd_pull(store: &ModelStore, model: &str) {
     }
 
     // Download GGUF from HuggingFace
-    let short_name = entry.name.strip_prefix("eullm/").unwrap_or(&entry.name);
-    let model_dir = store.model_path(&entry.name);
+    let short_name = entry.id.as_str();
+    let model_dir = store.model_path(&entry.id);
     let gguf_dest = model_dir.join(&entry.hf_filename);
 
     println!(
@@ -507,10 +609,9 @@ fn cmd_list(store: &ModelStore) {
             println!("No models installed.");
             println!("\nAvailable models in EU catalog:");
             for entry in catalog::EU_CATALOG.iter() {
-                let short = entry.name.strip_prefix("eullm/").unwrap_or(&entry.name);
                 println!(
                     "  {:<25} {:>3}GB  {}",
-                    short, entry.vram_gb, entry.description
+                    entry.id, entry.vram_gb, entry.description
                 );
             }
             println!("\nPull with: eullm pull <model-name>");
@@ -554,12 +655,12 @@ fn cmd_show(store: &ModelStore, model: &str) {
             if let Some(entry) = catalog::find_model(model) {
                 println!("Model:       {} (not pulled)", entry.name);
                 println!("Description: {}", entry.description);
-                println!("Base:        {}", entry.base);
+                println!("Base:        {}", entry.base());
                 println!("Languages:   {}", entry.languages.join(", "));
                 println!("VRAM:        {}GB", entry.vram_gb);
                 println!("Size:        {}", format_bytes(entry.size_bytes));
                 println!("License:     {}", entry.license);
-                println!("\nPull with: eullm pull {model}");
+                println!("\nPull with: eullm pull {}", entry.id);
             } else {
                 eprintln!("Error: model '{model}' not found.");
                 std::process::exit(1);
