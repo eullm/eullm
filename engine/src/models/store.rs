@@ -46,24 +46,24 @@ impl ModelStore {
     }
 
     /// Write a manifest to disk for a pulled model.
+    ///
+    /// The on-disk directory is keyed by the catalog `id` (filesystem-safe,
+    /// stable across catalog revisions). The manifest still records the
+    /// human `name` for display.
     pub fn write_manifest(
         &self,
         entry: &CatalogEntry,
         status: &str,
         gguf_file: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let short_name = entry
-            .name
-            .strip_prefix("eullm/")
-            .unwrap_or(&entry.name);
-        let model_dir = self.root.join(short_name);
+        let model_dir = self.root.join(&entry.id);
         fs::create_dir_all(&model_dir)?;
 
         let manifest = ModelManifest {
             name: entry.name.clone(),
             description: entry.description.clone(),
             languages: entry.languages.clone(),
-            base: entry.base.clone(),
+            base: entry.base(),
             vram_gb: entry.vram_gb,
             size_bytes: entry.size_bytes,
             license: entry.license.clone(),

@@ -333,7 +333,9 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
 
     // Add catalog entries (skip duplicates if the loaded model is in the catalog)
     for m in EU_CATALOG.iter() {
-        if loaded_name.as_deref() == Some(m.name.as_str()) {
+        if loaded_name.as_deref() == Some(m.name.as_str())
+            || loaded_name.as_deref() == Some(m.id.as_str())
+        {
             // Replace the placeholder entry above with full catalog metadata
             if let Some(first) = models.first_mut() {
                 *first = json!({
@@ -342,11 +344,11 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
                     "digest": m.digest,
                     "details": {
                         "format": "gguf",
-                        "family": m.base,
-                        "parameter_size": format!("{}B", m.vram_gb * 2),
-                        "quantization_level": "Q4_K_M",
+                        "family": m.base(),
+                        "parameter_size": format!("{:.1}B", m.params_b),
+                        "quantization_level": m.quantization,
                         "domain": m.domain,
-                        "source_model": m.source_model
+                        "source_model": m.source_model()
                     }
                 });
             }
@@ -358,11 +360,11 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
             "digest": m.digest,
             "details": {
                 "format": "gguf",
-                "family": m.base,
-                "parameter_size": format!("{}B", m.vram_gb * 2),
-                "quantization_level": "Q4_K_M",
+                "family": m.base(),
+                "parameter_size": format!("{:.1}B", m.params_b),
+                "quantization_level": m.quantization,
                 "domain": m.domain,
-                "source_model": m.source_model
+                "source_model": m.source_model()
             }
         }));
     }
@@ -614,17 +616,17 @@ async fn show_model(Json(body): Json<Value>) -> Json<Value> {
         Json(json!({
             "modelfile": format!(
                 "# EULLM model: {}\n# Domain: {}\n# Base: {}\n# Source: {}\n# License: {}",
-                entry.name, entry.domain, entry.base, entry.source_model, entry.license
+                entry.name, entry.domain, entry.base(), entry.source_model(), entry.license
             ),
             "parameters": "num_ctx 4096\ntemperature 0.7",
             "template": "{{ .Prompt }}",
             "details": {
                 "format": "gguf",
-                "family": entry.base,
-                "parameter_size": format!("{}B", entry.vram_gb * 2),
-                "quantization_level": "Q4_K_M",
+                "family": entry.base(),
+                "parameter_size": format!("{:.1}B", entry.params_b),
+                "quantization_level": entry.quantization,
                 "domain": entry.domain,
-                "source_model": entry.source_model
+                "source_model": entry.source_model()
             }
         }))
     } else {
