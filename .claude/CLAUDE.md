@@ -66,6 +66,27 @@ Rationale: the long-pole `build-windows-cuda-turboquant` takes 30 min – 2h dep
 | **Windows CUDA TurboQuant** | **~2h 40min** (cold) | **~15-30 min** (warm) |
 | Windows installers (Inno Setup) | ~5 min | ~5 min |
 
+### How a release in progress looks on GitHub (don't be fooled)
+
+When the tag is pushed, GitHub creates the release **immediately** with only
+the two auto-generated source-code archives (`Source code (zip)` and
+`(tar.gz)`) → the public page shows `Assets 2` and `published_at` is set
+~seconds after the tag, even though no binary has been compiled yet.
+
+The build jobs upload their binaries to the workflow's **artifact storage**
+as each one finishes; those artifacts are visible only inside the Actions UI
+to the repo maintainer (`ci-deploy` view), not on the public release page.
+Only when the final `release` job runs (it `needs: [all builds]`, gated by
+`if: !cancelled()`) does softprops/action-gh-release attach every artifact
+to the release at once → that's the moment "Assets 2" jumps to the full set
+(13 binaries + checksums for v0.5.x).
+
+**Practical:** during a release run, looking at the public release page tells
+you nothing about progress — `Assets 2` is the steady state until the final
+job lands. To know what's actually happening, look at the Actions tab (live
+job status) or ask the maintainer (they see the artifact list early). Don't
+re-derive theories from `published_at`.
+
 ### PowerShell gotchas in Windows CI steps
 
 Two patterns to remember:
