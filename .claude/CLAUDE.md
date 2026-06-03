@@ -108,17 +108,50 @@ its own ref or the default branch. Our releases fire on **tags** (`EuLLM-v*`), a
 each tag is a different ref, so a GitHub-cache sccache **never hits across
 releases**: v0.5.11 saved 865 MiB under its tag; v0.5.12 (another tag) couldn't see
 it and rebuilt cold (38 min Linux CUDA). S3 is a **global, content-addressed**
-store with no ref boundary → it hits across every release. Proven on S3 in v0.5.9:
-129 CUDA hits, **2m34s** Linux CUDA, `Cache location: s3`. **Do NOT move the
-release workflow's sccache back to the GitHub cache** — it's architecturally
-unsuitable for tag-triggered builds. (`ci.yml`, which runs on branch pushes, is a
-different story and may use the GitHub cache fine.)
+store with no ref boundary → it hits across every release (proven on S3 in v0.5.9:
+129 CUDA hits, **2m34s** Linux CUDA, `Cache location: s3`). **Do NOT move the
+release workflow's sccache back to the GitHub cache** — architecturally
+unsuitable for tag-triggered builds.
+
+### Windows CUDA: sccache has NEVER worked, and S3 vs GitHub cache is irrelevant
+
+For Windows specifically, sccache caches **only Rust** — never C/C++, never CUDA.
+Proof from v0.5.9 (S3 + launcher fix in place, the run that fixed Linux CUDA):
+
+| 0.5.9 sccache stats | Linux CUDA | Windows CUDA |
+|---|---|---|
+| Cache hits (Rust) | 160 | 149 |
+| Cache hits (C/C++) | 223 | **0** |
+| Cache hits (CUDA) | 129 | **0** |
+| Wall-clock | 2m34s | ~50 min |
+
+**Root cause:** the CMake "Visual Studio" generator (MSBuild) silently ignores
+`CMAKE_C_COMPILER_LAUNCHER` / `CMAKE_CXX_COMPILER_LAUNCHER` /
+`CMAKE_CUDA_COMPILER_LAUNCHER`. Those work only with the Makefile and Ninja
+generators. `llama-cpp-sys-2` on Windows defaults to the VS generator, so cl.exe
+and nvcc invocations bypass sccache entirely — no cache key is ever computed,
+no object is ever stored. Switching the backend (S3, GitHub, anything) cannot
+fix this; you'd need to switch generator to Ninja (requires installing ninja +
+properly activating the MSVC env on the runner — tried, finicky) or stop
+recompiling llama.cpp on Windows at all.
+
+**Therefore Windows CUDA gets its own fix: pre-build llama.cpp as a DLL once,
+link the engine against it.** That's the `build-llama-dll.yml` workflow + the
+B2 work on `llama-cpp-sys-2`'s build.rs. With the DLL in place Windows CUDA
+release builds drop to ~5-10 min (only Rust + linking, no C++/CUDA).
+
+**Rule of method:** never claim sccache "works" on a platform without reading
+that platform's `Cache hits (C/C++)` and `Cache hits (CUDA)` lines first. Don't
+extend Linux results to Windows.
+
+### sccache resilience: keep S3 from killing the build
 
 **The deeper lesson (process):** research a cache backend's *scoping/eviction
 rules up front* before migrating. We discovered the ref-scoping by a failed
-release instead of reading the docs — costly. Two separate confounds (the missing
+release instead of reading the docs — costly. Two confounds (the missing
 `CMAKE_CUDA_COMPILER_LAUNCHER`, then the ref-scoping) made the S3 value hard to
-see; the launcher was the real long-pole, S3 was always the right backend.
+see; the launcher was the real long-pole on Linux, S3 was always the right
+backend for tag-triggered release builds.
 
 **`SCCACHE_IDLE_TIMEOUT: "0"`** + a reachability probe before enabling the wrapper
 stay (so an S3 blip degrades to a cache-less build instead of killing it).
