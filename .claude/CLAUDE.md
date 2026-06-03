@@ -18,7 +18,7 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 ### `.github/workflows/release-engine.yml`
 - All `build` matrix jobs use `Swatinem/rust-cache@v2` keyed by target triple.
 - `build-cuda` (container-based) uses `actions/cache` manually (Swatinem doesn't work in containers) for: cargo registry, `target/`.
-- sccache routes C/C++/CUDA compile through the EU S3 backend (see the sccache subsections below).
+- sccache routes C/C++/CUDA compile through the **GitHub Actions cache** (`SCCACHE_DIR=$GITHUB_WORKSPACE/.sccache`, persisted by an `actions/cache` step keyed `sccache-<job>-<sha>`). See the sccache subsections below.
 
 ### TurboQuant removed in v0.5.8 (history note)
 
@@ -96,43 +96,30 @@ Two patterns to remember:
 
 The `installer-preflight` job in `ci.yml` compiles all 3 installers with dummy 100-byte staging files on every push. **Trust it, don't bypass it.** Two bugs (`$env:ProgramFiles(x86)` then `{userprofile}`) ate two 2h+ release builds before this preflight existed. Inno Setup has no built-in `{userprofile}` constant — use `{userdocs}` or `{%USERPROFILE}` for the user's home area. Full list of built-ins: https://jrsoftware.org/ishelp/index.php?topic=consts
 
-### sccache S3 endpoint: use a public-CA TLS cert, NOT self-signed
+### sccache uses the GitHub Actions cache (NOT a self-hosted S3 backend)
 
-The sccache S3 backend lives on MinIO (`127.0.0.1:9000`, plain HTTP) behind an
-Apache reverse proxy at **`https://ci.eullm.eu`** with a **Let's Encrypt**
-certificate. Set the `SCCACHE_ENDPOINT` secret to `https://ci.eullm.eu` (port
-443, no `:9443`). Because the cert chains to a public CA, every runner OS trusts
-it out of the box — **no per-OS cert-import steps**, no `.github/sccache-ca.crt`,
-no `SSL_CERT_FILE`.
+Each build job sets `SCCACHE_DIR=$GITHUB_WORKSPACE/.sccache` (exported in the
+shell so `--start-server` uses it) and persists that dir with an `actions/cache`
+step keyed `sccache-<job>-<sha>` + a `sccache-<job>-` restore-keys prefix.
+`Cache location` in the stats reads `Local disk: …/.sccache`. The 10 GB repo cap
+is fine now that TurboQuant is gone (2 CUDA jobs, ~900 MB sccache each).
 
-**Do NOT reintroduce self-signed cert trust steps.** We burned ~2 days on them:
-`SSL_CERT_FILE` is honoured ONLY by OpenSSL/rustls (Linux). macOS native-tls uses
-the Security framework (Keychain) and Windows uses Schannel — both ignore the env
-var. The self-signed approach silently failed sccache uploads on Windows (TLS
-probe passed but sccache used a different TLS path) and panicked all 3 macOS jobs
-at the handshake (exit 101, v0.5.4). The Let's Encrypt proxy made the entire
-problem disappear — that's the whole point. If TLS ever breaks again, fix the
-proxy/cert renewal on the server, never patch trust stores in CI.
+**History note (the expensive lesson): we ran a self-hosted MinIO/S3 backend at
+`https://ci.eullm.eu` for several v0.5.x releases and burned ~3 days on it
+(self-signed certs → Let's Encrypt proxy, TLS trust stores per-OS, a reachability
+probe, etc.). It was solving the WRONG problem.** The slow CUDA builds were never
+about cache *location* — they were the missing `CMAKE_CUDA_COMPILER_LAUNCHER`
+(nvcc bypassed sccache entirely; see the launcher subsection below). Once that was
+fixed (v0.5.9) and TurboQuant removed, GitHub's free cache was demonstrably enough
+(v0.5.11 populated 865 MiB of CUDA objects to it, `Cache write errors 0`). **Do
+NOT reintroduce an external sccache backend** unless you first PROVE, with sccache
+stats, that the GitHub cache is the actual bottleneck — not the launcher, not a
+key design issue. Diagnose with data before standing up infrastructure.
 
-### sccache must NEVER be a single point of failure (a build-killer)
-
-A remote sccache backend that's unreachable must **degrade** the build (compile
-without cache = slow), never **fail** it (exit 101 = hours wasted). Two guards,
-both in `release-engine.yml`, are mandatory:
-
-1. **`SCCACHE_IDLE_TIMEOUT: "0"`** (workflow-level env). The daemon's default
-   600s idle shutdown means on long jobs it dies mid-build; the next compile
-   spawns a fresh daemon that must re-handshake with S3, and a momentary backend
-   blip then prints `Timed out waiting for server startup` and kills the build.
-   Zero = the daemon that started successfully stays up for the whole run.
-2. **Reachability probe before enabling the wrapper.** Each `Install sccache`
-   step curls/Invoke-WebRequests `${SCCACHE_ENDPOINT}/minio/health/live` and only
-   sets `RUSTC_WRAPPER`/`CMAKE_*_COMPILER_LAUNCHER` (and runs `--start-server`)
-   if it responds. Otherwise it emits a `::warning::` and builds cache-less.
-
-With both, an S3 outage costs minutes (no cache), not hours (failed release).
-A mid-build cache GET/PUT failure is already non-fatal — sccache treats it as a
-miss and compiles locally. The only hard-fail was daemon *startup*, now guarded.
+**`SCCACHE_IDLE_TIMEOUT: "0"`** (workflow-level env) stays: the daemon's default
+600s idle shutdown can kill long jobs mid-build. Zero = the daemon that started
+stays up for the whole run. A local-disk cache has no startup race and no
+network single-point-of-failure, so the old reachability probe is gone.
 
 ### Three launcher vars, not two: CUDA needs sccache too
 
