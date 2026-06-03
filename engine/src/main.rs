@@ -133,6 +133,12 @@ enum Commands {
         #[arg(long)]
         no_ui: bool,
 
+        /// Terminal-only: don't auto-open the browser chat on startup, just
+        /// drop into the CLI REPL. (The chat UI is still served on --ui-port
+        /// unless --no-ui is also given.) Alias: --no-chat.
+        #[arg(long, visible_alias = "no-chat")]
+        cli: bool,
+
         /// Port for the embedded chat UI (separate from the API port so
         /// the API surface on --port stays pure). Default 11435.
         #[arg(long, default_value_t = 11435)]
@@ -309,7 +315,7 @@ async fn main() {
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
-                ui_port: 11435, daemon: false,
+                cli: false, ui_port: 11435, daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
@@ -318,7 +324,7 @@ async fn main() {
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
-                ui_port: 11435, daemon: false,
+                cli: false, ui_port: 11435, daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
             },
             Some(picker::Picked::Url(_url)) => {
@@ -361,6 +367,7 @@ async fn main() {
             cache_type_v,
             web,
             no_ui,
+            cli,
             ui_port,
             daemon,
             pidfile,
@@ -409,7 +416,10 @@ async fn main() {
                 ctv = inference::KvCacheType::F16;
             }
             let ui_port_opt = if no_ui { None } else { Some(ui_port) };
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt).await;
+            // Auto-open the browser chat unless the user asked for terminal-only
+            // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
+            let open_chat = !cli && ui_port_opt.is_some();
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
@@ -707,6 +717,32 @@ async fn ensure_port_available(port: u16, replace: bool) {
     }
 }
 
+/// Open `url` in the user's default browser, cross-platform. Fire-and-forget:
+/// spawns the OS handler and returns immediately (the engine keeps running).
+fn open_browser(url: &str) -> std::io::Result<()> {
+    use std::process::Command;
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        // `start` is a cmd builtin; the empty "" is the window-title argument.
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", "", url]);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+    cmd.spawn().map(|_| ())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_run(
     store: &ModelStore,
@@ -723,6 +759,7 @@ async fn cmd_run(
     cache_type_v: inference::KvCacheType,
     web: bool,
     ui_port: Option<u16>,
+    open_chat: bool,
 ) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
@@ -938,6 +975,16 @@ async fn cmd_run(
 
     // Give the API server a moment to bind.
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // Auto-open the browser chat (default). Suppressed by --cli / --no-chat
+    // (open_chat=false) or --no-ui (ui_port=None).
+    if open_chat && let Some(p) = ui_port {
+        let url = format!("http://localhost:{p}/");
+        match open_browser(&url) {
+            Ok(()) => println!("Opening chat in your browser: {url}\n  (use --cli to stay in the terminal)\n"),
+            Err(_) => println!("Open the chat in your browser: {url}\n"),
+        }
+    }
 
     if has_backend && is_tty {
         if let Some(sched) = repl_scheduler {
@@ -1429,6 +1476,11 @@ async fn interactive_chat(
 
     let mut temperature: f32 = 0.8;
     let mut max_reply_tokens: u32 = 2048;
+    // Sticky reasoning toggle. ON by default (reasoning models need it). When
+    // OFF we append the ` /no_think` soft-switch to each user turn — the
+    // mechanism the models actually honour (an injected empty <think></think>
+    // breaks reasoning models like DeepSeek-R1).
+    let mut think_mode = true;
 
     let mut history: Vec<ChatMessage> = vec![ChatMessage {
         role: "system",
@@ -1471,7 +1523,7 @@ async fn interactive_chat(
             }
         }
 
-        let input = input.trim().to_string();
+        let mut input = input.trim().to_string();
         if input.is_empty() {
             continue;
         }
@@ -1488,11 +1540,28 @@ async fn interactive_chat(
             println!("Commands:");
             println!("  /bye              Exit the chat");
             println!("  /clear            Clear conversation history");
+            println!("  /think            Enable reasoning (current: {})", if think_mode { "on" } else { "off" });
+            println!("  /no_think         Disable reasoning (sticky until /think)");
             println!("  /temp <0.0–2.0>   Set temperature (current: {temperature:.1})");
             println!("  /maxtokens <n>    Set max reply tokens (current: {max_reply_tokens})");
             println!("  /system <text>    Replace system prompt");
             println!("  /help             Show this help\n");
             continue;
+        } else if input == "/think" {
+            think_mode = true;
+            println!("Reasoning ON.\n");
+            continue;
+        } else if input == "/no_think" {
+            think_mode = false;
+            println!("Reasoning OFF (sticky — re-enable with /think).\n");
+            continue;
+        } else if let Some(rest) = input.strip_prefix("/no_think ") {
+            // Inline form: disable reasoning AND send this message.
+            think_mode = false;
+            input = rest.trim().to_string();
+        } else if let Some(rest) = input.strip_prefix("/think ") {
+            think_mode = true;
+            input = rest.trim().to_string();
         } else if let Some(val) = input.strip_prefix("/temp ") {
             match val.trim().parse::<f32>() {
                 Ok(t) if (0.0..=2.0).contains(&t) => {
@@ -1519,8 +1588,10 @@ async fn interactive_chat(
             continue;
         }
 
-        // Add user message to permanent history.
-        history.push(ChatMessage { role: "user", content: input.clone() });
+        // Add user message to permanent history. When reasoning is toggled
+        // off, append the ` /no_think` soft-switch the models actually honour.
+        let user_content = if think_mode { input.clone() } else { format!("{input} /no_think") };
+        history.push(ChatMessage { role: "user", content: user_content });
 
         // Build prompt using the model-appropriate chat template.
         // If web browsing is enabled, fetch URLs and inject content into a

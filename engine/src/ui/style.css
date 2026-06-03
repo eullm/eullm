@@ -86,7 +86,7 @@ body {
 .brand-link:hover { opacity: 0.85; }
 
 .brand-logo {
-  height: 32px;
+  height: 44px;
   width: auto;
   display: block;
 }
@@ -474,7 +474,7 @@ dialog#settings-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
 
 @media (max-width: 540px) {
   .brand-tag { display: none; }
-  .brand-logo { height: 24px; }
+  .brand-logo { height: 32px; }
   .model-picker-label { display: none; }
   .model-picker select { min-width: 140px; }
   .topbar { padding: 8px 12px; }
