@@ -1,0 +1,25 @@
+# Isolated builder crate for B1 of the Windows DLL strategy.
+#
+# Its ONLY job is to trigger llama-cpp-sys-2's build.rs with
+# LLAMA_BUILD_SHARED_LIBS=1, which compiles llama.cpp as shared libraries
+# (llama.dll + ggml*.dll on Windows) instead of static. The build-llama-dll.yml
+# workflow then harvests those DLLs + import libs + headers + bindings.rs from
+# the crate's OUT_DIR.
+#
+# Pinned to the SAME llama-cpp-sys-2 version the engine links (0.1.141, via
+# llama-cpp-2) so the produced DLL is ABI-compatible with the engine's bindgen
+# output — the whole point of B2.
+#
+# Standalone [workspace] table below makes the root eullm workspace ignore this
+# crate, so it never builds during normal engine/hub CI.
+
+[package]
+name = "llama-dll-builder"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+llama-cpp-sys-2 = { version = "=0.1.141", features = ["cuda"] }

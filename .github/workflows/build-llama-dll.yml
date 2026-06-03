@@ -1,0 +1,139 @@
+name: Build llama.cpp DLL (B1)
+
+# Isolated B1 step of the Windows DLL strategy. Produces a SHARED build of
+# llama.cpp (llama.dll + ggml*.dll) for Windows CUDA and harvests the DLLs,
+# import libs, headers and bindgen output as an artifact — WITHOUT touching the
+# engine release. Manual-only: run it from the Actions tab.
+#
+# What we're validating on the first run:
+#   1. The shared build produces clean DLLs + import (.lib) files.
+#   2. llama.dll actually EXPORTS the LLAMA_API symbols (the #1 way this fails).
+#   3. We learn the exact output layout for B2 (linking the engine against it).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Build llama.cpp as shared libraries (.dll) instead of static (.lib).
+  LLAMA_BUILD_SHARED_LIBS: "1"
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  build-windows-cuda-dll:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install LLVM (libclang for bindgen)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "17.0"
+
+      - name: Install CUDA toolkit 12.8
+        uses: Jimver/cuda-toolkit@v0.2.35
+        id: cuda-toolkit
+        with:
+          cuda: "12.8.0"
+          method: network
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/llama-dll-builder
+          key: llama-dll-windows-cuda
+
+      - uses: actions/cache@v5
+        with:
+          path: .sccache
+          key: sccache-llama-dll-windows-cuda-${{ github.sha }}
+          restore-keys: sccache-llama-dll-windows-cuda-
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $SCCACHE_VER = "0.8.0"
+          $url = "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VER/sccache-v$SCCACHE_VER-x86_64-pc-windows-msvc.tar.gz"
+          $tmp = New-Item -ItemType Directory -Path "$env:TEMP\sccache-install" -Force
+          Invoke-WebRequest -Uri $url -OutFile "$tmp\sccache.tar.gz"
+          tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
+          sccache --version
+          $env:SCCACHE_DIR = "$env:GITHUB_WORKSPACE\.sccache"
+          "SCCACHE_DIR=$env:SCCACHE_DIR" | Add-Content -Path $env:GITHUB_ENV
+          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          sccache --start-server
+
+      - name: Build llama.cpp as a shared (DLL) library
+        working-directory: tools/llama-dll-builder
+        run: cargo build --release
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+
+      - name: sccache stats
+        if: always()
+        shell: pwsh
+        run: sccache --show-stats
+
+      # ── Discovery: show exactly what the shared build produced ───────────
+      - name: Discover build output layout
+        shell: pwsh
+        run: |
+          $outRoot = Get-ChildItem -Path tools/llama-dll-builder/target/release/build -Directory -Filter "llama-cpp-sys-2-*" | Select-Object -First 1
+          Write-Host "OUT root: $($outRoot.FullName)\out"
+          Write-Host "=== all *.dll / *.lib / *.h / bindings.rs under out/ ==="
+          Get-ChildItem -Path "$($outRoot.FullName)\out" -Recurse -Include *.dll,*.lib,*.h,bindings.rs -ErrorAction SilentlyContinue |
+            Select-Object FullName, @{n='SizeKB';e={[math]::Round($_.Length/1KB)}} | Format-Table -AutoSize
+
+      # ── Validate the DLL exports the API symbols (the #1 failure mode) ───
+      - name: Verify llama.dll exports LLAMA_API symbols
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsPath = & $vswhere -latest -property installationPath
+          $dumpbin = Get-ChildItem -Path "$vsPath\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          $dll = Get-ChildItem -Path tools/llama-dll-builder/target/release/build -Recurse -Filter llama.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dll) { Write-Host "::warning::llama.dll not found — shared build may have produced a differently-named lib"; exit 0 }
+          Write-Host "dumpbin: $($dumpbin.FullName)"
+          Write-Host "dll:     $($dll.FullName)"
+          $exports = & $dumpbin.FullName /EXPORTS $dll.FullName
+          $count = ($exports | Select-String -Pattern "llama_" ).Count
+          Write-Host "=== llama_* exported symbols: $count ==="
+          $exports | Select-String -Pattern "llama_model_load|llama_decode|llama_tokenize|llama_backend_init" | ForEach-Object { Write-Host $_ }
+          if ($count -lt 1) { Write-Host "::error::llama.dll exports NO llama_* symbols — shared build needs export-macro work" }
+
+      # ── Harvest everything B2 will need ─────────────────────────────────
+      - name: Harvest DLLs + import libs + headers + bindings
+        shell: pwsh
+        run: |
+          $outRoot = (Get-ChildItem -Path tools/llama-dll-builder/target/release/build -Directory -Filter "llama-cpp-sys-2-*" | Select-Object -First 1).FullName + "\out"
+          New-Item -ItemType Directory -Force -Path dist\bin, dist\lib, dist\include | Out-Null
+          Get-ChildItem -Path $outRoot -Recurse -Filter *.dll -ErrorAction SilentlyContinue | Copy-Item -Destination dist\bin -Force
+          Get-ChildItem -Path $outRoot -Recurse -Filter *.lib -ErrorAction SilentlyContinue | Copy-Item -Destination dist\lib -Force
+          Get-ChildItem -Path $outRoot -Recurse -Filter llama.h -ErrorAction SilentlyContinue | Copy-Item -Destination dist\include -Force
+          Get-ChildItem -Path $outRoot -Recurse -Filter ggml.h -ErrorAction SilentlyContinue | Copy-Item -Destination dist\include -Force
+          Get-ChildItem -Path $outRoot -Recurse -Filter bindings.rs -ErrorAction SilentlyContinue | Copy-Item -Destination dist -Force
+          Write-Host "=== dist/ contents ==="
+          Get-ChildItem -Path dist -Recurse | Select-Object FullName, @{n='SizeKB';e={[math]::Round($_.Length/1KB)}} | Format-Table -AutoSize
+
+      - name: Upload llama.cpp DLL bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: llama-dll-windows-cuda-12.8
+          path: dist
+          if-no-files-found: warn
