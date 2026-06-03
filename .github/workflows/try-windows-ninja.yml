@@ -1,0 +1,121 @@
+name: Try Windows CUDA with Ninja (cache experiment)
+
+# Isolated experiment: rebuild the engine for Windows CUDA using the Ninja
+# CMake generator instead of MSBuild/Visual Studio. The release workflow's
+# Windows CUDA job uses the VS generator, which silently ignores
+# CMAKE_*_COMPILER_LAUNCHER — that's why sccache shows 0 Cache hits (C/C++)
+# and 0 Cache hits (CUDA) on Windows, and why every release rebuilds llama.cpp
+# from scratch (~50 min). Ninja DOES honour the LAUNCHER vars; if the build
+# works at all, sccache should cache C/C++ and CUDA the way it does on Linux.
+#
+# Pass/fail in a single look at the sccache stats at the end:
+#   - Cache hits (C/C++) > 0 AND Cache hits (CUDA) > 0  → Ninja works,
+#     swap it into release-engine.yml's Windows CUDA job.
+#   - Still 0 / 0  → Ninja doesn't fix it; the DLL strategy (B1/B2) is the
+#     only path for Windows CUDA. We learned this in 1 CI run.
+#
+# Manual-only (workflow_dispatch). Builds nothing the engine release depends
+# on — completely safe to run.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Same S3 backend the release workflow uses, so we can read what's already
+  # cached on Linux runs (mostly the Rust crates) and start populating Windows.
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+  SCCACHE_REGION: us-east-1
+  SCCACHE_S3_USE_SSL: "true"
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  SCCACHE_IDLE_TIMEOUT: "0"
+
+jobs:
+  build-windows-cuda-ninja:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install LLVM (libclang for bindgen)
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "17.0"
+
+      - name: Install Ninja
+        run: choco install ninja --no-progress --yes
+        shell: pwsh
+
+      - name: Install CUDA toolkit 12.8
+        uses: Jimver/cuda-toolkit@v0.2.35
+        id: cuda-toolkit
+        with:
+          cuda: "12.8.0"
+          method: network
+
+      # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
+      # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
+      # for MSBuild. The ilammar/msvc-dev-cmd action wraps vcvars64.bat and
+      # exports PATH + INCLUDE + LIB into $GITHUB_ENV so every later step
+      # (incl. cargo build calling cmake → Ninja → cl.exe) sees it.
+      - name: Activate MSVC x64 dev environment
+        uses: ilammar/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ninja-test-x86_64-pc-windows-msvc-cuda-12.8
+
+      - name: Install sccache
+        shell: pwsh
+        run: |
+          $SCCACHE_VER = "0.8.0"
+          $url = "https://github.com/mozilla/sccache/releases/download/v$SCCACHE_VER/sccache-v$SCCACHE_VER-x86_64-pc-windows-msvc.tar.gz"
+          $tmp = New-Item -ItemType Directory -Path "$env:TEMP\sccache-install" -Force
+          Invoke-WebRequest -Uri $url -OutFile "$tmp\sccache.tar.gz"
+          tar -xzf "$tmp\sccache.tar.gz" -C "$tmp"
+          $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
+          Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
+          sccache --version
+          # Quick probe — S3 reachable from the runner?
+          $reachable = $false
+          try {
+              Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              $reachable = $true
+          } catch { $reachable = $false }
+          if (-not $reachable) {
+              Write-Host "::warning::S3 unreachable — running cache-less (still tells us if Ninja routes through the launcher vars)"
+          }
+          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+          # THE experiment: force Ninja instead of the VS generator.
+          "CMAKE_GENERATOR=Ninja" | Add-Content -Path $env:GITHUB_ENV
+          sccache --start-server
+
+      - name: Build engine with CUDA via Ninja
+        shell: pwsh
+        run: cargo build --release --target x86_64-pc-windows-msvc --features cuda -p eullm-engine
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+          # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+
+      - name: sccache stats — the verdict
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "=== If 'Cache hits (C/C++)' and/or 'Cache hits (CUDA)' are > 0, Ninja works on Windows. ==="
+          sccache --show-stats
