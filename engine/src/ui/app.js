@@ -28,8 +28,17 @@
     system: "",
     temperature: 0.7,
     maxTokens: 2048,
-    think: false,
+    // Reasoning ON by default. Reasoning models (DeepSeek-R1, QwQ) are trained
+    // to always emit a <think> block; suppressing it (think:false injects an
+    // empty <think></think>) makes them degenerate into a canned greeting.
+    think: true,
   };
+
+  // Strip <think>…</think> from an assistant turn before storing it in history.
+  // Re-sending the model's own reasoning back as context confuses reasoning
+  // models and bloats the prompt; only the final answer belongs in history.
+  const stripThink = (s) =>
+    s.replace(/<think>[\s\S]*?<\/think>\s*/g, "").replace(/<think>[\s\S]*$/, "").trim();
 
   const history = []; // {role, content}
   let currentModel = "";
@@ -237,7 +246,7 @@
         }
       }
 
-      history.push({ role: "assistant", content: assistantText });
+      history.push({ role: "assistant", content: stripThink(assistantText) || assistantText });
       const dt = (performance.now() - t0) / 1000;
       const tps = tokenCount > 0 ? (tokenCount / dt).toFixed(1) : "—";
       metaEl.innerHTML = `<span>${tokenCount} chunks</span><span>${dt.toFixed(2)}s</span><span>~${tps} chunk/s</span>`;

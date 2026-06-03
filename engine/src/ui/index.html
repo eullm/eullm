@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <title>EuLLM Chat</title>
   <link rel="stylesheet" href="/eullm-ui/style.css">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23003399'/%3E%3Ctext x='16' y='22' font-family='system-ui,sans-serif' font-size='18' font-weight='700' fill='%23ffd700' text-anchor='middle'%3EEu%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/png" href="/eullm-ui/logo-light.png">
 </head>
 <body>
   <header class="topbar">
@@ -14,7 +14,7 @@
       <a class="brand-link" href="https://www.eullm.eu" target="_blank" rel="noopener" title="EuLLM — European Sovereign LLM Platform">
         <picture>
           <source srcset="/eullm-ui/logo-dark.png" media="(prefers-color-scheme: dark)">
-          <img class="brand-logo" src="/eullm-ui/logo-light.png" alt="EuLLM" height="32">
+          <img class="brand-logo" src="/eullm-ui/logo-light.png" alt="EuLLM" height="44">
         </picture>
       </a>
       <span class="brand-tag">Engine</span>
@@ -81,8 +81,8 @@
         <input id="settings-max-tokens" type="number" min="1" max="32000" step="1" value="2048"/>
       </label>
       <label class="row">
-        <input id="settings-think" type="checkbox"/>
-        <span>Enable reasoning mode (Qwen3 <code>&lt;think&gt;</code> blocks)</span>
+        <input id="settings-think" type="checkbox" checked/>
+        <span>Enable reasoning mode (<code>&lt;think&gt;</code> blocks — needed by DeepSeek-R1 / QwQ)</span>
       </label>
       <div class="settings-actions">
         <button type="submit" value="cancel" class="btn-secondary">Cancel</button>
