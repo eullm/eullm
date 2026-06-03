@@ -337,6 +337,17 @@ jobs:
         with:
           version: "17.0"
 
+      # Ninja is the key to caching C++/CUDA on Windows: the default CMake
+      # "Visual Studio" generator (MSBuild) silently ignores
+      # CMAKE_*_COMPILER_LAUNCHER, so cl.exe and nvcc bypass sccache entirely.
+      # Ninja honours those vars, which lets sccache content-hash every C++/CUDA
+      # compile and route it to/from S3 just like on Linux. Proven in the
+      # try-windows-ninja experiment (run #2): 205 C/C++ + 130 CUDA compiles
+      # were tracked and written to S3, vs 0 with the VS generator.
+      - name: Install Ninja
+        run: choco install ninja --no-progress --yes
+        shell: pwsh
+
       - name: Install CUDA toolkit 12.8
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
@@ -348,6 +359,34 @@ jobs:
           # from Linux ("cudart"). Providing a Linux-style allowlist makes
           # the installer exit with code 3772776473. Letting Jimver install
           # the default set (~5 GB) is the most reliable path on Windows.
+
+      # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
+      # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
+      # for MSBuild. We invoke vcvars64.bat directly (via vswhere to find the
+      # VS install dir) and diff the resulting environment into $GITHUB_ENV so
+      # every later step (cargo build → cmake → Ninja → cl.exe / nvcc) sees it.
+      - name: Activate MSVC x64 dev environment
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -property installationPath
+          if (-not $installPath) { throw "vswhere did not find a Visual Studio install" }
+          $vcvars = "$installPath\VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+          Write-Host "Activating: $vcvars"
+          $envBefore = @{}
+          foreach ($e in (Get-ChildItem env:)) { $envBefore[$e.Name] = $e.Value }
+          $output = cmd /c "`"$vcvars`" >NUL 2>&1 && set"
+          foreach ($line in $output) {
+              if ($line -match "^([^=]+)=(.*)$") {
+                  $name = $matches[1]
+                  $value = $matches[2]
+                  if ($envBefore[$name] -ne $value) {
+                      "$name=$value" | Add-Content -Path $env:GITHUB_ENV
+                  }
+              }
+          }
+          Write-Host "MSVC env activated."
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -392,6 +431,10 @@ jobs:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+          # Force the Ninja generator (instead of the default VS/MSBuild one)
+          # so sccache actually sees cl.exe + nvcc invocations and can cache
+          # them — see "Install Ninja" step above for the full rationale.
+          CMAKE_GENERATOR: Ninja
 
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()

@@ -113,10 +113,14 @@ store with no ref boundary → it hits across every release (proven on S3 in v0.
 release workflow's sccache back to the GitHub cache** — architecturally
 unsuitable for tag-triggered builds.
 
-### Windows CUDA: sccache has NEVER worked, and S3 vs GitHub cache is irrelevant
+### Windows CUDA: Ninja generator + S3 sccache (working as of v0.5.14)
 
-For Windows specifically, sccache caches **only Rust** — never C/C++, never CUDA.
-Proof from v0.5.9 (S3 + launcher fix in place, the run that fixed Linux CUDA):
+For years before v0.5.14, Windows CUDA was the long-pole of every release
+(~50 min cold, no warm path). The diagnosis sat in two layers and was only
+fully unblocked with a generator swap, not a backend swap.
+
+**Layer 1 — the diagnosis (proven on v0.5.9, S3 + CUDA launcher fix in place):**
+sccache cached **only Rust** on Windows, never C/C++, never CUDA.
 
 | 0.5.9 sccache stats | Linux CUDA | Windows CUDA |
 |---|---|---|
@@ -125,24 +129,55 @@ Proof from v0.5.9 (S3 + launcher fix in place, the run that fixed Linux CUDA):
 | Cache hits (CUDA) | 129 | **0** |
 | Wall-clock | 2m34s | ~50 min |
 
-**Root cause:** the CMake "Visual Studio" generator (MSBuild) silently ignores
+Root cause: the CMake "Visual Studio" generator (MSBuild) **silently ignores**
 `CMAKE_C_COMPILER_LAUNCHER` / `CMAKE_CXX_COMPILER_LAUNCHER` /
 `CMAKE_CUDA_COMPILER_LAUNCHER`. Those work only with the Makefile and Ninja
 generators. `llama-cpp-sys-2` on Windows defaults to the VS generator, so cl.exe
 and nvcc invocations bypass sccache entirely — no cache key is ever computed,
-no object is ever stored. Switching the backend (S3, GitHub, anything) cannot
-fix this; you'd need to switch generator to Ninja (requires installing ninja +
-properly activating the MSVC env on the runner — tried, finicky) or stop
-recompiling llama.cpp on Windows at all.
+no object is ever stored. Switching the cache backend (S3, GitHub, anything)
+cannot fix this; the launcher contract is at the generator level.
 
-**Therefore Windows CUDA gets its own fix: pre-build llama.cpp as a DLL once,
-link the engine against it.** That's the `build-llama-dll.yml` workflow + the
-B2 work on `llama-cpp-sys-2`'s build.rs. With the DLL in place Windows CUDA
-release builds drop to ~5-10 min (only Rust + linking, no C++/CUDA).
+**Layer 2 — the fix (proven on the try-windows-ninja experiment, run #2):**
+force `CMAKE_GENERATOR=Ninja` in the Windows CUDA job. Three small changes:
+
+1. `choco install ninja` (the binary must be on PATH before cargo builds).
+2. Activate MSVC x64 dev env via `vcvars64.bat` (found via `vswhere`).
+   Plain `windows-2022` runners do NOT activate it — that's only set up for
+   MSBuild. Without this, Ninja can't find `cl.exe` / `nvcc`.
+3. `CMAKE_GENERATOR: Ninja` as an env on the cargo build step.
+
+Experiment proof (build engine, cold):
+
+| Generator | Tracked by sccache | Wall-clock | Outcome |
+|---|---|---|---|
+| VS / MSBuild | 0 (no C/C++ line, no CUDA line in stats) | ~36 min | Re-builds from scratch forever |
+| **Ninja** | **205 C/C++ + 130 CUDA written to S3** | ~36 min | **Cache populated → next build warm** |
+
+After the experiment populated S3, the projection for the **second** Ninja
+build on Windows CUDA is ~5–10 min, mirroring exactly the Linux CUDA jump from
+0.5.9 (populate, 2m34s with hits) to 0.5.13 (rebuild, 2m47s with hits).
 
 **Rule of method:** never claim sccache "works" on a platform without reading
 that platform's `Cache hits (C/C++)` and `Cache hits (CUDA)` lines first. Don't
 extend Linux results to Windows.
+
+### Windows DLL strategy (B1) — still useful, no longer urgent
+
+The `build-llama-dll.yml` workflow + B2 (patching `llama-cpp-sys-2`'s build.rs
+to link a prebuilt DLL) was conceived when Ninja-on-Windows was thought
+intractable. With v0.5.14 the urgency is gone, but two values remain:
+
+- **Smaller release ZIPs**: linking against a separately-published DLL means
+  `eullm.exe` shrinks dramatically (the bulk of llama.cpp lives in the DLL).
+- **Self-update path**: updating the DLL independently of the engine binary
+  enables in-place llama.cpp upgrades without recompiling Rust.
+
+Treat B1/B2 as a future feature, not a speed fix. The B1 run #1 artefact
+(`llama-dll-windows-cuda-12.8.zip`, 122 MB) is already proven valid: 231
+`llama_*` symbols exported, all 5 critical ones (`llama_backend_init`,
+`llama_decode`, `llama_model_load_from_file`, `llama_model_load_from_splits`,
+`llama_tokenize`), plus `bindings.rs` already produced by bindgen — meaning
+B2 can skip the bindgen step entirely when it eventually lands.
 
 ### sccache resilience: keep S3 from killing the build
 
