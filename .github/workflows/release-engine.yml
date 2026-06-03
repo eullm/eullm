@@ -20,20 +20,25 @@ env:
   # Node 20 is forced off.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-  # ── sccache → GitHub Actions cache backend ─────────────────────────────
-  # Each job points SCCACHE_DIR at $GITHUB_WORKSPACE/.sccache and persists it
-  # with an actions/cache step. sccache is content-addressed, so this object
-  # cache for C/C++/CUDA/Rust survives Cargo.lock bumps (unlike the target/
-  # cache, which is keyed on Cargo.lock and misses on every version bump).
-  #
-  # Moved off the external S3/MinIO backend (ci.eullm.eu) in v0.5.x: the slow
-  # CUDA builds were never about cache *location* — they were the missing
-  # CMAKE_CUDA_COMPILER_LAUNCHER (nvcc bypassed sccache entirely). With that
-  # fixed and TurboQuant removed (fewer/smaller caches), GitHub's free cache
-  # is enough, and we drop a self-hosted server + its maintenance.
-  #
-  # Keep the daemon alive for the whole build (default 600s idle shutdown can
-  # kill long jobs mid-build); a local-disk cache never has a startup race.
+  # ── sccache → S3 backend on EU-hosted MinIO (ci.eullm.eu) ──────────────
+  # WHY S3 and not GitHub's free Actions cache: the Actions cache is
+  # REF-SCOPED. A run triggered by a tag (our releases fire on EuLLM-v*) can
+  # only restore caches saved on that same tag ref or on the default branch —
+  # NOT caches saved by other tags. So a GitHub-cache sccache never hits across
+  # releases: v0.5.11 populated 865 MiB under its tag, v0.5.12 (different tag)
+  # couldn't see it and rebuilt cold (38 min Linux CUDA). S3 is a GLOBAL,
+  # content-addressed store with no ref boundary → it hits across every release
+  # (proven in v0.5.9: 129 CUDA hits, 2m34s Linux CUDA, "Cache location: s3").
+  # Do NOT move sccache back to the GitHub cache for the release workflow.
+  SCCACHE_BUCKET: ${{ secrets.SCCACHE_BUCKET }}
+  SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+  SCCACHE_REGION: us-east-1
+  SCCACHE_S3_USE_SSL: "true"
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  # Keep the sccache daemon alive for the WHOLE build (default 600s idle
+  # shutdown can kill long jobs mid-build, then a fresh daemon re-handshakes
+  # with S3 and a blip prints "Timed out waiting for server startup").
   SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
@@ -68,13 +73,8 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # Persist the sccache object cache across runs (content-addressed, so it
-      # survives Cargo.lock bumps). Restore before the daemon starts.
-      - uses: actions/cache@v5
-        with:
-          path: .sccache
-          key: sccache-${{ matrix.target }}-${{ github.sha }}
-          restore-keys: sccache-${{ matrix.target }}-
+      # sccache now uses S3 backend on our EU-hosted MinIO — no local
+      # actions/cache layer needed. See workflow-level env block for config.
 
       - name: Install sccache
         shell: bash
@@ -97,15 +97,21 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          # Enable sccache (GitHub Actions cache backend via SCCACHE_DIR, which
-          # an actions/cache step persists). Export in the current shell too so
-          # the `sccache --start-server` below uses the right dir.
-          export SCCACHE_DIR="$GITHUB_WORKSPACE/.sccache"
-          echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          # Route compiler invocations through sccache (configured via the
+          # workflow-level SCCACHE_BUCKET / SCCACHE_ENDPOINT env vars).
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it. (v0.5.5 died at exit 101 when the endpoint
+          # vanished mid-build; this is the belt to that suspenders.)
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
           sccache --version
           sccache --start-server || true
           sccache --show-stats || true
@@ -183,14 +189,7 @@ jobs:
           key: target-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: target-cuda-${{ matrix.cuda }}-
 
-      # Persist the sccache object cache (content-addressed; survives
-      # Cargo.lock bumps, unlike target/). This is the layer that keeps the
-      # heavy nvcc CUDA kernels warm across releases.
-      - uses: actions/cache@v5
-        with:
-          path: .sccache
-          key: sccache-linux-cuda-${{ matrix.cuda }}-${{ github.sha }}
-          restore-keys: sccache-linux-cuda-${{ matrix.cuda }}-
+      # sccache now uses S3 backend (see workflow-level env block)
 
       - name: Install sccache
         run: |
@@ -202,15 +201,19 @@ jobs:
           find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
           chmod +x /usr/local/bin/sccache
           rm -rf "${TMPSC}"
-          # Enable sccache (GitHub Actions cache backend via SCCACHE_DIR, which
-          # an actions/cache step persists). Export in the current shell too so
-          # the `sccache --start-server` below uses the right dir.
-          export SCCACHE_DIR="$GITHUB_WORKSPACE/.sccache"
-          echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
-          echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> "$GITHUB_ENV"
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it. (v0.5.5 died at exit 101 when the endpoint
+          # vanished mid-build; this is the belt to that suspenders.)
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
           sccache --version
           sccache --start-server || true
 
@@ -268,11 +271,7 @@ jobs:
         with:
           key: x86_64-pc-windows-msvc
 
-      - uses: actions/cache@v5
-        with:
-          path: .sccache
-          key: sccache-windows-${{ github.sha }}
-          restore-keys: sccache-windows-
+      # sccache now uses S3 backend (see workflow-level env block)
 
       - name: Install sccache
         shell: pwsh
@@ -285,16 +284,24 @@ jobs:
           $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
           Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
           sccache --version
-          # Enable sccache (GitHub Actions cache backend via SCCACHE_DIR, which
-          # an actions/cache step persists). Set it in this shell too so the
-          # --start-server below uses the right dir.
-          $env:SCCACHE_DIR = "$env:GITHUB_WORKSPACE\.sccache"
-          "SCCACHE_DIR=$env:SCCACHE_DIR" | Add-Content -Path $env:GITHUB_ENV
-          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          sccache --start-server
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it (cf. v0.5.5: endpoint gone mid-build → exit 101).
+          $reachable = $false
+          try {
+              Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              $reachable = $true
+          } catch { $reachable = $false }
+          if ($reachable) {
+              "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              sccache --start-server
+              Write-Host "sccache: S3 backend reachable — caching enabled."
+          } else {
+              Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          }
 
       - name: Build engine
         run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
@@ -346,11 +353,7 @@ jobs:
         with:
           key: x86_64-pc-windows-msvc-cuda-12.8
 
-      - uses: actions/cache@v5
-        with:
-          path: .sccache
-          key: sccache-windows-cuda-${{ github.sha }}
-          restore-keys: sccache-windows-cuda-
+      # sccache now uses S3 backend (see workflow-level env block)
 
       - name: Install sccache
         shell: pwsh
@@ -363,16 +366,24 @@ jobs:
           $exe = Get-ChildItem -Path $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
           Copy-Item $exe.FullName -Destination "C:\Windows\System32\sccache.exe"
           sccache --version
-          # Enable sccache (GitHub Actions cache backend via SCCACHE_DIR, which
-          # an actions/cache step persists). Set it in this shell too so the
-          # --start-server below uses the right dir.
-          $env:SCCACHE_DIR = "$env:GITHUB_WORKSPACE\.sccache"
-          "SCCACHE_DIR=$env:SCCACHE_DIR" | Add-Content -Path $env:GITHUB_ENV
-          "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
-          sccache --start-server
+          # Only route compilers through sccache if the S3 backend is actually
+          # reachable. A backend outage must degrade to a cache-less (slower)
+          # build, never fail it (cf. v0.5.5: endpoint gone mid-build → exit 101).
+          $reachable = $false
+          try {
+              Invoke-WebRequest -Uri "${env:SCCACHE_ENDPOINT}/minio/health/live" -UseBasicParsing -TimeoutSec 10 | Out-Null
+              $reachable = $true
+          } catch { $reachable = $false }
+          if ($reachable) {
+              "RUSTC_WRAPPER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_C_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CXX_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" | Add-Content -Path $env:GITHUB_ENV
+              sccache --start-server
+              Write-Host "sccache: S3 backend reachable — caching enabled."
+          } else {
+              Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          }
 
       - name: Build engine with CUDA
         shell: pwsh

@@ -18,7 +18,7 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 ### `.github/workflows/release-engine.yml`
 - All `build` matrix jobs use `Swatinem/rust-cache@v2` keyed by target triple.
 - `build-cuda` (container-based) uses `actions/cache` manually (Swatinem doesn't work in containers) for: cargo registry, `target/`.
-- sccache routes C/C++/CUDA compile through the **GitHub Actions cache** (`SCCACHE_DIR=$GITHUB_WORKSPACE/.sccache`, persisted by an `actions/cache` step keyed `sccache-<job>-<sha>`). See the sccache subsections below.
+- sccache routes C/C++/CUDA compile through an **S3 backend on EU-hosted MinIO** (`ci.eullm.eu`). NOT the GitHub Actions cache — see the sccache subsection below for why (ref-scoping).
 
 ### TurboQuant removed in v0.5.8 (history note)
 
@@ -96,30 +96,65 @@ Two patterns to remember:
 
 The `installer-preflight` job in `ci.yml` compiles all 3 installers with dummy 100-byte staging files on every push. **Trust it, don't bypass it.** Two bugs (`$env:ProgramFiles(x86)` then `{userprofile}`) ate two 2h+ release builds before this preflight existed. Inno Setup has no built-in `{userprofile}` constant — use `{userdocs}` or `{%USERPROFILE}` for the user's home area. Full list of built-ins: https://jrsoftware.org/ishelp/index.php?topic=consts
 
-### sccache uses the GitHub Actions cache (NOT a self-hosted S3 backend)
+### sccache uses an S3 backend (MinIO on ci.eullm.eu), NOT the GitHub cache
 
-Each build job sets `SCCACHE_DIR=$GITHUB_WORKSPACE/.sccache` (exported in the
-shell so `--start-server` uses it) and persists that dir with an `actions/cache`
-step keyed `sccache-<job>-<sha>` + a `sccache-<job>-` restore-keys prefix.
-`Cache location` in the stats reads `Local disk: …/.sccache`. The 10 GB repo cap
-is fine now that TurboQuant is gone (2 CUDA jobs, ~900 MB sccache each).
+The release workflow (tag-triggered) routes sccache through an S3-compatible
+MinIO bucket behind `https://ci.eullm.eu` (Let's Encrypt proxy). `SCCACHE_*`
++ `AWS_*` secrets configure it. `Cache location` in the stats reads `s3`.
 
-**History note (the expensive lesson): we ran a self-hosted MinIO/S3 backend at
-`https://ci.eullm.eu` for several v0.5.x releases and burned ~3 days on it
-(self-signed certs → Let's Encrypt proxy, TLS trust stores per-OS, a reachability
-probe, etc.). It was solving the WRONG problem.** The slow CUDA builds were never
-about cache *location* — they were the missing `CMAKE_CUDA_COMPILER_LAUNCHER`
-(nvcc bypassed sccache entirely; see the launcher subsection below). Once that was
-fixed (v0.5.9) and TurboQuant removed, GitHub's free cache was demonstrably enough
-(v0.5.11 populated 865 MiB of CUDA objects to it, `Cache write errors 0`). **Do
-NOT reintroduce an external sccache backend** unless you first PROVE, with sccache
-stats, that the GitHub cache is the actual bottleneck — not the launcher, not a
-key design issue. Diagnose with data before standing up infrastructure.
+**Why NOT the free GitHub Actions cache (learned the hard way in v0.5.11→v0.5.12):**
+GitHub's Actions cache is **ref-scoped** — a run can only restore caches saved on
+its own ref or the default branch. Our releases fire on **tags** (`EuLLM-v*`), and
+each tag is a different ref, so a GitHub-cache sccache **never hits across
+releases**: v0.5.11 saved 865 MiB under its tag; v0.5.12 (another tag) couldn't see
+it and rebuilt cold (38 min Linux CUDA). S3 is a **global, content-addressed**
+store with no ref boundary → it hits across every release (proven on S3 in v0.5.9:
+129 CUDA hits, **2m34s** Linux CUDA, `Cache location: s3`). **Do NOT move the
+release workflow's sccache back to the GitHub cache** — architecturally
+unsuitable for tag-triggered builds.
 
-**`SCCACHE_IDLE_TIMEOUT: "0"`** (workflow-level env) stays: the daemon's default
-600s idle shutdown can kill long jobs mid-build. Zero = the daemon that started
-stays up for the whole run. A local-disk cache has no startup race and no
-network single-point-of-failure, so the old reachability probe is gone.
+### Windows CUDA: sccache has NEVER worked, and S3 vs GitHub cache is irrelevant
+
+For Windows specifically, sccache caches **only Rust** — never C/C++, never CUDA.
+Proof from v0.5.9 (S3 + launcher fix in place, the run that fixed Linux CUDA):
+
+| 0.5.9 sccache stats | Linux CUDA | Windows CUDA |
+|---|---|---|
+| Cache hits (Rust) | 160 | 149 |
+| Cache hits (C/C++) | 223 | **0** |
+| Cache hits (CUDA) | 129 | **0** |
+| Wall-clock | 2m34s | ~50 min |
+
+**Root cause:** the CMake "Visual Studio" generator (MSBuild) silently ignores
+`CMAKE_C_COMPILER_LAUNCHER` / `CMAKE_CXX_COMPILER_LAUNCHER` /
+`CMAKE_CUDA_COMPILER_LAUNCHER`. Those work only with the Makefile and Ninja
+generators. `llama-cpp-sys-2` on Windows defaults to the VS generator, so cl.exe
+and nvcc invocations bypass sccache entirely — no cache key is ever computed,
+no object is ever stored. Switching the backend (S3, GitHub, anything) cannot
+fix this; you'd need to switch generator to Ninja (requires installing ninja +
+properly activating the MSVC env on the runner — tried, finicky) or stop
+recompiling llama.cpp on Windows at all.
+
+**Therefore Windows CUDA gets its own fix: pre-build llama.cpp as a DLL once,
+link the engine against it.** That's the `build-llama-dll.yml` workflow + the
+B2 work on `llama-cpp-sys-2`'s build.rs. With the DLL in place Windows CUDA
+release builds drop to ~5-10 min (only Rust + linking, no C++/CUDA).
+
+**Rule of method:** never claim sccache "works" on a platform without reading
+that platform's `Cache hits (C/C++)` and `Cache hits (CUDA)` lines first. Don't
+extend Linux results to Windows.
+
+### sccache resilience: keep S3 from killing the build
+
+**The deeper lesson (process):** research a cache backend's *scoping/eviction
+rules up front* before migrating. We discovered the ref-scoping by a failed
+release instead of reading the docs — costly. Two confounds (the missing
+`CMAKE_CUDA_COMPILER_LAUNCHER`, then the ref-scoping) made the S3 value hard to
+see; the launcher was the real long-pole on Linux, S3 was always the right
+backend for tag-triggered release builds.
+
+**`SCCACHE_IDLE_TIMEOUT: "0"`** + a reachability probe before enabling the wrapper
+stay (so an S3 blip degrades to a cache-less build instead of killing it).
 
 ### Three launcher vars, not two: CUDA needs sccache too
 
