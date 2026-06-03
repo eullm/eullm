@@ -65,13 +65,33 @@ jobs:
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
-      # for MSBuild. The ilammar/msvc-dev-cmd action wraps vcvars64.bat and
-      # exports PATH + INCLUDE + LIB into $GITHUB_ENV so every later step
-      # (incl. cargo build calling cmake → Ninja → cl.exe) sees it.
+      # for MSBuild. We invoke vcvars64.bat directly (via vswhere to find the
+      # VS install dir) and diff the resulting environment into $GITHUB_ENV so
+      # every later step (incl. cargo build → cmake → Ninja → cl.exe) sees it.
+      # No external action needed — this is what the popular MSVC-setup actions
+      # do under the hood anyway.
       - name: Activate MSVC x64 dev environment
-        uses: ilammar/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -latest -property installationPath
+          if (-not $installPath) { throw "vswhere did not find a Visual Studio install" }
+          $vcvars = "$installPath\VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found at $vcvars" }
+          Write-Host "Activating: $vcvars"
+          $envBefore = @{}
+          foreach ($e in (Get-ChildItem env:)) { $envBefore[$e.Name] = $e.Value }
+          $output = cmd /c "`"$vcvars`" >NUL 2>&1 && set"
+          foreach ($line in $output) {
+              if ($line -match "^([^=]+)=(.*)$") {
+                  $name = $matches[1]
+                  $value = $matches[2]
+                  if ($envBefore[$name] -ne $value) {
+                      "$name=$value" | Add-Content -Path $env:GITHUB_ENV
+                  }
+              }
+          }
+          Write-Host "MSVC env activated."
 
       - uses: Swatinem/rust-cache@v2
         with:
