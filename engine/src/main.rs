@@ -451,11 +451,11 @@ async fn main() {
 /// to catalog selections; otherwise just call `cmd_pull` synchronously.
 async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
     if let Some(name) = model {
-        cmd_pull(store, name);
+        cmd_pull(store, name).await;
         return;
     }
     match picker::pick(store).await {
-        Some(picker::Picked::Catalog(entry)) => cmd_pull(store, &entry.id),
+        Some(picker::Picked::Catalog(entry)) => cmd_pull(store, &entry.id).await,
         Some(picker::Picked::Local(p)) => {
             println!("That model is already local: {}", p.display());
         }
@@ -472,7 +472,7 @@ async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
     }
 }
 
-fn cmd_pull(store: &ModelStore, model: &str) {
+async fn cmd_pull(store: &ModelStore, model: &str) {
     let entry = match catalog::find_model(model) {
         Some(e) => e,
         None => {
@@ -527,8 +527,10 @@ fn cmd_pull(store: &ModelStore, model: &str) {
     let hf_filename = entry.hf_filename.clone();
     let entry_clone = entry.clone();
 
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let result = rt.block_on(async {
+    // Download directly on the current async runtime — we're already inside
+    // `#[tokio::main]`, so spawning a nested `Runtime::new().block_on()` here
+    // panics with "Cannot start a runtime from within a runtime".
+    let result = {
         use crate::registry::{download_from_huggingface, format_progress};
         use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::Arc;
@@ -546,7 +548,7 @@ fn cmd_pull(store: &ModelStore, model: &str) {
         });
 
         download_from_huggingface(&hf_repo, &hf_filename, &gguf_dest, Some(progress)).await
-    });
+    };
 
     eprintln!(); // newline after progress
 
@@ -747,7 +749,7 @@ async fn cmd_run(
         if !store.exists(model) {
             if catalog::find_model(model).is_some() {
                 println!("Model not found locally. Pulling...");
-                cmd_pull(store, model);
+                cmd_pull(store, model).await;
             } else {
                 eprintln!("Error: model '{model}' not found.");
                 eprintln!();
