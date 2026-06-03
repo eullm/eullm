@@ -464,25 +464,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          # Skip files that did not get produced (e.g. installer failed) so
-          # the release still publishes the binaries that built. The matrix
+          # Skip files that did not get produced (e.g. one build job failed)
+          # so the release still publishes the binaries that built. The matrix
           # also tolerates entire upstream jobs being missing thanks to the
           # `if: !cancelled()` guard above.
           fail_on_unmatched_files: false
           files: |
             artifacts/eullm-linux-x64/eullm-linux-x64
             artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
-            artifacts/eullm-linux-x64-cuda12.8-turboquant-exp/eullm-linux-x64-cuda12.8-turboquant-exp
-            artifacts/eullm-macos-arm64-turboquant-exp/eullm-macos-arm64-turboquant-exp
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
             artifacts/eullm-windows-x64/eullm-windows-x64.exe
             artifacts/eullm-windows-x64-cuda-12.8/eullm-windows-x64-cuda-12.8.zip
-            artifacts/eullm-windows-x64-cuda12.8-turboquant-exp/eullm-windows-x64-cuda12.8-turboquant-exp.zip
-            artifacts/eullm-windows-installers/EuLLM-Setup-CPU-*.exe
-            artifacts/eullm-windows-installers/EuLLM-Setup-CUDA-*.exe
-            artifacts/eullm-windows-installers/EuLLM-Setup-CUDA-TurboQuant-*.exe
             artifacts/checksums.txt
           body: |
             ## EULLM Engine ${{ github.ref_name }}
@@ -524,33 +518,17 @@ jobs:
             |--------|-------------|--------------|
             | `eullm-linux-x64` | CPU only | None |
             | `eullm-linux-x64-cuda-12.8` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
-            | `eullm-linux-x64-cuda12.8-turboquant-exp` | NVIDIA GPU + TurboQuant KV cache | NVIDIA driver 570+ |
             | `eullm-linux-arm64` | CPU only | ARM64 Linux |
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
-            | `eullm-macos-arm64-turboquant-exp` | Metal + TurboQuant KV cache | macOS Apple Silicon |
             | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 |
             | `eullm-windows-x64-cuda-12.8.zip` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ for Windows. ZIP bundles eullm.exe + CUDA DLLs — run from the extracted folder |
-            | `eullm-windows-x64-cuda12.8-turboquant-exp.zip` | NVIDIA GPU + TurboQuant KV cache | NVIDIA driver 570+ for Windows. ZIP bundles eullm.exe + CUDA DLLs |
 
-            ### TurboQuant (experimental)
-
-            The `eullm-linux-x64-cuda12.8-turboquant-exp` build includes experimental
-            KV cache compression based on Google's TurboQuant algorithm (ICLR 2026).
-
-            **Important:**
-            - Requires NVIDIA GPU with CUDA 12.8+ support
-            - Experimental — may be unstable or change behavior between releases
-            - Not recommended for production workloads
-            - Use only for testing and benchmarking
+            ### Pick a model interactively
 
             ```bash
-            # Download TurboQuant build
-            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda12.8-turboquant-exp -o eullm
-            chmod +x eullm
-
-            # Run with TurboQuant KV cache (4-bit, ~4x compression)
-            ./eullm run model.gguf --cache-type-k tbq4_0 --cache-type-v tbq4_0
+            # Run with no arguments to open the model picker (local models + catalog)
+            ./eullm
             ```
 
             ### Web browsing
