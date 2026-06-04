@@ -97,8 +97,7 @@ eullm/
 ├── forge/      Python — Model verticalizzazione pipeline
 ├── hub/        Rust — EU model registry API
 ├── bench/      Benchmarks and stress tests
-├── docs/       Technical documentation
-└── website/    Landing page
+└── docs/       Technical documentation
 ```
 
 See [docs/architecture.md](docs/architecture.md) for detailed diagrams.
