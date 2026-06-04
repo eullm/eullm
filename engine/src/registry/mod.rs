@@ -39,9 +39,35 @@ pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
 ///
 /// Shows download progress via the callback. Streams to disk
 /// to avoid loading multi-GB files into memory.
+///
+/// If the download fails at any point, the partial `.part` file is
+/// removed before returning the error, so failed pulls don't leave
+/// gigabytes of orphaned bytes on disk.
 pub async fn download_file(
     url: &str,
     dest: &Path,
+    on_progress: Option<ProgressCallback>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Ensure parent directory exists up-front so we can put the .part there.
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp_path = dest.with_extension("gguf.part");
+
+    let result = download_file_inner(url, dest, &tmp_path, on_progress).await;
+    if result.is_err() {
+        // Best-effort cleanup. Ignore the error: we already have a real error
+        // to report, and not being able to delete a transient file shouldn't
+        // mask it.
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+async fn download_file_inner(
+    url: &str,
+    dest: &Path,
+    tmp_path: &Path,
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::builder()
@@ -61,14 +87,8 @@ pub async fn download_file(
 
     let total = response.content_length().unwrap_or(0);
 
-    // Ensure parent directory exists
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
     // Stream to a temporary file, then rename (atomic-ish)
-    let tmp_path = dest.with_extension("gguf.part");
-    let mut file = fs::File::create(&tmp_path)?;
+    let mut file = fs::File::create(tmp_path)?;
     let mut downloaded: u64 = 0;
 
     let mut stream = response.bytes_stream();
@@ -87,7 +107,7 @@ pub async fn download_file(
     drop(file);
 
     // Rename temp file to final path
-    fs::rename(&tmp_path, dest)?;
+    fs::rename(tmp_path, dest)?;
 
     Ok(())
 }

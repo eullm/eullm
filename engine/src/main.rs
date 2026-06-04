@@ -159,6 +159,20 @@ enum Commands {
         /// Model name
         model: String,
     },
+    /// Remove a locally downloaded model (frees disk space)
+    ///
+    /// Examples:
+    ///   eullm rm qwen3-14b
+    ///   eullm rm qwen3-14b --force      (skip the confirmation prompt)
+    #[command(visible_alias = "remove")]
+    Rm {
+        /// Model id (as shown by `eullm list`)
+        model: String,
+
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        force: bool,
+    },
     /// Start the API server without loading a model
     Serve {
         /// Port for the API server
@@ -423,6 +437,7 @@ async fn main() {
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
+        Commands::Rm { model, force } => cmd_rm(&store, &model, force),
         Commands::Serve { port, replace, batch_size: _, ui, ui_port, daemon, pidfile } => {
             let _ = (daemon, pidfile);
             let ui_port_opt = if ui { Some(ui_port) } else { None };
@@ -581,8 +596,12 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
             eprintln!("This may be because the model hasn't been published yet.");
             eprintln!("You can also use a local GGUF file: eullm run ./path/to/model.gguf");
 
-            // Still write manifest so we don't re-attempt
-            let _ = store.write_manifest(&entry_clone, "download_failed", None);
+            // Clean up: the partial .gguf.part file is already removed by the
+            // downloader. Any empty model directory the pull created stays
+            // out of `eullm list` — we explicitly remove it so a failed pull
+            // leaves no trace on disk. A subsequent `eullm pull <model>` will
+            // re-attempt cleanly.
+            let _ = store.delete(&entry_clone.id);
             std::process::exit(1);
         }
     }
@@ -653,6 +672,54 @@ fn cmd_show(store: &ModelStore, model: &str) {
         }
         Err(e) => {
             eprintln!("Error reading model: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_rm(store: &ModelStore, model: &str, force: bool) {
+    // Resolve the model to its on-disk manifest so we can show name + size
+    // in the confirmation prompt. If there's no manifest, refuse.
+    let manifest = match store.get(model) {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            eprintln!("Error: model '{model}' is not installed locally.");
+            eprintln!("Run `eullm list` to see installed models.");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error reading model: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if !force {
+        // Be explicit about what is going away — the confirmation has to
+        // carry enough info that the user can't fat-finger it on a 45 GB
+        // download they actually wanted to keep.
+        print!(
+            "Remove '{}' ({})? [y/N] ",
+            manifest.name,
+            format_bytes(manifest.size_bytes)
+        );
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut input = String::new();
+        if std::io::stdin().read_line(&mut input).is_err() {
+            eprintln!("Cancelled.");
+            std::process::exit(1);
+        }
+        let answer = input.trim().to_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("Cancelled.");
+            return;
+        }
+    }
+
+    match store.delete(model) {
+        Ok(Some(freed)) => println!("Removed '{}' ({} freed).", manifest.name, format_bytes(freed)),
+        Ok(None) => println!("Nothing to remove (already gone)."),
+        Err(e) => {
+            eprintln!("Error removing model: {e}");
             std::process::exit(1);
         }
     }

@@ -159,4 +159,36 @@ impl ModelStore {
         let short_name = name.strip_prefix("eullm/").unwrap_or(name);
         self.root.join(short_name)
     }
+
+    /// Remove a model's entire directory from disk.
+    ///
+    /// Returns `Ok(Some(bytes_freed))` if the directory existed and was
+    /// removed, `Ok(None)` if there was nothing to remove. Errors only on
+    /// real filesystem failures.
+    pub fn delete(&self, name: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
+        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
+        let model_dir = self.root.join(short_name);
+        if !model_dir.exists() {
+            return Ok(None);
+        }
+        let size = dir_size(&model_dir).unwrap_or(0);
+        fs::remove_dir_all(&model_dir)?;
+        Ok(Some(size))
+    }
+}
+
+/// Recursively sum the byte sizes of every regular file under `path`.
+/// Used for reporting how much disk space a `rm` actually freed.
+fn dir_size(path: &std::path::Path) -> Result<u64, Box<dyn std::error::Error>> {
+    let mut total: u64 = 0;
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            total += dir_size(&entry.path())?;
+        } else {
+            total += meta.len();
+        }
+    }
+    Ok(total)
 }
