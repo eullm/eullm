@@ -80,6 +80,45 @@ impl ModelStore {
         Ok(model_dir)
     }
 
+    /// Write a manifest for an "external" model — one pulled from an arbitrary
+    /// URL or HuggingFace repo, not present in the EU catalog. Metadata is
+    /// minimal (we don't know language/VRAM/license), but the entry is a
+    /// first-class local model: it lists, runs, and `rm`s like any other.
+    ///
+    /// `id` is the filesystem-safe directory key; `gguf_file` is the GGUF
+    /// filename inside that directory; `source` is the URL/repo it came from,
+    /// recorded as the description for provenance.
+    pub fn write_external_manifest(
+        &self,
+        id: &str,
+        gguf_file: &str,
+        source: &str,
+        size_bytes: u64,
+    ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let model_dir = self.root.join(id);
+        fs::create_dir_all(&model_dir)?;
+
+        let manifest = ModelManifest {
+            name: id.to_string(),
+            description: format!("External model pulled from {source}"),
+            languages: Vec::new(),
+            base: id.to_string(),
+            vram_gb: 0,
+            size_bytes,
+            license: "unknown".into(),
+            digest: String::new(),
+            pulled_at: chrono::Utc::now().to_rfc3339(),
+            status: "ready".into(),
+            gguf_file: Some(gguf_file.to_string()),
+        };
+
+        let manifest_path = model_dir.join("manifest.json");
+        let json = serde_json::to_string_pretty(&manifest)?;
+        fs::write(&manifest_path, json)?;
+
+        Ok(model_dir)
+    }
+
     /// Get the GGUF file path for a locally available model.
     pub fn gguf_path(&self, name: &str) -> Option<PathBuf> {
         let short_name = name.strip_prefix("eullm/").unwrap_or(name);

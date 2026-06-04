@@ -484,10 +484,7 @@ async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
         Some(picker::Picked::Local(p)) => {
             println!("That model is already local: {}", p.display());
         }
-        Some(picker::Picked::Url(_)) => {
-            eprintln!("URL pull from picker not yet supported.");
-            std::process::exit(2);
-        }
+        Some(picker::Picked::Url(url)) => cmd_pull_url(store, &url).await,
         Some(picker::Picked::Quit) => {}
         None => {
             eprintln!("Error: missing <MODEL> argument.");
@@ -497,12 +494,122 @@ async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
     }
 }
 
+/// True if `s` looks like an HTTP(S) URL we should download directly rather
+/// than resolve against the catalog.
+fn is_url(s: &str) -> bool {
+    s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// Derive a filesystem-safe model id and the GGUF filename from a download
+/// URL. `https://example.com/models/Gemma4.gguf?token=x` →
+/// id `gemma4`, filename `Gemma4.gguf`.
+///
+/// The id is the lowercased filename stem with anything outside
+/// `[a-z0-9._-]` collapsed to `-`, so it nests cleanly under the store root
+/// and can be typed back as `eullm run <id>`.
+fn url_to_model_id(url: &str) -> (String, String) {
+    // Strip query/fragment, take the last path segment.
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let filename = path
+        .rsplit('/')
+        .find(|s| !s.is_empty())
+        .unwrap_or("model.gguf")
+        .to_string();
+
+    let stem = filename.strip_suffix(".gguf").unwrap_or(&filename);
+    let id: String = stem
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect();
+    let id = id.trim_matches('-').to_string();
+    let id = if id.is_empty() { "model".to_string() } else { id };
+
+    // Ensure the stored filename ends in .gguf so gguf_path() finds it.
+    let filename = if filename.to_lowercase().ends_with(".gguf") {
+        filename
+    } else {
+        format!("{id}.gguf")
+    };
+    (id, filename)
+}
+
+/// Pull a GGUF directly from an arbitrary URL, outside the catalog.
+///
+/// `eullm pull https://host/path/model.gguf` — downloads into the store
+/// under an id derived from the filename, writes an external manifest, and
+/// the model then behaves like any catalog model (`run`, `list`, `rm`).
+async fn cmd_pull_url(store: &ModelStore, url: &str) {
+    let (id, filename) = url_to_model_id(url);
+
+    if let Some(gguf) = store.gguf_path(&id) {
+        println!("Model '{id}' is already downloaded.");
+        println!("  GGUF: {}", gguf.display());
+        println!("\nRun with: eullm run {id}");
+        return;
+    }
+
+    println!("Pulling from URL: {url}");
+    println!("  Storing as: {id}");
+    println!("  (off-catalog model — no license/VRAM metadata available)");
+    println!();
+
+    let model_dir = store.model_path(&id);
+    let gguf_dest = model_dir.join(&filename);
+
+    let result = {
+        use crate::registry::{download_file, format_progress};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let last_printed = Arc::new(AtomicU64::new(0));
+        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+            let last = last_printed.load(Ordering::Relaxed);
+            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+                last_printed.store(downloaded, Ordering::Relaxed);
+                eprint!("\r  {}", format_progress(downloaded, total));
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        });
+        download_file(url, &gguf_dest, Some(progress)).await
+    };
+    eprintln!();
+
+    match result {
+        Ok(()) => {
+            let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
+            match store.write_external_manifest(&id, &filename, url, size) {
+                Ok(_) => {
+                    println!("  Done. Model ready.");
+                    println!("\nRun with: eullm run {id}");
+                }
+                Err(e) => eprintln!("Warning: download succeeded but manifest write failed: {e}"),
+            }
+        }
+        Err(e) => {
+            eprintln!("Download failed: {e}");
+            // The .gguf.part is removed by the downloader; drop the dir too so
+            // a failed pull leaves no trace (mirrors catalog-pull cleanup).
+            let _ = store.delete(&id);
+            std::process::exit(1);
+        }
+    }
+}
+
 async fn cmd_pull(store: &ModelStore, model: &str) {
+    if is_url(model) {
+        cmd_pull_url(store, model).await;
+        return;
+    }
+
     let entry = match catalog::find_model(model) {
         Some(e) => e,
         None => {
             eprintln!("Error: model '{model}' not found in EU catalog.");
             eprintln!("Run `eullm list` to see available models.");
+            eprintln!();
+            eprintln!("You can also pull any GGUF by URL:");
+            eprintln!("  eullm pull https://host/path/model.gguf");
             std::process::exit(1);
         }
     };
@@ -846,7 +953,16 @@ async fn cmd_run(
     });
 
     // Try to resolve as a local GGUF file or downloaded model
-    let gguf_path = if let Some(path) = resolve_model_path(model, store) {
+    let gguf_path = if is_url(model) {
+        // Direct URL: pull into the store (if not already there), then load
+        // by the derived id.
+        let (id, _) = url_to_model_id(model);
+        if store.gguf_path(&id).is_none() {
+            println!("Model not found locally. Pulling from URL...");
+            cmd_pull_url(store, model).await;
+        }
+        store.gguf_path(&id)
+    } else if let Some(path) = resolve_model_path(model, store) {
         Some(path)
     } else {
         // Catalog model — try to pull if not available, then load GGUF
@@ -858,8 +974,9 @@ async fn cmd_run(
                 eprintln!("Error: model '{model}' not found.");
                 eprintln!();
                 eprintln!("Usage:");
-                eprintln!("  eullm run ./path/to/model.gguf    # Run a local GGUF file");
-                eprintln!("  eullm run legal-it-7b              # Run a catalog model");
+                eprintln!("  eullm run ./path/to/model.gguf         # Run a local GGUF file");
+                eprintln!("  eullm run https://host/model.gguf      # Run any GGUF by URL");
+                eprintln!("  eullm run legal-it-7b                  # Run a catalog model");
                 std::process::exit(1);
             }
         }
