@@ -234,6 +234,19 @@ jobs:
           # archs, so adding two more arches grows the file by ~kernel
           # cubins only (~50-80 MB each), not 3x.
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+          # llama-cpp-sys-2 0.1.146 compiles ggml-cuda with NCCL on (option
+          # GGML_CUDA_NCCL=ON in the vendored llama.cpp CMake). nvidia/cuda
+          # 12.8-devel ships nccl.h + libnccl.so, so find_package(NCCL)
+          # succeeds and GGML_USE_NCCL gets defined, pulling in
+          # ggml_backend_cuda_allreduce_tensor with refs to ncclCommInitAll,
+          # ncclAllReduce, ncclGroupStart/End, ncclGetErrorString. But the
+          # crate's build.rs never emits `cargo:rustc-link-lib=nccl`, and
+          # CMake links NCCL to ggml-cuda as PRIVATE, so the final rustc
+          # link call sees those symbols undefined. Closing the gap here
+          # keeps NCCL active (multi-GPU stays on the table) without
+          # forking llama-cpp-sys-2. v0.5.15 shipped without this and the
+          # build-cuda job failed at link.
+          RUSTFLAGS: "-C link-arg=-lnccl"
 
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
