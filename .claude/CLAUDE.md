@@ -18,7 +18,7 @@ The GitHub Actions workflows have been carefully optimized. **Do not remove cach
 ### `.github/workflows/release-engine.yml`
 - All `build` matrix jobs use `Swatinem/rust-cache@v2` keyed by target triple.
 - `build-cuda` (container-based) uses `actions/cache` manually (Swatinem doesn't work in containers) for: cargo registry, `target/`.
-- sccache routes C/C++/CUDA compile through an **S3 backend on EU-hosted MinIO** (`ci.eullm.eu`). NOT the GitHub Actions cache — see the sccache subsection below for why (ref-scoping).
+- sccache routes C/C++/CUDA compile through an **S3 backend on EU-hosted MinIO** (`ci.eullm.eu`). NOT the GitHub Actions cache — see the sccache subsection below for the full reasoning (size cap + cross-workflow sharing, NOT ref-scoping; that earlier framing was imprecise).
 
 ### TurboQuant removed in v0.5.8 (history note)
 
@@ -102,16 +102,42 @@ The release workflow (tag-triggered) routes sccache through an S3-compatible
 MinIO bucket behind `https://ci.eullm.eu` (Let's Encrypt proxy). `SCCACHE_*`
 + `AWS_*` secrets configure it. `Cache location` in the stats reads `s3`.
 
-**Why NOT the free GitHub Actions cache (learned the hard way in v0.5.11→v0.5.12):**
-GitHub's Actions cache is **ref-scoped** — a run can only restore caches saved on
-its own ref or the default branch. Our releases fire on **tags** (`EuLLM-v*`), and
-each tag is a different ref, so a GitHub-cache sccache **never hits across
-releases**: v0.5.11 saved 865 MiB under its tag; v0.5.12 (another tag) couldn't see
-it and rebuilt cold (38 min Linux CUDA). S3 is a **global, content-addressed**
-store with no ref boundary → it hits across every release (proven on S3 in v0.5.9:
-129 CUDA hits, **2m34s** Linux CUDA, `Cache location: s3`). **Do NOT move the
-release workflow's sccache back to the GitHub cache** — architecturally
-unsuitable for tag-triggered builds.
+**Why NOT the free GitHub Actions cache (the full, accurate story — earlier
+notes oversimplified this and were corrected during v0.5.14):**
+
+The GitHub Actions cache scoping rules are not as restrictive as the
+v0.5.11→v0.5.12 failure made them look. Per the [official docs][gha-cache-docs],
+a workflow run can restore caches created on its own ref **or on the default
+branch** (`main`). Tags can read main's caches; the bug in v0.5.12 was simply
+that we populated under `EuLLM-v0.5.11`'s tag, not under main — and tag→tag
+visibility is correctly blocked (cache poisoning protection). So
+"architecturally unsuitable" was wrong: a workflow on main *could* populate a
+shared cache that all subsequent tag-triggered releases read.
+
+The **real** reasons S3/MinIO remains the right backend for sccache:
+
+1. **The 10 GB per-repo cap with LRU eviction.** sccache for our CUDA build
+   accumulates ~600-900 MB per platform per release (objects for cl.exe/nvcc
+   instantiations across all `CMAKE_CUDA_ARCHITECTURES`). After a few releases
+   on multiple platforms, the bucket would saturate and start evicting the
+   oldest objects on every push — including base layers we'd just paid to
+   compile. MinIO has no cap; the existing S3 bucket has held the same
+   content-addressed objects across all v0.5.x releases without eviction.
+2. **Content-addressed sharing across all workflows in the repo.** Our CI
+   workflow (`ci.yml`, runs on every push/PR) and the release workflow share
+   the *same* sccache bucket. With S3 they hit each other's writes; with
+   GitHub cache, branch/PR runs are isolated from main+tag runs in
+   practice (their scopes don't overlap).
+3. **Cross-repo reuse (future).** If we ever add a sibling repo (Forge or
+   Hub C++ work), the same MinIO bucket continues to serve. GitHub cache
+   is per-repo, hard boundary.
+
+What this means concretely: **do not switch sccache back to the GitHub
+Actions cache**, but the reason is the size cap and the cross-workflow
+sharing, not ref-scoping. Proof S3 works: v0.5.9 → v0.5.13 Linux CUDA both
+hit 2m34s/2m47s with ~130 CUDA hits each, `Cache location: s3`.
+
+[gha-cache-docs]: https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching
 
 ### Windows CUDA: Ninja generator + S3 sccache (working as of v0.5.14)
 
@@ -181,12 +207,23 @@ B2 can skip the bindgen step entirely when it eventually lands.
 
 ### sccache resilience: keep S3 from killing the build
 
-**The deeper lesson (process):** research a cache backend's *scoping/eviction
-rules up front* before migrating. We discovered the ref-scoping by a failed
-release instead of reading the docs — costly. Two confounds (the missing
-`CMAKE_CUDA_COMPILER_LAUNCHER`, then the ref-scoping) made the S3 value hard to
-see; the launcher was the real long-pole on Linux, S3 was always the right
-backend for tag-triggered release builds.
+**The deeper lesson (process):** read a cache backend's *scoping, eviction,
+and size-limit rules up front* before migrating. v0.5.11→v0.5.12 looked like
+"GitHub cache fails on tags" because we populated the cache *under the v0.5.11
+tag* instead of under `main` (tags can read main's cache; tag→tag is correctly
+isolated for security). So the real misread was twofold:
+(a) we mis-configured the populate side (should have run a populate workflow
+on main), and (b) we then mis-attributed the failure to "ref-scoping is
+fundamentally broken for tags" rather than to our own setup. The actual
+disqualifier for the GitHub cache turned out to be the **10 GB per-repo cap
+with LRU eviction** — too small to hold sccache's CUDA object set across
+multiple platforms and releases.
+
+Compounding all that, on the *engineering* side we missed
+`CMAKE_CUDA_COMPILER_LAUNCHER` for half a dozen releases — that was the actual
+long-pole on Linux. With the launcher present and S3 populated correctly,
+Linux CUDA was 2m34s in v0.5.9. Two unrelated confounds (engineering + ops)
+masked the value of S3 until v0.5.9.
 
 **`SCCACHE_IDLE_TIMEOUT: "0"`** + a reachability probe before enabling the wrapper
 stay (so an S3 blip degrades to a cache-less build instead of killing it).
