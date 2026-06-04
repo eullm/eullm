@@ -89,6 +89,23 @@
       "recommended": true
     },
     {
+      "id": "gemma-4-e4b",
+      "name": "Gemma 4 E4B Instruct",
+      "description": "Google Gemma 4, E4B effective-parameter variant. Apache 2.0, strong multilingual chat (140+ languages). Mixed SWA architecture (D=512/256): the engine auto-pins the KV cache to f16, which it requires.",
+      "params_b": 4.0,
+      "quantization": "Q4_K_M",
+      "size_bytes": 4977169568,
+      "vram_gb": 8,
+      "languages": ["en", "it", "de", "fr", "es", "pt", "nl", "zh", "ja", "ko"],
+      "domain": "general",
+      "license": "Apache-2.0",
+      "tags": ["instruct", "multilingual"],
+      "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "hf_filename": "gemma-4-E4B-it-Q4_K_M.gguf",
+      "digest": "",
+      "recommended": true
+    },
+    {
       "id": "phi-3.5-mini",
       "name": "Phi 3.5 Mini Instruct",
       "description": "Microsoft Phi-3.5 mini (3.8B). Trained on high-quality synthetic data, strong on English reasoning.",
