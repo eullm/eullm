@@ -59,12 +59,13 @@ struct ActiveSequence {
     tx: mpsc::Sender<StreamEvent>,
     sampler: LlamaSampler,
     decoder: encoding_rs::Decoder,
-    /// Ring-style tail buffer: only keeps the last `max_stop_len` bytes
-    /// so stop-sequence checking stays O(1) instead of scanning the
-    /// ever-growing full output.
-    tail_buf: String,
-    /// Maximum length of any stop sequence (determines tail_buf capacity).
-    max_stop_len: usize,
+    /// Hold-back buffer for streaming stop-sequence detection. Any trailing
+    /// text that could still grow into (a prefix of) a stop sequence is kept
+    /// here and only flushed once confirmed not to be part of one. On a full
+    /// stop match it is truncated at the match; on EOG it is discarded — so a
+    /// model that spells the turn delimiter out as plain text (e.g. Gemma
+    /// emitting `<end_of_turn` followed by an EOG token) never leaks it.
+    pending: String,
     tokens_prompt: u32,
     tokens_generated: u32,
     max_tokens: u32,
@@ -451,12 +452,6 @@ fn run_scheduler_loop(
                         None => break, // No free slots — should not happen due to active.len() check
                     };
 
-                    let max_stop_len = scheduled.request.stop_sequences
-                        .iter()
-                        .map(|s| s.len())
-                        .max()
-                        .unwrap_or(0);
-
                     let req = &scheduled.request;
                     let seed = req.seed.unwrap_or(seq_id as u32);
                     let sampler = {
@@ -496,8 +491,7 @@ fn run_scheduler_loop(
                         tx: scheduled.tx,
                         sampler,
                         decoder: encoding_rs::UTF_8.new_decoder(),
-                        tail_buf: String::with_capacity(max_stop_len + 64),
-                        max_stop_len,
+                        pending: String::new(),
                         tokens_prompt: 0,
                         tokens_generated: 0,
                         max_tokens: scheduled.request.max_tokens,
@@ -532,39 +526,33 @@ fn run_scheduler_loop(
 
                                 match model.token_to_piece(token, &mut seq.decoder, true, None) {
                                     Ok(piece) => {
-                                        tail_push(&mut seq.tail_buf, &piece, seq.max_stop_len);
-
-                                        // Check stop sequences.
-                                        let mut stopped = false;
-                                        for s in &seq.stop_sequences {
-                                            if seq.tail_buf.ends_with(s) {
-                                                let trimmed = if piece.len() >= s.len() {
-                                                    &piece[..piece.len() - s.len()]
-                                                } else {
-                                                    ""
-                                                };
-                                                if !trimmed.is_empty() {
-                                                    let _ = seq.tx.try_send(
-                                                        StreamEvent::Token(trimmed.to_string()),
-                                                    );
+                                        match process_piece(&mut seq.pending, &seq.stop_sequences, &piece) {
+                                            PieceOutcome::Stop(out) => {
+                                                if !out.is_empty() {
+                                                    let _ = seq.tx.try_send(StreamEvent::Token(out));
                                                 }
                                                 send_done(&seq);
                                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
                                                 free_seq_ids.push(seq.seq_id);
-                                                stopped = true;
-                                                break;
                                             }
-                                        }
-
-                                        if !stopped {
-                                            if seq.tokens_generated >= seq.max_tokens {
-                                                send_done(&seq);
-                                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                                free_seq_ids.push(seq.seq_id);
-                                            } else {
-                                                let _ = seq.tx.try_send(StreamEvent::Token(piece));
-                                                seq.last_token = Some(token);
-                                                active.push(seq);
+                                            PieceOutcome::Emit(out) => {
+                                                if seq.tokens_generated >= seq.max_tokens {
+                                                    // Truncation: flush whatever was held back too.
+                                                    let tail = std::mem::take(&mut seq.pending);
+                                                    let final_out = out + &tail;
+                                                    if !final_out.is_empty() {
+                                                        let _ = seq.tx.try_send(StreamEvent::Token(final_out));
+                                                    }
+                                                    send_done(&seq);
+                                                    let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                                    free_seq_ids.push(seq.seq_id);
+                                                } else {
+                                                    if !out.is_empty() {
+                                                        let _ = seq.tx.try_send(StreamEvent::Token(out));
+                                                    }
+                                                    seq.last_token = Some(token);
+                                                    active.push(seq);
+                                                }
                                             }
                                         }
                                     }
@@ -666,43 +654,26 @@ fn run_scheduler_loop(
             // Decode token to text.
             match model.token_to_piece(token, &mut seq.decoder, true, None) {
                 Ok(piece) => {
-                    tail_push(&mut seq.tail_buf, &piece, seq.max_stop_len);
-
-                    // Check stop sequences.
-                    let mut stopped = false;
-                    for s in &seq.stop_sequences {
-                        if seq.tail_buf.ends_with(s) {
-                            let trimmed = if piece.len() >= s.len() {
-                                &piece[..piece.len() - s.len()]
-                            } else {
-                                ""
-                            };
-                            if !trimmed.is_empty()
-                                && seq.tx.try_send(StreamEvent::Token(trimmed.to_string())).is_err()
-                            {
-                                to_remove.push(i);
-                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                stopped = true;
-                                break;
+                    match process_piece(&mut seq.pending, &seq.stop_sequences, &piece) {
+                        PieceOutcome::Stop(out) => {
+                            if !out.is_empty() {
+                                let _ = seq.tx.try_send(StreamEvent::Token(out));
                             }
                             send_done(seq);
                             to_remove.push(i);
                             let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                            stopped = true;
-                            break;
+                            continue;
                         }
-                    }
-
-                    if stopped {
-                        continue;
-                    }
-
-                    // Send the token piece.
-                    if seq.tx.try_send(StreamEvent::Token(piece)).is_err() {
-                        // Receiver dropped — client disconnected.
-                        to_remove.push(i);
-                        let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                        continue;
+                        PieceOutcome::Emit(out) => {
+                            if !out.is_empty()
+                                && seq.tx.try_send(StreamEvent::Token(out)).is_err()
+                            {
+                                // Receiver dropped — client disconnected.
+                                to_remove.push(i);
+                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                continue;
+                            }
+                        }
                     }
                 }
                 Err(_) => {
@@ -715,6 +686,11 @@ fn run_scheduler_loop(
 
             // Check max tokens.
             if seq.tokens_generated >= seq.max_tokens {
+                // Truncation (not a stop): flush any held-back tail as real text.
+                let tail = std::mem::take(&mut seq.pending);
+                if !tail.is_empty() {
+                    let _ = seq.tx.try_send(StreamEvent::Token(tail));
+                }
                 send_done(seq);
                 to_remove.push(i);
                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
@@ -821,22 +797,79 @@ fn prefill_sequence(
     Ok((n_tokens, tokens.len() as i32, effective_max_tokens))
 }
 
-/// Append `piece` to the tail buffer, keeping only the last `max_stop_len`
-/// bytes so stop-sequence checks stay O(1).
-fn tail_push(tail_buf: &mut String, piece: &str, max_stop_len: usize) {
-    if max_stop_len == 0 {
-        return;
-    }
-    tail_buf.push_str(piece);
-    if tail_buf.len() > max_stop_len * 2 {
-        // Trim from the left, keeping at least max_stop_len bytes.
-        let mut keep_from = tail_buf.len() - max_stop_len;
-        // Advance to the nearest char boundary (stable alternative to ceil_char_boundary).
-        while keep_from < tail_buf.len() && !tail_buf.is_char_boundary(keep_from) {
-            keep_from += 1;
+/// Outcome of feeding one decoded piece through the stop-sequence filter.
+enum PieceOutcome {
+    /// Safe-to-stream text (may be empty); generation continues.
+    Emit(String),
+    /// A full stop sequence was hit. The contained text is whatever preceded
+    /// the stop marker and should be streamed before finishing.
+    Stop(String),
+}
+
+/// Length (in bytes) of the longest suffix of `buf` that is a *proper* prefix
+/// of any stop sequence. This is the amount of trailing text that must be held
+/// back: it could still grow into a full stop sequence on the next token.
+///
+/// A full match is handled by the caller (via `find`) before this is consulted,
+/// so we never report the entire stop sequence here.
+fn stop_prefix_holdback(buf: &str, stops: &[String]) -> usize {
+    let mut max = 0;
+    for s in stops {
+        if s.is_empty() {
+            continue;
         }
-        tail_buf.drain(..keep_from);
+        // Try the longest possible overlap first; the suffix of `buf` must be a
+        // prefix of `s` and strictly shorter than `s` (full matches handled elsewhere).
+        let upper = buf.len().min(s.len().saturating_sub(1));
+        let mut k = upper;
+        while k >= 1 {
+            let start = buf.len() - k;
+            if buf.is_char_boundary(start) && s.as_bytes().starts_with(&buf.as_bytes()[start..]) {
+                if k > max {
+                    max = k;
+                }
+                break;
+            }
+            k -= 1;
+        }
     }
+    max
+}
+
+/// Feed one decoded `piece` into the per-sequence `pending` hold-back buffer and
+/// decide what is safe to stream.
+///
+/// - If appending the piece completes a stop sequence, everything up to the
+///   stop marker is returned as `Stop(..)` and `pending` is cleared.
+/// - Otherwise the longest trailing run that could still become a stop sequence
+///   is retained in `pending`, and the rest is returned as `Emit(..)`.
+///
+/// This makes streaming robust against models that spell a turn delimiter out
+/// as ordinary text and only then emit an EOG token (e.g. Gemma emitting
+/// `<end_of_turn` + EOG): the partial delimiter sits in `pending` and is
+/// discarded when the caller observes EOG, instead of leaking to the client.
+fn process_piece(pending: &mut String, stops: &[String], piece: &str) -> PieceOutcome {
+    pending.push_str(piece);
+
+    // Earliest full stop-sequence occurrence, if any.
+    let mut cut: Option<usize> = None;
+    for s in stops {
+        if let Some(pos) = pending.find(s.as_str()) {
+            cut = Some(cut.map_or(pos, |c| c.min(pos)));
+        }
+    }
+    if let Some(pos) = cut {
+        let out = pending[..pos].to_string();
+        pending.clear();
+        return PieceOutcome::Stop(out);
+    }
+
+    // Hold back any trailing run that could still become a stop sequence.
+    let holdback = stop_prefix_holdback(pending, stops);
+    let emit_upto = pending.len() - holdback;
+    let out = pending[..emit_upto].to_string();
+    pending.drain(..emit_upto);
+    PieceOutcome::Emit(out)
 }
 
 /// Bytes per element for a KV cache type (approximate for quantized types).
@@ -892,4 +925,79 @@ fn send_done(seq: &ActiveSequence) {
         tokens_prompt: seq.tokens_prompt,
         duration_ms,
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{process_piece, stop_prefix_holdback, PieceOutcome};
+
+    fn gemma_stops() -> Vec<String> {
+        vec!["<end_of_turn>".to_string()]
+    }
+
+    fn drain(pending: &mut String, stops: &[String], pieces: &[&str]) -> (String, bool) {
+        let mut emitted = String::new();
+        let mut stopped = false;
+        for p in pieces {
+            match process_piece(pending, stops, p) {
+                PieceOutcome::Emit(s) => emitted.push_str(&s),
+                PieceOutcome::Stop(s) => {
+                    emitted.push_str(&s);
+                    stopped = true;
+                    break;
+                }
+            }
+        }
+        (emitted, stopped)
+    }
+
+    #[test]
+    fn holdback_detects_partial_prefix() {
+        let stops = gemma_stops();
+        // A trailing partial delimiter must be held back.
+        assert_eq!(stop_prefix_holdback("hello<end_of_turn", &stops), "<end_of_turn".len());
+        // No overlap → nothing held back.
+        assert_eq!(stop_prefix_holdback("hello world", &stops), 0);
+        // Only the suffix that overlaps a prefix is held back.
+        assert_eq!(stop_prefix_holdback("a<end", &stops), "<end".len());
+    }
+
+    #[test]
+    fn gemma_text_delimiter_then_eog_does_not_leak() {
+        // Model spells the delimiter out as plain text (the real Gemma 4 case):
+        // < end _ of _ turn, then an EOG token (no further piece). The partial
+        // `<end_of_turn` must stay buffered and never be emitted.
+        let stops = gemma_stops();
+        let mut pending = String::new();
+        let (emitted, stopped) =
+            drain(&mut pending, &stops, &["hello", " world", "<", "end", "_", "of", "_", "turn"]);
+        assert_eq!(emitted, "hello world");
+        assert!(!stopped, "no full stop seq seen yet — EOG handles termination");
+        // Caller discards `pending` on EOG; confirm it holds only the partial.
+        assert_eq!(pending, "<end_of_turn");
+    }
+
+    #[test]
+    fn full_stop_sequence_truncates_cleanly() {
+        let stops = gemma_stops();
+        let mut pending = String::new();
+        let (emitted, stopped) =
+            drain(&mut pending, &stops, &["Rome.", "<end_of_turn>"]);
+        assert!(stopped);
+        assert_eq!(emitted, "Rome.");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn false_alarm_prefix_is_released() {
+        // `<end` looks like the start of `<end_of_turn>` but turns out to be
+        // ordinary text — it must be released once disambiguated.
+        let stops = gemma_stops();
+        let mut pending = String::new();
+        let (emitted, stopped) =
+            drain(&mut pending, &stops, &["the ", "<end", "point", " is near"]);
+        assert!(!stopped);
+        assert_eq!(emitted, "the <endpoint is near");
+        assert!(pending.is_empty());
+    }
 }
