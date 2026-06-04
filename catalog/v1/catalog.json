@@ -191,6 +191,23 @@
       "recommended": false
     },
     {
+      "id": "gemma-4-12b",
+      "name": "Gemma 4 12B Instruct (text-only for now)",
+      "description": "Google Gemma 4 12B, Apache 2.0, multilingual, 256K context. NOTE: upstream this is a multimodal (text + image) model, but the EULLM engine currently runs it TEXT-ONLY — image input is not yet supported (no mmproj/mtmd path). Use it for text today; vision support is pending engine work. The matching mmproj-F16.gguf vision projector lives in the same HF repo for when it lands.",
+      "params_b": 12.0,
+      "quantization": "Q4_K_M",
+      "size_bytes": 7121860000,
+      "vram_gb": 10,
+      "languages": ["en", "it", "de", "fr", "es", "pt", "nl", "zh", "ja", "ko"],
+      "domain": "general",
+      "license": "Apache-2.0",
+      "tags": ["instruct", "multilingual", "multimodal-upstream", "text-only"],
+      "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
+      "hf_filename": "gemma-4-12b-it-Q4_K_M.gguf",
+      "digest": "",
+      "recommended": false
+    },
+    {
       "id": "mistral-nemo-12b",
       "name": "Mistral Nemo 12B Instruct (2407)",
       "description": "Mistral × NVIDIA Nemo. 12B Apache 2.0, 128K context, strong multilingual European coverage.",
