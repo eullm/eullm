@@ -939,7 +939,11 @@ async fn cmd_run(
     let has_backend = engine.is_some() || scheduler.is_some();
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
 
-    if has_backend && is_tty {
+    // Banner must match what we're actually about to do (see REPL launch
+    // condition below: `has_backend && is_tty && !open_chat`). If the browser
+    // chat is going to take over, telling the user to "Type a message" in
+    // this terminal is a lie.
+    if has_backend && is_tty && !open_chat {
         println!("Type a message to chat, /bye to quit.\n");
     } else {
         println!("Press Ctrl+C to stop.\n");
@@ -986,7 +990,12 @@ async fn cmd_run(
         }
     }
 
-    if has_backend && is_tty {
+    // The terminal REPL is the CLI counterpart to the browser chat: at most
+    // one should be active at a time. If we opened the browser (default), the
+    // user is chatting there — the REPL would just compete for the same model
+    // on the same line discipline. Only drop into the REPL when the browser
+    // was suppressed (--cli / --no-chat) or unavailable (--no-ui).
+    if has_backend && is_tty && !open_chat {
         if let Some(sched) = repl_scheduler {
             interactive_chat(sched, &model_name, ctx_size, batch_size, web).await;
         }
