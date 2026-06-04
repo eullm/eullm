@@ -39,12 +39,6 @@ impl ModelStore {
         Ok(Self { root })
     }
 
-    /// Create a store at a custom path.
-    pub fn new(root: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
-        fs::create_dir_all(&root)?;
-        Ok(Self { root })
-    }
-
     /// Write a manifest to disk for a pulled model.
     ///
     /// The on-disk directory is keyed by the catalog `id` (filesystem-safe,
