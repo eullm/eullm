@@ -1041,9 +1041,11 @@ mod tests {
     }
 
     #[test]
-    fn filter_strips_complete_harmony_marker_in_one_piece() {
+    fn filter_strips_complete_harmony_block_with_known_role() {
         // Gemma 4 12B emits `<|channel>thought<channel|>` at the start of a
-        // reply — both markers must disappear, the word between them stays.
+        // reply. The combined pattern in DEFAULT_HARMONY_FILTERS catches the
+        // whole block (including the "thought" word) as one unit, so nothing
+        // residual appears in the output.
         let stops = gemma_stops();
         let filters = harmony_filters();
         let mut pending = String::new();
@@ -1054,7 +1056,26 @@ mod tests {
             &["<|channel>thought<channel|>Ciao!"],
         );
         assert!(!stopped, "filter must NEVER terminate generation");
-        assert_eq!(emitted, "thoughtCiao!");
+        assert_eq!(emitted, "Ciao!");
+    }
+
+    #[test]
+    fn filter_falls_back_to_delimiter_strip_for_unknown_role() {
+        // If the model produces a Harmony channel with a role word we have
+        // not enumerated in DEFAULT_HARMONY_FILTERS, the single-delimiter
+        // entries still scrub the visible syntax; the word between is left
+        // dangling. Documents the degradation contract.
+        let stops = gemma_stops();
+        let filters = harmony_filters();
+        let mut pending = String::new();
+        let (emitted, stopped) = drain_with_filters(
+            &mut pending,
+            &stops,
+            &filters,
+            &["<|channel>banana<channel|>Hello"],
+        );
+        assert!(!stopped);
+        assert_eq!(emitted, "bananaHello");
     }
 
     #[test]
