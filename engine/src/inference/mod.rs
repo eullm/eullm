@@ -134,6 +134,12 @@ pub struct InferenceConfig {
     /// KV cache data type for values.  Lower precision = less VRAM.
     /// Default: F16 (maximum GPU compatibility).
     pub cache_type_v: KvCacheType,
+    /// Optional path to a multimodal projector (mmproj) GGUF file. When
+    /// present AND the `multimodal` cargo feature is enabled, the engine
+    /// loads an `MtmdContext` alongside the text model so it can accept
+    /// image / audio input. When `None` or the feature is off, the engine
+    /// runs text-only exactly as before.
+    pub mmproj_path: Option<PathBuf>,
 }
 
 impl Default for InferenceConfig {
@@ -151,6 +157,7 @@ impl Default for InferenceConfig {
             // with --cache-type-k / --cache-type-v after verifying with nvtop.
             cache_type_k: KvCacheType::F16,
             cache_type_v: KvCacheType::F16,
+            mmproj_path: None,
         }
     }
 }
@@ -324,6 +331,12 @@ pub struct InferenceEngine {
     config: InferenceConfig,
     /// Mutex around context because llama.cpp context is not thread-safe.
     ctx_mutex: Mutex<()>,
+    /// Multimodal context (image / audio input). Present only when the
+    /// `multimodal` cargo feature is enabled and a valid mmproj path was
+    /// supplied in the config. Wrapped in `Option` so the same struct
+    /// definition works in text-only mode; the field exists but stays None.
+    #[cfg(feature = "multimodal")]
+    mtmd_ctx: Option<llama_cpp_2::mtmd::MtmdContext>,
 }
 
 // SAFETY: LlamaBackend and LlamaModel are safe to share across threads.
@@ -365,12 +378,82 @@ impl InferenceEngine {
 
         tracing::info!("Model loaded successfully.");
 
+        #[cfg(feature = "multimodal")]
+        let mtmd_ctx = Self::init_mtmd_optional(&config, &model)?;
+
         Ok(Self {
             backend,
             model,
             config,
             ctx_mutex: Mutex::new(()),
+            #[cfg(feature = "multimodal")]
+            mtmd_ctx,
         })
+    }
+
+    /// Attempt to load the multimodal projector if the config has one and the
+    /// `multimodal` cargo feature is enabled. Returns:
+    /// - `Ok(None)` if no mmproj was configured (text-only run is intended);
+    /// - `Ok(Some(ctx))` if the projector loaded; logs capability flags;
+    /// - `Err(...)` if a path was supplied but loading failed (treated as
+    ///   a hard configuration error — the user clearly wants multimodal
+    ///   and we should not silently degrade).
+    #[cfg(feature = "multimodal")]
+    fn init_mtmd_optional(
+        config: &InferenceConfig,
+        model: &LlamaModel,
+    ) -> Result<Option<llama_cpp_2::mtmd::MtmdContext>, Box<dyn std::error::Error + Send + Sync>>
+    {
+        use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
+
+        let Some(mmproj_path) = config.mmproj_path.as_ref() else {
+            return Ok(None);
+        };
+        if !mmproj_path.exists() {
+            return Err(format!(
+                "mmproj file not found: {} — multimodal load aborted",
+                mmproj_path.display()
+            )
+            .into());
+        }
+
+        // Mirror the text-side GPU policy: offload mmproj to GPU when the
+        // text model itself is being offloaded. Threads count carries over
+        // for the CPU-side image preprocessing inside mtmd.
+        let mut params = MtmdContextParams::default();
+        params.use_gpu = config.gpu_layers != 0;
+        params.print_timings = false;
+        params.n_threads = config.threads as i32;
+
+        tracing::info!("Loading mmproj projector: {}", mmproj_path.display());
+        let path_str = mmproj_path
+            .to_str()
+            .ok_or("mmproj path is not valid UTF-8")?;
+        let ctx = MtmdContext::init_from_file(path_str, model, &params)
+            .map_err(|e| format!("Failed to load mmproj: {e}"))?;
+
+        // Log capability flags up front so the user (and our own logs) can
+        // see at a glance what this projector enables. M-RoPE is the load-
+        // time guard the plan called out: scalar position bookkeeping in
+        // our scheduler/generate loop is incorrect for M-RoPE models.
+        let support_vision = ctx.support_vision();
+        let support_audio = ctx.support_audio();
+        let use_mrope = ctx.decode_use_mrope();
+        let use_non_causal = ctx.decode_use_non_causal();
+        tracing::info!(
+            "mmproj loaded — vision={support_vision} audio={support_audio} \
+             m_rope={use_mrope} non_causal={use_non_causal}"
+        );
+        if use_mrope {
+            tracing::warn!(
+                "mmproj reports decode_use_mrope=true — this model uses \
+                 multi-dimensional positions. The current MVP only supports \
+                 scalar-position models (e.g. Gemma 4). Multimodal calls \
+                 will refuse media input on this model."
+            );
+        }
+
+        Ok(Some(ctx))
     }
 
     /// Generate text from a prompt (blocking, returns all at once).
@@ -756,6 +839,254 @@ impl InferenceEngine {
                 return;
             }
 
+            n_cur += 1;
+            tokens_generated += 1;
+        }
+
+        let duration_ms = start.elapsed().as_millis() as u64;
+        let _ = tx.blocking_send(StreamEvent::Done {
+            tokens_generated,
+            tokens_prompt,
+            duration_ms,
+        });
+    }
+
+    /// Multimodal streaming generation: accepts image / audio media alongside
+    /// a text prompt, runs the mtmd-aware prefill via `eval_chunks`, then
+    /// hands off to the same single-token decode loop as `generate_streaming`.
+    ///
+    /// The text prompt MUST contain exactly one media marker (`<__media__>`,
+    /// see [`llama_cpp_2::mtmd::mtmd_default_marker`]) for each entry in
+    /// `media`. `media[i]` is the raw bytes of an image (jpg/png/bmp/gif) or
+    /// audio file (wav/mp3/flac) — `MtmdBitmap::from_buffer` auto-detects.
+    ///
+    /// Returns immediately via `StreamEvent::Error` if multimodal is not
+    /// configured for this engine, the M-RoPE guard refuses the model, or
+    /// the requested modality is not supported by the loaded projector.
+    #[cfg(feature = "multimodal")]
+    pub fn generate_multimodal(
+        &self,
+        request: &GenerateRequest,
+        media: &[Vec<u8>],
+        tx: mpsc::Sender<StreamEvent>,
+    ) {
+        use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputText};
+
+        let _lock = self.ctx_mutex.lock();
+        let start = std::time::Instant::now();
+
+        // ── 1. Guards ───────────────────────────────────────────────────
+        let Some(mtmd_ctx) = self.mtmd_ctx.as_ref() else {
+            let _ = tx.blocking_send(StreamEvent::Error(
+                "Multimodal not configured: load the model with a valid mmproj_path".into(),
+            ));
+            return;
+        };
+        if mtmd_ctx.decode_use_mrope() {
+            let _ = tx.blocking_send(StreamEvent::Error(
+                "This model requires M-RoPE positions, which the current MVP \
+                 does not yet plumb through the decode loop. Image/audio input \
+                 is refused; text-only requests still work via generate_streaming."
+                    .into(),
+            ));
+            return;
+        }
+        // Reject the request if the user supplied a modality the projector
+        // does not support, to fail loudly rather than silently mis-decode.
+        let has_audio = media.iter().any(|b| {
+            // miniaudio magic bytes: RIFF (wav), ID3/MP3 sync (mp3), fLaC (flac).
+            // This is a cheap heuristic; mtmd would also error at from_buffer.
+            b.starts_with(b"RIFF") || b.starts_with(b"ID3") || b.starts_with(b"fLaC")
+                || (b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0)
+        });
+        if has_audio && !mtmd_ctx.support_audio() {
+            let _ = tx.blocking_send(StreamEvent::Error(
+                "This mmproj does not support audio input (vision-only projector)".into(),
+            ));
+            return;
+        }
+        if !has_audio && !media.is_empty() && !mtmd_ctx.support_vision() {
+            let _ = tx.blocking_send(StreamEvent::Error(
+                "This mmproj does not support image input".into(),
+            ));
+            return;
+        }
+
+        // ── 2. Build context (same code path as generate_streaming) ─────
+        let ctx_size = NonZeroU32::new(self.config.context_size)
+            .unwrap_or(NonZeroU32::new(4096).unwrap());
+        let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
+            || self.config.cache_type_v != KvCacheType::F16;
+        let ctx_params = build_ctx_params(&self.config, ctx_size);
+        let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
+            Ok(c) => c,
+            Err(e) if has_quantized_cache => {
+                let fallback = build_ctx_params_with_cache(
+                    &self.config, ctx_size, KvCacheType::F16, KvCacheType::F16,
+                );
+                match self.model.new_context(&self.backend, fallback) {
+                    Ok(c) => c,
+                    Err(e2) => {
+                        let _ = tx.blocking_send(StreamEvent::Error(format!(
+                            "F16 fallback failed: {e2} (original: {e})"
+                        )));
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "Failed to create context: {e}"
+                )));
+                return;
+            }
+        };
+
+        // ── 3. Decode media bytes into mtmd bitmaps ─────────────────────
+        let mut bitmaps: Vec<MtmdBitmap> = Vec::with_capacity(media.len());
+        for (i, bytes) in media.iter().enumerate() {
+            match MtmdBitmap::from_buffer(mtmd_ctx, bytes) {
+                Ok(b) => bitmaps.push(b),
+                Err(e) => {
+                    let _ = tx.blocking_send(StreamEvent::Error(format!(
+                        "Media #{i} failed to decode: {e:?}"
+                    )));
+                    return;
+                }
+            }
+        }
+        let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+
+        // ── 4. Tokenize text + media → MtmdInputChunks ──────────────────
+        // The prompt is already templated by the caller and contains one
+        // <__media__> marker per bitmap. add_special=!raw mirrors the text
+        // path; parse_special=true must be on so the chat-template special
+        // tokens (e.g. Gemma <start_of_turn>) are recognised.
+        let input_text = MtmdInputText {
+            text: request.prompt.clone(),
+            add_special: !request.raw,
+            parse_special: true,
+        };
+        let chunks = match mtmd_ctx.tokenize(input_text, &bitmap_refs) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "mtmd tokenize failed: {e:?}"
+                )));
+                return;
+            }
+        };
+
+        let tokens_prompt = chunks.total_tokens() as u32;
+        let server_ctx = ctx.n_ctx();
+        let effective_ctx = request.num_ctx.map(|n| n.min(server_ctx)).unwrap_or(server_ctx);
+        if tokens_prompt >= effective_ctx {
+            let _ = tx.blocking_send(StreamEvent::Error(format!(
+                "Multimodal prompt ({tokens_prompt} tokens) does not fit in context window ({effective_ctx})"
+            )));
+            return;
+        }
+
+        // ── 5. mtmd-aware prefill: text chunks via llama_decode, media
+        //      chunks via mtmd_encode + llama_decode, all handled internally.
+        let new_n_past = match chunks.eval_chunks(
+            mtmd_ctx,
+            &ctx,
+            0,
+            0,
+            self.config.n_batch as i32,
+            true, // we want logits on the last token to start sampling
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "mtmd eval_chunks failed: {e:?}"
+                )));
+                return;
+            }
+        };
+
+        let max_output = effective_ctx.saturating_sub(tokens_prompt);
+        let max_tokens = request.max_tokens.min(max_output);
+        let n_len = (tokens_prompt + max_tokens) as i32;
+
+        tracing::info!(
+            "Multimodal stream: media={} ({}), prompt_tokens={}, max_output={}, ctx={}",
+            media.len(),
+            if has_audio { "audio" } else { "image" },
+            tokens_prompt,
+            max_tokens,
+            effective_ctx,
+        );
+
+        // ── 6. Sampler (identical to generate_streaming) ────────────────
+        let mut sampler = {
+            let seed = request.seed.unwrap_or(1234);
+            let mut chain: Vec<LlamaSampler> = Vec::new();
+            if let Some(ref grammar_str) = request.grammar {
+                if let Ok(gs) = LlamaSampler::grammar(&self.model, grammar_str, "root") {
+                    chain.push(gs);
+                }
+            }
+            if request.repeat_penalty != 1.0 {
+                chain.push(LlamaSampler::penalties(
+                    request.repeat_last_n, request.repeat_penalty, 0.0, 0.0,
+                ));
+            }
+            if request.top_k > 0 { chain.push(LlamaSampler::top_k(request.top_k)); }
+            if request.top_p < 1.0 { chain.push(LlamaSampler::top_p(request.top_p, 1)); }
+            if request.min_p > 0.0 { chain.push(LlamaSampler::min_p(request.min_p, 1)); }
+            chain.push(LlamaSampler::temp(request.temperature));
+            chain.push(LlamaSampler::dist(seed));
+            LlamaSampler::chain_simple(chain)
+        };
+
+        // ── 7. Decode loop (identical pattern to generate_streaming) ────
+        let mut decoder = encoding_rs::UTF_8.new_decoder();
+        let mut full_output = String::new();
+        let mut n_cur = new_n_past;
+        let mut tokens_generated: u32 = 0;
+        let mut batch = LlamaBatch::new(1, 1);
+
+        while n_cur <= n_len && tokens_generated < max_tokens {
+            let token = sampler.sample(&ctx, -1);
+            sampler.accept(token);
+            if self.model.is_eog_token(token) { break; }
+
+            match self.model.token_to_piece(token, &mut decoder, true, None) {
+                Ok(piece) => {
+                    full_output.push_str(&piece);
+                    let mut stopped = false;
+                    for s in &request.stop_sequences {
+                        if full_output.ends_with(s) {
+                            let trimmed = if piece.len() >= s.len() {
+                                &piece[..piece.len() - s.len()]
+                            } else { "" };
+                            if !trimmed.is_empty()
+                                && tx.blocking_send(StreamEvent::Token(trimmed.to_string())).is_err()
+                            {
+                                return;
+                            }
+                            stopped = true;
+                            break;
+                        }
+                    }
+                    if stopped { break; }
+                    if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
+                        return;
+                    }
+                }
+                Err(_) => break,
+            }
+
+            batch.clear();
+            if batch.add(token, n_cur, &[0], true).is_err() { break; }
+            if ctx.decode(&mut batch).is_err() {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "Decode failed at token {tokens_generated}"
+                )));
+                return;
+            }
             n_cur += 1;
             tokens_generated += 1;
         }

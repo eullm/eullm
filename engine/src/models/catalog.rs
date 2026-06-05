@@ -54,6 +54,16 @@ pub struct CatalogEntry {
     /// Whether this is one of the curated "start here" picks.
     #[serde(default)]
     pub recommended: bool,
+    /// Optional multimodal projector — HF repo where the mmproj GGUF lives.
+    /// When set (together with `mmproj_filename`), `eullm pull` will download
+    /// it alongside the main GGUF so a multimodal engine build can load it.
+    /// For text-only models leave it absent.
+    #[serde(default)]
+    pub mmproj_repo: Option<String>,
+    /// Optional multimodal projector filename inside `mmproj_repo`
+    /// (e.g. `mmproj-F16.gguf`). Ignored without `mmproj_repo`.
+    #[serde(default)]
+    pub mmproj_filename: Option<String>,
 }
 
 impl CatalogEntry {

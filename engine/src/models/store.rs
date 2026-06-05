@@ -23,6 +23,12 @@ pub struct ModelManifest {
     /// Path to the GGUF file relative to the model directory (if downloaded).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gguf_file: Option<String>,
+    /// Filename of the multimodal projector (mmproj) GGUF inside the same
+    /// model directory, when this is a vision/audio-capable model and the
+    /// projector was pulled alongside the main weights. Absent for text-only
+    /// models, and silently ignored by text-only engine builds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mmproj_file: Option<String>,
 }
 
 /// Manages the local model directory (`~/.eullm/models/`).
@@ -49,6 +55,7 @@ impl ModelStore {
         entry: &CatalogEntry,
         status: &str,
         gguf_file: Option<&str>,
+        mmproj_file: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let model_dir = self.root.join(&entry.id);
         fs::create_dir_all(&model_dir)?;
@@ -65,6 +72,7 @@ impl ModelStore {
             pulled_at: chrono::Utc::now().to_rfc3339(),
             status: status.into(),
             gguf_file: gguf_file.map(String::from),
+            mmproj_file: mmproj_file.map(String::from),
         };
 
         let manifest_path = model_dir.join("manifest.json");
@@ -104,6 +112,7 @@ impl ModelStore {
             pulled_at: chrono::Utc::now().to_rfc3339(),
             status: "ready".into(),
             gguf_file: Some(gguf_file.to_string()),
+            mmproj_file: None,
         };
 
         let manifest_path = model_dir.join("manifest.json");
@@ -111,6 +120,39 @@ impl ModelStore {
         fs::write(&manifest_path, json)?;
 
         Ok(model_dir)
+    }
+
+    /// Get the multimodal projector path for a locally available model, if any.
+    /// Mirrors `gguf_path` but reads `manifest.mmproj_file` instead, and falls
+    /// back to scanning the directory for any `mmproj*.gguf` file.
+    pub fn mmproj_path(&self, name: &str) -> Option<PathBuf> {
+        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
+        let model_dir = self.root.join(short_name);
+
+        let manifest_path = model_dir.join("manifest.json");
+        if manifest_path.exists()
+            && let Ok(data) = fs::read_to_string(&manifest_path)
+            && let Ok(manifest) = serde_json::from_str::<ModelManifest>(&data)
+            && let Some(ref mmproj) = manifest.mmproj_file
+        {
+            let path = model_dir.join(mmproj);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+
+        if model_dir.is_dir() && let Ok(entries) = fs::read_dir(&model_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                    && name.starts_with("mmproj")
+                    && path.extension().is_some_and(|e| e == "gguf")
+                {
+                    return Some(path);
+                }
+            }
+        }
+        None
     }
 
     /// Get the GGUF file path for a locally available model.

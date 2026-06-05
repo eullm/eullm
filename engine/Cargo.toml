@@ -16,6 +16,11 @@ cuda = ["llama-cpp-2/cuda"]
 rocm = ["llama-cpp-2/rocm"]
 vulkan = ["llama-cpp-2/vulkan"]
 metal = ["llama-cpp-2/metal"]
+# Native multimodal input (image + audio) via llama.cpp mtmd. Off by default —
+# enable for the pre-release multimodal binary (cargo build --features
+# "cuda,multimodal"). When off, all multimodal code paths are #[cfg]'d out
+# and the build is identical to today's text-only engine.
+multimodal = ["llama-cpp-2/mtmd"]
 
 [dependencies]
 clap = { version = "4.6", features = ["derive"] }

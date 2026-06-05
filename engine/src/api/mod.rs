@@ -138,6 +138,12 @@ impl AppState {
             n_batch: self.n_batch,
             cache_type_k: self.cache_type_k,
             cache_type_v: self.cache_type_v,
+            // Multimodal is currently a CLI-only feature (--image flag on
+            // `eullm run`); the HTTP server does not yet route image input,
+            // so the swap path always loads in text-only mode for now. When
+            // Phase 2 lands, resolve the mmproj path from the model store
+            // here and propagate it like the GGUF.
+            mmproj_path: None,
         };
 
         let batch_size = override_batch_size.unwrap_or(self.batch_size);
