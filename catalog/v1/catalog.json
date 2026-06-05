@@ -193,7 +193,7 @@
     {
       "id": "gemma-4-12b",
       "name": "Gemma 4 12B Instruct (vision-capable)",
-      "description": "Google Gemma 4 12B, Apache 2.0, multilingual, 256K context, multimodal text + image. Image input is supported only by multimodal engine builds (--features multimodal, currently shipped as a beta/pre-release binary). On a text-only engine build the projector is downloaded but ignored and the model runs as text-only.",
+      "description": "Google Gemma 4 12B, Apache 2.0, multilingual, 256K context, multimodal text + image. Image input requires a multimodal engine build (shipped enabled in the CUDA/beta binaries); on other builds it runs as a strong text model.",
       "params_b": 12.0,
       "quantization": "Q4_K_M",
       "size_bytes": 7121860000,

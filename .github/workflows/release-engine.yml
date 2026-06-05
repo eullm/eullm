@@ -437,9 +437,9 @@ jobs:
               Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
           }
 
-      - name: Build engine with CUDA
+      - name: Build engine with CUDA + multimodal (mtmd)
         shell: pwsh
-        run: cargo build --release --target x86_64-pc-windows-msvc --features cuda -p eullm-engine
+        run: cargo build --release --target x86_64-pc-windows-msvc --features "cuda,multimodal" -p eullm-engine
         env:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).

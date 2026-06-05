@@ -119,6 +119,19 @@
     while (i < latex.length) {
       const c = latex[i];
       if (c === "\\") {
+        // LaTeX spacing commands with non-alphabetic names: \, \: \; \! — these
+        // would fail the [a-zA-Z]+ match below and fall back to raw. Standard
+        // TeX widths: \, = 3mu, \: = 4mu, \; = 5mu, \! = -3mu (1mu ≈ 0.0556em).
+        const next = latex[i + 1];
+        if (next === "," || next === ":" || next === ";" || next === "!") {
+          const w = next === "," ? "0.167em"
+                  : next === ":" ? "0.222em"
+                  : next === ";" ? "0.278em"
+                  :                "-0.167em";
+          out.push(`<mspace width="${w}"/>`);
+          i += 2;
+          continue;
+        }
         const m = latex.slice(i + 1).match(/^[a-zA-Z]+/);
         if (!m) throw new Error("bad escape");
         const name = m[0];
@@ -140,6 +153,10 @@
           out.push(`<mtext>${escapeMath(arg.text)}</mtext>`);
         } else if (name === "left" || name === "right") {
           // Stretchy delimiters not modelled; the next char is emitted normally.
+        } else if (name === "quad") {
+          out.push('<mspace width="1em"/>');
+        } else if (name === "qquad") {
+          out.push('<mspace width="2em"/>');
         } else if (MATH_GREEK[name]) {
           out.push(`<mi>${MATH_GREEK[name]}</mi>`);
         } else if (MATH_OPS[name]) {
