@@ -265,6 +265,107 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  # Pre-release-only: Linux CUDA build with the `multimodal` cargo feature
+  # enabled (mtmd vision/audio path). Mirrors build-cuda exactly except for
+  # the features flag and artifact name; the cargo `multimodal` feature is
+  # opt-in so the C++ mtmd code is only compiled here, never in stable.
+  # Conditioned on the tag carrying -beta/-rc/-alpha to keep stable releases
+  # text-only until the API surface (Phase 2) and continuous-batching
+  # coexistence (Phase 3) land.
+  build-cuda-multimodal:
+    if: contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha')
+    strategy:
+      matrix:
+        include:
+          - cuda: "12.8.1"
+            artifact: eullm-linux-x64-cuda-12.8-multimodal
+            cuda_tag: "12.8.1-devel-ubuntu22.04"
+
+    runs-on: ubuntu-22.04
+    container:
+      image: nvidia/cuda:${{ matrix.cuda_tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install build dependencies
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake build-essential pkg-config libssl-dev git libclang-dev
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-cuda-mm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-cuda-mm-
+
+      # Separate target cache from build-cuda: features changes invalidate
+      # Cargo's fingerprint, so a shared target/ would just thrash. sccache
+      # (content-addressed on C++/CUDA source) is still shared via S3.
+      - uses: actions/cache@v5
+        with:
+          path: target
+          key: target-cuda-mm-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-cuda-mm-${{ matrix.cuda }}-
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER=0.8.0
+          TMPSC=$(mktemp -d)
+          curl -sSfL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" \
+            -o "${TMPSC}/sccache.tar.gz"
+          tar -xzf "${TMPSC}/sccache.tar.gz" -C "${TMPSC}"
+          find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
+          chmod +x /usr/local/bin/sccache
+          rm -rf "${TMPSC}"
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CUDA_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
+          sccache --version
+          sccache --start-server || true
+
+      - name: Build engine with CUDA + multimodal (mtmd)
+        run: |
+          . "$HOME/.cargo/env"
+          export PATH="/usr/local/cuda/bin:$PATH"
+          cargo build --release --features "cuda,multimodal" -p eullm-engine
+        env:
+          CUDA_PATH: /usr/local/cuda
+          CUDACXX: /usr/local/cuda/bin/nvcc
+          CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
+          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+          # Same NCCL link patch as build-cuda — see that job for rationale.
+          RUSTFLAGS: "-C link-arg=-lnccl"
+
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
+
+      - name: Package binary
+        run: |
+          cp target/release/eullm ${{ matrix.artifact }}
+          strip --strip-all ${{ matrix.artifact }} || true
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
   build-windows:
     runs-on: windows-2022
     steps:
@@ -486,6 +587,7 @@ jobs:
     needs:
       - build
       - build-cuda
+      - build-cuda-multimodal
       - build-windows
       - build-windows-cuda
     # Run as long as at least one upstream job built something. We never
@@ -528,6 +630,7 @@ jobs:
           files: |
             artifacts/eullm-linux-x64/eullm-linux-x64
             artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
+            artifacts/eullm-linux-x64-cuda-12.8-multimodal/eullm-linux-x64-cuda-12.8-multimodal
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
