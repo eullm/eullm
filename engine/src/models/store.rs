@@ -10,6 +10,12 @@ use super::catalog::CatalogEntry;
 /// Manifest written to disk for each pulled model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelManifest {
+    /// Addressable identifier — the catalog id and the on-disk directory key
+    /// (e.g. `gemma-4-12b`). This is the exact string to pass to `eullm run`.
+    /// `#[serde(default)]` + directory-name backfill in `list`/`get` keeps
+    /// manifests written before this field existed working without a re-pull.
+    #[serde(default)]
+    pub id: String,
     pub name: String,
     pub description: String,
     pub languages: Vec<String>,
@@ -61,6 +67,7 @@ impl ModelStore {
         fs::create_dir_all(&model_dir)?;
 
         let manifest = ModelManifest {
+            id: entry.id.clone(),
             name: entry.name.clone(),
             description: entry.description.clone(),
             languages: entry.languages.clone(),
@@ -101,6 +108,7 @@ impl ModelStore {
         fs::create_dir_all(&model_dir)?;
 
         let manifest = ModelManifest {
+            id: id.to_string(),
             name: id.to_string(),
             description: format!("External model pulled from {source}"),
             languages: Vec::new(),
@@ -200,7 +208,14 @@ impl ModelStore {
                 let manifest_path = entry.path().join("manifest.json");
                 if manifest_path.exists() {
                     let data = fs::read_to_string(&manifest_path)?;
-                    let manifest: ModelManifest = serde_json::from_str(&data)?;
+                    let mut manifest: ModelManifest = serde_json::from_str(&data)?;
+                    // Backfill the addressable id from the directory name for
+                    // manifests written before the `id` field existed.
+                    if manifest.id.is_empty()
+                        && let Some(dir) = entry.file_name().to_str()
+                    {
+                        manifest.id = dir.to_string();
+                    }
                     models.push(manifest);
                 }
             }
@@ -219,7 +234,11 @@ impl ModelStore {
         }
 
         let data = fs::read_to_string(&manifest_path)?;
-        let manifest: ModelManifest = serde_json::from_str(&data)?;
+        let mut manifest: ModelManifest = serde_json::from_str(&data)?;
+        // Backfill the addressable id from the directory key for older manifests.
+        if manifest.id.is_empty() {
+            manifest.id = short_name.to_string();
+        }
         Ok(Some(manifest))
     }
 
@@ -266,4 +285,55 @@ fn dir_size(path: &std::path::Path) -> Result<u64, Box<dyn std::error::Error>> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_store() -> (ModelStore, PathBuf) {
+        let root = std::env::temp_dir().join(format!("eullm-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        (ModelStore { root: root.clone() }, root)
+    }
+
+    /// A manifest written before the `id` field existed must still resolve to
+    /// an addressable id, backfilled from the on-disk directory name — so the
+    /// user never has to re-pull a model just to see it in `list`.
+    #[test]
+    fn legacy_manifest_without_id_backfills_from_dir() {
+        let (store, root) = temp_store();
+        let dir = root.join("gemma-4-12b");
+        fs::create_dir_all(&dir).unwrap();
+        // Old-format manifest JSON: no "id" key at all.
+        let legacy = r#"{
+            "name": "Gemma 4 12B Instruct (text-only for now)",
+            "description": "x", "languages": [], "base": "gemma",
+            "vram_gb": 10, "size_bytes": 7100000000, "license": "Apache-2.0",
+            "digest": "", "pulled_at": "2026-01-01T00:00:00Z", "status": "ready"
+        }"#;
+        fs::write(dir.join("manifest.json"), legacy).unwrap();
+
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "gemma-4-12b", "id backfilled from dir name");
+
+        let got = store.get("gemma-4-12b").unwrap().unwrap();
+        assert_eq!(got.id, "gemma-4-12b");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// A manifest written by the current code records the id explicitly, and it
+    /// matches the directory key used to address the model.
+    #[test]
+    fn external_manifest_records_id() {
+        let (store, root) = temp_store();
+        store
+            .write_external_manifest("my-model", "weights.gguf", "https://x/y.gguf", 123)
+            .unwrap();
+        let listed = store.list().unwrap();
+        assert_eq!(listed[0].id, "my-model");
+        fs::remove_dir_all(&root).ok();
+    }
 }

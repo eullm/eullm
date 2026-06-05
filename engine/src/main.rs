@@ -796,15 +796,26 @@ fn cmd_list(store: &ModelStore) {
             println!("Or run a local GGUF: eullm run ./path/to/model.gguf");
         }
         Ok(models) => {
-            println!("{:<30} {:>8} {:>6} STATUS", "NAME", "SIZE", "VRAM");
+            // NAME is the addressable id — exactly what you pass to `eullm run`.
+            // The human-readable name is shown as a trailing description.
+            println!(
+                "{:<24} {:>8} {:>6} {:<16} DESCRIPTION",
+                "NAME", "SIZE", "VRAM", "STATUS"
+            );
             for m in &models {
                 let size = format_bytes(m.size_bytes);
-                let short = m.name.strip_prefix("eullm/").unwrap_or(&m.name);
+                let id = if m.id.is_empty() {
+                    m.name.strip_prefix("eullm/").unwrap_or(&m.name)
+                } else {
+                    &m.id
+                };
                 println!(
-                    "{:<30} {:>8} {:>4}GB  {}",
-                    short, size, m.vram_gb, m.status
+                    "{:<24} {:>8} {:>4}GB  {:<16} {}",
+                    id, size, m.vram_gb, m.status, m.name
                 );
             }
+            println!("\nRun one with: eullm run <NAME>   (e.g. eullm run {})",
+                models.first().map(|m| if m.id.is_empty() { m.name.as_str() } else { m.id.as_str() }).unwrap_or("<NAME>"));
         }
         Err(e) => {
             eprintln!("Error listing models: {e}");
@@ -1029,6 +1040,26 @@ async fn cmd_run(
             .unwrap_or(4)
     });
 
+    // Canonical, addressable name shown in the banner and the API model slot —
+    // the same string the user types into `eullm run` and sees in `eullm list`
+    // and the picker. For a catalog/store model that's the id; for a direct
+    // .gguf path it's the file stem (the only sensible name); for a URL it's
+    // the derived id. This deliberately does NOT use the GGUF file stem for
+    // store models, so `gemma-4-12b` stays `gemma-4-12b` everywhere instead of
+    // surfacing as `gemma-4-12b-it-Q4_K_M`.
+    let canonical_name: String = if is_url(model) {
+        url_to_model_id(model).0
+    } else {
+        let p = PathBuf::from(model);
+        if p.exists() && p.extension().is_some_and(|e| e == "gguf") {
+            p.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| model.to_string())
+        } else {
+            model.strip_prefix("eullm/").unwrap_or(model).to_string()
+        }
+    };
+
     // Try to resolve as a local GGUF file or downloaded model
     let gguf_path = if is_url(model) {
         // Direct URL: pull into the store (if not already there), then load
@@ -1061,10 +1092,7 @@ async fn cmd_run(
     };
 
     if let Some(gguf_path) = gguf_path {
-        model_name = gguf_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| model.to_string());
+        model_name = canonical_name.clone();
 
         println!("Loading GGUF: {}", gguf_path.display());
 
@@ -1136,7 +1164,7 @@ async fn cmd_run(
             }
         }
     } else {
-        model_name = model.to_string();
+        model_name = canonical_name.clone();
         eprintln!("Warning: no GGUF file available for this model.");
         eprintln!("  The model may not have been published yet.");
         eprintln!("  API will start but inference requests will return 503.");
@@ -1595,6 +1623,7 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
 
     // Write EULLM manifest
     let manifest = models::store::ModelManifest {
+        id: eullm_name.clone(),
         name: format!("eullm/{eullm_name}"),
         description: format!("Imported from Ollama: {model}"),
         languages: vec![],
