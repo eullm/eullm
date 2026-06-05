@@ -204,7 +204,25 @@ pub fn cache_type_display(ct: &KvCacheType) -> String {
 /// Filter sequences differ from stop sequences: a stop terminates the response,
 /// a filter is silently elided. Both share the same hold-back buffer in
 /// `process_piece` so a marker split across token boundaries still gets caught.
+///
+/// Order matters: longer "combined" patterns (`<|channel>thought<channel|>`)
+/// are listed BEFORE the single delimiters so they match as one unit, leaving
+/// no orphan word ("thought") in the output. If the model spits a Harmony
+/// variant not in the combined list (e.g. `<|channel>foo<channel|>`), the
+/// single delimiters still strip the visible noise; only the word in between
+/// is left dangling. Add new combined patterns when new variants surface.
 pub const DEFAULT_HARMONY_FILTERS: &[&str] = &[
+    // Combined patterns — match the whole Harmony channel block as one piece,
+    // including the role word in the middle. Observed values in the wild:
+    // `thought` (Gemma 4 12B reasoning preamble), `analysis` and `final` are
+    // the canonical GPT-OSS Harmony channels.
+    "<|channel>thought<channel|>",
+    "<|channel>analysis<channel|>",
+    "<|channel>final<channel|>",
+    "<|message|>",
+    // Single delimiters — fallback for Harmony variants we have not enumerated
+    // and for stray `<|image|>`/`<|audio|>` markers mid-sentence. Will leave
+    // the body word visible when used alone, but at least scrubs the syntax.
     "<|channel>",
     "<channel|>",
     "<|image>",
