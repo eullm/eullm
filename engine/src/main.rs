@@ -702,46 +702,46 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
     // is small (typically 100-200 MB for vision-only) compared to the main
     // weights, so we don't gate it behind a flag.
     let mut mmproj_filename_stored: Option<String> = None;
-    if result.is_ok() {
-        if let (Some(mmproj_repo), Some(mmproj_filename)) = (
+    if result.is_ok()
+        && let (Some(mmproj_repo), Some(mmproj_filename)) = (
             entry_clone.mmproj_repo.as_ref(),
             entry_clone.mmproj_filename.as_ref(),
-        ) {
-            let mmproj_dest = model_dir.join(mmproj_filename);
-            println!();
-            println!(
-                "  Downloading multimodal projector {} from {}...",
-                mmproj_filename, mmproj_repo
-            );
-            println!("  Destination: {}", mmproj_dest.display());
+        )
+    {
+        let mmproj_dest = model_dir.join(mmproj_filename);
+        println!();
+        println!(
+            "  Downloading multimodal projector {} from {}...",
+            mmproj_filename, mmproj_repo
+        );
+        println!("  Destination: {}", mmproj_dest.display());
 
-            use crate::registry::{download_from_huggingface, format_progress};
-            use std::sync::atomic::{AtomicU64, Ordering};
-            use std::sync::Arc;
+        use crate::registry::{download_from_huggingface, format_progress};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
 
-            let last_printed = Arc::new(AtomicU64::new(0));
-            let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
-                let last = last_printed.load(Ordering::Relaxed);
-                if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
-                    last_printed.store(downloaded, Ordering::Relaxed);
-                    eprint!("\r  {}", format_progress(downloaded, total));
-                    let _ = std::io::Write::flush(&mut std::io::stderr());
-                }
-            });
+        let last_printed = Arc::new(AtomicU64::new(0));
+        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+            let last = last_printed.load(Ordering::Relaxed);
+            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+                last_printed.store(downloaded, Ordering::Relaxed);
+                eprint!("\r  {}", format_progress(downloaded, total));
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        });
 
-            match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, Some(progress)).await {
-                Ok(()) => {
-                    eprintln!();
-                    println!("  mmproj ready ({}).", mmproj_filename);
-                    mmproj_filename_stored = Some(mmproj_filename.clone());
-                }
-                Err(e) => {
-                    eprintln!();
-                    // Non-fatal: the GGUF is already on disk, the model is
-                    // usable in text-only mode. Multimodal builds will refuse
-                    // image input until the user re-pulls or downloads manually.
-                    eprintln!("  Warning: mmproj download failed ({e}). Model will run text-only.");
-                }
+        match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, Some(progress)).await {
+            Ok(()) => {
+                eprintln!();
+                println!("  mmproj ready ({}).", mmproj_filename);
+                mmproj_filename_stored = Some(mmproj_filename.clone());
+            }
+            Err(e) => {
+                eprintln!();
+                // Non-fatal: the GGUF is already on disk, the model is
+                // usable in text-only mode. Multimodal builds will refuse
+                // image input until the user re-pulls or downloads manually.
+                eprintln!("  Warning: mmproj download failed ({e}). Model will run text-only.");
             }
         }
     }
