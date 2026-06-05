@@ -537,6 +537,10 @@ async fn chat(
         seed: sp.seed,
         num_ctx: sp.num_ctx,
         stop_sequences,
+        filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         grammar,
         raw: false,
     };
@@ -713,6 +717,10 @@ async fn chat_completions(
         seed: sp.seed,
         num_ctx: sp.num_ctx,
         stop_sequences,
+        filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         grammar,
         raw: false,
     };

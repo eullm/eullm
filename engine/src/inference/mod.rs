@@ -187,6 +187,25 @@ pub fn cache_type_display(ct: &KvCacheType) -> String {
 }
 
 
+/// Format-template artifacts that some models hallucinate as plain text
+/// (Gemma 4 12B has been observed to emit GPT-OSS-style harmony markers like
+/// `<|channel>thought<channel|>` at the start of replies and stray
+/// `<image|>`/`<audio|>` mid-sentence). These are NOT tokens in the model
+/// vocabulary — they're generated as literal characters — so the safest fix is
+/// to drop them from the streamed output without ending the generation.
+///
+/// Filter sequences differ from stop sequences: a stop terminates the response,
+/// a filter is silently elided. Both share the same hold-back buffer in
+/// `process_piece` so a marker split across token boundaries still gets caught.
+pub const DEFAULT_HARMONY_FILTERS: &[&str] = &[
+    "<|channel>",
+    "<channel|>",
+    "<|image>",
+    "<image|>",
+    "<|audio>",
+    "<audio|>",
+];
+
 /// Request for text generation.
 #[derive(Debug, Clone)]
 pub struct GenerateRequest {
@@ -200,6 +219,11 @@ pub struct GenerateRequest {
     pub repeat_last_n: i32,
     pub seed: Option<u32>,
     pub stop_sequences: Vec<String>,
+    /// Substrings to silently drop from the streamed output without ending
+    /// generation. Use for format-template artifacts hallucinated by the
+    /// model (e.g. Gemma 4 emitting GPT-OSS harmony markers as plain text).
+    /// `DEFAULT_HARMONY_FILTERS` is applied by default via `Default`.
+    pub filter_sequences: Vec<String>,
     /// Per-request context budget (Ollama `num_ctx`).  When `Some`, the
     /// validation uses this instead of the server-level `context_size`.
     /// Must be ≤ server `context_size` (clamped at prefill time).
@@ -226,6 +250,7 @@ impl Default for GenerateRequest {
             repeat_last_n: 64,
             seed: None,
             stop_sequences: Vec::new(),
+            filter_sequences: DEFAULT_HARMONY_FILTERS.iter().map(|s| (*s).to_string()).collect(),
             num_ctx: None,
             grammar: None,
             raw: false,
