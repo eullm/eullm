@@ -151,6 +151,15 @@ enum Commands {
         /// PID file path (used with --daemon)
         #[arg(long, default_value = DEFAULT_PIDFILE)]
         pidfile: String,
+
+        /// (Multimodal MVP, --features multimodal builds only.) Path to an
+        /// image or audio file to send together with the first prompt.
+        /// Triggers the multimodal inference path (mtmd) which requires the
+        /// model's mmproj projector to be available; for catalog models it
+        /// is auto-downloaded during `pull`. Currently CLI-only; the HTTP
+        /// API does not yet route media input.
+        #[arg(long, value_name = "PATH")]
+        image: Option<PathBuf>,
     },
     /// List locally available models
     List,
@@ -331,6 +340,7 @@ async fn main() {
                 cache_type_v: "f16".into(), web: false, no_ui: false,
                 cli: false, ui_port: 11435, daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
+                image: None,
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
@@ -340,6 +350,7 @@ async fn main() {
                 cache_type_v: "f16".into(), web: false, no_ui: false,
                 cli: false, ui_port: 11435, daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
+                image: None,
             },
             Some(picker::Picked::Url(_url)) => {
                 eprintln!(
@@ -385,6 +396,7 @@ async fn main() {
             ui_port,
             daemon,
             pidfile,
+            image,
         } => {
             // `eullm run` with no model → picker, dispatch back through the same Run.
             let model = match model {
@@ -433,7 +445,7 @@ async fn main() {
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
@@ -632,7 +644,7 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
         println!("  Warning: no download source configured for this model.");
         println!("  Writing manifest only (no GGUF file).");
 
-        match store.write_manifest(entry, "metadata_only", None) {
+        match store.write_manifest(entry, "metadata_only", None, None) {
             Ok(path) => println!("  Manifest saved to {}", path.display()),
             Err(e) => {
                 eprintln!("Error: {e}");
@@ -684,10 +696,65 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
 
     eprintln!(); // newline after progress
 
+    // Optional: download the multimodal projector (mmproj) alongside the
+    // GGUF. Multimodal models in the catalog declare `mmproj_repo` and
+    // `mmproj_filename`; for everyone else this is a no-op. The projector
+    // is small (typically 100-200 MB for vision-only) compared to the main
+    // weights, so we don't gate it behind a flag.
+    let mut mmproj_filename_stored: Option<String> = None;
+    if result.is_ok() {
+        if let (Some(mmproj_repo), Some(mmproj_filename)) = (
+            entry_clone.mmproj_repo.as_ref(),
+            entry_clone.mmproj_filename.as_ref(),
+        ) {
+            let mmproj_dest = model_dir.join(mmproj_filename);
+            println!();
+            println!(
+                "  Downloading multimodal projector {} from {}...",
+                mmproj_filename, mmproj_repo
+            );
+            println!("  Destination: {}", mmproj_dest.display());
+
+            use crate::registry::{download_from_huggingface, format_progress};
+            use std::sync::atomic::{AtomicU64, Ordering};
+            use std::sync::Arc;
+
+            let last_printed = Arc::new(AtomicU64::new(0));
+            let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+                let last = last_printed.load(Ordering::Relaxed);
+                if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+                    last_printed.store(downloaded, Ordering::Relaxed);
+                    eprint!("\r  {}", format_progress(downloaded, total));
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                }
+            });
+
+            match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, Some(progress)).await {
+                Ok(()) => {
+                    eprintln!();
+                    println!("  mmproj ready ({}).", mmproj_filename);
+                    mmproj_filename_stored = Some(mmproj_filename.clone());
+                }
+                Err(e) => {
+                    eprintln!();
+                    // Non-fatal: the GGUF is already on disk, the model is
+                    // usable in text-only mode. Multimodal builds will refuse
+                    // image input until the user re-pulls or downloads manually.
+                    eprintln!("  Warning: mmproj download failed ({e}). Model will run text-only.");
+                }
+            }
+        }
+    }
+
     match result {
         Ok(()) => {
-            // Write manifest with GGUF file reference
-            match store.write_manifest(&entry_clone, "ready", Some(&entry_clone.hf_filename)) {
+            // Write manifest with GGUF file reference (and mmproj if pulled)
+            match store.write_manifest(
+                &entry_clone,
+                "ready",
+                Some(&entry_clone.hf_filename),
+                mmproj_filename_stored.as_deref(),
+            ) {
                 Ok(_) => {
                     println!("  Done. Model ready.");
                     println!("\nRun with: eullm run {}", short_name);
@@ -934,10 +1001,20 @@ async fn cmd_run(
     web: bool,
     ui_port: Option<u16>,
     open_chat: bool,
+    image: Option<PathBuf>,
 ) {
-    ensure_port_available(port, replace).await;
-    if let Some(p) = ui_port {
-        ensure_port_available(p, replace).await;
+    // `--image` is a one-shot multimodal probe: load, send the bytes + prompt,
+    // print the output, exit. Forces sequential mode (the scheduler does not
+    // yet route media) and skips port binding because we won't serve an API.
+    let multimodal_oneshot = image.is_some();
+    let batch_size = if multimodal_oneshot { 0 } else { batch_size };
+    let ui_port = if multimodal_oneshot { None } else { ui_port };
+
+    if !multimodal_oneshot {
+        ensure_port_available(port, replace).await;
+        if let Some(p) = ui_port {
+            ensure_port_available(p, replace).await;
+        }
     }
 
     let model_name: String;
@@ -991,6 +1068,29 @@ async fn cmd_run(
 
         println!("Loading GGUF: {}", gguf_path.display());
 
+        // Multimodal MVP: --image requires the `multimodal` feature build.
+        // Refuse the flag upfront on text-only builds with an actionable
+        // error so the user is not left guessing why the file was ignored.
+        #[cfg(not(feature = "multimodal"))]
+        if image.is_some() {
+            eprintln!(
+                "Error: --image requires a multimodal engine build. \
+                 Rebuild with --features multimodal, or use the beta binary."
+            );
+            std::process::exit(2);
+        }
+
+        // Look up an mmproj projector for this model (if any was pulled
+        // alongside the GGUF). On text-only builds the value is read but
+        // ignored at InferenceConfig level; on multimodal builds it is
+        // what enables `generate_multimodal`.
+        let mmproj_for_config = store
+            .mmproj_path(&model_name)
+            .or_else(|| store.mmproj_path(model)); // also try the user-typed id
+        if let Some(ref p) = mmproj_for_config {
+            println!("Found mmproj: {}", p.display());
+        }
+
         let config = InferenceConfig {
             model_path: gguf_path,
             gpu_layers,
@@ -1000,6 +1100,7 @@ async fn cmd_run(
             n_batch,
             cache_type_k,
             cache_type_v,
+            mmproj_path: mmproj_for_config,
         };
 
         if batch_size > 0 {
@@ -1117,6 +1218,28 @@ async fn cmd_run(
         println!("  Mode:          {mode}");
     }
     println!();
+
+    // ── Multimodal one-shot probe ─────────────────────────────────────────
+    // When --image was given we don't open an API or REPL; instead we run
+    // a single multimodal generation and exit. MVP scope: vision/audio
+    // only via the sequential engine path (Phase 1 of the mtmd plan).
+    if multimodal_oneshot {
+        #[cfg(feature = "multimodal")]
+        {
+            let image_path = image.expect("multimodal_oneshot implies image is Some");
+            let eng = match engine.as_ref() {
+                Some(e) => e.clone(),
+                None => {
+                    eprintln!("Error: multimodal one-shot needs the sequential engine but none is loaded.");
+                    std::process::exit(1);
+                }
+            };
+            run_multimodal_oneshot(eng, image_path).await;
+            return;
+        }
+        #[cfg(not(feature = "multimodal"))]
+        unreachable!("multimodal_oneshot==true is gated on --image, which is refused on text-only builds");
+    }
 
     // Clone the scheduler handle for the interactive REPL before moving into api::serve.
     let repl_scheduler = scheduler.clone();
@@ -1483,6 +1606,7 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
         pulled_at: chrono::Utc::now().to_rfc3339(),
         status: "ready".into(),
         gguf_file: Some(gguf_filename),
+        mmproj_file: None,
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
@@ -2062,4 +2186,95 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{bytes}B")
     }
+}
+
+/// One-shot multimodal probe: load the file at `image_path`, read a prompt
+/// from stdin (or use a default), wrap it in the Gemma chat template with
+/// the mtmd media marker, run a single multimodal generation, stream tokens
+/// to stdout, exit.
+///
+/// This is the MVP entry point for the mtmd integration — deliberately tiny.
+/// API/UI multimodal surface is intentionally out of scope here.
+#[cfg(feature = "multimodal")]
+async fn run_multimodal_oneshot(
+    engine: Arc<InferenceEngine>,
+    image_path: PathBuf,
+) {
+    use llama_cpp_2::mtmd::mtmd_default_marker;
+    use std::io::Read;
+    use tokio::sync::mpsc;
+
+    // 1. Load the media bytes.
+    let media_bytes = match std::fs::read(&image_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("Error reading {}: {e}", image_path.display());
+            std::process::exit(1);
+        }
+    };
+    eprintln!("Media loaded: {} ({} bytes)", image_path.display(), media_bytes.len());
+
+    // 2. Read the user prompt from stdin (if piped) or fall back to a default.
+    let mut user_prompt = String::new();
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        // Non-TTY: a prompt was piped in. Read it all.
+        let _ = std::io::stdin().read_to_string(&mut user_prompt);
+    }
+    let user_prompt = user_prompt.trim();
+    let user_prompt = if user_prompt.is_empty() {
+        "Describe this image briefly."
+    } else {
+        user_prompt
+    };
+
+    // 3. Wrap in the Gemma chat template with the media marker placed inside
+    //    the user turn. Future work: detect the template from the model name
+    //    instead of hardcoding Gemma — but our only multimodal catalog entry
+    //    today is Gemma 4 12B, so this is correct for the MVP.
+    let marker = mtmd_default_marker();
+    let templated = format!(
+        "<start_of_turn>user\n{marker}\n{user_prompt}<end_of_turn>\n<start_of_turn>model\n"
+    );
+
+    // 4. Build the request and stream the answer to stdout.
+    let request = inference::GenerateRequest {
+        prompt: templated,
+        max_tokens: 512,
+        temperature: 0.7,
+        raw: true, // template is hand-built, no extra BOS / formatting
+        stop_sequences: vec!["<end_of_turn>".to_string()],
+        ..Default::default()
+    };
+
+    let (tx, mut rx) = mpsc::channel(64);
+    let eng_for_task = engine.clone();
+    let request_for_task = request.clone();
+    let media_for_task = vec![media_bytes];
+    let join = tokio::task::spawn_blocking(move || {
+        eng_for_task.generate_multimodal(&request_for_task, &media_for_task, tx);
+    });
+
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    while let Some(ev) = rx.recv().await {
+        match ev {
+            inference::StreamEvent::Token(t) => {
+                let _ = stdout.write_all(t.as_bytes());
+                let _ = stdout.flush();
+            }
+            inference::StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
+                let _ = writeln!(stdout);
+                let _ = writeln!(
+                    stdout,
+                    "[done — {tokens_generated} tokens, prompt {tokens_prompt}, {duration_ms} ms]"
+                );
+            }
+            inference::StreamEvent::Error(e) => {
+                let _ = writeln!(stdout, "\n[error] {e}");
+                let _ = join.await;
+                std::process::exit(1);
+            }
+        }
+    }
+    let _ = join.await;
 }
