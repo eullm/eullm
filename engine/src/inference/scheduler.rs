@@ -71,6 +71,9 @@ struct ActiveSequence {
     max_tokens: u32,
     n_past: i32,
     stop_sequences: Vec<String>,
+    /// Substrings silently elided from the streamed output (e.g. harmony
+    /// format artifacts that some models hallucinate).
+    filter_sequences: Vec<String>,
     start: std::time::Instant,
     /// Set to true once the initial prompt has been prefilled.
     prefilled: bool,
@@ -497,6 +500,7 @@ fn run_scheduler_loop(
                         max_tokens: scheduled.request.max_tokens,
                         n_past: 0,
                         stop_sequences: scheduled.request.stop_sequences.clone(),
+                        filter_sequences: scheduled.request.filter_sequences.clone(),
                         start: std::time::Instant::now(),
                         prefilled: false,
                         last_token: None,
@@ -526,7 +530,7 @@ fn run_scheduler_loop(
 
                                 match model.token_to_piece(token, &mut seq.decoder, true, None) {
                                     Ok(piece) => {
-                                        match process_piece(&mut seq.pending, &seq.stop_sequences, &piece) {
+                                        match process_piece(&mut seq.pending, &seq.stop_sequences, &seq.filter_sequences, &piece) {
                                             PieceOutcome::Stop(out) => {
                                                 if !out.is_empty() {
                                                     let _ = seq.tx.try_send(StreamEvent::Token(out));
@@ -654,7 +658,7 @@ fn run_scheduler_loop(
             // Decode token to text.
             match model.token_to_piece(token, &mut seq.decoder, true, None) {
                 Ok(piece) => {
-                    match process_piece(&mut seq.pending, &seq.stop_sequences, &piece) {
+                    match process_piece(&mut seq.pending, &seq.stop_sequences, &seq.filter_sequences, &piece) {
                         PieceOutcome::Stop(out) => {
                             if !out.is_empty() {
                                 let _ = seq.tx.try_send(StreamEvent::Token(out));
@@ -848,10 +852,15 @@ fn stop_prefix_holdback(buf: &str, stops: &[String]) -> usize {
 /// as ordinary text and only then emit an EOG token (e.g. Gemma emitting
 /// `<end_of_turn` + EOG): the partial delimiter sits in `pending` and is
 /// discarded when the caller observes EOG, instead of leaking to the client.
-fn process_piece(pending: &mut String, stops: &[String], piece: &str) -> PieceOutcome {
+fn process_piece(
+    pending: &mut String,
+    stops: &[String],
+    filters: &[String],
+    piece: &str,
+) -> PieceOutcome {
     pending.push_str(piece);
 
-    // Earliest full stop-sequence occurrence, if any.
+    // 1. Stop sequences win: terminate generation at the earliest hit.
     let mut cut: Option<usize> = None;
     for s in stops {
         if let Some(pos) = pending.find(s.as_str()) {
@@ -864,8 +873,22 @@ fn process_piece(pending: &mut String, stops: &[String], piece: &str) -> PieceOu
         return PieceOutcome::Stop(out);
     }
 
-    // Hold back any trailing run that could still become a stop sequence.
-    let holdback = stop_prefix_holdback(pending, stops);
+    // 2. Filter sequences: silently elide every completed occurrence, then
+    // continue. Unlike stops, these do not terminate the response.
+    for f in filters {
+        if f.is_empty() {
+            continue;
+        }
+        while let Some(pos) = pending.find(f.as_str()) {
+            pending.replace_range(pos..pos + f.len(), "");
+        }
+    }
+
+    // 3. Hold back any trailing run that could still complete EITHER a stop
+    // or a filter sequence. Reuses `stop_prefix_holdback` for both — it just
+    // looks at suffix→prefix overlaps and is agnostic to the list's meaning.
+    let holdback = stop_prefix_holdback(pending, stops)
+        .max(stop_prefix_holdback(pending, filters));
     let emit_upto = pending.len() - holdback;
     let out = pending[..emit_upto].to_string();
     pending.drain(..emit_upto);
@@ -936,10 +959,19 @@ mod tests {
     }
 
     fn drain(pending: &mut String, stops: &[String], pieces: &[&str]) -> (String, bool) {
+        drain_with_filters(pending, stops, &[], pieces)
+    }
+
+    fn drain_with_filters(
+        pending: &mut String,
+        stops: &[String],
+        filters: &[String],
+        pieces: &[&str],
+    ) -> (String, bool) {
         let mut emitted = String::new();
         let mut stopped = false;
         for p in pieces {
-            match process_piece(pending, stops, p) {
+            match process_piece(pending, stops, filters, p) {
                 PieceOutcome::Emit(s) => emitted.push_str(&s),
                 PieceOutcome::Stop(s) => {
                     emitted.push_str(&s);
@@ -998,6 +1030,95 @@ mod tests {
             drain(&mut pending, &stops, &["the ", "<end", "point", " is near"]);
         assert!(!stopped);
         assert_eq!(emitted, "the <endpoint is near");
+        assert!(pending.is_empty());
+    }
+
+    fn harmony_filters() -> Vec<String> {
+        crate::inference::DEFAULT_HARMONY_FILTERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
+    }
+
+    #[test]
+    fn filter_strips_complete_harmony_marker_in_one_piece() {
+        // Gemma 4 12B emits `<|channel>thought<channel|>` at the start of a
+        // reply — both markers must disappear, the word between them stays.
+        let stops = gemma_stops();
+        let filters = harmony_filters();
+        let mut pending = String::new();
+        let (emitted, stopped) = drain_with_filters(
+            &mut pending,
+            &stops,
+            &filters,
+            &["<|channel>thought<channel|>Ciao!"],
+        );
+        assert!(!stopped, "filter must NEVER terminate generation");
+        assert_eq!(emitted, "thoughtCiao!");
+    }
+
+    #[test]
+    fn filter_works_across_token_boundaries() {
+        // Realistic case: marker split across two model pieces.
+        let stops = gemma_stops();
+        let filters = harmony_filters();
+        let mut pending = String::new();
+        let (emitted, stopped) = drain_with_filters(
+            &mut pending,
+            &stops,
+            &filters,
+            &["before <|chan", "nel>after"],
+        );
+        assert!(!stopped);
+        assert_eq!(emitted, "before after");
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn filter_mid_word_artifact_is_removed() {
+        // Real screenshot: the model wrote "vor<image|>resti" — must become "vorresti".
+        let stops = gemma_stops();
+        let filters = harmony_filters();
+        let mut pending = String::new();
+        let (emitted, stopped) =
+            drain_with_filters(&mut pending, &stops, &filters, &["vor<image|>resti"]);
+        assert!(!stopped);
+        assert_eq!(emitted, "vorresti");
+    }
+
+    #[test]
+    fn stop_wins_over_filter_when_both_appear() {
+        // If a stop sequence and a filter both occur, the stop takes precedence
+        // and terminates the response; the filter doesn't get a chance to act
+        // beyond the cut.
+        let stops = gemma_stops();
+        let filters = harmony_filters();
+        let mut pending = String::new();
+        let (emitted, stopped) = drain_with_filters(
+            &mut pending,
+            &stops,
+            &filters,
+            &["answer.<end_of_turn><|channel>noise"],
+        );
+        assert!(stopped);
+        assert_eq!(emitted, "answer.");
+    }
+
+    #[test]
+    fn ordinary_text_unaffected_by_filters() {
+        // Regression guard: the presence of filter rules must not change
+        // streaming for content that contains none of them.
+        let stops = gemma_stops();
+        let filters = harmony_filters();
+        let mut pending = String::new();
+        let (emitted, stopped) = drain_with_filters(
+            &mut pending,
+            &stops,
+            &filters,
+            &["hello", " world", "."],
+        );
+        assert!(!stopped);
+        assert_eq!(emitted, "hello world.");
         assert!(pending.is_empty());
     }
 }

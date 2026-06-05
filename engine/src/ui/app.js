@@ -98,8 +98,44 @@
     return { msg, contentEl, metaEl: msg.querySelector(".msg-meta") };
   }
 
-  function scrollToBottom() {
-    els.messages.scrollTop = els.messages.scrollHeight;
+  // Stick-to-bottom: auto-scroll during streaming ONLY when the user is
+  // already near the bottom. Once they scroll up to read, stop auto-scrolling
+  // so they can keep reading while the answer keeps streaming in the
+  // background. Re-enables itself when they scroll back near the bottom.
+  let stickToBottom = true;
+  const STICK_THRESHOLD_PX = 80;
+
+  els.messages.addEventListener("scroll", () => {
+    const { scrollTop, scrollHeight, clientHeight } = els.messages;
+    const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+    stickToBottom = distanceFromBottom < STICK_THRESHOLD_PX;
+    updateJumpButton();
+  });
+
+  function scrollToBottom(force = false) {
+    if (force || stickToBottom) {
+      els.messages.scrollTop = els.messages.scrollHeight;
+    }
+  }
+
+  // Floating "jump to latest" button — shown only when the user has scrolled
+  // up during an active stream, so they have a one-click way back without
+  // disturbing the reading position they chose.
+  const jumpBtn = document.createElement("button");
+  jumpBtn.type = "button";
+  jumpBtn.className = "jump-to-bottom";
+  jumpBtn.textContent = "↓ Jump to latest";
+  jumpBtn.hidden = true;
+  jumpBtn.addEventListener("click", () => {
+    stickToBottom = true;
+    scrollToBottom(true);
+    updateJumpButton();
+  });
+  document.body.appendChild(jumpBtn);
+
+  function updateJumpButton() {
+    const streaming = !!document.querySelector(".message.streaming");
+    jumpBtn.hidden = stickToBottom || !streaming;
   }
 
   // ── API calls ─────────────────────────────────────────────────────────
@@ -187,6 +223,7 @@
 
     const { msg, contentEl, metaEl } = appendMessage("assistant", "");
     msg.classList.add("streaming");
+    updateJumpButton();
     setSending(true);
 
     abortController = new AbortController();
@@ -259,6 +296,7 @@
       }
     } finally {
       msg.classList.remove("streaming");
+      updateJumpButton();
       setSending(false);
       abortController = null;
     }

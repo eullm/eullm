@@ -288,10 +288,20 @@ async fn inject_web_content(
         return messages;
     }
 
-    // Insert a synthetic "tool" message before the last user turn
+    // Instruction-tuned models (Gemma 4 12B observed) say "I can't browse the
+    // web" while at the same time summarising the page just handed to them.
+    // Tell them up-front that the fetch already happened on their behalf, so
+    // the response is consistent with what they actually have in context.
+    let preamble = "\
+You have a web browsing capability provided by the inference engine. When the \
+user shares a URL, the engine automatically fetches the page and gives you its \
+plain-text content below. Treat the content below as pages YOU navigated and \
+read. Do NOT claim you cannot browse the web — you just did. You may cite the \
+source URL when answering.\n\n---\n\n";
+
     let web_message = json!({
         "role": "system",
-        "content": injections.join("\n\n---\n\n")
+        "content": format!("{preamble}{}", injections.join("\n\n---\n\n"))
     });
     messages.insert(idx, web_message);
     messages
@@ -527,6 +537,10 @@ async fn chat(
         seed: sp.seed,
         num_ctx: sp.num_ctx,
         stop_sequences,
+        filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         grammar,
         raw: false,
     };
@@ -703,6 +717,10 @@ async fn chat_completions(
         seed: sp.seed,
         num_ctx: sp.num_ctx,
         stop_sequences,
+        filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect(),
         grammar,
         raw: false,
     };
