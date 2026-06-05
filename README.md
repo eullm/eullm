@@ -105,13 +105,22 @@ What you get on top of the Ollama-compatible API:
 | Component | Status | Use today? |
 |-----------|--------|------------|
 | **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.8)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
-| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) | ✅ **Ready (v0.5.5)** | **Yes** — auto-opens after install on Windows |
+| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) with Markdown + best-effort LaTeX→MathML rendering | ✅ **Ready (v0.5.5)** | **Yes** — auto-opens after install on Windows |
 | **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | 🚧 Paused after v0.5.6 — needs SmartScreen / launcher redesign before re-shipping | Use the standalone Windows binaries above for now |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
 | **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
 
 > The Engine works **today, standalone, with any GGUF model** on Hugging Face. You don't need to wait for the Hub or Forge to use it. Star this repo to follow Forge & Hub releases.
+
+> **Note on math rendering in the Chat UI:** the embedded UI ships a tiny,
+> zero-dependency, best-effort LaTeX→MathML renderer covering the subset of
+> LaTeX that LLMs commonly emit (`$…$` / `$$…$$`, `\frac`, `\sqrt`,
+> superscripts/subscripts, Greek letters, common operators, spacing). It is
+> **not** a full LaTeX engine — anything outside that subset (complex
+> environments like `align`/`matrix`/`cases`, exotic macros) falls back to the
+> raw text untouched, never a broken render. It renders client-side via native
+> browser MathML, so no JS/WASM dependency is added and the stream/API stay raw.
 
 ## The problem
 

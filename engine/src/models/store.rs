@@ -307,7 +307,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         // Old-format manifest JSON: no "id" key at all.
         let legacy = r#"{
-            "name": "Gemma 4 12B Instruct (text-only for now)",
+            "name": "Gemma 4 12B Instruct (vision-capable)",
             "description": "x", "languages": [], "base": "gemma",
             "vram_gb": 10, "size_bytes": 7100000000, "license": "Apache-2.0",
             "digest": "", "pulled_at": "2026-01-01T00:00:00Z", "status": "ready"

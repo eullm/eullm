@@ -809,9 +809,16 @@ fn cmd_list(store: &ModelStore) {
                 } else {
                     &m.id
                 };
+                // Prefer the current catalog name over the manifest's frozen
+                // copy, so a stale display name (e.g. an old "(text-only)" tag)
+                // self-corrects without a re-pull. External models fall back to
+                // the manifest name.
+                let desc = catalog::find_model(id)
+                    .map(|e| e.name.as_str())
+                    .unwrap_or(m.name.as_str());
                 println!(
                     "{:<24} {:>8} {:>4}GB  {:<16} {}",
-                    id, size, m.vram_gb, m.status, m.name
+                    id, size, m.vram_gb, m.status, desc
                 );
             }
             println!("\nRun one with: eullm run <NAME>   (e.g. eullm run {})",
@@ -828,7 +835,13 @@ fn cmd_show(store: &ModelStore, model: &str) {
     // First check local store
     match store.get(model) {
         Ok(Some(manifest)) => {
-            println!("Model:       {}", manifest.name);
+            // Show the addressable id and the fresh catalog name when known.
+            let id = if manifest.id.is_empty() { model } else { &manifest.id };
+            let display_name = catalog::find_model(id)
+                .map(|e| e.name.clone())
+                .unwrap_or_else(|| manifest.name.clone());
+            println!("Name:        {id}");
+            println!("Model:       {display_name}");
             println!("Description: {}", manifest.description);
             println!("Base:        {}", manifest.base);
             println!("Languages:   {}", manifest.languages.join(", "));
