@@ -325,6 +325,15 @@
     let listKind = null; // "ul" | "ol" | null
     const closeList = () => { if (listKind) { out.push(`</${listKind}>`); listKind = null; } };
 
+    // A line that should NOT break an open list: blank lines, and lines whose
+    // only content is a single block-level <math> island. Both are common
+    // separators between numbered items when math appears in the middle.
+    const inListAllowed = (l) => {
+      if (!listKind) return false;
+      if (!l.trim()) return true;
+      return /^\s*<math[^>]*display="block"[^>]*>[\s\S]*?<\/math>\s*$/.test(l);
+    };
+
     for (const line of lines) {
       // Horizontal rule
       if (/^[-_*]{3,}\s*$/.test(line)) {
@@ -359,8 +368,12 @@
         out.push(`<blockquote>${renderInline(bq[1])}</blockquote>`);
         continue;
       }
-      // Plain line — close any open list and pass through with inline formatting.
-      closeList();
+      // Plain line. Keep the list alive across blank lines and standalone
+      // display-math blocks — otherwise every `1.` after a `$$...$$` would
+      // start a new <ol> and the numbering would visibly restart at 1.
+      if (!inListAllowed(line)) {
+        closeList();
+      }
       out.push(renderInline(line));
     }
     closeList();
@@ -383,7 +396,13 @@
       return "";
     });
 
-    // 2. Escape HTML first so user/model text can never inject tags.
+    // 2a. Collapse runs of blank lines (LLMs commonly emit `\n\n\n`+, which —
+    //     combined with `white-space: pre-wrap` on .msg-content — creates
+    //     visible empty lines that pile up on top of block-element margins).
+    //     One blank line between blocks is enough to separate paragraphs.
+    text = text.replace(/\n{3,}/g, "\n\n");
+
+    // 2b. Escape HTML first so user/model text can never inject tags.
     let body = escapeHtml(text);
 
     // 3. Stash code spans (fenced + inline) as opaque placeholders so the
