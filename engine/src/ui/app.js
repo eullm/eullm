@@ -44,11 +44,17 @@
     math: true,
   };
 
-  // Strip <think>…</think> from an assistant turn before storing it in history.
+  // Strip reasoning blocks from an assistant turn before storing it in history.
   // Re-sending the model's own reasoning back as context confuses reasoning
   // models and bloats the prompt; only the final answer belongs in history.
+  // Covers Qwen3 `<think>…</think>` and Gemma 4 `<|channel>thought\n…<channel|>`.
   const stripThink = (s) =>
-    s.replace(/<think>[\s\S]*?<\/think>\s*/g, "").replace(/<think>[\s\S]*$/, "").trim();
+    s
+      .replace(/<\|channel>thought\n?[\s\S]*?<channel\|>\s*/g, "")
+      .replace(/<\|channel>thought\n?[\s\S]*$/, "")
+      .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+      .replace(/<think>[\s\S]*$/, "")
+      .trim();
 
   const history = []; // {role, content}
   let currentModel = "";
@@ -381,8 +387,24 @@
   }
 
   function renderContent(text) {
-    // 1. Pull out Qwen3 <think>...</think> blocks before any other processing.
+    // 1a. Pull out Gemma 4 channel-thought blocks, then Qwen3 <think> blocks.
+    // Gemma 4 12B emits  `<|channel>thought\n[reasoning]<channel|>[final]`
+    // (Google's official prompt format). Surface the reasoning as a Reasoning
+    // section identical to <think>, then keep the final answer as body text.
     let thinkHtml = "";
+    text = text.replace(/<\|channel>thought\n?([\s\S]*?)<channel\|>/g, (_, inner) => {
+      const trimmed = inner.trim();
+      if (trimmed) {
+        thinkHtml += `<div class="think"><div class="think-label">Reasoning</div>${escapeHtml(trimmed)}</div>`;
+      }
+      return "";
+    });
+    // Unclosed Gemma channel-thought at the end (streaming in progress).
+    text = text.replace(/<\|channel>thought\n?([\s\S]*)$/, (_, inner) => {
+      thinkHtml += `<div class="think"><div class="think-label">Reasoning…</div>${escapeHtml(inner.trim())}</div>`;
+      return "";
+    });
+    // 1b. Pull out Qwen3 <think>...</think> blocks.
     text = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, inner) => {
       const trimmed = inner.trim();
       if (trimmed) {
