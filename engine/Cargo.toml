@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.5.20"
+version = "0.6.0-beta.7"
 edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"
@@ -34,7 +34,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 futures-util = "0.3"
-llama-cpp-2 = { version = "0.1.146", features = ["sampler"] }
+llama-cpp-2 = { path = "vendor/llama-cpp-rs/llama-cpp-2", version = "0.1.147", features = ["sampler"] }
 encoding_rs = "0.8"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
