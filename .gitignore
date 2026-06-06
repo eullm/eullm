@@ -50,6 +50,10 @@ Thumbs.db
 *.sqlite
 *.db
 vendor/
+# Exception: engine/vendor/ tracks vendored Rust crates (llama-cpp-rs fork
+# pinned to the gemma4uv-capable llama.cpp commit). See engine/vendor/README.
+!engine/vendor/
+!engine/vendor/**
 
 # Datasets / corpora (GDPR-sensitive, never commit)
 *.jsonl

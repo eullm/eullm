@@ -49,6 +49,10 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
+        with:
+          # llama.cpp source lives in engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp
+          # as a submodule of this repo; required to build the engine.
+          submodules: recursive
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
