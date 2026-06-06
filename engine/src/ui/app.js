@@ -26,7 +26,13 @@
   };
 
   const settings = {
-    system: "",
+    // Default math-formatting nudge: some models close a $...$ block before the
+    // final fraction, leaving raw LaTeX. This asks them to delimit every full
+    // formula. Purely a formatting hint — the user can clear it in Settings.
+    system:
+      "When you write mathematics, wrap each complete formula — including the " +
+      "final result — in $...$ (inline) or $$...$$ (block) LaTeX delimiters. " +
+      "Never leave commands like \\frac or \\sqrt outside the delimiters.",
     temperature: 0.7,
     maxTokens: 2048,
     // Reasoning ON by default. Reasoning models (DeepSeek-R1, QwQ) are trained
@@ -235,8 +241,69 @@
       /(?<![\w$])\$(?!\s)([^\s$][^\n$]*?[^\s$]|[^\s$])\$(?![\w$\d])/g,
       (raw, inner) => looksLikeCurrency(inner) ? raw : tryMath(inner, false, raw)
     );
+    // Orphan LaTeX: LLMs often close a $...$ block before the final fraction
+    // and leave `\frac{..}{..}` / `\sqrt{..}` as bare text. A backslash command
+    // with brace args never occurs in normal prose, so rendering it is safe.
+    body = renderOrphanMath(body);
     return body;
   }
+
+  // Render bare \frac{..}{..} and \sqrt{..} that sit OUTSIDE math delimiters,
+  // without re-touching the <math> / .math-raw islands already produced above
+  // (we only scan the plain-text gaps between them).
+  function renderOrphanMath(body) {
+    if (!/\\(?:frac|sqrt)/.test(body)) return body;
+    const island = /<math[\s\S]*?<\/math>|<span class="math-raw">[\s\S]*?<\/span>/g;
+    let out = "";
+    let last = 0;
+    let m;
+    while ((m = island.exec(body)) !== null) {
+      out += renderOrphanInPlain(body.slice(last, m.index));
+      out += m[0];
+      last = island.lastIndex;
+    }
+    out += renderOrphanInPlain(body.slice(last));
+    return out;
+  }
+
+  function renderOrphanInPlain(text) {
+    let out = "";
+    let i = 0;
+    while (i < text.length) {
+      if (text[i] === "\\") {
+        const cmd = text.slice(i + 1).match(/^(frac|sqrt)/);
+        if (cmd) {
+          const name = cmd[1];
+          let k = i + 1 + name.length;
+          let ok = true;
+          try {
+            if (name === "sqrt" && text[k] === "[") {
+              const close = text.indexOf("]", k);
+              if (close === -1) throw new Error("bad");
+              k = close + 1;
+            }
+            const groups = name === "frac" ? 2 : 1;
+            for (let g = 0; g < groups; g++) {
+              if (text[k] !== "{") throw new Error("bad");
+              k = readGroup(text, k).end;
+            }
+          } catch (_) {
+            ok = false;
+          }
+          if (ok) {
+            const span = text.slice(i, k);
+            out += tryMath(span, false, span);
+            i = k;
+            continue;
+          }
+        }
+      }
+      out += text[i];
+      i++;
+    }
+    return out;
+  }
+
 
   // ── Markdown-lite: headings, lists, blockquote, hr, bold/italic ────────
   // Line-based block processing (so a heading at line 1 doesn't bleed into
