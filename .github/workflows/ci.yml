@@ -67,7 +67,12 @@ jobs:
         run: cargo test
       - name: Clippy
         working-directory: engine
-        run: cargo clippy -- -D warnings -A dead-code -A unused-imports
+        # --no-deps: lint only our own crate, never dependencies. The vendored
+        # llama-cpp-rs crates are workspace members (a path dep under the
+        # workspace root is always a member), so without --no-deps the
+        # RUSTC_WORKSPACE_WRAPPER would run clippy on their build scripts and
+        # `-D warnings` would fail on upstream's pedantic/missing-docs findings.
+        run: cargo clippy --no-deps -- -D warnings -A dead-code -A unused-imports
 
   # ── Hub ──────────────────────────────────────────────────────────────
   hub:
