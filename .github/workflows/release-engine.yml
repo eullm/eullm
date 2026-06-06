@@ -63,6 +63,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -162,6 +165,9 @@ jobs:
       image: nvidia/cuda:${{ matrix.cuda_tag }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
+          submodules: recursive
 
       - name: Install build dependencies
         run: |
@@ -269,6 +275,9 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
+        with:
+          # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -339,6 +348,9 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
+        with:
+          # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
