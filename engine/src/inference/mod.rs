@@ -215,16 +215,18 @@ pub const DEFAULT_HARMONY_FILTERS: &[&str] = &[
     // Combined patterns — match the whole Harmony channel block as one piece,
     // including the role word in the middle. Observed values in the wild:
     // `thought` (Gemma 4 12B reasoning preamble), `analysis` and `final` are
-    // the canonical GPT-OSS Harmony channels.
+    // the canonical GPT-OSS Harmony channels. These match only EMPTY blocks
+    // (no content between the role and the closing tag); blocks with content
+    // pass through to the client so the UI can render them as a Reasoning
+    // section — see `app.js` for the matching Gemma `<|channel>thought…` pass.
     "<|channel>thought<channel|>",
     "<|channel>analysis<channel|>",
     "<|channel>final<channel|>",
     "<|message|>",
-    // Single delimiters — fallback for Harmony variants we have not enumerated
-    // and for stray `<|image|>`/`<|audio|>` markers mid-sentence. Will leave
-    // the body word visible when used alone, but at least scrubs the syntax.
-    "<|channel>",
-    "<channel|>",
+    // Stray non-channel markers — for mid-sentence leakage we have no UX for.
+    // Note: we deliberately do NOT scrub bare `<|channel>` / `<channel|>` as
+    // substrings any more. Doing so used to leave `thought\n[reasoning]` as
+    // naked text whenever Gemma 4 emitted a non-empty thought block.
     "<|image>",
     "<image|>",
     "<|audio>",

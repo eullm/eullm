@@ -338,10 +338,15 @@ body {
 .msg-content math { font-size: 1.05em; }
 .msg-content math[display="block"] {
   display: block;
-  margin: 10px 0;
+  margin: 4px 0;
   text-align: center;
   overflow-x: auto;
 }
+/* Tighten the gap between consecutive list items that contain a display-math
+   block, so the multi-step "1./formula/2./formula" pattern doesn't accumulate
+   excess vertical whitespace from <li> + <math> margins compounding. */
+.msg-content li > math[display="block"]:first-child { margin-top: 2px; }
+.msg-content li > math[display="block"]:last-child { margin-bottom: 2px; }
 .math-raw {
   font-family: var(--mono);
   font-size: 0.92em;

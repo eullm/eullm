@@ -44,11 +44,17 @@
     math: true,
   };
 
-  // Strip <think>…</think> from an assistant turn before storing it in history.
+  // Strip reasoning blocks from an assistant turn before storing it in history.
   // Re-sending the model's own reasoning back as context confuses reasoning
   // models and bloats the prompt; only the final answer belongs in history.
+  // Covers Qwen3 `<think>…</think>` and Gemma 4 `<|channel>thought\n…<channel|>`.
   const stripThink = (s) =>
-    s.replace(/<think>[\s\S]*?<\/think>\s*/g, "").replace(/<think>[\s\S]*$/, "").trim();
+    s
+      .replace(/<\|channel>thought\n?[\s\S]*?<channel\|>\s*/g, "")
+      .replace(/<\|channel>thought\n?[\s\S]*$/, "")
+      .replace(/<think>[\s\S]*?<\/think>\s*/g, "")
+      .replace(/<think>[\s\S]*$/, "")
+      .trim();
 
   const history = []; // {role, content}
   let currentModel = "";
@@ -325,6 +331,15 @@
     let listKind = null; // "ul" | "ol" | null
     const closeList = () => { if (listKind) { out.push(`</${listKind}>`); listKind = null; } };
 
+    // A line that should NOT break an open list: blank lines, and lines whose
+    // only content is a single block-level <math> island. Both are common
+    // separators between numbered items when math appears in the middle.
+    const inListAllowed = (l) => {
+      if (!listKind) return false;
+      if (!l.trim()) return true;
+      return /^\s*<math[^>]*display="block"[^>]*>[\s\S]*?<\/math>\s*$/.test(l);
+    };
+
     for (const line of lines) {
       // Horizontal rule
       if (/^[-_*]{3,}\s*$/.test(line)) {
@@ -359,8 +374,12 @@
         out.push(`<blockquote>${renderInline(bq[1])}</blockquote>`);
         continue;
       }
-      // Plain line — close any open list and pass through with inline formatting.
-      closeList();
+      // Plain line. Keep the list alive across blank lines and standalone
+      // display-math blocks — otherwise every `1.` after a `$$...$$` would
+      // start a new <ol> and the numbering would visibly restart at 1.
+      if (!inListAllowed(line)) {
+        closeList();
+      }
       out.push(renderInline(line));
     }
     closeList();
@@ -368,8 +387,24 @@
   }
 
   function renderContent(text) {
-    // 1. Pull out Qwen3 <think>...</think> blocks before any other processing.
+    // 1a. Pull out Gemma 4 channel-thought blocks, then Qwen3 <think> blocks.
+    // Gemma 4 12B emits  `<|channel>thought\n[reasoning]<channel|>[final]`
+    // (Google's official prompt format). Surface the reasoning as a Reasoning
+    // section identical to <think>, then keep the final answer as body text.
     let thinkHtml = "";
+    text = text.replace(/<\|channel>thought\n?([\s\S]*?)<channel\|>/g, (_, inner) => {
+      const trimmed = inner.trim();
+      if (trimmed) {
+        thinkHtml += `<div class="think"><div class="think-label">Reasoning</div>${escapeHtml(trimmed)}</div>`;
+      }
+      return "";
+    });
+    // Unclosed Gemma channel-thought at the end (streaming in progress).
+    text = text.replace(/<\|channel>thought\n?([\s\S]*)$/, (_, inner) => {
+      thinkHtml += `<div class="think"><div class="think-label">Reasoning…</div>${escapeHtml(inner.trim())}</div>`;
+      return "";
+    });
+    // 1b. Pull out Qwen3 <think>...</think> blocks.
     text = text.replace(/<think>([\s\S]*?)<\/think>/g, (_, inner) => {
       const trimmed = inner.trim();
       if (trimmed) {
@@ -383,7 +418,13 @@
       return "";
     });
 
-    // 2. Escape HTML first so user/model text can never inject tags.
+    // 2a. Collapse runs of blank lines (LLMs commonly emit `\n\n\n`+, which —
+    //     combined with `white-space: pre-wrap` on .msg-content — creates
+    //     visible empty lines that pile up on top of block-element margins).
+    //     One blank line between blocks is enough to separate paragraphs.
+    text = text.replace(/\n{3,}/g, "\n\n");
+
+    // 2b. Escape HTML first so user/model text can never inject tags.
     let body = escapeHtml(text);
 
     // 3. Stash code spans (fenced + inline) as opaque placeholders so the

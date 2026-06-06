@@ -1060,11 +1060,14 @@ mod tests {
     }
 
     #[test]
-    fn filter_falls_back_to_delimiter_strip_for_unknown_role() {
-        // If the model produces a Harmony channel with a role word we have
-        // not enumerated in DEFAULT_HARMONY_FILTERS, the single-delimiter
-        // entries still scrub the visible syntax; the word between is left
-        // dangling. Documents the degradation contract.
+    fn unknown_channel_role_passes_through_untouched() {
+        // Contract (since `<|channel>` / `<channel|>` were removed from the
+        // single-delimiter fallback): if the model produces a Harmony channel
+        // with a role we have NOT enumerated, the whole `<|channel>ROLE<channel|>`
+        // block reaches the client verbatim. The UI can then choose how to
+        // surface it (e.g. as a Reasoning box for `thought`). The old fallback
+        // was actively harmful for Gemma 4: it stripped `<|channel>` and
+        // `<channel|>` separately and left `thought\n[reasoning]` as naked text.
         let stops = gemma_stops();
         let filters = harmony_filters();
         let mut pending = String::new();
@@ -1075,12 +1078,13 @@ mod tests {
             &["<|channel>banana<channel|>Hello"],
         );
         assert!(!stopped);
-        assert_eq!(emitted, "bananaHello");
+        assert_eq!(emitted, "<|channel>banana<channel|>Hello");
     }
 
     #[test]
     fn filter_works_across_token_boundaries() {
-        // Realistic case: marker split across two model pieces.
+        // Realistic case: a known stray marker (`<|image>`) split across two
+        // model pieces still gets scrubbed.
         let stops = gemma_stops();
         let filters = harmony_filters();
         let mut pending = String::new();
@@ -1088,7 +1092,7 @@ mod tests {
             &mut pending,
             &stops,
             &filters,
-            &["before <|chan", "nel>after"],
+            &["before <|ima", "ge>after"],
         );
         assert!(!stopped);
         assert_eq!(emitted, "before after");
