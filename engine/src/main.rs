@@ -1185,7 +1185,21 @@ async fn cmd_run(
             n_batch,
             cache_type_k,
             cache_type_v,
-            mmproj_path: mmproj_for_config,
+            mmproj_path: mmproj_for_config.clone(),
+        };
+
+        // The continuous-batching scheduler is text-only; multimodal models
+        // must be served by the sequential `InferenceEngine` so that
+        // `/api/chat` requests carrying `images` reach `generate_multimodal`.
+        // Force batch_size=0 when an mmproj is present (vision is single-user
+        // interactive — losing batching here is not a practical regression).
+        let batch_size = if mmproj_for_config.is_some() {
+            if batch_size > 0 {
+                println!("Multimodal model — falling back to sequential mode (batch_size=0).");
+            }
+            0
+        } else {
+            batch_size
         };
 
         if batch_size > 0 {

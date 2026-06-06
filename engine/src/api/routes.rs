@@ -170,6 +170,64 @@ fn parse_format_grammar(body: &Value) -> Option<String> {
     }
 }
 
+// ── Multimodal MVP helpers ─────────────────────────────────────────────
+// Scope: a single user turn whose last message carries `images: [<base64>]`
+// (Ollama convention). The history is ignored for now — vision turns are
+// treated as one-shot probes. Gemma 4 is the only vision family in our
+// catalog, so the chat template here is hard-coded; switch on
+// `template.family()` when more land.
+
+/// Pull base64-encoded images from the LAST user message. Returns
+/// `(text, media)` with `media` non-empty only when the client attached
+/// images. Accepts both raw base64 and the `data:...;base64,...` prefix.
+#[cfg(feature = "multimodal")]
+fn extract_multimodal_payload(messages: &[Value]) -> Option<(String, Vec<Vec<u8>>)> {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    let last_user = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))?;
+    let images_arr = last_user.get("images")?.as_array()?;
+    if images_arr.is_empty() {
+        return None;
+    }
+    let mut media = Vec::with_capacity(images_arr.len());
+    for v in images_arr {
+        let s = v.as_str()?;
+        // `data:image/jpeg;base64,XXX` → keep only the payload after the comma.
+        let payload = s.rsplit(',').next().unwrap_or(s);
+        media.push(STANDARD.decode(payload).ok()?);
+    }
+    let text = last_user
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+    Some((text, media))
+}
+
+/// Wrap a user prompt in the Gemma chat template with an mtmd media marker
+/// placed inside the user turn (matches `run_multimodal_oneshot` in main.rs).
+#[cfg(feature = "multimodal")]
+fn gemma_multimodal_prompt(user_text: &str) -> String {
+    let marker = llama_cpp_2::mtmd::mtmd_default_marker();
+    format!("<start_of_turn>user\n{marker}\n{user_text}<end_of_turn>\n<start_of_turn>model\n")
+}
+
+/// Background mtmd-aware generation, mirroring `sequential_to_channel`.
+#[cfg(feature = "multimodal")]
+fn multimodal_to_channel(
+    engine: Arc<InferenceEngine>,
+    request: GenerateRequest,
+    media: Vec<Vec<u8>>,
+) -> mpsc::Receiver<StreamEvent> {
+    let (tx, rx) = mpsc::channel::<StreamEvent>(64);
+    tokio::task::spawn_blocking(move || {
+        engine.generate_multimodal(&request, &media, tx);
+    });
+    rx
+}
+
 /// Format chat messages into a prompt string using the model-appropriate template.
 /// When `think` is false, suppresses Qwen3 thinking mode (ChatML only).
 fn format_chat_prompt(messages: &[Value], think: bool, model_name: &str) -> String {
@@ -521,6 +579,77 @@ async fn chat(
         .unwrap_or_default();
 
     let messages = inject_web_content(messages, state.web_enabled, state.ctx_size, state.batch_size).await;
+
+    // ── Multimodal MVP branch ──────────────────────────────────────────
+    // If the last user message carries `images`, route through the
+    // sequential mtmd path. `swap_model` forces sequential mode when the
+    // loaded model has an mmproj, so `snap.engine` is expected to be Some.
+    // If it isn't, the operator loaded a text-only model and the client is
+    // trying to send pictures anyway → 503 with an explicit message.
+    #[cfg(feature = "multimodal")]
+    if let Some((user_text, media)) = extract_multimodal_payload(&messages) {
+        let engine = match snap.engine.as_ref() {
+            Some(e) => Arc::clone(e),
+            None => {
+                return Err((
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({
+                        "error": "Multimodal request but engine is in batched (text-only) mode \
+                                 — the loaded model has no mmproj projector."
+                    })),
+                ));
+            }
+        };
+        let sp = parse_generate_params(&body);
+        let mm_request = GenerateRequest {
+            prompt: gemma_multimodal_prompt(&user_text),
+            max_tokens: sp.max_tokens,
+            temperature: sp.temperature,
+            top_k: sp.top_k,
+            top_p: sp.top_p,
+            min_p: sp.min_p,
+            repeat_penalty: sp.repeat_penalty,
+            repeat_last_n: sp.repeat_last_n,
+            seed: sp.seed,
+            num_ctx: sp.num_ctx,
+            // Hand-built Gemma template with the mtmd marker — do NOT let
+            // generate() add its own BOS/template on top.
+            raw: true,
+            stop_sequences: vec!["<end_of_turn>".to_string()],
+            filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            grammar: None,
+        };
+        if is_streaming(&body) {
+            let rx = multimodal_to_channel(engine, mm_request, media);
+            return Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat));
+        }
+        let rx = multimodal_to_channel(engine, mm_request, media);
+        let (text, tokens_generated, tokens_prompt, duration_ms) = collect_stream(rx)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
+        let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
+        audit.input_tokens = tokens_prompt;
+        audit.output_tokens = tokens_generated;
+        audit.duration_ms = duration_ms;
+        AuditLogger::new().log(&audit);
+        return Ok(Json(json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "message": { "role": "assistant", "content": text },
+            "done": true,
+            "done_reason": "stop",
+            "total_duration": duration_ms * 1_000_000,
+            "load_duration": 0,
+            "prompt_eval_count": tokens_prompt,
+            "prompt_eval_duration": 0,
+            "eval_count": tokens_generated,
+            "eval_duration": duration_ms * 1_000_000
+        }))
+        .into_response());
+    }
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;

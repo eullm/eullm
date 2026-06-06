@@ -655,6 +655,7 @@ dependencies = [
  "assert_cmd",
  "async-stream",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "crossbeam-channel",
