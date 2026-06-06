@@ -164,6 +164,16 @@ jobs:
     container:
       image: nvidia/cuda:${{ matrix.cuda_tag }}
     steps:
+      # The nvidia/cuda image ships without git. actions/checkout then falls
+      # back to a REST API tarball download, which cannot fetch submodules
+      # ("Input 'submodules' not supported when falling back to download using
+      # the GitHub REST API"). Installing git BEFORE checkout lets it do a real
+      # clone and pull the llama.cpp submodule.
+      - name: Install git (container has none; required for submodule checkout)
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y git
+
       - uses: actions/checkout@v5
         with:
           # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
@@ -413,7 +423,14 @@ jobs:
           }
           Write-Host "MSVC env activated."
 
+      # continue-on-error: a transient failure of the GitHub Actions cache
+      # service during restore must not nuke this ~50 min long-pole job. On
+      # beta.7 the cache restore here errored and killed the whole build before
+      # a single object compiled. A cache miss/blip should degrade to a slower,
+      # cache-less build (sccache/S3 still carries the C++/CUDA objects anyway),
+      # never a hard failure.
       - uses: Swatinem/rust-cache@v2
+        continue-on-error: true
         with:
           key: x86_64-pc-windows-msvc-cuda-12.8
 

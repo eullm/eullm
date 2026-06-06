@@ -73,9 +73,12 @@ include = [
 
 [dependencies]
 
+# EuLLM vendoring: excluded from the root workspace (cap-lints allow), so the
+# upstream `{ workspace = true }` inheritance is de-inlined to upstream's exact
+# values (ysimonson:support-gemma4-12b @ c491763b workspace.dependencies).
 [build-dependencies]
-bindgen = { workspace = true }
-cc = { workspace = true, features = ["parallel"] }
+bindgen = "0.72.1"
+cc = { version = "1.2.61", features = ["parallel"] }
 cmake = "0.1"
 find_cuda_helper = "0.2.0"
 glob = "0.3.3"

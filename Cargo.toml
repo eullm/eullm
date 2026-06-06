@@ -3,47 +3,23 @@ resolver = "2"
 members = [
     "engine",
     "hub",
-    # Vendored llama-cpp-rs (ysimonson:support-gemma4-12b @ c491763b,
-    # upstream PR utilityai/llama-cpp-rs#1034). Absorbed into the root
-    # workspace so the upstream `workspace = true` inheritance in these
-    # crates resolves against the matching keys below — keeping the vendor
-    # tree byte-identical to upstream is preferable to rewriting it. The
-    # llama.cpp C++ source is a git submodule pinned to commit
-    # 7c158fbb4aec1bdc9c81d6ca0e785139f4826fae (first commit including the
-    # `gemma4uv` projector required by Gemma 4 12B Unified multimodal).
+    # Vendored llama-cpp-rs (ysimonson:support-gemma4-12b @ c491763b, upstream
+    # PR utilityai/llama-cpp-rs#1034) — the llama.cpp pin carries the `gemma4uv`
+    # projector that Gemma 4 12B Unified multimodal needs. These are members
+    # because a path dependency living under the workspace root is always
+    # promoted to a member regardless of `exclude` or a nested `[workspace]`
+    # (verified empirically). To keep EuLLM's `-D warnings` clippy gate off this
+    # third-party code, the CI/release clippy step uses `--no-deps` (lints only
+    # our own crates, never dependencies). The vendored manifests are
+    # self-contained (dependency versions inlined from upstream's
+    # `[workspace.dependencies]`), so no root inheritance table is needed.
     #
-    # When utilityai/llama-cpp-rs#1034 merges and llama-cpp-2 0.1.147+ is
-    # published, delete this vendor tree, drop these two members, drop the
-    # `[workspace.dependencies]` entries below, restore engine/Cargo.toml
-    # to the plain registry pin, and remove the llama.cpp submodule.
+    # llama.cpp C++ source is a git submodule pinned to
+    # 7c158fbb4aec1bdc9c81d6ca0e785139f4826fae.
+    #
+    # When utilityai/llama-cpp-rs#1034 merges and llama-cpp-2 0.1.147+ ships on
+    # crates.io: delete this vendor tree, drop these two members, remove the
+    # submodule, and restore engine/Cargo.toml to the registry pin.
     "engine/vendor/llama-cpp-rs/llama-cpp-2",
     "engine/vendor/llama-cpp-rs/llama-cpp-sys-2",
 ]
-
-# Workspace inheritance values consumed by the vendored llama-cpp-rs crates.
-# Copied verbatim from engine/vendor/llama-cpp-rs upstream so the
-# `dep = { workspace = true }` lines in the vendor manifests keep working
-# without any modification.
-[workspace.dependencies]
-thiserror = "2"
-tracing = "0.1"
-tracing-core = "0.1"
-hf-hub = { version = "0.5.0" }
-criterion = "0.5.1"
-pprof = "0.13.0"
-bindgen = "0.72.1"
-cc = "1.2.61"
-anyhow = "1.0.102"
-clap = "4.6.0"
-encoding_rs = "0.8.35"
-tracing-subscriber = { version = "0.3", features = ["json"] }
-
-# Lints applied only to crates that opt in via `[lints] workspace = true`.
-# Our own crates (engine, hub) do NOT opt in, so these strict warnings only
-# affect the vendored llama-cpp-rs crates — same behavior as upstream.
-[workspace.lints.rust]
-missing_docs = { level = "warn" }
-missing_debug_implementations = { level = "warn" }
-
-[workspace.lints.clippy]
-pedantic = { level = "warn" }
