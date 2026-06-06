@@ -90,8 +90,8 @@
     },
     {
       "id": "gemma-4-e4b",
-      "name": "Gemma 4 E4B Instruct",
-      "description": "Google Gemma 4, E4B effective-parameter variant. Apache 2.0, strong multilingual chat (140+ languages). Mixed SWA architecture (D=512/256): the engine auto-pins the KV cache to f16, which it requires.",
+      "name": "Gemma 4 E4B Instruct (vision-capable)",
+      "description": "Google Gemma 4, E4B effective-parameter variant. Apache 2.0, strong multilingual chat (140+ languages), multimodal text + image. Mixed SWA architecture (D=512/256): the engine auto-pins the KV cache to f16, which it requires. Released March 2026 — its mmproj uses the pre-unified projector type, so it works with the currently-shipped llama-cpp-2 (unlike the 12B Unified variant, whose newer `gemma4uv` projector awaits an upstream bump).",
       "params_b": 4.0,
       "quantization": "Q4_K_M",
       "size_bytes": 4977169568,
@@ -99,11 +99,13 @@
       "languages": ["en", "it", "de", "fr", "es", "pt", "nl", "zh", "ja", "ko"],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual"],
+      "tags": ["instruct", "multilingual", "multimodal", "vision"],
       "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
       "hf_filename": "gemma-4-E4B-it-Q4_K_M.gguf",
       "digest": "",
-      "recommended": true
+      "recommended": true,
+      "mmproj_repo": "unsloth/gemma-4-E4B-it-GGUF",
+      "mmproj_filename": "mmproj-F16.gguf"
     },
     {
       "id": "phi-3.5-mini",

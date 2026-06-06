@@ -630,6 +630,27 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
     if let Some(gguf) = store.gguf_path(&entry.id) {
         println!("Model '{}' is already downloaded.", entry.name);
         println!("  GGUF: {}", gguf.display());
+
+        // If the catalog declares a multimodal projector (mmproj) and it's not
+        // present on disk, fetch it now. Happens when the user pulled before
+        // the catalog gained mmproj fields — without this branch the only fix
+        // would be to delete the model and re-download the full ~7 GB.
+        if entry.mmproj_repo.is_some()
+            && entry.mmproj_filename.is_some()
+            && store.mmproj_path(&entry.id).is_none()
+        {
+            let model_dir = store.model_path(&entry.id);
+            if let Some(mmproj_filename) = download_mmproj(entry, &model_dir).await {
+                // Refresh the manifest so its mmproj_file matches disk reality.
+                let gguf_name = gguf.file_name().and_then(|s| s.to_str());
+                if let Err(e) =
+                    store.write_manifest(entry, "ready", gguf_name, Some(&mmproj_filename))
+                {
+                    eprintln!("  Warning: mmproj downloaded but manifest update failed: {e}");
+                }
+            }
+        }
+
         println!("\nRun with: eullm run {model}");
         return;
     }
@@ -698,53 +719,12 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
 
     // Optional: download the multimodal projector (mmproj) alongside the
     // GGUF. Multimodal models in the catalog declare `mmproj_repo` and
-    // `mmproj_filename`; for everyone else this is a no-op. The projector
-    // is small (typically 100-200 MB for vision-only) compared to the main
-    // weights, so we don't gate it behind a flag.
-    let mut mmproj_filename_stored: Option<String> = None;
-    if result.is_ok()
-        && let (Some(mmproj_repo), Some(mmproj_filename)) = (
-            entry_clone.mmproj_repo.as_ref(),
-            entry_clone.mmproj_filename.as_ref(),
-        )
-    {
-        let mmproj_dest = model_dir.join(mmproj_filename);
-        println!();
-        println!(
-            "  Downloading multimodal projector {} from {}...",
-            mmproj_filename, mmproj_repo
-        );
-        println!("  Destination: {}", mmproj_dest.display());
-
-        use crate::registry::{download_from_huggingface, format_progress};
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::sync::Arc;
-
-        let last_printed = Arc::new(AtomicU64::new(0));
-        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
-            let last = last_printed.load(Ordering::Relaxed);
-            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
-                last_printed.store(downloaded, Ordering::Relaxed);
-                eprint!("\r  {}", format_progress(downloaded, total));
-                let _ = std::io::Write::flush(&mut std::io::stderr());
-            }
-        });
-
-        match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, Some(progress)).await {
-            Ok(()) => {
-                eprintln!();
-                println!("  mmproj ready ({}).", mmproj_filename);
-                mmproj_filename_stored = Some(mmproj_filename.clone());
-            }
-            Err(e) => {
-                eprintln!();
-                // Non-fatal: the GGUF is already on disk, the model is
-                // usable in text-only mode. Multimodal builds will refuse
-                // image input until the user re-pulls or downloads manually.
-                eprintln!("  Warning: mmproj download failed ({e}). Model will run text-only.");
-            }
-        }
-    }
+    // `mmproj_filename`; for everyone else this is a no-op.
+    let mmproj_filename_stored: Option<String> = if result.is_ok() {
+        download_mmproj(&entry_clone, &model_dir).await
+    } else {
+        None
+    };
 
     match result {
         Ok(()) => {
@@ -777,6 +757,70 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
             // re-attempt cleanly.
             let _ = store.delete(&entry_clone.id);
             std::process::exit(1);
+        }
+    }
+}
+
+/// Download the multimodal projector for `entry` into `model_dir`, if the
+/// catalog declares one. Returns the on-disk filename when the file ended up
+/// present (either freshly downloaded or already there), `None` otherwise.
+/// Non-fatal: on failure we print a warning and let the caller proceed.
+async fn download_mmproj(
+    entry: &models::CatalogEntry,
+    model_dir: &std::path::Path,
+) -> Option<String> {
+    let (Some(mmproj_repo), Some(mmproj_filename)) =
+        (entry.mmproj_repo.as_ref(), entry.mmproj_filename.as_ref())
+    else {
+        return None;
+    };
+    let mmproj_dest = model_dir.join(mmproj_filename);
+
+    // Idempotency: if the file is already on disk and non-empty, just record
+    // it. Lets this helper be called from both the first pull and the
+    // mmproj-recovery branch without re-downloading 800+ MB.
+    if mmproj_dest.is_file()
+        && let Ok(meta) = std::fs::metadata(&mmproj_dest)
+        && meta.len() > 0
+    {
+        return Some(mmproj_filename.clone());
+    }
+
+    println!();
+    println!(
+        "  Downloading multimodal projector {} from {}...",
+        mmproj_filename, mmproj_repo
+    );
+    println!("  Destination: {}", mmproj_dest.display());
+
+    use crate::registry::{download_from_huggingface, format_progress};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+
+    let last_printed = Arc::new(AtomicU64::new(0));
+    let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+        let last = last_printed.load(Ordering::Relaxed);
+        if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+            last_printed.store(downloaded, Ordering::Relaxed);
+            eprint!("\r  {}", format_progress(downloaded, total));
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+        }
+    });
+
+    match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, Some(progress)).await {
+        Ok(()) => {
+            eprintln!();
+            println!("  mmproj ready ({}).", mmproj_filename);
+            Some(mmproj_filename.clone())
+        }
+        Err(e) => {
+            eprintln!();
+            // Non-fatal: the GGUF is on disk, the model is usable in text-only
+            // mode. Multimodal builds will refuse image input until the user
+            // re-runs `pull` (which will retry this download) or drops the
+            // file in manually.
+            eprintln!("  Warning: mmproj download failed ({e}). Model will run text-only.");
+            None
         }
     }
 }
