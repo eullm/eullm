@@ -650,11 +650,12 @@ dependencies = [
 
 [[package]]
 name = "eullm-engine"
-version = "0.6.0-beta.7"
+version = "0.6.0-beta.8"
 dependencies = [
  "assert_cmd",
  "async-stream",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "crossbeam-channel",

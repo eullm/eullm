@@ -418,6 +418,37 @@ body {
 
 /* ── Composer ─────────────────────────────────────────────────────────── */
 
+/* Attached-image preview row, shown above the textarea while the user has
+   a pending image attached. Removed via the × button or after send. */
+.attachment-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  max-width: var(--max-width);
+  margin: 0 auto 6px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.attachment-bar[hidden] { display: none; }
+.attachment-bar img {
+  max-height: 56px;
+  max-width: 96px;
+  border-radius: 6px;
+  object-fit: cover;
+  display: block;
+}
+
+/* Inline images rendered inside user message bubbles. */
+.msg-content img.msg-image {
+  display: block;
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 8px;
+  margin: 6px 0;
+}
+
 .composer {
   background: var(--bg-elev);
   border-top: 1px solid var(--border);

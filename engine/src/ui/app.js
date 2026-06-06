@@ -23,7 +23,17 @@
     stopBtn: $("stop-btn"),
     clearBtn: $("clear-btn"),
     statusGrid: $("status-grid"),
+    attachBtn: $("attach-btn"),
+    imageInput: $("image-input"),
+    attachmentBar: $("attachment-bar"),
+    attachmentThumb: $("attachment-thumb"),
+    attachmentRemove: $("attachment-remove"),
   };
+
+  // Pending image attached to the next outgoing user message. `dataUrl` is
+  // used for the in-page preview; `base64` (no `data:` prefix) is what we
+  // ship to the backend over /api/chat. Cleared after each send.
+  let pendingImage = null;
 
   const settings = {
     // Default math-formatting nudge: some models close a $...$ block before the
@@ -453,7 +463,7 @@
     if (w) w.remove();
   }
 
-  function appendMessage(role, content = "") {
+  function appendMessage(role, content = "", imageDataUrl = null) {
     dismissWelcome();
     const msg = document.createElement("div");
     msg.className = `msg ${role}`;
@@ -466,7 +476,19 @@
       </div>`;
     els.messages.appendChild(msg);
     const contentEl = msg.querySelector(".msg-content");
-    if (content) contentEl.innerHTML = renderContent(content);
+    // Image first, then text — matches how the model sees it (marker, then prompt).
+    if (imageDataUrl) {
+      const img = document.createElement("img");
+      img.className = "msg-image";
+      img.src = imageDataUrl;
+      img.alt = "Attached image";
+      contentEl.appendChild(img);
+    }
+    if (content) {
+      const textEl = document.createElement("div");
+      textEl.innerHTML = renderContent(content);
+      contentEl.appendChild(textEl);
+    }
     scrollToBottom();
     return { msg, contentEl, metaEl: msg.querySelector(".msg-meta") };
   }
@@ -587,12 +609,17 @@
       alert("No model loaded.\n\nStart the engine with:\n  eullm run /path/to/model.gguf");
       return;
     }
-    history.push({ role: "user", content: userText });
-    appendMessage("user", userText);
+    // Snapshot + clear the pending image at send time so a fast Re-attach
+    // mid-stream cannot mix into the next turn. `image` is null for normal
+    // text turns; `dataUrl` is for the preview only, `base64` is what
+    // /api/chat consumes.
+    const image = pendingImage;
+    clearAttachment();
 
-    const messagesToSend = [];
-    if (settings.system) messagesToSend.push({ role: "system", content: settings.system });
-    messagesToSend.push(...history);
+    // History only stores the text — re-sending old images would blow up
+    // the prompt and the multimodal MVP is one-shot anyway.
+    history.push({ role: "user", content: userText });
+    appendMessage("user", userText, image ? image.dataUrl : null);
 
     const { msg, contentEl, metaEl } = appendMessage("assistant", "");
     msg.classList.add("streaming");
@@ -605,20 +632,47 @@
     let tokenCount = 0;
 
     try {
-      const resp = await fetch("/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: abortController.signal,
-        body: JSON.stringify({
-          model: currentModel,
-          messages: messagesToSend,
-          stream: true,
-          temperature: settings.temperature,
-          max_tokens: settings.maxTokens,
-          // Pass-through field for Ollama-compatible backends that honour it.
-          think: settings.think,
-        }),
-      });
+      let resp;
+      if (image) {
+        // Multimodal branch: hit /api/chat (Ollama NDJSON) with the
+        // images:[base64] convention, NOT /v1/chat/completions. The backend
+        // routes this through engine.generate_multimodal(). History is
+        // intentionally omitted — the mtmd MVP is a one-shot probe.
+        const userMsg = { role: "user", content: userText, images: [image.base64] };
+        const messagesToSend = settings.system
+          ? [{ role: "system", content: settings.system }, userMsg]
+          : [userMsg];
+        resp = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            model: currentModel,
+            messages: messagesToSend,
+            stream: true,
+            temperature: settings.temperature,
+            max_tokens: settings.maxTokens,
+          }),
+        });
+      } else {
+        const messagesToSend = [];
+        if (settings.system) messagesToSend.push({ role: "system", content: settings.system });
+        messagesToSend.push(...history);
+        resp = await fetch("/v1/chat/completions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
+          body: JSON.stringify({
+            model: currentModel,
+            messages: messagesToSend,
+            stream: true,
+            temperature: settings.temperature,
+            max_tokens: settings.maxTokens,
+            // Pass-through field for Ollama-compatible backends that honour it.
+            think: settings.think,
+          }),
+        });
+      }
 
       if (!resp.ok) {
         const errText = await resp.text();
@@ -638,12 +692,25 @@
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
-          if (!line || !line.startsWith("data:")) continue;
-          const payload = line.slice(5).trim();
-          if (payload === "[DONE]") continue;
+          if (!line) continue;
+          // Two streaming formats live behind the same loop:
+          //   * Ollama NDJSON (multimodal /api/chat): one JSON object per line,
+          //     no `data:` prefix; delta = `message.content`.
+          //   * OpenAI SSE (/v1/chat/completions): `data: {...}` lines + a
+          //     trailing `[DONE]`; delta = `choices[0].delta.content`.
+          let payload, delta;
+          if (image) {
+            payload = line;
+          } else {
+            if (!line.startsWith("data:")) continue;
+            payload = line.slice(5).trim();
+            if (payload === "[DONE]") continue;
+          }
           try {
             const obj = JSON.parse(payload);
-            const delta = obj.choices?.[0]?.delta?.content || "";
+            delta = image
+              ? (obj.message?.content || "")
+              : (obj.choices?.[0]?.delta?.content || "");
             if (delta) {
               assistantText += delta;
               tokenCount++;
@@ -651,7 +718,7 @@
               scrollToBottom();
             }
           } catch (e) {
-            console.warn("SSE parse error:", e, payload);
+            console.warn("stream parse error:", e, payload);
           }
         }
       }
@@ -675,9 +742,14 @@
     }
   }
 
+  function canSend() {
+    return !!(els.input.value.trim() || pendingImage);
+  }
+
   function setSending(busy) {
-    els.sendBtn.disabled = busy || !els.input.value.trim();
+    els.sendBtn.disabled = busy || !canSend();
     els.input.disabled = busy;
+    els.attachBtn.disabled = busy;
     els.stopBtn.hidden = !busy;
     els.sendBtn.hidden = busy;
     if (!busy) els.input.focus();
@@ -687,7 +759,7 @@
   function autoresize() {
     els.input.style.height = "auto";
     els.input.style.height = Math.min(els.input.scrollHeight, 200) + "px";
-    els.sendBtn.disabled = !els.input.value.trim();
+    els.sendBtn.disabled = !canSend();
   }
 
   els.input.addEventListener("input", autoresize);
@@ -698,10 +770,49 @@
     }
   });
 
+  // ── Attachment handling ───────────────────────────────────────────────
+  // The 📎 button opens the hidden file picker; the chosen image is read
+  // as a data URL, the base64 payload is stripped off the `data:...;base64,`
+  // prefix for the backend, and a thumbnail bar appears above the textarea
+  // until the user sends or removes it.
+  function clearAttachment() {
+    pendingImage = null;
+    els.imageInput.value = "";
+    els.attachmentThumb.removeAttribute("src");
+    els.attachmentBar.hidden = true;
+    els.sendBtn.disabled = !canSend();
+  }
+
+  els.attachBtn.addEventListener("click", () => els.imageInput.click());
+  els.imageInput.addEventListener("change", () => {
+    const file = els.imageInput.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      alert("Only image files are supported for now.");
+      els.imageInput.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result;
+      const comma = dataUrl.indexOf(",");
+      const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+      pendingImage = { dataUrl, base64 };
+      els.attachmentThumb.src = dataUrl;
+      els.attachmentBar.hidden = false;
+      els.sendBtn.disabled = !canSend();
+    };
+    reader.onerror = () => alert("Could not read the selected image.");
+    reader.readAsDataURL(file);
+  });
+  els.attachmentRemove.addEventListener("click", clearAttachment);
+
   els.form.addEventListener("submit", (e) => {
     e.preventDefault();
     const txt = els.input.value.trim();
-    if (!txt) return;
+    // An image-only turn is allowed (the model falls back to its default
+    // "describe this image" behaviour); a fully empty submit is not.
+    if (!txt && !pendingImage) return;
     els.input.value = "";
     autoresize();
     send(txt);
@@ -713,6 +824,7 @@
     if (!history.length) return;
     if (!confirm("Clear conversation?")) return;
     history.length = 0;
+    clearAttachment();
     els.messages.innerHTML = "";
     loadModels(); // re-render the welcome block via re-init
     init(true);

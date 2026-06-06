@@ -101,6 +101,14 @@ impl AppState {
         }
 
         let gguf_path = self.resolve_model(&normalized)?;
+        // Resolve an mmproj sibling (vision projector) if the model store
+        // declares one. Presence of a projector is the signal that this is
+        // a multimodal model — we then force sequential loading (next step)
+        // because the continuous-batching scheduler is text-only.
+        let mmproj_path = self.store.mmproj_path(&normalized);
+        if let Some(ref p) = mmproj_path {
+            tracing::info!("Multimodal model detected — mmproj: {}", p.display());
+        }
         tracing::info!("Swapping model → {normalized} ({})", gguf_path.display());
 
         // ── 1. Unload the current model and WAIT for the scheduler
@@ -138,15 +146,22 @@ impl AppState {
             n_batch: self.n_batch,
             cache_type_k: self.cache_type_k,
             cache_type_v: self.cache_type_v,
-            // Multimodal is currently a CLI-only feature (--image flag on
-            // `eullm run`); the HTTP server does not yet route image input,
-            // so the swap path always loads in text-only mode for now. When
-            // Phase 2 lands, resolve the mmproj path from the model store
-            // here and propagate it like the GGUF.
-            mmproj_path: None,
+            // Multimodal: when the model store declares an mmproj sibling we
+            // load it here so HTTP requests with `images` can route through
+            // `engine.generate_multimodal()`. Models without an mmproj keep
+            // the text-only fast path (None → no extra VRAM, no init cost).
+            mmproj_path: mmproj_path.clone(),
         };
 
-        let batch_size = override_batch_size.unwrap_or(self.batch_size);
+        // The continuous-batching scheduler is text-only — it does not route
+        // mtmd chunks. For multimodal models we therefore force the sequential
+        // `InferenceEngine` (batch_size=0). Vision is interactive single-user
+        // anyway, so losing batching here is not a practical regression.
+        let batch_size = if mmproj_path.is_some() {
+            0
+        } else {
+            override_batch_size.unwrap_or(self.batch_size)
+        };
         let model_name = normalized.clone();
 
         let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
