@@ -48,7 +48,7 @@ pub async fn pick(store: &ModelStore) -> Option<Picked> {
     let locals = list_local_ggufs(store);
     // Try the live catalog (5s timeout); falls back to embedded silently.
     let remote = catalog::fetch_remote().await;
-    Some(prompt_user(&locals, &remote))
+    Some(prompt_user(&locals, &remote, store))
 }
 
 #[derive(Debug, Clone)]
@@ -115,7 +115,11 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
-fn prompt_user(locals: &[LocalModel], catalog_models: &[CatalogEntry]) -> Picked {
+fn prompt_user(
+    locals: &[LocalModel],
+    catalog_models: &[CatalogEntry],
+    store: &ModelStore,
+) -> Picked {
     println!();
     println!("  ╭─ EuLLM ─ choose a model ────────────────────────────────────");
     println!("  │");
@@ -153,7 +157,17 @@ fn prompt_user(locals: &[LocalModel], catalog_models: &[CatalogEntry]) -> Picked
 
         for (orig_i, m) in &ordered {
             let star = if m.recommended { "★" } else { " " };
-            let tag = if m.recommended { "[recommended]" } else { "" };
+            // Mark catalog entries already pulled to the local store so the
+            // user can tell at a glance what is ready to run vs what would
+            // trigger a download.
+            let local_tag = if store.exists(&m.id) { "[local]" } else { "" };
+            let rec_tag = if m.recommended { "[recommended]" } else { "" };
+            let tags = match (local_tag, rec_tag) {
+                ("", "")     => String::new(),
+                ("", r)      => r.to_string(),
+                (l, "")      => l.to_string(),
+                (l, r)       => format!("{l} {r}"),
+            };
             println!(
                 "  │   {:>3}) {} {:<28} {:>8}  {:<14} {}",
                 next_num,
@@ -161,7 +175,7 @@ fn prompt_user(locals: &[LocalModel], catalog_models: &[CatalogEntry]) -> Picked
                 truncate(&m.id, 28),
                 format_size(m.size_bytes),
                 m.license,
-                tag
+                tags
             );
             index.push(MenuItem::Catalog(*orig_i));
             next_num += 1;
