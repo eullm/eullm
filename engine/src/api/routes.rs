@@ -341,7 +341,12 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         }));
     }
 
-    // Add catalog entries (skip duplicates if the loaded model is in the catalog)
+    // Add catalog entries (skip duplicates if the loaded model is in the catalog).
+    // The Ollama-compatible `name` field MUST be the addressable id — clients
+    // pass it back as the `model` field in chat/generate requests, and that's
+    // the only string the model store / picker knows how to resolve. The human
+    // catalog name is exposed alongside as `details.display_name` for UIs that
+    // want to show it.
     for m in EU_CATALOG.iter() {
         if loaded_name.as_deref() == Some(m.name.as_str())
             || loaded_name.as_deref() == Some(m.id.as_str())
@@ -349,7 +354,7 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
             // Replace the placeholder entry above with full catalog metadata
             if let Some(first) = models.first_mut() {
                 *first = json!({
-                    "name": m.name,
+                    "name": m.id,
                     "size": m.size_bytes,
                     "digest": m.digest,
                     "details": {
@@ -358,14 +363,15 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
                         "parameter_size": format!("{:.1}B", m.params_b),
                         "quantization_level": m.quantization,
                         "domain": m.domain,
-                        "source_model": m.source_model()
+                        "source_model": m.source_model(),
+                        "display_name": m.name,
                     }
                 });
             }
             continue;
         }
         models.push(json!({
-            "name": m.name,
+            "name": m.id,
             "size": m.size_bytes,
             "digest": m.digest,
             "details": {
@@ -374,7 +380,8 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
                 "parameter_size": format!("{:.1}B", m.params_b),
                 "quantization_level": m.quantization,
                 "domain": m.domain,
-                "source_model": m.source_model()
+                "source_model": m.source_model(),
+                "display_name": m.name,
             }
         }));
     }
@@ -662,11 +669,14 @@ async fn pull_model(Json(body): Json<Value>) -> Json<Value> {
 // ── OpenAI-compatible handlers ───────────────────────────────────────────────
 
 async fn list_models_openai() -> Json<Value> {
+    // The OpenAI `id` field is what clients echo back as the `model` parameter
+    // in chat requests, so it has to be the addressable catalog id, not the
+    // human display name.
     let data: Vec<Value> = EU_CATALOG
         .iter()
         .map(|m| {
             json!({
-                "id": m.name,
+                "id": m.id,
                 "object": "model",
                 "created": 1700000000_u64,
                 "owned_by": "eullm"

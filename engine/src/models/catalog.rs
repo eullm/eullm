@@ -226,4 +226,22 @@ mod tests {
         let q = find_model("qwen3-8b").unwrap();
         assert_eq!(q.base(), "qwen3");
     }
+
+    /// Every catalog entry's id must resolve through `find_model` — this is
+    /// the contract the API and CLI rely on, since `/api/tags`, `/v1/models`,
+    /// `eullm list` and `eullm run` all use the id as the addressable name.
+    /// If anyone renames an id in catalog.json without updating it elsewhere,
+    /// this test grids.
+    #[test]
+    fn every_catalog_id_resolves() {
+        for m in EU_CATALOG.iter() {
+            assert!(
+                find_model(&m.id).is_some(),
+                "catalog entry id `{}` does not resolve",
+                m.id
+            );
+            // The human name shouldn't accidentally become the addressable id.
+            assert_ne!(m.id, m.name, "id and human name collide for `{}`", m.id);
+        }
+    }
 }
