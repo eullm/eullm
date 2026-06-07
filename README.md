@@ -104,8 +104,9 @@ What you get on top of the Ollama-compatible API:
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.5.8)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
-| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) with Markdown + best-effort LaTeX→MathML rendering | ✅ **Ready (v0.5.5)** | **Yes** — auto-opens after install on Windows |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.6.0)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
+| **Multimodal** — vision + audio understanding via llama.cpp `mtmd` (Gemma 4 12B). Image OCR + scene description in the Chat UI and CLI; audio understanding via CLI | 🆕 **New in v0.6.0** — vision validated on Linux + Windows CUDA; audio **experimental** (CLI) | **Yes (vision)** — see [Multimodal](#multimodal-vision--audio-new-in-v060) |
+| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) with Markdown + best-effort LaTeX→MathML rendering, plus **image attachment** for multimodal models | ✅ **Ready (v0.6.0)** | **Yes** — auto-opens after install on Windows |
 | **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | 🚧 Paused after v0.5.6 — needs SmartScreen / launcher redesign before re-shipping | Use the standalone Windows binaries above for now |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
@@ -168,6 +169,7 @@ eullm serve                               # Start API server without loading a m
 
 Key features:
 - **Real inference** powered by llama.cpp (not a mock, not a proxy)
+- **Multimodal (new in v0.6.0)** — vision (image OCR + scene description) and experimental audio understanding via llama.cpp `mtmd`, served through the same Ollama-compatible `/api/chat` and the embedded Chat UI. See [Multimodal](#multimodal-vision--audio-new-in-v060)
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
 - **GPU acceleration** — NVIDIA CUDA *(tested)*, AMD ROCm / Vulkan / Apple Metal *(builds available, [community testing wanted](#-platform-status--help-us-test))*
@@ -180,6 +182,54 @@ Key features:
 - **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64, macOS x64, macOS ARM64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
 - **No network telemetry** — no analytics, no crash reports, no usage stats; audit trail is written locally to `~/.eullm/audit/audit.jsonl` and never transmitted
+
+#### Multimodal: vision + audio (new in v0.6.0)
+
+v0.6.0 adds **multimodal input** — the engine can now *see* images and *hear*
+audio, not just read text. It runs on consumer GPUs, fully local, no data
+leaving the machine. Built on llama.cpp's `mtmd` stack with **Gemma 4 12B**
+(Apache-2.0) and its `gemma4uv` projector.
+
+**What works today, validated end-to-end on an RTX 5070 Ti (Linux + Windows CUDA):**
+
+- **Vision** — attach an image and the model describes the scene, reads text
+  (OCR), and answers questions about it. Works both in the **Chat UI** (📎
+  attach button) and from the **CLI**.
+- **Audio (experimental)** — feed a `.wav` / `.mp3` / `.flac` clip and the model
+  understands it: language, tone, salient content, partial transcription. **CLI
+  only** for now; quality is the model's experimental audio stage (see notes).
+
+```bash
+# Vision / audio one-shot from the CLI (the flag reads any media file)
+echo "Describe this image in detail." | eullm run gemma-4-12b --image photo.jpg
+echo "What is said in this recording?" | eullm run gemma-4-12b --image clip.mp3
+
+# In the Chat UI (auto-opens on `eullm run`): click 📎, attach an image, ask away.
+```
+
+Under the hood: when a model ships a multimodal projector (`mmproj`), the engine
+loads it automatically, routes `/api/chat` requests that carry an `images`
+field through the `mtmd` encode path, and streams the answer back. The projector
+is content-addressed and auto-detects image vs audio from the file bytes.
+
+> **Honest scope (it's an MVP):**
+> - **Vision** is solid and validated on Linux + Windows CUDA. **Audio** is
+>   experimental upstream (llama.cpp flags it as *"audio input is in
+>   experimental stage and may have reduced quality"*) — expect *audio
+>   understanding*, not faithful speech-to-text. For verbatim transcription,
+>   pair the engine with a dedicated STT model.
+> - Multimodal models load in **sequential mode** (the continuous-batching
+>   scheduler is text-only); text-only models keep full batching.
+> - Web Chat UI accepts **images** today; audio is CLI-only for now.
+> - Quality is bounded by the quantized model — a Q4 12B does great OCR and
+>   scene description but can hallucinate specific facts (e.g. a landmark name).
+> - **Linux CUDA note:** the GPU binary links `libnccl.so.2`. If you see
+>   `error while loading shared libraries: libnccl.so.2`, install it with
+>   `sudo apt install -y libnccl2` (packaging fix tracked for a follow-up).
+> - The multimodal build vendors a pre-release of `llama-cpp-rs`
+>   ([utilityai/llama-cpp-rs#1034](https://github.com/utilityai/llama-cpp-rs/pull/1034))
+>   to get the Gemma 4 projector ahead of the upstream merge; it reverts to the
+>   crates.io release once that lands.
 
 ### EULLM Forge
 
@@ -436,6 +486,8 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 * OpenAI + Ollama API compatibility (drop-in replacement)
 * Single binary distribution (Linux/macOS, CUDA/ROCm/Vulkan/Metal)
 * GGUF model support, transparent web browsing, audit trail
+* ✅ **Multimodal (v0.6.0)** — vision + experimental audio understanding via `mtmd` (Gemma 4 12B), in the Chat UI and CLI
+* **Planned — embeddings endpoint** (`/api/embeddings` + `/v1/embeddings`): API parity with Ollama/OpenAI for tooling that expects a vector endpoint
 * **Planned — auto GPU layer fitting** (`--fit` flag): query available VRAM at startup, estimate per-layer + KV cache memory cost from the GGUF header, compute the maximum `n-gpu-layers` that fits, fall back to partial CPU offload otherwise. Targets large dense models (14B–32B at Q4) and MoE models (e.g. Qwen3-30B-A3B, Gemma-4-26B-A4B) on consumer GPUs without manual tuning. Cross-platform (CUDA/ROCm/Vulkan/Metal).
 * Public launch on HackerNews, [dev.to](http://dev.to), Hashnode, LinkedIn
 * GitHub repository active, contributor onboarding
