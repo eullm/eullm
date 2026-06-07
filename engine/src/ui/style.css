@@ -439,6 +439,19 @@ body {
   object-fit: cover;
   display: block;
 }
+.attachment-bar audio {
+  height: 36px;
+  max-width: 240px;
+}
+.attachment-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.85em;
+  color: var(--text-dim, #888);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* Inline images rendered inside user message bubbles. */
 .msg-content img.msg-image {
@@ -446,6 +459,13 @@ body {
   max-width: 320px;
   max-height: 240px;
   border-radius: 8px;
+  margin: 6px 0;
+}
+
+/* Inline audio player rendered inside user message bubbles. */
+.msg-content audio.msg-audio {
+  display: block;
+  max-width: 360px;
   margin: 6px 0;
 }
 

@@ -27,13 +27,18 @@
     imageInput: $("image-input"),
     attachmentBar: $("attachment-bar"),
     attachmentThumb: $("attachment-thumb"),
+    attachmentAudio: $("attachment-audio"),
+    attachmentName: $("attachment-name"),
     attachmentRemove: $("attachment-remove"),
   };
 
-  // Pending image attached to the next outgoing user message. `dataUrl` is
-  // used for the in-page preview; `base64` (no `data:` prefix) is what we
-  // ship to the backend over /api/chat. Cleared after each send.
-  let pendingImage = null;
+  // Pending media (image OR audio) attached to the next outgoing user
+  // message. `dataUrl` drives the in-page preview; `base64` (no `data:`
+  // prefix) is what we ship to the backend over /api/chat; `kind` is
+  // "image" | "audio"; `name` is the original filename. The backend's mtmd
+  // path auto-detects image vs audio from the bytes, so both travel through
+  // the same `images:[...]` field. Cleared after each send.
+  let pendingMedia = null;
 
   const settings = {
     // Default math-formatting nudge: some models close a $...$ block before the
@@ -463,7 +468,7 @@
     if (w) w.remove();
   }
 
-  function appendMessage(role, content = "", imageDataUrl = null) {
+  function appendMessage(role, content = "", media = null) {
     dismissWelcome();
     const msg = document.createElement("div");
     msg.className = `msg ${role}`;
@@ -476,13 +481,19 @@
       </div>`;
     els.messages.appendChild(msg);
     const contentEl = msg.querySelector(".msg-content");
-    // Image first, then text — matches how the model sees it (marker, then prompt).
-    if (imageDataUrl) {
+    // Media first, then text — matches how the model sees it (marker, then prompt).
+    if (media && media.kind === "image") {
       const img = document.createElement("img");
       img.className = "msg-image";
-      img.src = imageDataUrl;
+      img.src = media.dataUrl;
       img.alt = "Attached image";
       contentEl.appendChild(img);
+    } else if (media && media.kind === "audio") {
+      const audio = document.createElement("audio");
+      audio.className = "msg-audio";
+      audio.controls = true;
+      audio.src = media.dataUrl;
+      contentEl.appendChild(audio);
     }
     if (content) {
       const textEl = document.createElement("div");
@@ -609,17 +620,17 @@
       alert("No model loaded.\n\nStart the engine with:\n  eullm run /path/to/model.gguf");
       return;
     }
-    // Snapshot + clear the pending image at send time so a fast Re-attach
-    // mid-stream cannot mix into the next turn. `image` is null for normal
+    // Snapshot + clear the pending media at send time so a fast re-attach
+    // mid-stream cannot mix into the next turn. `media` is null for normal
     // text turns; `dataUrl` is for the preview only, `base64` is what
     // /api/chat consumes.
-    const image = pendingImage;
+    const media = pendingMedia;
     clearAttachment();
 
-    // History only stores the text — re-sending old images would blow up
+    // History only stores the text — re-sending old media would blow up
     // the prompt and the multimodal MVP is one-shot anyway.
     history.push({ role: "user", content: userText });
-    appendMessage("user", userText, image ? image.dataUrl : null);
+    appendMessage("user", userText, media);
 
     const { msg, contentEl, metaEl } = appendMessage("assistant", "");
     msg.classList.add("streaming");
@@ -633,12 +644,13 @@
 
     try {
       let resp;
-      if (image) {
+      if (media) {
         // Multimodal branch: hit /api/chat (Ollama NDJSON) with the
-        // images:[base64] convention, NOT /v1/chat/completions. The backend
-        // routes this through engine.generate_multimodal(). History is
-        // intentionally omitted — the mtmd MVP is a one-shot probe.
-        const userMsg = { role: "user", content: userText, images: [image.base64] };
+        // images:[base64] convention, NOT /v1/chat/completions. Image AND
+        // audio both ride this field — the backend's mtmd path auto-detects
+        // the media type from the bytes. History is intentionally omitted —
+        // the mtmd MVP is a one-shot probe.
+        const userMsg = { role: "user", content: userText, images: [media.base64] };
         const messagesToSend = settings.system
           ? [{ role: "system", content: settings.system }, userMsg]
           : [userMsg];
@@ -699,7 +711,7 @@
           //   * OpenAI SSE (/v1/chat/completions): `data: {...}` lines + a
           //     trailing `[DONE]`; delta = `choices[0].delta.content`.
           let payload, delta;
-          if (image) {
+          if (media) {
             payload = line;
           } else {
             if (!line.startsWith("data:")) continue;
@@ -708,7 +720,7 @@
           }
           try {
             const obj = JSON.parse(payload);
-            delta = image
+            delta = media
               ? (obj.message?.content || "")
               : (obj.choices?.[0]?.delta?.content || "");
             if (delta) {
@@ -743,7 +755,7 @@
   }
 
   function canSend() {
-    return !!(els.input.value.trim() || pendingImage);
+    return !!(els.input.value.trim() || pendingMedia);
   }
 
   function setSending(busy) {
@@ -771,14 +783,19 @@
   });
 
   // ── Attachment handling ───────────────────────────────────────────────
-  // The 📎 button opens the hidden file picker; the chosen image is read
-  // as a data URL, the base64 payload is stripped off the `data:...;base64,`
-  // prefix for the backend, and a thumbnail bar appears above the textarea
+  // The 📎 button opens the hidden file picker; the chosen image OR audio
+  // file is read as a data URL, the base64 payload is stripped off the
+  // `data:...;base64,` prefix for the backend, and a preview bar appears
+  // above the textarea (thumbnail for images, a mini player for audio)
   // until the user sends or removes it.
   function clearAttachment() {
-    pendingImage = null;
+    pendingMedia = null;
     els.imageInput.value = "";
     els.attachmentThumb.removeAttribute("src");
+    els.attachmentThumb.hidden = true;
+    els.attachmentAudio.removeAttribute("src");
+    els.attachmentAudio.hidden = true;
+    els.attachmentName.textContent = "";
     els.attachmentBar.hidden = true;
     els.sendBtn.disabled = !canSend();
   }
@@ -787,8 +804,13 @@
   els.imageInput.addEventListener("change", () => {
     const file = els.imageInput.files?.[0];
     if (!file) return;
-    if (!file.type.startsWith("image/")) {
-      alert("Only image files are supported for now.");
+    const kind = file.type.startsWith("image/")
+      ? "image"
+      : file.type.startsWith("audio/")
+        ? "audio"
+        : null;
+    if (!kind) {
+      alert("Only image and audio files are supported.");
       els.imageInput.value = "";
       return;
     }
@@ -797,12 +819,21 @@
       const dataUrl = reader.result;
       const comma = dataUrl.indexOf(",");
       const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
-      pendingImage = { dataUrl, base64 };
-      els.attachmentThumb.src = dataUrl;
+      pendingMedia = { dataUrl, base64, kind, name: file.name };
+      if (kind === "image") {
+        els.attachmentThumb.src = dataUrl;
+        els.attachmentThumb.hidden = false;
+        els.attachmentAudio.hidden = true;
+      } else {
+        els.attachmentAudio.src = dataUrl;
+        els.attachmentAudio.hidden = false;
+        els.attachmentThumb.hidden = true;
+      }
+      els.attachmentName.textContent = file.name;
       els.attachmentBar.hidden = false;
       els.sendBtn.disabled = !canSend();
     };
-    reader.onerror = () => alert("Could not read the selected image.");
+    reader.onerror = () => alert("Could not read the selected file.");
     reader.readAsDataURL(file);
   });
   els.attachmentRemove.addEventListener("click", clearAttachment);
@@ -812,7 +843,7 @@
     const txt = els.input.value.trim();
     // An image-only turn is allowed (the model falls back to its default
     // "describe this image" behaviour); a fully empty submit is not.
-    if (!txt && !pendingImage) return;
+    if (!txt && !pendingMedia) return;
     els.input.value = "";
     autoresize();
     send(txt);
