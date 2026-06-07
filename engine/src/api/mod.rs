@@ -13,6 +13,7 @@
 
 mod routes;
 
+use axum::extract::DefaultBodyLimit;
 use axum::Router;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -407,6 +408,13 @@ async fn shutdown_signal() {
     }
 }
 
+/// Maximum request body size. Axum defaults to 2 MB, which is fine for text
+/// but far too small for multimodal `/api/chat` requests: a base64-encoded
+/// image or audio clip easily exceeds it (base64 inflates bytes by ~33%), so
+/// a stock photo returns `413 length limit exceeded`. 64 MB comfortably fits
+/// images and reasonable audio clips while still bounding abuse.
+const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
+
 /// Build the EULLM API router (Ollama + OpenAI compat) with CORS enabled
 /// for Open WebUI and other frontends.
 ///
@@ -422,6 +430,7 @@ fn api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
         .with_state(state)
 }
@@ -441,6 +450,7 @@ fn ui_router(state: Arc<AppState>) -> Router {
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
         .merge(crate::ui::router())
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
         .with_state(state)
 }
