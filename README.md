@@ -397,6 +397,21 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 
 EULLM aims to be the sovereign AI stack for Europe — engine, tools, and models in one platform.
 
+### For researchers and European labs
+
+The EU AI Act (Regulation 2024/1689) is easy to discuss on paper and hard to
+study on *running* software. EULLM is built to be an open, reproducible
+**testbed** for exactly that: every inference is written to a local,
+inspectable audit trail, nothing leaves the machine, and the whole stack is
+Apache-2.0 with no hidden services — so a lab can instrument, measure and
+prototype transparency, traceability and human-oversight mechanisms on a real
+engine instead of a mock.
+
+We make no claim that a binary makes a system "AI Act compliant" — compliance
+is a property of the whole system and its governance, not of a runtime. What we
+offer is an honest, fully inspectable base to experiment on. **Academic and
+consortium collaborations are welcome** — see [Contributing](#contributing).
+
 ## Benchmarks — Continuous batching scaling
 
 EULLM Engine's continuous batching scheduler decodes all active sequences in a single GPU pass, so total throughput scales with concurrency instead of being capped by a per-slot pre-allocated KV cache.
