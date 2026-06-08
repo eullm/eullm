@@ -445,6 +445,23 @@ impl InferenceEngine {
         params.print_timings = false;
         params.n_threads = config.threads as i32;
 
+        // Dynamic-resolution vision models (e.g. Gemma 4) cap image tokens
+        // (Gemma4UV defaults to max 280). That low cap aggressively downscales
+        // images, hurting hard cases (dark / low-contrast / small subject).
+        // EULLM_IMAGE_MAX_TOKENS / EULLM_IMAGE_MIN_TOKENS let us raise the
+        // budget to give the encoder more resolution. `-1` keeps the default.
+        // NOTE: very high values can OOM or crash some projectors — raise in
+        // moderate steps (e.g. 512, then 1024).
+        let env_i32 = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<i32>().ok());
+        if let Some(maxt) = env_i32("EULLM_IMAGE_MAX_TOKENS") {
+            params.image_max_tokens = maxt;
+            tracing::info!("Override image_max_tokens = {maxt} (EULLM_IMAGE_MAX_TOKENS)");
+        }
+        if let Some(mint) = env_i32("EULLM_IMAGE_MIN_TOKENS") {
+            params.image_min_tokens = mint;
+            tracing::info!("Override image_min_tokens = {mint} (EULLM_IMAGE_MIN_TOKENS)");
+        }
+
         tracing::info!("Loading mmproj projector: {}", mmproj_path.display());
         let path_str = mmproj_path
             .to_str()
@@ -896,31 +913,17 @@ impl InferenceEngine {
         let start = std::time::Instant::now();
 
         // ── 1. Guards ───────────────────────────────────────────────────
-        // EXPERIMENT (0.6.1): rebuild the MtmdContext fresh for every request
-        // instead of reusing the long-lived `self.mtmd_ctx`. This rules out
-        // shared projector/encoder state leaking across requests — the
-        // suspected cause of the non-deterministic "image not seen /
-        // hallucinated" behaviour on an otherwise fresh LlamaContext. Costs
-        // ~150-300 ms of projector re-init per call; acceptable for the
-        // sequential vision path. If this removes the flakiness, the bug was
-        // shared mtmd state; if not, it points squarely upstream (eval_chunks
-        // / SWA KV-position handling, llama.cpp#17930) and we stop here.
-        let mtmd_ctx_owned = match Self::init_mtmd_optional(&self.config, &self.model) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                let _ = tx.blocking_send(StreamEvent::Error(
-                    "Multimodal not configured: load the model with a valid mmproj_path".into(),
-                ));
-                return;
-            }
-            Err(e) => {
-                let _ = tx.blocking_send(StreamEvent::Error(format!(
-                    "mmproj re-init failed: {e}"
-                )));
-                return;
-            }
+        // (0.6.1 experiment reverted: rebuilding MtmdContext per request did
+        // not change the per-image-type failure — dark/low-contrast/portrait
+        // images still degrade identically — so the cause is upstream in the
+        // Gemma 4 projector/encoder, not shared mtmd state. Back to the
+        // long-lived, load-once projector.)
+        let Some(mtmd_ctx) = self.mtmd_ctx.as_ref() else {
+            let _ = tx.blocking_send(StreamEvent::Error(
+                "Multimodal not configured: load the model with a valid mmproj_path".into(),
+            ));
+            return;
         };
-        let mtmd_ctx = &mtmd_ctx_owned;
         if mtmd_ctx.decode_use_mrope() {
             let _ = tx.blocking_send(StreamEvent::Error(
                 "This model requires M-RoPE positions, which the current MVP \
