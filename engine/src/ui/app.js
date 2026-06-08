@@ -720,6 +720,18 @@
           }
           try {
             const obj = JSON.parse(payload);
+            // The backend emits `{"error": "..."}` as a stream line on a
+            // failure (e.g. an undecodable image). Surface it instead of
+            // ending silently with an empty "0 chunks" reply. A plain
+            // `throw` here would be swallowed by the inner catch below, so
+            // render it and bail out of send() directly (finally{} restores
+            // the composer).
+            if (obj.error) {
+              contentEl.innerHTML =
+                `<span style="color: var(--danger)">Error: ${escapeHtml(obj.error)}</span>`;
+              metaEl.innerHTML = "";
+              return;
+            }
             delta = media
               ? (obj.message?.content || "")
               : (obj.choices?.[0]?.delta?.content || "");
@@ -800,8 +812,39 @@
     els.sendBtn.disabled = !canSend();
   }
 
+  // llama.cpp's mtmd decodes images via stb_image, which only handles
+  // jpg / png / bmp / gif. WebP, AVIF and HEIC reach the server as
+  // "failed to decode image bytes" and the model then hallucinates. We
+  // transparently re-encode anything outside this set to PNG in-browser.
+  const MTMD_SAFE_IMAGE = new Set(["image/jpeg", "image/png", "image/bmp", "image/gif"]);
+
+  const fileToDataUrl = (file) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error("read failed"));
+      r.readAsDataURL(file);
+    });
+
+  // Re-encode an unsupported image to PNG via a canvas. Resolves to a PNG
+  // data URL. Rejects if the browser itself can't decode the source (HEIC
+  // on most desktops) — caught below with an actionable message.
+  const convertImageToPng = (dataUrl) =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext("2d").drawImage(img, 0, 0);
+        resolve(canvas.toDataURL("image/png"));
+      };
+      img.onerror = () => reject(new Error("decode failed"));
+      img.src = dataUrl;
+    });
+
   els.attachBtn.addEventListener("click", () => els.imageInput.click());
-  els.imageInput.addEventListener("change", () => {
+  els.imageInput.addEventListener("change", async () => {
     const file = els.imageInput.files?.[0];
     if (!file) return;
     const kind = file.type.startsWith("image/")
@@ -814,9 +857,12 @@
       els.imageInput.value = "";
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = reader.result;
+    try {
+      let dataUrl = await fileToDataUrl(file);
+      if (kind === "image" && !MTMD_SAFE_IMAGE.has(file.type)) {
+        // WebP / AVIF / HEIC … → normalise to PNG so mtmd can decode it.
+        dataUrl = await convertImageToPng(dataUrl);
+      }
       const comma = dataUrl.indexOf(",");
       const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
       pendingMedia = { dataUrl, base64, kind, name: file.name };
@@ -832,9 +878,13 @@
       els.attachmentName.textContent = file.name;
       els.attachmentBar.hidden = false;
       els.sendBtn.disabled = !canSend();
-    };
-    reader.onerror = () => alert("Could not read the selected file.");
-    reader.readAsDataURL(file);
+    } catch {
+      alert(
+        "Could not read this file. If it's a HEIC/HEIF photo, convert it to " +
+        "JPG or PNG first — the engine accepts jpg/png/bmp/gif/webp."
+      );
+      els.imageInput.value = "";
+    }
   });
   els.attachmentRemove.addEventListener("click", clearAttachment);
 
