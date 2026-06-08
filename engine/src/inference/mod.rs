@@ -896,12 +896,31 @@ impl InferenceEngine {
         let start = std::time::Instant::now();
 
         // ── 1. Guards ───────────────────────────────────────────────────
-        let Some(mtmd_ctx) = self.mtmd_ctx.as_ref() else {
-            let _ = tx.blocking_send(StreamEvent::Error(
-                "Multimodal not configured: load the model with a valid mmproj_path".into(),
-            ));
-            return;
+        // EXPERIMENT (0.6.1): rebuild the MtmdContext fresh for every request
+        // instead of reusing the long-lived `self.mtmd_ctx`. This rules out
+        // shared projector/encoder state leaking across requests — the
+        // suspected cause of the non-deterministic "image not seen /
+        // hallucinated" behaviour on an otherwise fresh LlamaContext. Costs
+        // ~150-300 ms of projector re-init per call; acceptable for the
+        // sequential vision path. If this removes the flakiness, the bug was
+        // shared mtmd state; if not, it points squarely upstream (eval_chunks
+        // / SWA KV-position handling, llama.cpp#17930) and we stop here.
+        let mtmd_ctx_owned = match Self::init_mtmd_optional(&self.config, &self.model) {
+            Ok(Some(c)) => c,
+            Ok(None) => {
+                let _ = tx.blocking_send(StreamEvent::Error(
+                    "Multimodal not configured: load the model with a valid mmproj_path".into(),
+                ));
+                return;
+            }
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "mmproj re-init failed: {e}"
+                )));
+                return;
+            }
         };
+        let mtmd_ctx = &mtmd_ctx_owned;
         if mtmd_ctx.decode_use_mrope() {
             let _ = tx.blocking_send(StreamEvent::Error(
                 "This model requires M-RoPE positions, which the current MVP \
