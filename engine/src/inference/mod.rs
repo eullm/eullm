@@ -445,6 +445,23 @@ impl InferenceEngine {
         params.print_timings = false;
         params.n_threads = config.threads as i32;
 
+        // Dynamic-resolution vision models (e.g. Gemma 4) cap image tokens
+        // (Gemma4UV defaults to max 280). That low cap aggressively downscales
+        // images, hurting hard cases (dark / low-contrast / small subject).
+        // EULLM_IMAGE_MAX_TOKENS / EULLM_IMAGE_MIN_TOKENS let us raise the
+        // budget to give the encoder more resolution. `-1` keeps the default.
+        // NOTE: very high values can OOM or crash some projectors — raise in
+        // moderate steps (e.g. 512, then 1024).
+        let env_i32 = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<i32>().ok());
+        if let Some(maxt) = env_i32("EULLM_IMAGE_MAX_TOKENS") {
+            params.image_max_tokens = maxt;
+            tracing::info!("Override image_max_tokens = {maxt} (EULLM_IMAGE_MAX_TOKENS)");
+        }
+        if let Some(mint) = env_i32("EULLM_IMAGE_MIN_TOKENS") {
+            params.image_min_tokens = mint;
+            tracing::info!("Override image_min_tokens = {mint} (EULLM_IMAGE_MIN_TOKENS)");
+        }
+
         tracing::info!("Loading mmproj projector: {}", mmproj_path.display());
         let path_str = mmproj_path
             .to_str()

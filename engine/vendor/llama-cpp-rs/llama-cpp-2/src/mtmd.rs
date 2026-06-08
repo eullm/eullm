@@ -75,6 +75,13 @@ pub struct MtmdContextParams {
     pub n_threads: i32,
     /// Media marker string used to identify media positions in text
     pub media_marker: CString,
+    /// Minimum number of tokens for image input (dynamic-resolution vision
+    /// models only). `-1` keeps the model-metadata default.
+    pub image_min_tokens: i32,
+    /// Maximum number of tokens for image input (dynamic-resolution vision
+    /// models only). `-1` keeps the model-metadata default. Raising this gives
+    /// the encoder more resolution at the cost of more tokens / VRAM.
+    pub image_max_tokens: i32,
 }
 
 impl Default for MtmdContextParams {
@@ -91,12 +98,16 @@ impl From<&MtmdContextParams> for llama_cpp_sys_2::mtmd_context_params {
             print_timings,
             n_threads,
             media_marker,
+            image_min_tokens,
+            image_max_tokens,
         } = params;
 
         context.use_gpu = *use_gpu;
         context.print_timings = *print_timings;
         context.n_threads = *n_threads;
         context.media_marker = media_marker.as_ptr();
+        context.image_min_tokens = *image_min_tokens;
+        context.image_max_tokens = *image_max_tokens;
 
         context
     }
@@ -109,6 +120,8 @@ impl From<llama_cpp_sys_2::mtmd_context_params> for MtmdContextParams {
             print_timings: params.print_timings,
             n_threads: params.n_threads,
             media_marker: unsafe { CStr::from_ptr(params.media_marker) }.to_owned(),
+            image_min_tokens: params.image_min_tokens,
+            image_max_tokens: params.image_max_tokens,
         }
     }
 }
