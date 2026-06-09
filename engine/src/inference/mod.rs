@@ -1017,13 +1017,19 @@ impl InferenceEngine {
         let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
 
         // ── 4. Tokenize text + media → MtmdInputChunks ──────────────────
-        // The prompt is already templated by the caller and contains one
-        // <__media__> marker per bitmap. add_special=!raw mirrors the text
-        // path; parse_special=true must be on so the chat-template special
-        // tokens (e.g. Gemma <start_of_turn>) are recognised.
+        // The prompt is hand-templated by the caller (turn markers + one
+        // <__media__> marker per bitmap) but does NOT include <bos>.
+        // `add_special = true` makes mtmd prepend the model's BOS, matching
+        // llama.cpp's reference `mtmd-cli` (`add_special = add_bos` on the
+        // first turn). Omitting BOS was the bug: Gemma needs it, and without
+        // it the model degrades into "wall of text / line art" confabulation
+        // on all but the easiest images (the missing-BOS prompt is malformed;
+        // strong landscapes survived it, weaker subjects did not).
+        // `parse_special = true` so the turn tokens (Gemma <start_of_turn>)
+        // are recognised rather than tokenised literally.
         let input_text = MtmdInputText {
             text: request.prompt.clone(),
-            add_special: !request.raw,
+            add_special: true,
             parse_special: true,
         };
         let chunks = match mtmd_ctx.tokenize(input_text, &bitmap_refs) {
