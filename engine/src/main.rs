@@ -156,8 +156,8 @@ enum Commands {
         /// image or audio file to send together with the first prompt.
         /// Triggers the multimodal inference path (mtmd) which requires the
         /// model's mmproj projector to be available; for catalog models it
-        /// is auto-downloaded during `pull`. Currently CLI-only; the HTTP
-        /// API does not yet route media input.
+        /// is auto-downloaded during `pull`. The HTTP API also routes media
+        /// (web chat / `/api/chat` `images`); this flag is the CLI one-shot.
         #[arg(long, value_name = "PATH")]
         image: Option<PathBuf>,
     },
