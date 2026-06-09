@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.0%20%E2%80%94%20multimodal-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.2%20%E2%80%94%20multimodal-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -105,8 +105,8 @@ What you get on top of the Ollama-compatible API:
 | Component | Status | Use today? |
 |-----------|--------|------------|
 | **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.6.0)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
-| **Multimodal** — vision + audio understanding via llama.cpp `mtmd` (Gemma 4 12B). Image OCR + scene description in the Chat UI and CLI; audio understanding via CLI | 🆕 **New in v0.6.0** — vision validated on Linux + Windows CUDA; audio **experimental** (CLI) | **Yes (vision)** — see [Multimodal](#multimodal-vision--audio-new-in-v060) |
-| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) with Markdown + best-effort LaTeX→MathML rendering, plus **image attachment** for multimodal models | ✅ **Ready (v0.6.0)** | **Yes** — auto-opens after install on Windows |
+| **Multimodal** — vision + audio understanding via llama.cpp `mtmd` (Gemma 4). Image OCR + scene description **and** audio understanding (transcription, in-content search) now both in the Chat UI and CLI | 🆕 **v0.6.2** — vision validated on Linux + Windows CUDA; audio understanding validated in the Chat UI (still upstream-**experimental**) | **Yes** — see [Multimodal](#multimodal-vision--audio-new-in-v060) |
+| **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) with Markdown + best-effort LaTeX→MathML rendering, plus **image and audio attachment** for multimodal models | ✅ **Ready (v0.6.2)** | **Yes** — auto-opens after install on Windows |
 | **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | 🚧 Paused after v0.5.6 — needs SmartScreen / launcher redesign before re-shipping | Use the standalone Windows binaries above for now |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
@@ -196,15 +196,18 @@ leaving the machine. Built on llama.cpp's `mtmd` stack with **Gemma 4 12B**
   (OCR), and answers questions about it. Works both in the **Chat UI** (📎
   attach button) and from the **CLI**.
 - **Audio (experimental)** — feed a `.wav` / `.mp3` / `.flac` clip and the model
-  understands it: language, tone, salient content, partial transcription. **CLI
-  only** for now; quality is the model's experimental audio stage (see notes).
+  understands it: transcription, language, tone, and answering questions about
+  the spoken content (e.g. *"does the recording mention X?"*). Works in the
+  **Chat UI** (📎 attach / drag & drop) **and** the **CLI**; quality is the
+  model's experimental audio stage (see notes).
 
 ```bash
 # Vision / audio one-shot from the CLI (the flag reads any media file)
 echo "Describe this image in detail." | eullm run gemma-4-12b --image photo.jpg
 echo "What is said in this recording?" | eullm run gemma-4-12b --image clip.mp3
 
-# In the Chat UI (auto-opens on `eullm run`): click 📎, attach an image, ask away.
+# In the Chat UI (auto-opens on `eullm run`): click 📎, attach an image or an
+# audio clip (wav/mp3/flac), ask away.
 ```
 
 Under the hood: when a model ships a multimodal projector (`mmproj`), the engine
@@ -215,12 +218,24 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 > **Honest scope (it's an MVP):**
 > - **Vision** is solid and validated on Linux + Windows CUDA. **Audio** is
 >   experimental upstream (llama.cpp flags it as *"audio input is in
->   experimental stage and may have reduced quality"*) — expect *audio
->   understanding*, not faithful speech-to-text. For verbatim transcription,
->   pair the engine with a dedicated STT model.
+>   experimental stage and may have reduced quality"*). In our tests, clean
+>   single-speaker speech transcribed accurately and was searchable by content;
+>   treat noisy, long, or multi-speaker audio as best-effort. For
+>   guaranteed-verbatim transcription, pair the engine with a dedicated STT model.
+> - **Exact counting is unreliable.** The model *understands* and *locates*
+>   audio content well (transcription, quoting the relevant passages), but
+>   *"how many times is X said?"* is generation, not a deterministic search —
+>   counts can vary with prompt phrasing. For exact occurrence counts,
+>   transcribe with the engine and count in your application layer (literal
+>   string search), not via the prompt.
+> - **Model coverage:** multimodal runs on any **scalar-position** `mtmd` model;
+>   validated on **Gemma 4** (E4B + 12B), whose `mmproj` projector the catalog
+>   auto-downloads alongside the model. M-RoPE models (Qwen2/2.5/3-VL) are not
+>   yet supported — the engine refuses media input on them for now.
 > - Multimodal models load in **sequential mode** (the continuous-batching
 >   scheduler is text-only); text-only models keep full batching.
-> - Web Chat UI accepts **images** today; audio is CLI-only for now.
+> - Web Chat UI accepts **both images and audio** (`.wav`/`.mp3`/`.flac`) as of
+>   v0.6.2 — 📎 attach or drag & drop.
 > - Quality is bounded by the quantized model — a Q4 12B does great OCR and
 >   scene description but can hallucinate specific facts (e.g. a landmark name).
 > - **Linux CUDA note:** the GPU binary links `libnccl.so.2`. If you see
