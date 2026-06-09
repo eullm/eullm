@@ -443,6 +443,11 @@ body {
   height: 36px;
   max-width: 240px;
 }
+/* `display:` rules above override the UA stylesheet's [hidden] { display:none },
+   so the empty <img>/<audio> would otherwise show (broken thumbnail for audio,
+   stray player for images). Re-assert [hidden] with matching specificity. */
+.attachment-bar img[hidden],
+.attachment-bar audio[hidden] { display: none; }
 .attachment-name {
   flex: 1;
   min-width: 0;
