@@ -602,9 +602,16 @@
 
   function updateStatus(loadedModel) {
     if (!els.statusGrid) return;
+    // The chat UI lives on its own port; external clients (Open WebUI,
+    // LangChain, RAG) must point at the canonical API port (Ollama default
+    // 11434), reported by /api/version. Fall back to this origin if unknown.
+    const apiOrigin = window.__eullm_api_port
+      ? `${location.protocol}//${location.hostname}:${window.__eullm_api_port}`
+      : location.origin;
     const items = [
       ["Engine", `${window.__eullm_version || "v?"}`],
-      ["Endpoint", location.origin],
+      ["API", apiOrigin],
+      ["Chat UI", location.origin],
       ["APIs", "/api  +  /v1"],
       ["Model", loadedModel?.name || "(none loaded)"],
       ["Telemetry", "off — local-only audit"],
@@ -961,6 +968,7 @@
   async function init(skipWelcomeReinject) {
     const v = await loadVersion();
     if (v?.version) window.__eullm_version = `v${v.version}`;
+    if (v?.api_port) window.__eullm_api_port = v.api_port;
     await loadModels();
     if (!skipWelcomeReinject && !els.messages.querySelector(".welcome") && history.length === 0) {
       location.reload(); // simplest way to restore welcome after clear
