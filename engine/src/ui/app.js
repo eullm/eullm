@@ -875,7 +875,8 @@
         els.attachmentAudio.hidden = false;
         els.attachmentThumb.hidden = true;
       }
-      els.attachmentName.textContent = file.name;
+      els.attachmentName.textContent =
+        kind === "audio" ? `🎵 ${file.name}` : file.name;
       els.attachmentBar.hidden = false;
       els.sendBtn.disabled = !canSend();
     } catch {
