@@ -959,13 +959,30 @@ impl InferenceEngine {
             .unwrap_or(NonZeroU32::new(4096).unwrap());
         let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
             || self.config.cache_type_v != KvCacheType::F16;
-        let ctx_params = build_ctx_params(&self.config, ctx_size);
+
+        // Vision encoders use NON-causal attention, which requires the entire
+        // image to land in a single micro-batch: `n_ubatch >= image_tokens`.
+        // The default n_ubatch (512) silently caps effective image resolution
+        // and hard-aborts above it (GGML_ASSERT "non-causal attention requires
+        // n_ubatch >= n_tokens"). Size both n_batch and n_ubatch to the image
+        // token budget so a higher EULLM_IMAGE_MAX_TOKENS genuinely raises
+        // resolution instead of crashing. Multimodal-only — text/scheduler
+        // contexts are untouched.
+        let img_budget = std::env::var("EULLM_IMAGE_MAX_TOKENS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        let mm_batch = self.config.n_batch.max(img_budget).max(512);
+        let mk_params = |ctk, ctv| {
+            build_ctx_params_with_cache(&self.config, ctx_size, ctk, ctv)
+                .with_n_batch(mm_batch)
+                .with_n_ubatch(mm_batch)
+        };
+        let ctx_params = mk_params(self.config.cache_type_k, self.config.cache_type_v);
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
             Err(e) if has_quantized_cache => {
-                let fallback = build_ctx_params_with_cache(
-                    &self.config, ctx_size, KvCacheType::F16, KvCacheType::F16,
-                );
+                let fallback = mk_params(KvCacheType::F16, KvCacheType::F16);
                 match self.model.new_context(&self.backend, fallback) {
                     Ok(c) => c,
                     Err(e2) => {
