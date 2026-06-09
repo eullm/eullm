@@ -100,6 +100,37 @@ What you get on top of the Ollama-compatible API:
 
 [→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm)
 
+### Run it as a daemon (background service)
+
+Both `eullm run` and `eullm serve` accept `--daemon`: the engine detaches into
+the background and frees your terminal, no `nohup`, no `&`, no tmux.
+
+```bash
+eullm run gemma-4-12b --daemon                       # load model + serve, detached
+eullm serve --daemon                                 # headless API server, detached
+eullm serve --daemon --pidfile /var/run/eullm.pid    # custom PID file location
+
+# eullm daemon started (PID 88453).
+#   PID file: /tmp/eullm.pid
+#   Log file: /tmp/eullm.log
+#   Stop with: kill 88453
+```
+
+- **PID file** defaults to `/tmp/eullm.pid` on Linux/macOS, `eullm.pid` in the
+  current directory on Windows — override with `--pidfile`.
+- **Logs**: stdout/stderr are redirected to a `.log` file next to the PID file
+  (e.g. `/tmp/eullm.log`), so startup errors and crashes are captured even
+  after the launching terminal is gone.
+- **Stop** with `kill $(cat /tmp/eullm.pid)` — the engine handles SIGTERM
+  gracefully and finishes in-flight requests before exiting.
+- All other flags work unchanged (`--port`, `--ctx-size`, `--web`,
+  `--batch-size`, …).
+
+> **Running under Docker or systemd?** Don't pass `--daemon` there — the
+> supervisor *is* the daemonizer. Use `docker compose up -d` or a plain
+> `ExecStart=/usr/local/bin/eullm serve` unit; graceful SIGTERM handling is
+> built in, so `docker stop` / `systemctl stop` shut the engine down cleanly.
+
 ## What's ready today, what's coming
 
 | Component | Status | Use today? |
@@ -160,6 +191,7 @@ eullm run legal-it-7b                     # From EU registry (coming soon)
 eullm list                                # Show local and available models
 eullm show legal-it-7b                    # Model details, metadata, compliance info
 eullm serve                               # Start API server without loading a model
+eullm serve --daemon                      # Same, detached in the background (PID + log file)
 
 # API endpoints (Ollama-compatible + OpenAI-compatible)
 # http://localhost:11434/api/generate
@@ -178,6 +210,7 @@ Key features:
 - **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
 - **Quantized KV cache** — standard llama.cpp Q4_0/Q5_0/Q5_1/Q8_0 KV types reduce memory ~2-4× at small quality cost (`--cache-type-k q4_0 --cache-type-v q4_0`). We also tested the experimental TurboQuant approach (see [Research](#research--experiments))
+- **Daemon mode** (`--daemon`) — detaches into the background with PID file + log file, freeing the terminal; `kill $(cat /tmp/eullm.pid)` stops it gracefully. See [Run it as a daemon](#run-it-as-a-daemon-background-service)
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64, macOS x64, macOS ARM64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
