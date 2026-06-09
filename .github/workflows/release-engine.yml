@@ -388,12 +388,21 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: "12.8.0"
-          method: network
+          # `local` (full offline installer ~3 GB) instead of `network`: the
+          # network installer is a tiny bootstrapper that re-downloads ~5 GB
+          # of packages from NVIDIA's CDN on EVERY run (6-17 min, variable),
+          # because use-github-cache only caches the bootstrapper, not the
+          # toolkit. The local installer is fully cached by GitHub Actions
+          # cache (use-github-cache: true, default), so subsequent runs
+          # restore it locally and install offline — no NVIDIA CDN, ~2-4 min.
+          # sccache stays on S3 and is untouched; only this ~3 GB installer
+          # shares the 10 GB GitHub cache with the Swatinem rust-cache.
+          method: local
           # Sub-package filtering is deliberately omitted: NVIDIA's Windows
           # installer uses component names like "cudart_12.8" which differ
           # from Linux ("cudart"). Providing a Linux-style allowlist makes
           # the installer exit with code 3772776473. Letting Jimver install
-          # the default set (~5 GB) is the most reliable path on Windows.
+          # the default set is the most reliable path on Windows.
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
