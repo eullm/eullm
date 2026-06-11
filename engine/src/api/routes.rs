@@ -367,8 +367,14 @@ source URL when answering.\n\n---\n\n";
 
 // ── EULLM API handlers ──────────────────────────────────────────────────────
 
-async fn version() -> Json<Value> {
-    Json(json!({ "version": env!("CARGO_PKG_VERSION") }))
+async fn version(State(state): State<S>) -> Json<Value> {
+    // `api_port` is an EULLM extension: the chat UI (served on its own port)
+    // reads it to display the canonical API endpoint. Ollama clients only
+    // look at `version` and ignore unknown fields.
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "api_port": state.api_port,
+    }))
 }
 
 /// List models — returns the currently loaded model (like Ollama) plus catalog entries.

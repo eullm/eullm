@@ -62,6 +62,11 @@ pub struct AppState {
     /// and their content is injected into the prompt before inference.
     pub web_enabled: bool,
 
+    /// Port the canonical API listener runs on (Ollama-compatible, default
+    /// 11434). Exposed via `/api/version` so the chat UI (served on its own
+    /// port) can display the endpoint external clients should point at.
+    pub api_port: u16,
+
     /// Model store for resolving names → GGUF paths.
     pub store: ModelStore,
 }
@@ -319,6 +324,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         cache_type_v: cfg.cache_type_v,
         batch_size: cfg.batch_size,
         web_enabled: cfg.web_enabled,
+        api_port: cfg.port,
         store: cfg.store,
     });
     let api_port = cfg.port;
