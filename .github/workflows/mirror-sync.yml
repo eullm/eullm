@@ -1,0 +1,92 @@
+name: Mirror sync — EU durability mirrors
+
+# Refreshes the two EU-hosted durability mirrors with the latest upstream
+# master/main and all tags:
+#   - eullm/llama.cpp     ← ggml-org/llama.cpp
+#   - eullm/llama-cpp-rs  ← utilityai/llama-cpp-rs
+#
+# Tags are immutable once pushed: even if upstream is wiped tomorrow, every
+# version we have ever depended on remains pinnable from our mirrors.
+# Feature branches and PR refs are intentionally NOT mirrored.
+#
+# Requires a fine-grained PAT saved as repo secret `EU_MIRROR_TOKEN` with
+# Contents:write on eullm/llama.cpp and eullm/llama-cpp-rs.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'    # 03:17 UTC daily
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync-llama-cpp:
+    name: Sync eullm/llama.cpp
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push master + tags from upstream
+        env:
+          TOKEN: ${{ secrets.EU_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --bare https://github.com/ggml-org/llama.cpp.git upstream.git
+          cd upstream.git
+          git push --force \
+            "https://x-access-token:${TOKEN}@github.com/eullm/llama.cpp.git" \
+            master --tags
+
+      - name: Verify mirror matches upstream
+        run: |
+          set -euo pipefail
+          UPSTREAM_SHA=$(git ls-remote https://github.com/ggml-org/llama.cpp.git refs/heads/master | cut -f1)
+          MIRROR_SHA=$(git ls-remote https://github.com/eullm/llama.cpp.git refs/heads/master | cut -f1)
+          UPSTREAM_TAGS=$(git ls-remote --tags https://github.com/ggml-org/llama.cpp.git | wc -l)
+          MIRROR_TAGS=$(git ls-remote --tags https://github.com/eullm/llama.cpp.git | wc -l)
+
+          echo "Upstream master: $UPSTREAM_SHA ($UPSTREAM_TAGS tags)"
+          echo "Mirror   master: $MIRROR_SHA ($MIRROR_TAGS tags)"
+
+          if [ "$UPSTREAM_SHA" != "$MIRROR_SHA" ]; then
+            echo "::error::Mirror master SHA does not match upstream"
+            exit 1
+          fi
+          if [ "$MIRROR_TAGS" -lt "$UPSTREAM_TAGS" ]; then
+            echo "::warning::Mirror has fewer tags than upstream ($MIRROR_TAGS < $UPSTREAM_TAGS)"
+          fi
+          echo "Sync verified"
+
+  sync-llama-cpp-rs:
+    name: Sync eullm/llama-cpp-rs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push main + tags from upstream
+        env:
+          TOKEN: ${{ secrets.EU_MIRROR_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --bare https://github.com/utilityai/llama-cpp-rs.git upstream.git
+          cd upstream.git
+          git push --force \
+            "https://x-access-token:${TOKEN}@github.com/eullm/llama-cpp-rs.git" \
+            main --tags
+
+      - name: Verify mirror matches upstream
+        run: |
+          set -euo pipefail
+          UPSTREAM_SHA=$(git ls-remote https://github.com/utilityai/llama-cpp-rs.git refs/heads/main | cut -f1)
+          MIRROR_SHA=$(git ls-remote https://github.com/eullm/llama-cpp-rs.git refs/heads/main | cut -f1)
+          UPSTREAM_TAGS=$(git ls-remote --tags https://github.com/utilityai/llama-cpp-rs.git | wc -l)
+          MIRROR_TAGS=$(git ls-remote --tags https://github.com/eullm/llama-cpp-rs.git | wc -l)
+
+          echo "Upstream main: $UPSTREAM_SHA ($UPSTREAM_TAGS tags)"
+          echo "Mirror   main: $MIRROR_SHA ($MIRROR_TAGS tags)"
+
+          if [ "$UPSTREAM_SHA" != "$MIRROR_SHA" ]; then
+            echo "::error::Mirror main SHA does not match upstream"
+            exit 1
+          fi
+          if [ "$MIRROR_TAGS" -lt "$UPSTREAM_TAGS" ]; then
+            echo "::warning::Mirror has fewer tags than upstream ($MIRROR_TAGS < $UPSTREAM_TAGS)"
+          fi
+          echo "Sync verified"
