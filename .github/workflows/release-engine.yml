@@ -56,9 +56,11 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15
             artifact: eullm-macos-x64
+            features: metal
           - target: aarch64-apple-darwin
             os: macos-15
             artifact: eullm-macos-arm64
+            features: metal
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -133,7 +135,7 @@ jobs:
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
 
       - name: Build engine
-        run: cargo build --release --target ${{ matrix.target }} -p eullm-engine
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} -p eullm-engine
 
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
