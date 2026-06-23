@@ -1,8 +1,11 @@
-use cmake::Config;
-use glob::glob;
 use std::env;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::str::FromStr as _;
+
+use cmake::Config;
+use glob::glob;
 use walkdir::DirEntry;
 
 enum WindowsVariant {
@@ -12,6 +15,7 @@ enum WindowsVariant {
 
 enum AppleVariant {
     MacOS,
+    WatchOS,
     Other,
 }
 
@@ -30,6 +34,28 @@ macro_rules! debug_log {
     };
 }
 
+fn emit_compiler_static_archive_search_path(archive: &str) {
+    let compiler = cc::Build::new().get_compiler();
+    let Ok(output) = Command::new(compiler.path())
+        .arg(format!("--print-file-name={archive}"))
+        .output()
+    else {
+        return;
+    };
+
+    if !output.status.success() {
+        return;
+    }
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let path = Path::new(&path);
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            println!("cargo:rustc-link-search=native={}", parent.display());
+        }
+    }
+}
+
 fn parse_target_os() -> Result<(TargetOs, String), String> {
     let target = env::var("TARGET").unwrap();
 
@@ -42,6 +68,8 @@ fn parse_target_os() -> Result<(TargetOs, String), String> {
     } else if target.contains("apple") {
         if target.ends_with("-apple-darwin") {
             Ok((TargetOs::Apple(AppleVariant::MacOS), target))
+        } else if target.contains("watchos") {
+            Ok((TargetOs::Apple(AppleVariant::WatchOS), target))
         } else {
             Ok((TargetOs::Apple(AppleVariant::Other), target))
         }
@@ -256,14 +284,16 @@ fn main() {
         }
     }
 
-    // Speed up build
-    env::set_var(
-        "CMAKE_BUILD_PARALLEL_LEVEL",
-        std::thread::available_parallelism()
-            .unwrap()
-            .get()
-            .to_string(),
-    );
+    // Use all available cores except 2 to
+    let cmake_build_parallelism_level =
+        match env::var("CMAKE_BUILD_PARALLEL_LEVEL").map(|v| NonZeroUsize::from_str(&v)) {
+            Ok(Ok(v)) => v.to_string(),
+            _ => std::thread::available_parallelism()
+                .expect("failed to load available parallelism")
+                .get()
+                .to_string(),
+        };
+    env::set_var("CMAKE_BUILD_PARALLEL_LEVEL", cmake_build_parallelism_level);
 
     // Bindings
     let mut bindings_builder = bindgen::Builder::default()
@@ -280,9 +310,9 @@ fn main() {
         .allowlist_type("llama_.*")
         .prepend_enum_name(false);
 
-    // The `llama_rs_*` symbols are emitted by `wrapper_common.cpp` /
-    // `wrapper_oai.cpp`, which are only compiled (and only have their headers
-    // included from `wrapper.h`) when the `common` feature is enabled.
+    // The `llama_rs_*` symbols are emitted by `wrapper_common.cpp`, which is
+    // only compiled (and only has its header included from `wrapper.h`) when
+    // the `common` feature is enabled.
     if cfg!(feature = "common") {
         bindings_builder = bindings_builder
             .clang_arg("-DLLAMA_RS_BUILD_COMMON")
@@ -497,8 +527,6 @@ fn main() {
     println!("cargo:rerun-if-changed=wrapper.h");
     println!("cargo:rerun-if-changed=wrapper_common.h");
     println!("cargo:rerun-if-changed=wrapper_common.cpp");
-    println!("cargo:rerun-if-changed=wrapper_oai.h");
-    println!("cargo:rerun-if-changed=wrapper_oai.cpp");
     println!("cargo:rerun-if-changed=wrapper_utils.h");
     println!("cargo:rerun-if-changed=wrapper_mtmd.h");
 
@@ -509,7 +537,6 @@ fn main() {
         common_wrapper_build
             .cpp(true)
             .file("wrapper_common.cpp")
-            .file("wrapper_oai.cpp")
             .include(&llama_src)
             .include(llama_src.join("common"))
             .include(llama_src.join("include"))
@@ -542,6 +569,8 @@ fn main() {
     config.define("LLAMA_BUILD_EXAMPLES", "OFF");
     config.define("LLAMA_BUILD_SERVER", "OFF");
     config.define("LLAMA_BUILD_TOOLS", "OFF");
+    // `app` (the unified `llama` binary) defaults to ON when llama.cpp is the
+    // top-level CMake project; it pulls in server/tool internals we don't build.
     config.define("LLAMA_BUILD_APP", "OFF");
     config.define(
         "LLAMA_BUILD_COMMON",
@@ -646,6 +675,15 @@ fn main() {
 
     if matches!(target_os, TargetOs::Apple(_)) {
         config.define("GGML_BLAS", "OFF");
+    }
+
+    // watchOS has no Metal framework, so disable the Metal backend there.
+    // Also define _DARWIN_C_SOURCE so BSD types (u_int, u_char, u_short) used by
+    // some sources are visible — implicit on macOS/iOS but not on watchOS.
+    if matches!(target_os, TargetOs::Apple(AppleVariant::WatchOS)) {
+        config.define("GGML_METAL", "OFF");
+        config.cflag("-D_DARWIN_C_SOURCE");
+        config.cxxflag("-D_DARWIN_C_SOURCE");
     }
 
     if (matches!(target_os, TargetOs::Windows(WindowsVariant::Msvc))
@@ -823,6 +861,40 @@ fn main() {
 
     if cfg!(feature = "rocm") {
         config.define("GGML_HIP", "ON");
+    }
+
+    if cfg!(feature = "opencl") {
+        // The Qualcomm-supported GPU backend for Adreno. EMBED_KERNELS and
+        // USE_ADRENO_KERNELS are ON by default upstream, so no extra defines are
+        // needed for those.
+        config.define("GGML_OPENCL", "ON");
+
+        // ggml-opencl/CMakeLists.txt runs `find_package(OpenCL REQUIRED)`. When
+        // cross-compiling (e.g. Android, whose NDK ships no OpenCL SDK) CMake's
+        // FindOpenCL can't locate one, so let the caller hand us the header dir
+        // and the import library directly — FindOpenCL skips its own search when
+        // these result variables are already set.
+        println!("cargo:rerun-if-env-changed=OPENCL_INCLUDE_DIR");
+        println!("cargo:rerun-if-env-changed=OPENCL_LIBRARY");
+        if let Ok(include_dir) = env::var("OPENCL_INCLUDE_DIR") {
+            config.define("OpenCL_INCLUDE_DIR", include_dir);
+        }
+        if let Ok(library) = env::var("OPENCL_LIBRARY") {
+            config.define("OpenCL_LIBRARY", library);
+        }
+
+        // The backend embeds its kernels at build time with a Python helper
+        // (`find_package(Python3 REQUIRED)`); allow pinning the interpreter so a
+        // cross-build doesn't pick a broken stub `python3` (e.g. the Windows
+        // Store alias). When unset, CMake's FindPython3 runs as usual.
+        println!("cargo:rerun-if-env-changed=PYTHON3_EXECUTABLE");
+        if let Ok(python3) = env::var("PYTHON3_EXECUTABLE") {
+            config.define("Python3_EXECUTABLE", python3);
+        }
+
+        // The final `-lOpenCL` link is left to the top-level crate (mirroring how
+        // the Android branch above leaves `-lvulkan` to it), keeping this fork
+        // minimal: at runtime the device's own ICD provides the implementation.
     }
 
     // Android doesn't have OpenMP support AFAICT and openmp is a default feature. Do this here
@@ -1045,10 +1117,8 @@ fn main() {
                 common_profile_dir.display()
             );
         }
-        // Upstream renamed the `common` static library target to `llama-common`
-        // and split out `llama-common-base` (which provides the build-info
-        // symbols that `llama-common` depends on). Link both, with the
-        // referencing library first for the benefit of single-pass linkers.
+        // Newer llama.cpp renamed the common static library `common` ->
+        // `llama-common` and split base utilities into `llama-common-base`.
         println!("cargo:rustc-link-lib=static=llama-common");
         println!("cargo:rustc-link-lib=static=llama-common-base");
     }
@@ -1066,7 +1136,12 @@ fn main() {
 
     // OpenMP
     if cfg!(feature = "openmp") && target_triple.contains("gnu") {
-        println!("cargo:rustc-link-lib=gomp");
+        if cfg!(feature = "static-openmp") {
+            emit_compiler_static_archive_search_path("libgomp.a");
+            println!("cargo:rustc-link-lib=static=gomp");
+        } else {
+            println!("cargo:rustc-link-lib=gomp");
+        }
     }
 
     match target_os {
@@ -1084,12 +1159,20 @@ fn main() {
             }
         }
         TargetOs::Linux => {
-            println!("cargo:rustc-link-lib=dylib=stdc++");
+            if cfg!(feature = "static-stdcxx") {
+                emit_compiler_static_archive_search_path("libstdc++.a");
+                println!("cargo:rustc-link-lib=static=stdc++");
+            } else {
+                println!("cargo:rustc-link-lib=dylib=stdc++");
+            }
         }
         TargetOs::Apple(ref variant) => {
             println!("cargo:rustc-link-lib=framework=Foundation");
-            println!("cargo:rustc-link-lib=framework=Metal");
-            println!("cargo:rustc-link-lib=framework=MetalKit");
+            // watchOS has no Metal; skip the Metal frameworks there.
+            if !matches!(variant, AppleVariant::WatchOS) {
+                println!("cargo:rustc-link-lib=framework=Metal");
+                println!("cargo:rustc-link-lib=framework=MetalKit");
+            }
             println!("cargo:rustc-link-lib=framework=Accelerate");
             println!("cargo:rustc-link-lib=c++");
 
@@ -1104,7 +1187,7 @@ fn main() {
                         println!("cargo:rustc-link-search={}", path);
                     }
                 }
-                AppleVariant::Other => (),
+                AppleVariant::WatchOS | AppleVariant::Other => (),
             }
         }
         TargetOs::Android => {
