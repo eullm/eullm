@@ -3,10 +3,12 @@ resolver = "2"
 members = [
     "engine",
     "hub",
-    # Vendored llama-cpp-rs (ysimonson:support-gemma4-12b @ c491763b, upstream
-    # PR utilityai/llama-cpp-rs#1034) — the llama.cpp pin carries the `gemma4uv`
-    # projector that Gemma 4 12B Unified multimodal needs. These are members
-    # because a path dependency living under the workspace root is always
+    # Vendored llama-cpp-rs (utilityai/llama-cpp-rs main @ 8625c7c4) — built
+    # through the EU-hosted mirror https://github.com/eullm/llama-cpp-rs. The
+    # earlier ysimonson:support-gemma4-12b workaround for PR #1034 is gone: that
+    # fix landed upstream in main via PR #1037, so we now track plain upstream
+    # main (0.1.151) through our EU mirror instead of a fork branch. These are
+    # members because a path dependency living under the workspace root is always
     # promoted to a member regardless of `exclude` or a nested `[workspace]`
     # (verified empirically). To keep EuLLM's `-D warnings` clippy gate off this
     # third-party code, the CI/release clippy step uses `--no-deps` (lints only
@@ -15,11 +17,12 @@ members = [
     # `[workspace.dependencies]`), so no root inheritance table is needed.
     #
     # llama.cpp C++ source is a git submodule pinned to
-    # 7c158fbb4aec1bdc9c81d6ca0e785139f4826fae.
+    # 9e3b928fd8c9d14dbf15a8768b9fdd7e5c721d66, fetched through the EU-hosted
+    # mirror https://github.com/eullm/llama.cpp (see .gitmodules).
     #
-    # When utilityai/llama-cpp-rs#1034 merges and llama-cpp-2 0.1.147+ ships on
-    # crates.io: delete this vendor tree, drop these two members, remove the
-    # submodule, and restore engine/Cargo.toml to the registry pin.
+    # To refresh: re-vendor llama-cpp-2/llama-cpp-sys-2 from the eullm
+    # llama-cpp-rs mirror and bump the submodule pin to the matching llama.cpp
+    # commit.
     "engine/vendor/llama-cpp-rs/llama-cpp-2",
     "engine/vendor/llama-cpp-rs/llama-cpp-sys-2",
 ]

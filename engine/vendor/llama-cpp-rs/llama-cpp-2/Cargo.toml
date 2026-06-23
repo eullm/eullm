@@ -1,44 +1,36 @@
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"
-version = "0.1.147"
+version = "0.1.151"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/utilityai/llama-cpp-rs"
-
-# NOTE (EuLLM vendoring): this crate is EXCLUDED from the EuLLM root workspace
-# (see /Cargo.toml `exclude`) so Cargo treats it as an ordinary path dependency
-# with `--cap-lints allow` — our `-D warnings` clippy gate must never lint
-# third-party vendored code. Because it is no longer a workspace member, the
-# `{ workspace = true }` dependency inheritance and `[lints] workspace = true`
-# from upstream are de-inlined to the exact upstream values below, keeping the
-# crate self-contained. Values copied verbatim from upstream's
-# `[workspace.dependencies]` (ysimonson:support-gemma4-12b @ c491763b).
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 enumflags2 = "0.7.12"
-llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.147" }
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.151" }
+# EuLLM vendoring: this crate lives under the workspace root (so Cargo treats
+# it as a member) but the EuLLM root defines no [workspace.dependencies]; the
+# upstream `{ workspace = true }` inheritance is de-inlined to upstream's exact
+# values (utilityai/llama-cpp-rs main @ 8625c7c4 [workspace.dependencies]).
 thiserror = "2"
 tracing = "0.1"
 tracing-core = "0.1"
 encoding_rs = "0.8.35"
-llguidance = { version = "1.7.2", optional = true }
+llguidance = { version = "1.7.5", optional = true }
 toktrie = { version = "1.7.5", optional = true }
 
 [dev-dependencies]
 encoding_rs = "0.8.35"
-hf-hub = "0.5.0"
-serde_json = "1.0"
 tracing-subscriber = { version = "0.3", features = ["json"] }
 
 [features]
 default = ["openmp", "android-shared-stdcxx", "common"]
-# Enable the OpenAI-compatible / chat-template / JSON-schema-to-grammar APIs.
-# These are backed by `llama.cpp`'s `common/` static library; disabling drops
-# `libcommon.a` (~14 MB) plus the `wrapper_common.cpp` / `wrapper_oai.cpp`
-# bindings (~10 MB combined) from the link line. Enabled by default for
+# Enable the JSON-schema-to-grammar API. Backed by `llama.cpp`'s `common/`
+# static library; disabling drops `libcommon.a` (~14 MB) plus the
+# `wrapper_common.cpp` bindings from the link line. Enabled by default for
 # backwards compatibility.
 common = ["llama-cpp-sys-2/common"]
 cuda = ["llama-cpp-sys-2/cuda"]
@@ -46,12 +38,19 @@ cuda-no-vmm = ["cuda", "llama-cpp-sys-2/cuda-no-vmm"]
 metal = ["llama-cpp-sys-2/metal"]
 dynamic-link = ["llama-cpp-sys-2/dynamic-link"]
 vulkan = ["llama-cpp-sys-2/vulkan"]
+opencl = ["llama-cpp-sys-2/opencl"]
 openmp = ["llama-cpp-sys-2/openmp"]
+# Link GNU OpenMP (`libgomp`) statically on GNU targets while keeping OpenMP
+# enabled. Useful for self-contained downstream binaries.
+static-openmp = ["llama-cpp-sys-2/static-openmp"]
 rocm = ["llama-cpp-sys-2/rocm"]
 sampler = []
 # Only has an impact on Android.
 android-shared-stdcxx = ["llama-cpp-sys-2/shared-stdcxx"]
 android-static-stdcxx = ["llama-cpp-sys-2/static-stdcxx"]
+# Generic alias for non-Android targets that also support static C++ stdlib
+# linkage through the sys crate.
+static-stdcxx = ["llama-cpp-sys-2/static-stdcxx"]
 mtmd = ["llama-cpp-sys-2/mtmd"]
 system-ggml = ["llama-cpp-sys-2/system-ggml"]
 system-ggml-static = ["llama-cpp-sys-2/system-ggml-static"]
@@ -60,18 +59,16 @@ dynamic-backends = ["llama-cpp-sys-2/dynamic-backends"]
 
 
 [target.'cfg(all(target_os = "macos", any(target_arch = "aarch64", target_arch = "arm64")))'.dependencies]
-llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.147", features = [
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.151", features = [
     "metal",
 ] }
 
-# [lints] workspace = true removed: this crate is excluded from the EuLLM
-# workspace (cap-lints allow), so the upstream pedantic/missing_docs gate does
-# not apply here.
+# [lints] workspace = true removed: the EuLLM root workspace defines no
+# [workspace.lints]; the CI/release clippy step lints only our own crates via
+# `clippy --no-deps`, so the upstream pedantic gate never applies here.
 
 [package.metadata.docs.rs]
 features = ["sampler"]
 
-# Upstream's [[example]] targets (../examples/*.rs) are intentionally dropped:
-# the examples/ directory is not vendored, so those paths do not exist in this
-# tree and would only matter under `cargo build --examples`, which EuLLM never
-# runs against this crate.
+# Upstream's [[example]] targets (../examples/*.rs) are dropped: the examples/
+# directory is not vendored, so those paths do not exist in this tree.

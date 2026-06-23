@@ -1,6 +1,5 @@
 //! A safe wrapper around `llama_model_params`.
 
-#[cfg(feature = "common")]
 use crate::context::params::LlamaContextParams;
 use crate::model::params::kv_overrides::KvOverrides;
 use crate::LlamaCppError;
@@ -293,7 +292,7 @@ impl LlamaModelParams {
 impl LlamaModelParams {
     /// Automatically fit model parameters to available device memory.
     ///
-    /// Wraps llama.cpp's `common_fit_params`, which determines optimal `n_gpu_layers`,
+    /// Wraps llama.cpp's `common_fit_params` (libcommon), which determines optimal `n_gpu_layers`,
     /// `tensor_split`, and `tensor_buft_overrides` based on available VRAM. On success
     /// the model and context params are updated in place.
     ///
@@ -357,7 +356,7 @@ impl LlamaModelParams {
         self.params.tensor_buft_overrides = null();
 
         let status = unsafe {
-            llama_cpp_sys_2::llama_rs_params_fit(
+            llama_cpp_sys_2::llama_rs_fit_params(
                 model_path.as_ptr(),
                 &raw mut self.params,
                 &raw mut cparams.context_params,
@@ -369,8 +368,7 @@ impl LlamaModelParams {
             )
         };
 
-        // Status mirrors upstream `common_params_fit_status`: 0 = success,
-        // 1 = no allocation fits available memory, anything else = hard error.
+        // llama_rs_fit_params returns common_params_fit_status: 0 = success, 1 = failure, 2 = error.
         match status {
             0 => {}
             1 => return Err(FitError::Failure),

@@ -6,6 +6,7 @@
 #include <string>
 #include <stdint.h>
 
+#include "llama.cpp/common/common.h"
 #include "llama.cpp/common/fit.h"
 #include "llama.cpp/common/json-schema-to-grammar.h"
 #include "llama.cpp/include/llama.h"
@@ -30,54 +31,6 @@ extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
     } catch (const std::exception &) {
         return LLAMA_RS_STATUS_EXCEPTION;
     }
-}
-
-extern "C" void llama_rs_chat_template_result_free(struct llama_rs_chat_template_result * result) {
-    if (!result) {
-        return;
-    }
-    if (result->prompt) {
-        std::free(result->prompt);
-    }
-    if (result->grammar) {
-        std::free(result->grammar);
-    }
-    if (result->parser) {
-        std::free(result->parser);
-    }
-    if (result->generation_prompt) {
-        std::free(result->generation_prompt);
-    }
-    if (result->grammar_triggers) {
-        for (size_t i = 0; i < result->grammar_triggers_count; ++i) {
-            std::free(result->grammar_triggers[i].value);
-        }
-        std::free(result->grammar_triggers);
-    }
-    if (result->preserved_tokens) {
-        for (size_t i = 0; i < result->preserved_tokens_count; ++i) {
-            std::free(result->preserved_tokens[i]);
-        }
-        std::free(result->preserved_tokens);
-    }
-    if (result->additional_stops) {
-        for (size_t i = 0; i < result->additional_stops_count; ++i) {
-            std::free(result->additional_stops[i]);
-        }
-        std::free(result->additional_stops);
-    }
-    result->prompt = nullptr;
-    result->grammar = nullptr;
-    result->parser = nullptr;
-    result->generation_prompt = nullptr;
-    result->chat_format = 0;
-    result->grammar_lazy = false;
-    result->grammar_triggers = nullptr;
-    result->grammar_triggers_count = 0;
-    result->preserved_tokens = nullptr;
-    result->preserved_tokens_count = 0;
-    result->additional_stops = nullptr;
-    result->additional_stops_count = 0;
 }
 
 extern "C" void llama_rs_string_free(char * ptr) {
@@ -168,7 +121,9 @@ extern "C" llama_rs_status llama_rs_sampler_accept(struct llama_sampler * sample
     }
 }
 
-extern "C" int llama_rs_params_fit(
+// Thin pass-through to llama.cpp's common_fit_params (a C++ symbol in libcommon).
+// Returns common_params_fit_status as an int: 0 = success, 1 = failure, 2 = error.
+extern "C" int llama_rs_fit_params(
     const char * path_model,
     struct llama_model_params * mparams,
     struct llama_context_params * cparams,
@@ -177,26 +132,17 @@ extern "C" int llama_rs_params_fit(
     size_t * margins,
     uint32_t n_ctx_min,
     enum ggml_log_level log_level) {
-    try {
-        return static_cast<int>(common_fit_params(
-            path_model,
-            mparams,
-            cparams,
-            tensor_split,
-            tensor_buft_overrides,
-            margins,
-            n_ctx_min,
-            log_level));
-    } catch (...) {
-        return COMMON_PARAMS_FIT_STATUS_ERROR;
-    }
+    return static_cast<int>(common_fit_params(
+        path_model,
+        mparams,
+        cparams,
+        tensor_split,
+        tensor_buft_overrides,
+        margins,
+        n_ctx_min,
+        log_level));
 }
 
 extern "C" void llama_rs_memory_breakdown_print(const struct llama_context * ctx) {
-    try {
-        common_memory_breakdown_print(ctx);
-    } catch (...) {
-        // Swallow exceptions to preserve the noexcept C-ABI boundary; this is a
-        // best-effort diagnostic print.
-    }
+    common_memory_breakdown_print(ctx);
 }
