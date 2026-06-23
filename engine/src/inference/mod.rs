@@ -1004,7 +1004,9 @@ impl InferenceEngine {
         // ── 3. Decode media bytes into mtmd bitmaps ─────────────────────
         let mut bitmaps: Vec<MtmdBitmap> = Vec::with_capacity(media.len());
         for (i, bytes) in media.iter().enumerate() {
-            match MtmdBitmap::from_buffer(mtmd_ctx, bytes) {
+            // llama-cpp-2 0.1.151 added a `placeholder` flag to from_buffer:
+            // false = decode and load the actual media (what we need for inference).
+            match MtmdBitmap::from_buffer(mtmd_ctx, bytes, false) {
                 Ok(b) => bitmaps.push(b),
                 Err(e) => {
                     let _ = tx.blocking_send(StreamEvent::Error(format!(
