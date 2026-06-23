@@ -47,7 +47,14 @@ impl ModelStore {
     pub fn default_store() -> Result<Self, Box<dyn std::error::Error>> {
         let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
         let root = PathBuf::from(home).join(".eullm").join("models");
-        fs::create_dir_all(&root)?;
+        fs::create_dir_all(&root).map_err(|e| {
+            format!(
+                "could not create model store at {}: {e}. \
+                 If that path is a symlink to an unmounted volume (e.g. a Windows/NAS mount), \
+                 mount it first or remove the dangling link.",
+                root.display()
+            )
+        })?;
         Ok(Self { root })
     }
 
