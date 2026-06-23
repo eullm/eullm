@@ -54,8 +54,8 @@ curl http://localhost:11434/v1/chat/completions \
 |----------|------|:------:|-------|
 | 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
 | 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | ✅ Tested | RTX 3000/4000/5000 |
-| 🐧 Linux ARM64 | `eullm-linux-arm64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | RPi 4/5, Orange Pi 5+, Jetson, etc. |
-| 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | M1/M2/M3/M4 |
+| 🐧 Linux ARM64 | `eullm-linux-arm64` | ✅ Tested (community) | Validated on Raspberry Pi 400; RPi 4/5, Orange Pi 5+, Jetson, etc. |
+| 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | ✅ Tested (community) | Validated on M2 Pro (Metal); M1/M2/M3/M4 |
 | 🍎 macOS Intel | `eullm-macos-x64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | Pre-Apple-Silicon Macs |
 | 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | ✅ Tested | Standalone binary, CLI/server |
 | 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ✅ Tested | ZIP bundles CUDA DLLs — extract, run |
@@ -70,13 +70,13 @@ curl http://localhost:11434/v1/chat/completions \
 
 ### 🧪 Platform status / help us test
 
-The Linux x64 and Windows x64 binaries are validated end-to-end by the maintainer. The **macOS** (Intel + Apple Silicon) and **Linux ARM64** binaries compile in CI but the maintainer doesn't own that hardware — so they're shipped as **Experimental — untested**.
+The Linux x64 and Windows x64 binaries are validated end-to-end by the maintainer. **macOS Apple Silicon (Metal)** and **Linux ARM64** are now **community-validated** (see the testers below). **macOS Intel (x64)** still compiles in CI but nobody has run it on that hardware yet — it remains **Experimental — untested**.
 
 If you run local LLMs on a Mac or an ARM64 board (Raspberry Pi 4/5, Orange Pi 5+, Rock 5B, Jetson, …), **your help validating these binaries is hugely appreciated**. See the open testing call:
 
 → **[Issue #140 — Help wanted: testing on macOS & ARM64 Linux](https://github.com/eullm/eullm/issues/140)** (`help wanted`, `testing`)
 
-Priority order: macOS Apple Silicon (Metal backend) → Linux ARM64 (Raspberry Pi 5) → macOS Intel. Reports with `eullm --version` output, model used, and what worked/broke go a long way.
+The remaining gap is **macOS Intel (x86_64)** — if you run local LLMs on a pre-Apple-Silicon Mac, reports with `eullm --version` output, model used, and what worked/broke are very welcome.
 
 **Community testers — thank you 🙏** Early hands-on reports are already in (see #140):
 
@@ -208,7 +208,7 @@ Key features:
 - **Multimodal (new in v0.6.0)** — vision (image OCR + scene description) and experimental audio understanding via llama.cpp `mtmd`, served through the same Ollama-compatible `/api/chat` and the embedded Chat UI. See [Multimodal](#multimodal-vision--audio-new-in-v060)
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
-- **GPU acceleration** — NVIDIA CUDA *(tested)*, AMD ROCm / Vulkan / Apple Metal *(builds available, [community testing wanted](#-platform-status--help-us-test))*
+- **GPU acceleration** — NVIDIA CUDA *(tested)*, Apple Metal *(community-validated)*, AMD ROCm / Vulkan *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - **Ollama-compatible API** — drop-in replacement, same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
@@ -216,7 +216,7 @@ Key features:
 - **Quantized KV cache** — standard llama.cpp Q4_0/Q5_0/Q5_1/Q8_0 KV types reduce memory ~2-4× at small quality cost (`--cache-type-k q4_0 --cache-type-v q4_0`). We also tested the experimental TurboQuant approach (see [Research](#research--experiments))
 - **Daemon mode** (`--daemon`) — detaches into the background with PID file + log file, freeing the terminal; `kill $(cat /tmp/eullm.pid)` stops it gracefully. See [Run it as a daemon](#run-it-as-a-daemon-background-service)
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
-- **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64, macOS x64, macOS ARM64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
+- **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64 + macOS Apple Silicon/Metal *(community-validated)* · macOS x64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
 - Model registry hosted on EU infrastructure (Germany, France, Finland)
 - **No network telemetry** — no analytics, no crash reports, no usage stats; audit trail is written locally to `~/.eullm/audit/audit.jsonl` and never transmitted
 
@@ -353,7 +353,7 @@ chmod +x eullm
 ./eullm run ./your-model.gguf
 ```
 
-Available for: Linux x64 (CPU, CUDA) ✅ · Windows x64 (CPU, CUDA) ✅ · Linux ARM64, macOS x64, macOS Apple Silicon (Metal) 🧪 [community testing wanted](#-platform-status--help-us-test).
+Available for: Linux x64 (CPU, CUDA) ✅ · Windows x64 (CPU, CUDA) ✅ · Linux ARM64 + macOS Apple Silicon (Metal) ✅ *(community-validated)* · macOS x64 🧪 [community testing wanted](#-platform-status--help-us-test).
 
 ### Build from source
 
