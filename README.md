@@ -78,6 +78,10 @@ If you run local LLMs on a Mac or an ARM64 board (Raspberry Pi 4/5, Orange Pi 5+
 
 Priority order: macOS Apple Silicon (Metal backend) → Linux ARM64 (Raspberry Pi 5) → macOS Intel. Reports with `eullm --version` output, model used, and what worked/broke go a long way.
 
+**Community testers — thank you 🙏** Early hands-on reports are already in (see #140):
+
+- **[@andreyluiz](https://github.com/andreyluiz)** — macOS (Apple M2 Pro, Metal) and Raspberry Pi 400 (Cortex-A72, ARM64), with full logs. His macOS run surfaced a real packaging bug: the published `eullm-macos-arm64` had been built without Metal and silently ran on CPU — the release now builds the macOS binaries with `--features metal`. Genuinely grateful for the time he's putting into validating hardware the maintainer can't reach.
+
 ### Drop-in for Ollama-compatible clients
 
 Same port (11434), same Ollama API, plus OpenAI-compatible API on the same binary. Existing tooling (Open WebUI, LangChain, n8n, any OpenAI client) works without code changes:
