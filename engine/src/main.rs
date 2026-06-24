@@ -1291,7 +1291,9 @@ async fn cmd_run(
         // --fit: auto-size the GPU offload to free VRAM before loading. Opt-in;
         // headless-safe (never prompts unless both stdin and stdout are TTYs).
         if fit {
-            match fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict) {
+            let kv_bpe_k = inference::cache_type_bytes_per_elem(&cache_type_k);
+            let kv_bpe_v = inference::cache_type_bytes_per_elem(&cache_type_v);
+            match fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v) {
                 fit::FitOutcome::Proceed(n) => gpu_layers = n,
                 fit::FitOutcome::Abort => {
                     // Clean return: don't load, don't bind a port. If we were

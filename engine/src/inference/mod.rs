@@ -178,6 +178,22 @@ pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
     }
 }
 
+/// Approximate bytes per element for a KV cache type. Quantized types use the
+/// GGUF block byte ratio (e.g. Q4_0 packs 32 elements into 18 bytes, so 0.5625
+/// B/elem). Used by both the runtime KV-memory estimate and the `--fit` sizer.
+pub fn cache_type_bytes_per_elem(ct: &KvCacheType) -> f64 {
+    match ct {
+        KvCacheType::F16 => 2.0,
+        KvCacheType::F32 => 4.0,
+        KvCacheType::Q8_0 => 34.0 / 32.0,
+        KvCacheType::Q4_0 => 18.0 / 32.0,
+        KvCacheType::Q4_1 => 20.0 / 32.0,
+        KvCacheType::Q5_0 => 22.0 / 32.0,
+        KvCacheType::Q5_1 => 24.0 / 32.0,
+        _ => 2.0, // default to F16
+    }
+}
+
 /// Human-readable name for a KV cache type.
 pub fn cache_type_display(ct: &KvCacheType) -> String {
     match ct {
