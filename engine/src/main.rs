@@ -345,10 +345,14 @@ async fn main() {
     // settings. Non-interactive (pipe/redirect) prints a usage hint instead.
     let cli_command = match cli.command {
         Some(c) => c,
+        // The picker only opens on an interactive terminal, so `--fit` is the
+        // default here (unlike the scriptable `eullm run`, where it stays
+        // opt-in): a user choosing a model from the menu gets GPU layers
+        // auto-sized to free VRAM instead of an out-of-memory abort.
         None => match picker::pick(&store).await {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
-                port: 11434, replace: false, gpu_layers: -1, fit: false,
+                port: 11434, replace: false, gpu_layers: -1, fit: true,
                 fit_strict: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
@@ -359,7 +363,7 @@ async fn main() {
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
-                port: 11434, replace: false, gpu_layers: -1, fit: false,
+                port: 11434, replace: false, gpu_layers: -1, fit: true,
                 fit_strict: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
