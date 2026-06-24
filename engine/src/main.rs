@@ -1,6 +1,7 @@
 mod api;
 mod audit;
 mod chat_template;
+mod fit;
 mod gguf_patch;
 mod inference;
 mod models;
@@ -88,6 +89,18 @@ enum Commands {
         /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
         #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
         gpu_layers: i32,
+
+        /// Auto-fit GPU layers to available VRAM (CUDA builds only). Probes
+        /// free VRAM and the model's layer count, then offloads as many layers
+        /// as fit. Opt-in: without it, --gpu-layers is used as-is. If VRAM
+        /// can't be probed it falls back to --gpu-layers.
+        #[arg(long)]
+        fit: bool,
+
+        /// With --fit, refuse to load (instead of offloading a partial split
+        /// or falling back) when the model does not fully fit on the GPU.
+        #[arg(long)]
+        fit_strict: bool,
 
         /// Context window size
         #[arg(short, long, default_value_t = 4096)]
@@ -335,7 +348,8 @@ async fn main() {
         None => match picker::pick(&store).await {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
-                port: 11434, replace: false, gpu_layers: -1, ctx_size: 4096,
+                port: 11434, replace: false, gpu_layers: -1, fit: false,
+                fit_strict: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -345,7 +359,8 @@ async fn main() {
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
-                port: 11434, replace: false, gpu_layers: -1, ctx_size: 4096,
+                port: 11434, replace: false, gpu_layers: -1, fit: false,
+                fit_strict: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -384,6 +399,8 @@ async fn main() {
             port,
             replace,
             gpu_layers,
+            fit,
+            fit_strict,
             ctx_size,
             threads,
             batch_size,
@@ -446,7 +463,7 @@ async fn main() {
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
@@ -1155,6 +1172,8 @@ async fn cmd_run(
     port: u16,
     replace: bool,
     gpu_layers: i32,
+    fit: bool,
+    fit_strict: bool,
     ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
@@ -1173,6 +1192,10 @@ async fn cmd_run(
     let multimodal_oneshot = image.is_some();
     let batch_size = if multimodal_oneshot { 0 } else { batch_size };
     let ui_port = if multimodal_oneshot { None } else { ui_port };
+
+    // `--fit` may override this below once the GGUF file is resolved; until
+    // then it is exactly the user-provided `--gpu-layers`.
+    let mut gpu_layers = gpu_layers;
 
     if !multimodal_oneshot {
         ensure_port_available(port, replace).await;
@@ -1260,6 +1283,19 @@ async fn cmd_run(
         model_name = canonical_name.clone();
 
         println!("Loading GGUF: {}", gguf_path.display());
+
+        // --fit: auto-size the GPU offload to free VRAM before loading. Opt-in;
+        // headless-safe (never prompts unless both stdin and stdout are TTYs).
+        if fit {
+            match fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict) {
+                fit::FitOutcome::Proceed(n) => gpu_layers = n,
+                fit::FitOutcome::Abort => {
+                    // Clean return: don't load, don't bind a port. If we were
+                    // invoked from the picker flow, the user lands back there.
+                    return;
+                }
+            }
+        }
 
         // Multimodal MVP: --image requires the `multimodal` feature build.
         // Refuse the flag upfront on text-only builds with an actionable
