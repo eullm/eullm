@@ -73,7 +73,8 @@ enum Commands {
     /// the user can choose a local model, a catalog model, or paste a
     /// custom path/URL.
     Run {
-        /// Model id (catalog), path to a local GGUF file, or URL to one
+        /// Model id (catalog), path to a local GGUF file, URL to one, or a
+        /// HuggingFace repo shorthand (`hf.co/<owner>/<repo>[:<quant>]`)
         model: Option<String>,
 
         /// Port for the API server
@@ -512,6 +513,96 @@ fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
+/// Derive a filesystem-safe model id from a HuggingFace ref. Uses the repo
+/// name (last path segment), lowercased and sanitized like `url_to_model_id`,
+/// with the quant appended when one was requested so different quants of the
+/// same repo coexist:  `hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M` → `qwen3-8b-gguf-q4_k_m`.
+fn hf_ref_to_model_id(hf: &registry::HfRef) -> String {
+    let repo_name = hf.repo.rsplit('/').next().unwrap_or(&hf.repo);
+    let base = match hf.quant.as_deref() {
+        Some(q) => format!("{repo_name}-{q}"),
+        None => repo_name.to_string(),
+    };
+    let id: String = base
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect();
+    let id = id.trim_matches('-').to_string();
+    if id.is_empty() { "model".to_string() } else { id }
+}
+
+/// Pull a GGUF from a HuggingFace repo shorthand, outside the catalog.
+///
+/// Resolves the repo's `.gguf` siblings via the HF API, picks one (by the
+/// requested `:quant` or a sensible default), downloads it into the store
+/// under an id derived from the repo + quant, and writes an external manifest.
+/// On ambiguity (multiple matches or sharded multi-file gguf) it prints the
+/// available filenames and exits, asking the user to re-run with `:<quant>`.
+async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
+    let id = hf_ref_to_model_id(hf);
+
+    if let Some(gguf) = store.gguf_path(&id) {
+        println!("Model '{id}' is already downloaded.");
+        println!("  GGUF: {}", gguf.display());
+        println!("\nRun with: eullm run {id}");
+        return;
+    }
+
+    println!("Resolving HuggingFace repo: {}", hf.repo);
+    let filename = match registry::resolve_hf_gguf(hf).await {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Could not resolve a GGUF to download: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("Pulling from HuggingFace: {} ({})", hf.repo, filename);
+    println!("  Storing as: {id}");
+    println!("  (off-catalog model — no license/VRAM metadata available)");
+    println!();
+
+    let model_dir = store.model_path(&id);
+    let gguf_dest = model_dir.join(&filename);
+
+    let result = {
+        use crate::registry::{download_from_huggingface, format_progress};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let last_printed = Arc::new(AtomicU64::new(0));
+        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+            let last = last_printed.load(Ordering::Relaxed);
+            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+                last_printed.store(downloaded, Ordering::Relaxed);
+                eprint!("\r  {}", format_progress(downloaded, total));
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        });
+        download_from_huggingface(&hf.repo, &filename, &gguf_dest, Some(progress)).await
+    };
+    eprintln!();
+
+    match result {
+        Ok(()) => {
+            let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
+            match store.write_external_manifest(&id, &filename, &hf.original, size) {
+                Ok(_) => {
+                    println!("  Done. Model ready.");
+                    println!("\nRun with: eullm run {id}");
+                }
+                Err(e) => eprintln!("Warning: download succeeded but manifest write failed: {e}"),
+            }
+        }
+        Err(e) => {
+            eprintln!("Download failed: {e}");
+            let _ = store.delete(&id);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Derive a filesystem-safe model id and the GGUF filename from a download
 /// URL. `https://example.com/models/Gemma4.gguf?token=x` →
 /// id `gemma4`, filename `Gemma4.gguf`.
@@ -611,6 +702,11 @@ async fn cmd_pull_url(store: &ModelStore, url: &str) {
 async fn cmd_pull(store: &ModelStore, model: &str) {
     if is_url(model) {
         cmd_pull_url(store, model).await;
+        return;
+    }
+
+    if let Some(hf) = registry::parse_hf_ref(model) {
+        cmd_pull_hf(store, &hf).await;
         return;
     }
 
@@ -1106,6 +1202,8 @@ async fn cmd_run(
     // surfacing as `gemma-4-12b-it-Q4_K_M`.
     let canonical_name: String = if is_url(model) {
         url_to_model_id(model).0
+    } else if let Some(hf) = registry::parse_hf_ref(model) {
+        hf_ref_to_model_id(&hf)
     } else {
         let p = PathBuf::from(model);
         if p.exists() && p.extension().is_some_and(|e| e == "gguf") {
@@ -1127,6 +1225,15 @@ async fn cmd_run(
             cmd_pull_url(store, model).await;
         }
         store.gguf_path(&id)
+    } else if let Some(hf) = registry::parse_hf_ref(model) {
+        // HuggingFace shorthand: pull into the store (if not already there),
+        // then load by the derived id.
+        let id = hf_ref_to_model_id(&hf);
+        if store.gguf_path(&id).is_none() {
+            println!("Model not found locally. Pulling from HuggingFace...");
+            cmd_pull_hf(store, &hf).await;
+        }
+        store.gguf_path(&id)
     } else if let Some(path) = resolve_model_path(model, store) {
         Some(path)
     } else {
@@ -1141,6 +1248,7 @@ async fn cmd_run(
                 eprintln!("Usage:");
                 eprintln!("  eullm run ./path/to/model.gguf         # Run a local GGUF file");
                 eprintln!("  eullm run https://host/model.gguf      # Run any GGUF by URL");
+                eprintln!("  eullm run hf.co/owner/repo[:quant]     # Run from HuggingFace");
                 eprintln!("  eullm run legal-it-7b                  # Run a catalog model");
                 std::process::exit(1);
             }
