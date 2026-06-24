@@ -215,7 +215,7 @@ fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String
     // If a quant was requested and it disambiguates to a single file, use it
     // even if other (non-matching) shards exist.
     if requested_quant.is_some() {
-        let non_shard: Vec<&&String> = candidates.iter().filter(|f| !is_shard(f)).collect();
+        let non_shard: Vec<&&String> = candidates.iter().filter(|f| !is_shard(f.as_str())).collect();
         if non_shard.len() == 1 {
             return Ok(non_shard[0].to_string());
         }
@@ -232,7 +232,7 @@ fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String
 
     // No quant requested: refuse if the repo only contains shards (we'd have
     // to guess across them), otherwise prefer the standard quants.
-    let single_file: Vec<&String> = ggufs.iter().filter(|f| !is_shard(f)).collect();
+    let single_file: Vec<&String> = ggufs.iter().filter(|f| !is_shard(f.as_str())).collect();
     if single_file.is_empty() {
         return Err(format!(
             "this repo only contains sharded .gguf files; pass an explicit :<quant>. Available files:\n{}",
