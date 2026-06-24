@@ -1,6 +1,7 @@
 mod api;
 mod audit;
 mod chat_template;
+mod fit;
 mod gguf_patch;
 mod inference;
 mod models;
@@ -73,7 +74,8 @@ enum Commands {
     /// the user can choose a local model, a catalog model, or paste a
     /// custom path/URL.
     Run {
-        /// Model id (catalog), path to a local GGUF file, or URL to one
+        /// Model id (catalog), path to a local GGUF file, URL to one, or a
+        /// HuggingFace repo shorthand (`hf.co/<owner>/<repo>[:<quant>]`)
         model: Option<String>,
 
         /// Port for the API server
@@ -87,6 +89,18 @@ enum Commands {
         /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
         #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
         gpu_layers: i32,
+
+        /// Auto-fit GPU layers to available VRAM (CUDA builds only). Probes
+        /// free VRAM and the model's layer count, then offloads as many layers
+        /// as fit. Opt-in: without it, --gpu-layers is used as-is. If VRAM
+        /// can't be probed it falls back to --gpu-layers.
+        #[arg(long)]
+        fit: bool,
+
+        /// With --fit, refuse to load (instead of offloading a partial split
+        /// or falling back) when the model does not fully fit on the GPU.
+        #[arg(long)]
+        fit_strict: bool,
 
         /// Context window size
         #[arg(short, long, default_value_t = 4096)]
@@ -334,7 +348,8 @@ async fn main() {
         None => match picker::pick(&store).await {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
-                port: 11434, replace: false, gpu_layers: -1, ctx_size: 4096,
+                port: 11434, replace: false, gpu_layers: -1, fit: false,
+                fit_strict: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -344,7 +359,8 @@ async fn main() {
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
-                port: 11434, replace: false, gpu_layers: -1, ctx_size: 4096,
+                port: 11434, replace: false, gpu_layers: -1, fit: false,
+                fit_strict: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -383,6 +399,8 @@ async fn main() {
             port,
             replace,
             gpu_layers,
+            fit,
+            fit_strict,
             ctx_size,
             threads,
             batch_size,
@@ -445,7 +463,7 @@ async fn main() {
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
@@ -510,6 +528,96 @@ async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
 /// than resolve against the catalog.
 fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
+}
+
+/// Derive a filesystem-safe model id from a HuggingFace ref. Uses the repo
+/// name (last path segment), lowercased and sanitized like `url_to_model_id`,
+/// with the quant appended when one was requested so different quants of the
+/// same repo coexist:  `hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M` → `qwen3-8b-gguf-q4_k_m`.
+fn hf_ref_to_model_id(hf: &registry::HfRef) -> String {
+    let repo_name = hf.repo.rsplit('/').next().unwrap_or(&hf.repo);
+    let base = match hf.quant.as_deref() {
+        Some(q) => format!("{repo_name}-{q}"),
+        None => repo_name.to_string(),
+    };
+    let id: String = base
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect();
+    let id = id.trim_matches('-').to_string();
+    if id.is_empty() { "model".to_string() } else { id }
+}
+
+/// Pull a GGUF from a HuggingFace repo shorthand, outside the catalog.
+///
+/// Resolves the repo's `.gguf` siblings via the HF API, picks one (by the
+/// requested `:quant` or a sensible default), downloads it into the store
+/// under an id derived from the repo + quant, and writes an external manifest.
+/// On ambiguity (multiple matches or sharded multi-file gguf) it prints the
+/// available filenames and exits, asking the user to re-run with `:<quant>`.
+async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
+    let id = hf_ref_to_model_id(hf);
+
+    if let Some(gguf) = store.gguf_path(&id) {
+        println!("Model '{id}' is already downloaded.");
+        println!("  GGUF: {}", gguf.display());
+        println!("\nRun with: eullm run {id}");
+        return;
+    }
+
+    println!("Resolving HuggingFace repo: {}", hf.repo);
+    let filename = match registry::resolve_hf_gguf(hf).await {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("Could not resolve a GGUF to download: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    println!("Pulling from HuggingFace: {} ({})", hf.repo, filename);
+    println!("  Storing as: {id}");
+    println!("  (off-catalog model — no license/VRAM metadata available)");
+    println!();
+
+    let model_dir = store.model_path(&id);
+    let gguf_dest = model_dir.join(&filename);
+
+    let result = {
+        use crate::registry::{download_from_huggingface, format_progress};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
+        let last_printed = Arc::new(AtomicU64::new(0));
+        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
+            let last = last_printed.load(Ordering::Relaxed);
+            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
+                last_printed.store(downloaded, Ordering::Relaxed);
+                eprint!("\r  {}", format_progress(downloaded, total));
+                let _ = std::io::Write::flush(&mut std::io::stderr());
+            }
+        });
+        download_from_huggingface(&hf.repo, &filename, &gguf_dest, Some(progress)).await
+    };
+    eprintln!();
+
+    match result {
+        Ok(()) => {
+            let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
+            match store.write_external_manifest(&id, &filename, &hf.original, size) {
+                Ok(_) => {
+                    println!("  Done. Model ready.");
+                    println!("\nRun with: eullm run {id}");
+                }
+                Err(e) => eprintln!("Warning: download succeeded but manifest write failed: {e}"),
+            }
+        }
+        Err(e) => {
+            eprintln!("Download failed: {e}");
+            let _ = store.delete(&id);
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Derive a filesystem-safe model id and the GGUF filename from a download
@@ -611,6 +719,11 @@ async fn cmd_pull_url(store: &ModelStore, url: &str) {
 async fn cmd_pull(store: &ModelStore, model: &str) {
     if is_url(model) {
         cmd_pull_url(store, model).await;
+        return;
+    }
+
+    if let Some(hf) = registry::parse_hf_ref(model) {
+        cmd_pull_hf(store, &hf).await;
         return;
     }
 
@@ -1059,6 +1172,8 @@ async fn cmd_run(
     port: u16,
     replace: bool,
     gpu_layers: i32,
+    fit: bool,
+    fit_strict: bool,
     ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
@@ -1077,6 +1192,10 @@ async fn cmd_run(
     let multimodal_oneshot = image.is_some();
     let batch_size = if multimodal_oneshot { 0 } else { batch_size };
     let ui_port = if multimodal_oneshot { None } else { ui_port };
+
+    // `--fit` may override this below once the GGUF file is resolved; until
+    // then it is exactly the user-provided `--gpu-layers`.
+    let mut gpu_layers = gpu_layers;
 
     if !multimodal_oneshot {
         ensure_port_available(port, replace).await;
@@ -1106,6 +1225,8 @@ async fn cmd_run(
     // surfacing as `gemma-4-12b-it-Q4_K_M`.
     let canonical_name: String = if is_url(model) {
         url_to_model_id(model).0
+    } else if let Some(hf) = registry::parse_hf_ref(model) {
+        hf_ref_to_model_id(&hf)
     } else {
         let p = PathBuf::from(model);
         if p.exists() && p.extension().is_some_and(|e| e == "gguf") {
@@ -1127,6 +1248,15 @@ async fn cmd_run(
             cmd_pull_url(store, model).await;
         }
         store.gguf_path(&id)
+    } else if let Some(hf) = registry::parse_hf_ref(model) {
+        // HuggingFace shorthand: pull into the store (if not already there),
+        // then load by the derived id.
+        let id = hf_ref_to_model_id(&hf);
+        if store.gguf_path(&id).is_none() {
+            println!("Model not found locally. Pulling from HuggingFace...");
+            cmd_pull_hf(store, &hf).await;
+        }
+        store.gguf_path(&id)
     } else if let Some(path) = resolve_model_path(model, store) {
         Some(path)
     } else {
@@ -1141,6 +1271,7 @@ async fn cmd_run(
                 eprintln!("Usage:");
                 eprintln!("  eullm run ./path/to/model.gguf         # Run a local GGUF file");
                 eprintln!("  eullm run https://host/model.gguf      # Run any GGUF by URL");
+                eprintln!("  eullm run hf.co/owner/repo[:quant]     # Run from HuggingFace");
                 eprintln!("  eullm run legal-it-7b                  # Run a catalog model");
                 std::process::exit(1);
             }
@@ -1152,6 +1283,19 @@ async fn cmd_run(
         model_name = canonical_name.clone();
 
         println!("Loading GGUF: {}", gguf_path.display());
+
+        // --fit: auto-size the GPU offload to free VRAM before loading. Opt-in;
+        // headless-safe (never prompts unless both stdin and stdout are TTYs).
+        if fit {
+            match fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict) {
+                fit::FitOutcome::Proceed(n) => gpu_layers = n,
+                fit::FitOutcome::Abort => {
+                    // Clean return: don't load, don't bind a port. If we were
+                    // invoked from the picker flow, the user lands back there.
+                    return;
+                }
+            }
+        }
 
         // Multimodal MVP: --image requires the `multimodal` feature build.
         // Refuse the flag upfront on text-only builds with an actionable
