@@ -32,10 +32,36 @@ const GGUF_TYPE_INT64: u32 = 11;
 const GGUF_TYPE_FLOAT64: u32 = 12;
 
 /// What the parser extracted from a GGUF header that we care about for fitting.
+///
+/// `n_layers` is required; the attention dimensions are optional — when present
+/// they let `compute_fit` size the KV cache exactly for the chosen cache type
+/// (so quantizing the KV frees room for more GPU layers). When absent, the
+/// sizer falls back to a coarse per-token KV reserve.
 #[derive(Debug, Clone)]
 pub struct GgufInfo {
     /// Number of transformer blocks/layers (`<arch>.block_count`).
     pub n_layers: u32,
+    /// Embedding dimension (`<arch>.embedding_length`), if present.
+    pub n_embd: Option<u32>,
+    /// Number of attention heads (`<arch>.attention.head_count`), if present.
+    pub n_head: Option<u32>,
+    /// Number of key/value heads (`<arch>.attention.head_count_kv`) — the GQA
+    /// group count that actually sizes the KV cache. If present.
+    pub n_head_kv: Option<u32>,
+}
+
+impl GgufInfo {
+    /// KV elements per token per layer = `n_head_kv × head_dim`, where
+    /// `head_dim = n_embd / n_head`. This mirrors exactly the runtime estimate
+    /// in the scheduler. Returns `None` when any dimension is missing or zero,
+    /// so the sizer can fall back to a coarse reserve.
+    fn kv_elems_per_token_per_layer(&self) -> Option<f64> {
+        let n_embd = self.n_embd.filter(|&v| v > 0)? as f64;
+        let n_head = self.n_head.filter(|&v| v > 0)? as f64;
+        let n_head_kv = self.n_head_kv.filter(|&v| v > 0)? as f64;
+        let head_dim = n_embd / n_head;
+        Some(n_head_kv * head_dim)
+    }
 }
 
 /// A tiny forward-only cursor over a byte slice. Every read is bounds-checked
@@ -143,29 +169,54 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let metadata_kv_count = c.u64()?;
 
     let mut n_layers: Option<u32> = None;
+    let mut n_embd: Option<u32> = None;
+    let mut n_head: Option<u32> = None;
+    let mut n_head_kv: Option<u32> = None;
 
+    // The metadata keys we want, each an integer stored as u32 or u64 depending
+    // on the exporter. The `_kv` head count is checked before the plain head
+    // count because the former does NOT end with `.attention.head_count`.
     for _ in 0..metadata_kv_count {
         let key_bytes = c.gguf_string()?;
         let value_type = c.u32()?;
 
-        // We only care about a key ending in `.block_count` (e.g.
-        // `qwen3.block_count`, `llama.block_count`). For everything else we
-        // skip the value to stay aligned for the next pair.
-        let is_block_count = key_bytes.ends_with(b".block_count");
-        if is_block_count && value_type != GGUF_TYPE_ARRAY {
-            if let Some(v) = c.read_uint_as_u64(value_type) {
-                // Clamp into u32; layer counts are small.
-                n_layers = u32::try_from(v).ok().or(Some(u32::MAX));
-            } else {
-                // Unexpected type; skip to stay aligned.
-                c.skip_value(value_type)?;
-            }
+        // Pick which field (if any) this key feeds. All are scalar integers;
+        // an array-typed match is ignored (skipped) to stay aligned.
+        let target: Option<&mut Option<u32>> = if value_type == GGUF_TYPE_ARRAY {
+            None
+        } else if key_bytes.ends_with(b".block_count") {
+            Some(&mut n_layers)
+        } else if key_bytes.ends_with(b".embedding_length") {
+            Some(&mut n_embd)
+        } else if key_bytes.ends_with(b".attention.head_count_kv") {
+            Some(&mut n_head_kv)
+        } else if key_bytes.ends_with(b".attention.head_count") {
+            Some(&mut n_head)
         } else {
-            c.skip_value(value_type)?;
+            None
+        };
+
+        match target {
+            Some(slot) => {
+                if let Some(v) = c.read_uint_as_u64(value_type) {
+                    // Clamp into u32; all of these counts are small.
+                    *slot = u32::try_from(v).ok().or(Some(u32::MAX));
+                } else {
+                    // Unexpected type for a key we wanted; skip to stay aligned.
+                    c.skip_value(value_type)?;
+                }
+            }
+            // Not a key we care about (or an array) — skip its value.
+            None => c.skip_value(value_type)?,
         }
     }
 
-    n_layers.map(|n_layers| GgufInfo { n_layers })
+    n_layers.map(|n_layers| GgufInfo {
+        n_layers,
+        n_embd,
+        n_head,
+        n_head_kv,
+    })
 }
 
 /// Read the leading bytes of a GGUF file and parse its header.
@@ -225,20 +276,45 @@ pub enum FitDecision {
     Unknown { reason: String },
 }
 
-/// Safety margin applied to free VRAM before fitting (reserve 10% for the
-/// CUDA context, fragmentation, and the compute buffer).
-const VRAM_SAFETY_FRACTION: f64 = 0.9;
+/// Fraction of free VRAM we're willing to use, reserving a slice for
+/// allocator fragmentation and miscellaneous driver overhead. Together with
+/// `COMPUTE_BUFFER_RESERVE_BYTES` this reproduces the ~0.8 GiB headroom
+/// measured on an RTX 5070 Ti loading qwq-32b at 45/64 layers (f16 KV,
+/// 4096 ctx) — i.e. the sizer lands the same safe split that was validated by
+/// hand, then offloads strictly more layers as the KV cache is quantized.
+const VRAM_SAFETY_FRACTION: f64 = 0.97;
 
-/// Compute the fit decision from probed VRAM, the GGUF info, and the on-disk
-/// file size (used as a proxy for total weight bytes).
+/// Flat reserve for the CUDA context + the prefill/decode compute buffer, which
+/// is roughly fixed for a given `n_batch` and does not scale per offloaded
+/// layer. Calibrated against an observed ~307 MiB CUDA0 compute buffer at
+/// `n_batch = 2048`; 320 MiB leaves a little slack.
+const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 320.0 * 1024.0 * 1024.0;
+
+/// Coarse KV reserve used only when the GGUF header doesn't expose the
+/// attention dims: ~128 B per token per layer (a rough F16 ballpark for
+/// 7-8B-class models). The exact path below supersedes this whenever the
+/// dims are present.
+const FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER: f64 = 128.0;
+
+/// Compute the fit decision from probed VRAM, the GGUF info, the on-disk file
+/// size (a proxy for total weight bytes), and the chosen KV cache element
+/// sizes.
 ///
-/// `ctx_size` lets us add a rough KV-cache reserve; this is a cheap estimate
-/// only — when we can't size it sensibly we lean on the 0.9 margin alone.
+/// The cost charged for each GPU-offloaded layer is its share of the weights
+/// plus its KV-cache slice for the requested context. Because the KV term is
+/// now sized from the real cache type, quantizing the KV (e.g. `--cache-type
+/// q4_0`) lowers the per-layer cost and lets more layers land on the GPU — the
+/// effect grows with context length, where the KV dominates.
+///
+/// `kv_bytes_per_elem_k` / `_v` are the per-element byte costs of the K and V
+/// caches (e.g. 2.0 for F16, 0.5625 for Q4_0).
 pub fn compute_fit(
     free_vram: Option<u64>,
     info: Option<&GgufInfo>,
     file_size: u64,
     ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
 ) -> FitDecision {
     let free_vram = match free_vram {
         Some(v) => v,
@@ -263,28 +339,29 @@ pub fn compute_fit(
         };
     }
 
-    let usable = free_vram as f64 * VRAM_SAFETY_FRACTION;
-
-    // Rough KV-cache reserve: F16 KV is ~2 bytes/elem × 2 (K and V). Without
-    // the model's head/layer dims we can't size it exactly, so use a small
-    // per-token-per-layer constant as a coarse upper-ish estimate. This is
-    // deliberately conservative; getting it slightly wrong only shifts the
-    // offload boundary by a layer or two, which the 0.9 margin absorbs.
-    // ~0.125 MiB per 1k ctx per layer is a ballpark for 7-8B-class models.
-    let kv_reserve =
-        (ctx_size as f64) * (info.n_layers as f64) * 128.0; // bytes ≈ 128 B per token per layer
-    let usable = (usable - kv_reserve).max(0.0);
-
-    let per_layer = file_size as f64 / info.n_layers as f64;
-    if per_layer <= 0.0 {
+    let n_layers = info.n_layers as u64;
+    let per_layer_weight = file_size as f64 / info.n_layers as f64;
+    if per_layer_weight <= 0.0 {
         return FitDecision::Unknown {
             reason: "degenerate per-layer size".to_string(),
         };
     }
 
-    let max_layers = (usable / per_layer).floor();
+    // KV bytes per offloaded layer for this context. Exact when the attention
+    // dims are known (mirrors the scheduler's runtime estimate); coarse
+    // fallback otherwise.
+    let kv_per_layer = match info.kv_elems_per_token_per_layer() {
+        Some(elems) => (ctx_size as f64) * elems * (kv_bytes_per_elem_k + kv_bytes_per_elem_v),
+        None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
+    };
+
+    let cost_per_layer = per_layer_weight + kv_per_layer;
+
+    // Budget = a fraction of free VRAM, minus the flat compute-buffer reserve.
+    let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
+
+    let max_layers = (usable / cost_per_layer).floor();
     let max_layers = if max_layers < 0.0 { 0 } else { max_layers as u64 };
-    let n_layers = info.n_layers as u64;
 
     if max_layers >= n_layers {
         FitDecision::FitsFully
@@ -330,12 +407,21 @@ pub fn run_fit(
     fallback_gpu_layers: i32,
     ctx_size: u32,
     strict: bool,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
 ) -> FitOutcome {
     let free_vram = free_vram_bytes();
     let info = read_gguf_info(model_path);
     let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
 
-    let decision = compute_fit(free_vram, info.as_ref(), file_size, ctx_size);
+    let decision = compute_fit(
+        free_vram,
+        info.as_ref(),
+        file_size,
+        ctx_size,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+    );
 
     match decision {
         FitDecision::Unknown { reason } => {
@@ -464,26 +550,47 @@ mod tests {
         assert!(parse_gguf_header(truncated).is_none());
     }
 
+    /// F16 KV element sizes (2 bytes each for K and V) — the common case.
+    const F16: (f64, f64) = (2.0, 2.0);
+
+    /// A bare `GgufInfo` with only the layer count (no attention dims) — the
+    /// fallback path where KV is sized by the coarse constant.
+    fn info_layers(n: u32) -> GgufInfo {
+        GgufInfo {
+            n_layers: n,
+            n_embd: None,
+            n_head: None,
+            n_head_kv: None,
+        }
+    }
+
     #[test]
     fn fit_unknown_when_no_vram() {
-        let info = GgufInfo { n_layers: 28 };
-        let d = compute_fit(None, Some(&info), 5_000_000_000, 4096);
+        let info = info_layers(28);
+        let d = compute_fit(None, Some(&info), 5_000_000_000, 4096, F16.0, F16.1);
         assert!(matches!(d, FitDecision::Unknown { .. }));
     }
 
     #[test]
     fn fit_full_when_vram_ample() {
-        let info = GgufInfo { n_layers: 28 };
+        let info = info_layers(28);
         // 40 GiB free, 5 GB model → fits fully.
-        let d = compute_fit(Some(40 * 1024 * 1024 * 1024), Some(&info), 5_000_000_000, 4096);
+        let d = compute_fit(
+            Some(40 * 1024 * 1024 * 1024),
+            Some(&info),
+            5_000_000_000,
+            4096,
+            F16.0,
+            F16.1,
+        );
         assert_eq!(d, FitDecision::FitsFully);
     }
 
     #[test]
     fn fit_partial_when_vram_tight() {
-        let info = GgufInfo { n_layers: 32 };
+        let info = info_layers(32);
         // 4 GB free, 16 GB model → only some layers fit.
-        let d = compute_fit(Some(4_000_000_000), Some(&info), 16_000_000_000, 4096);
+        let d = compute_fit(Some(4_000_000_000), Some(&info), 16_000_000_000, 4096, F16.0, F16.1);
         match d {
             FitDecision::Partial { layers, n_layers } => {
                 assert!(layers > 0 && (layers as u32) < n_layers);
@@ -491,5 +598,70 @@ mod tests {
             }
             other => panic!("expected partial, got {other:?}"),
         }
+    }
+
+    /// With the attention dims present, quantizing the KV cache (smaller
+    /// per-element bytes) must let at least as many — and in a tight fit,
+    /// strictly more — layers onto the GPU than F16. This is the headline of
+    /// the KV-aware sizer.
+    #[test]
+    fn quantized_kv_offloads_more_layers() {
+        // qwq-32b-ish dims: 64 layers, n_embd 5120, 40 heads, 8 KV heads.
+        let info = GgufInfo {
+            n_layers: 64,
+            n_embd: Some(5120),
+            n_head: Some(40),
+            n_head_kv: Some(8),
+        };
+        let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
+        let file = 18_500_000_000;
+        // Large context so the KV term is significant.
+        let ctx = 32768;
+
+        let f16 = compute_fit(Some(free), Some(&info), file, ctx, 2.0, 2.0);
+        // Q4_0 ≈ 0.5625 B/elem for both K and V.
+        let q4 = compute_fit(Some(free), Some(&info), file, ctx, 0.5625, 0.5625);
+
+        let layers = |d: &FitDecision| match d {
+            FitDecision::Partial { layers, .. } => *layers,
+            FitDecision::FitsFully => i32::MAX,
+            FitDecision::Unknown { .. } => -1,
+        };
+        assert!(
+            layers(&q4) > layers(&f16),
+            "q4_0 KV should offload more layers than f16 at long context: q4={:?} f16={:?}",
+            q4,
+            f16
+        );
+    }
+
+    /// The parser must pick up the attention dims when present, and keep the
+    /// `_kv` head count distinct from the plain head count.
+    #[test]
+    fn parses_attention_dims() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes()); // version
+        b.extend_from_slice(&0u64.to_le_bytes()); // tensor_count
+        b.extend_from_slice(&4u64.to_le_bytes()); // metadata_kv_count
+
+        let put_u32 = |key: &[u8], val: u32, buf: &mut Vec<u8>| {
+            buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            buf.extend_from_slice(key);
+            buf.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+            buf.extend_from_slice(&val.to_le_bytes());
+        };
+        put_u32(b"qwen3.block_count", 64, &mut b);
+        put_u32(b"qwen3.embedding_length", 5120, &mut b);
+        put_u32(b"qwen3.attention.head_count", 40, &mut b);
+        put_u32(b"qwen3.attention.head_count_kv", 8, &mut b);
+
+        let info = parse_gguf_header(&b).unwrap();
+        assert_eq!(info.n_layers, 64);
+        assert_eq!(info.n_embd, Some(5120));
+        assert_eq!(info.n_head, Some(40));
+        assert_eq!(info.n_head_kv, Some(8));
+        // head_dim = 5120/40 = 128 → 8 × 128 = 1024 elems/token/layer.
+        assert_eq!(info.kv_elems_per_token_per_layer(), Some(1024.0));
     }
 }

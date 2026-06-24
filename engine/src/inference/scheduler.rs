@@ -896,17 +896,9 @@ fn process_piece(
 }
 
 /// Bytes per element for a KV cache type (approximate for quantized types).
+/// Thin alias over the shared helper so existing call sites stay unchanged.
 fn cache_type_bytes_per_elem(ct: &super::KvCacheType) -> f64 {
-    match ct {
-        super::KvCacheType::F16 => 2.0,
-        super::KvCacheType::F32 => 4.0,
-        super::KvCacheType::Q8_0 => 34.0 / 32.0,
-        super::KvCacheType::Q4_0 => 18.0 / 32.0,
-        super::KvCacheType::Q4_1 => 20.0 / 32.0,
-        super::KvCacheType::Q5_0 => 22.0 / 32.0,
-        super::KvCacheType::Q5_1 => 24.0 / 32.0,
-        _ => 2.0, // default to F16
-    }
+    super::cache_type_bytes_per_elem(ct)
 }
 
 /// Estimate KV cache memory from model dimensions and cache types.
