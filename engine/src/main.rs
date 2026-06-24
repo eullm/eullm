@@ -85,7 +85,7 @@ enum Commands {
         replace: bool,
 
         /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
-        #[arg(long, default_value_t = -1)]
+        #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
         gpu_layers: i32,
 
         /// Context window size
