@@ -5,21 +5,58 @@
 //! During early development, models are fetched from HuggingFace.
 
 use std::fs;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Progress callback: (bytes_downloaded, total_bytes).
 /// `total_bytes` is 0 if the server didn't send Content-Length.
 pub type ProgressCallback = Box<dyn Fn(u64, u64) + Send>;
 
+/// Size of each byte range fetched by a parallel download worker.
+const PARALLEL_CHUNK_SIZE: u64 = 16 * 1024 * 1024;
+
+/// How many times a single chunk is retried (with exponential backoff) before
+/// the whole download is considered failed. A retry re-fetches only that chunk,
+/// so a transient drop (e.g. a Starlink satellite handover) costs one chunk,
+/// not the entire file.
+const CHUNK_MAX_ATTEMPTS: u32 = 5;
+
+/// Per-request wall-clock cap. Bounds a stalled connection so it errors and the
+/// chunk is retried instead of hanging forever. Generous enough for one
+/// `PARALLEL_CHUNK_SIZE` chunk on a slow link.
+const CHUNK_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Number of concurrent range requests for a parallel download.
+///
+/// A single TCP stream cannot saturate a high-latency link (the
+/// bandwidth-delay product is large on e.g. Starlink), so we fan out. Default
+/// 8 — the same ballpark `hf_transfer`/`aria2` use, and well within what the
+/// HuggingFace CDN tolerates. Override with `EULLM_DOWNLOAD_CONNECTIONS`
+/// (clamped to 1..=16; 1 forces the legacy single-stream path).
+pub fn default_connections() -> usize {
+    std::env::var("EULLM_DOWNLOAD_CONNECTIONS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(8)
+        .clamp(1, 16)
+}
+
 /// Download a GGUF file from a URL to a local path.
 ///
-/// Shows download progress via the callback. Streams to disk
-/// to avoid loading multi-GB files into memory.
+/// Uses parallel HTTP Range requests when the server supports them (most CDNs,
+/// including HuggingFace, do), which both saturates high-latency links and
+/// survives transient drops by retrying individual chunks. Falls back to a
+/// single streaming GET when ranges or a content length aren't available.
 ///
-/// If the download fails at any point, the partial `.part` file is
-/// removed before returning the error, so failed pulls don't leave
-/// gigabytes of orphaned bytes on disk.
+/// Shows download progress via the callback. Streams to disk to avoid loading
+/// multi-GB files into memory.
+///
+/// If the download fails at any point, the partial `.part` file is removed
+/// before returning the error, so failed pulls don't leave gigabytes of
+/// orphaned bytes on disk.
 pub async fn download_file(
     url: &str,
     dest: &Path,
@@ -31,7 +68,7 @@ pub async fn download_file(
     }
     let tmp_path = dest.with_extension("gguf.part");
 
-    let result = download_file_inner(url, dest, &tmp_path, on_progress).await;
+    let result = download_file_smart(url, dest, &tmp_path, on_progress).await;
     if result.is_err() {
         // Best-effort cleanup. Ignore the error: we already have a real error
         // to report, and not being able to delete a transient file shouldn't
@@ -41,7 +78,9 @@ pub async fn download_file(
     result
 }
 
-async fn download_file_inner(
+/// Probe the URL for Range support and either fan out into parallel chunk
+/// workers or fall back to a single streaming download.
+async fn download_file_smart(
     url: &str,
     dest: &Path,
     tmp_path: &Path,
@@ -49,8 +88,170 @@ async fn download_file_inner(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::builder()
         .user_agent("eullm/0.1.0")
+        .connect_timeout(Duration::from_secs(15))
         .build()?;
 
+    // Probe: a one-byte ranged GET tells us, in a single round-trip, both
+    // whether ranges are supported (206 Partial Content) and the total size
+    // (the `/<total>` tail of Content-Range).
+    let (supports_range, total) = probe_range(&client, url).await;
+
+    let connections = default_connections();
+
+    if !supports_range || total == 0 || connections <= 1 {
+        // Legacy path: one connection, sequential stream.
+        return download_stream(&client, url, tmp_path, dest, on_progress).await;
+    }
+
+    // Pre-allocate the destination so chunk workers can write at their offsets.
+    let file = fs::File::create(tmp_path)?;
+    file.set_len(total)?;
+    drop(file);
+
+    let ranges = split_ranges(total, PARALLEL_CHUNK_SIZE);
+    let downloaded = Arc::new(AtomicU64::new(0));
+
+    use futures_util::stream::{self, StreamExt};
+    let mut workers = stream::iter(ranges.into_iter().map(|(s, e)| {
+        let client = client.clone();
+        let url = url.to_string();
+        let tmp_path = tmp_path.to_path_buf();
+        let downloaded = Arc::clone(&downloaded);
+        async move { fetch_chunk(&client, &url, &tmp_path, s, e, &downloaded).await }
+    }))
+    .buffer_unordered(connections);
+
+    while let Some(res) = workers.next().await {
+        // Propagate the first chunk that fails even after its own retries; the
+        // caller removes the partial file.
+        res?;
+        if let Some(ref cb) = on_progress {
+            cb(downloaded.load(Ordering::Relaxed), total);
+        }
+    }
+    drop(workers);
+
+    fs::rename(tmp_path, dest)?;
+    Ok(())
+}
+
+/// Split a total byte count into inclusive `[start, end]` ranges of at most
+/// `chunk` bytes each. The last range covers whatever remains.
+fn split_ranges(total: u64, chunk: u64) -> Vec<(u64, u64)> {
+    let mut ranges = Vec::new();
+    let mut start = 0u64;
+    while start < total {
+        let end = (start + chunk - 1).min(total - 1);
+        ranges.push((start, end));
+        start = end + 1;
+    }
+    ranges
+}
+
+/// Send a `bytes=0-0` ranged GET. Returns `(supports_range, total_bytes)`.
+/// `supports_range` is true only on a 206 with a parseable `Content-Range`.
+async fn probe_range(client: &reqwest::Client, url: &str) -> (bool, u64) {
+    let resp = match client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .timeout(CHUNK_REQUEST_TIMEOUT)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return (false, 0),
+    };
+    if resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        return (false, 0);
+    }
+    let total = resp
+        .headers()
+        .get(reqwest::header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())
+        // "bytes 0-0/123456" → take the part after the final '/'.
+        .and_then(|s| s.rsplit('/').next())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    (true, total)
+}
+
+/// Fetch one byte range with retries. On success the chunk's byte count is
+/// added to `downloaded` exactly once (a failed attempt adds nothing, so the
+/// progress counter never overshoots).
+async fn fetch_chunk(
+    client: &reqwest::Client,
+    url: &str,
+    tmp_path: &Path,
+    start: u64,
+    end: u64,
+    downloaded: &AtomicU64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut attempt = 0u32;
+    loop {
+        match fetch_chunk_once(client, url, tmp_path, start, end).await {
+            Ok(()) => {
+                downloaded.fetch_add(end - start + 1, Ordering::Relaxed);
+                return Ok(());
+            }
+            Err(e) => {
+                attempt += 1;
+                if attempt >= CHUNK_MAX_ATTEMPTS {
+                    return Err(format!(
+                        "range {start}-{end} failed after {attempt} attempts: {e}"
+                    )
+                    .into());
+                }
+                // Exponential backoff: 1s, 2s, 4s, 8s.
+                tokio::time::sleep(Duration::from_secs(1u64 << (attempt - 1))).await;
+            }
+        }
+    }
+}
+
+/// One attempt at fetching a byte range and writing it at its file offset.
+async fn fetch_chunk_once(
+    client: &reqwest::Client,
+    url: &str,
+    tmp_path: &Path,
+    start: u64,
+    end: u64,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let resp = client
+        .get(url)
+        .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
+        .timeout(CHUNK_REQUEST_TIMEOUT)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if status != reqwest::StatusCode::PARTIAL_CONTENT && !status.is_success() {
+        return Err(format!("HTTP {status} for range {start}-{end}").into());
+    }
+
+    // Each worker opens its own handle and seeks to the chunk's offset; within
+    // a chunk the body arrives in order, so a plain sequential write is correct.
+    let mut file = fs::OpenOptions::new().write(true).open(tmp_path)?;
+    file.seek(SeekFrom::Start(start))?;
+
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk)?;
+    }
+    file.flush()?;
+    Ok(())
+}
+
+/// Single-connection streaming download (the fallback when Range isn't
+/// supported, the size is unknown, or `EULLM_DOWNLOAD_CONNECTIONS=1`).
+async fn download_stream(
+    client: &reqwest::Client,
+    url: &str,
+    tmp_path: &Path,
+    dest: &Path,
+    on_progress: Option<ProgressCallback>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
@@ -64,12 +265,11 @@ async fn download_file_inner(
 
     let total = response.content_length().unwrap_or(0);
 
-    // Stream to a temporary file, then rename (atomic-ish)
     let mut file = fs::File::create(tmp_path)?;
     let mut downloaded: u64 = 0;
 
-    let mut stream = response.bytes_stream();
     use futures_util::StreamExt;
+    let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk?;
         file.write_all(&chunk)?;
@@ -83,7 +283,6 @@ async fn download_file_inner(
     file.flush()?;
     drop(file);
 
-    // Rename temp file to final path
     fs::rename(tmp_path, dest)?;
 
     Ok(())
@@ -335,6 +534,33 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_ranges_exact_multiple() {
+        // 30 bytes in 10-byte chunks → three full ranges, no gaps/overlap.
+        let r = split_ranges(30, 10);
+        assert_eq!(r, vec![(0, 9), (10, 19), (20, 29)]);
+    }
+
+    #[test]
+    fn split_ranges_with_remainder() {
+        // Last range is short and ends exactly at total-1.
+        let r = split_ranges(25, 10);
+        assert_eq!(r, vec![(0, 9), (10, 19), (20, 24)]);
+        // Ranges tile the whole file contiguously.
+        let covered: u64 = r.iter().map(|(s, e)| e - s + 1).sum();
+        assert_eq!(covered, 25);
+    }
+
+    #[test]
+    fn split_ranges_smaller_than_chunk() {
+        assert_eq!(split_ranges(5, 16), vec![(0, 4)]);
+    }
+
+    #[test]
+    fn split_ranges_empty() {
+        assert!(split_ranges(0, 16).is_empty());
+    }
 
     #[test]
     fn parses_hf_co_prefix() {
