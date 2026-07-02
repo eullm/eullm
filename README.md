@@ -557,7 +557,13 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 * GGUF model support, transparent web browsing, audit trail
 * ✅ **Multimodal (v0.6.0)** — vision + experimental audio understanding via `mtmd` (Gemma 4 12B), in the Chat UI and CLI
 * **Planned — embeddings endpoint** (`/api/embeddings` + `/v1/embeddings`): API parity with Ollama/OpenAI for tooling that expects a vector endpoint
-* **Planned — auto GPU layer fitting** (`--fit` flag): query available VRAM at startup, estimate per-layer + KV cache memory cost from the GGUF header, compute the maximum `n-gpu-layers` that fits, fall back to partial CPU offload otherwise. Targets large dense models (14B–32B at Q4) and MoE models (e.g. Qwen3-30B-A3B, Gemma-4-26B-A4B) on consumer GPUs without manual tuning. Cross-platform (CUDA/ROCm/Vulkan/Metal).
+* ✅ **Auto GPU layer fitting (v0.6.5)** (`--fit` flag): probes free VRAM (CUDA) and sizes `--gpu-layers` to what actually fits — charging each offloaded layer its weight share **plus** its KV-cache slice for the chosen context and cache type, so quantizing the KV (`--cache-type-k/v q4_0`) frees room for more GPU layers (the gain grows with context length). Falls back to partial CPU offload when the model doesn't fully fit, and to the manual `--gpu-layers` value on non-CUDA builds or headless runs. Enabled by default when you pick a model from the interactive menu; opt-in on the scriptable CLI.
+
+  ```bash
+  eullm run qwen3-14b --fit                     # auto-size layers to free VRAM
+  eullm run qwq-32b --fit --ctx-size 32768 \
+      --cache-type-k q4_0 --cache-type-v q4_0   # quantized KV → more layers at long context
+  ```
 * Public launch on HackerNews, [dev.to](http://dev.to), Hashnode, LinkedIn
 * GitHub repository active, contributor onboarding
 * Community feedback collection
