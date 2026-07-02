@@ -7,6 +7,16 @@
 - **Commit messages**: Conventional commits (feat:, fix:, docs:, chore:). No references to AI tools or Claude in commit messages or code comments.
 - **Working branch**: Always ask the user which branch to work on, or use the one specified in session instructions. If the session specifies a `claude/` branch, rename it following the rules above before pushing.
 
+## Coding Standards
+
+- **Rust:** clippy clean, rustfmt, standard conventions
+- **Python:** PEP 8, type hints, docstrings on public functions
+- **Commits:** Conventional commits (feat:, fix:, docs:, chore:)
+- **Tests:** Required for all core functionality
+- **Docs:** Every public API documented
+- **No vendor lock-in:** Abstract external services behind interfaces
+- **Always check latest versions**: When adding or updating any dependency (Rust crates, Python packages, GitHub Actions), look up the current latest stable version online and use that. Never guess or copy version numbers from memory — they go stale quickly.
+
 ## CI/CD Rules (MANDATORY — do not remove or simplify)
 
 The GitHub Actions workflows have been carefully optimized. **Do not remove caching steps.**
@@ -310,7 +320,7 @@ Output: 7B Q4 model (~4.5GB) that runs on any laptop with 8GB RAM
 ### Demo Models (Phase 1)
 
 | Model | Domain | Source | Target | Languages |
-|-------|--------|--------|--------|-----------|
+|-------|--------|--------|--------|----------|
 | `eullm/legal-it-7b` | Italian law | Qwen3-14B | 7B Q4 | IT, EN |
 | `eullm/medical-de-7b` | German medicine | Qwen3-14B | 7B Q4 | DE, EN |
 | `eullm/finance-fr-7b` | French finance | Qwen3-14B | 7B Q4 | FR, EN |
@@ -389,15 +399,6 @@ eullm/
 │   └── src/
 └── docs/
 ```
-
-## Coding Standards
-
-- **Rust:** clippy clean, rustfmt, standard conventions
-- **Python:** PEP 8, type hints, docstrings on public functions
-- **Commits:** Conventional commits (feat:, fix:, docs:, chore:)
-- **Tests:** Required for all core functionality
-- **Docs:** Every public API documented
-- **No vendor lock-in:** Abstract external services behind interfaces
 
 ## Current Phase: Forge pipeline + first demo models
 
