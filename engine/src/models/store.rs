@@ -43,18 +43,24 @@ pub struct ModelStore {
 }
 
 impl ModelStore {
-    /// Create a store at the default location (`~/.eullm/models/`).
+    /// Create a store at the default location (`~/.eullm/models/`), or at
+    /// `$EULLM_MODELS_DIR` when set.
+    ///
+    /// The directory is **not** created here. The store is only needed for
+    /// catalog / pull / list operations; running a direct `.gguf` path (e.g.
+    /// when eullm is embedded in another binary that manages its own model
+    /// directory) must not require `~/.eullm/models` to exist — and must not
+    /// fail at startup if that path happens to be a dangling symlink to an
+    /// unmounted volume. Creation happens lazily in `write_manifest` /
+    /// `write_external_manifest` when a model is actually stored.
     pub fn default_store() -> Result<Self, Box<dyn std::error::Error>> {
-        let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
-        let root = PathBuf::from(home).join(".eullm").join("models");
-        fs::create_dir_all(&root).map_err(|e| {
-            format!(
-                "could not create model store at {}: {e}. \
-                 If that path is a symlink to an unmounted volume (e.g. a Windows/NAS mount), \
-                 mount it first or remove the dangling link.",
-                root.display()
-            )
-        })?;
+        let root = match std::env::var("EULLM_MODELS_DIR") {
+            Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => {
+                let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
+                PathBuf::from(home).join(".eullm").join("models")
+            }
+        };
         Ok(Self { root })
     }
 
@@ -71,7 +77,7 @@ impl ModelStore {
         mmproj_file: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let model_dir = self.root.join(&entry.id);
-        fs::create_dir_all(&model_dir)?;
+        create_model_dir(&model_dir)?;
 
         let manifest = ModelManifest {
             id: entry.id.clone(),
@@ -112,7 +118,7 @@ impl ModelStore {
         size_bytes: u64,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let model_dir = self.root.join(id);
-        fs::create_dir_all(&model_dir)?;
+        create_model_dir(&model_dir)?;
 
         let manifest = ModelManifest {
             id: id.to_string(),
@@ -276,6 +282,21 @@ impl ModelStore {
         fs::remove_dir_all(&model_dir)?;
         Ok(Some(size))
     }
+}
+
+/// Create a model directory (and its parents, including the store root),
+/// attaching a hint when the failure looks like a dangling symlink to an
+/// unmounted volume — the one place the store actually has to create the tree.
+fn create_model_dir(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::create_dir_all(dir).map_err(|e| {
+        format!(
+            "could not create model directory at {}: {e}. \
+             If the store path is a symlink to an unmounted volume (e.g. a Windows/NAS mount), \
+             mount it first, remove the dangling link, or set EULLM_MODELS_DIR to a writable path.",
+            dir.display()
+        )
+        .into()
+    })
 }
 
 /// Recursively sum the byte sizes of every regular file under `path`.
