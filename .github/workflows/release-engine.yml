@@ -252,19 +252,12 @@ jobs:
           # archs, so adding two more arches grows the file by ~kernel
           # cubins only (~50-80 MB each), not 3x.
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
-          # llama-cpp-sys-2 0.1.146 compiles ggml-cuda with NCCL on (option
-          # GGML_CUDA_NCCL=ON in the vendored llama.cpp CMake). nvidia/cuda
-          # 12.8-devel ships nccl.h + libnccl.so, so find_package(NCCL)
-          # succeeds and GGML_USE_NCCL gets defined, pulling in
-          # ggml_backend_cuda_allreduce_tensor with refs to ncclCommInitAll,
-          # ncclAllReduce, ncclGroupStart/End, ncclGetErrorString. But the
-          # crate's build.rs never emits `cargo:rustc-link-lib=nccl`, and
-          # CMake links NCCL to ggml-cuda as PRIVATE, so the final rustc
-          # link call sees those symbols undefined. Closing the gap here
-          # keeps NCCL active (multi-GPU stays on the table) without
-          # forking llama-cpp-sys-2. v0.5.15 shipped without this and the
-          # build-cuda job failed at link.
-          RUSTFLAGS: "-C link-arg=-lnccl"
+          # NCCL is disabled at the CMake level in the vendored build.rs
+          # (GGML_CUDA_NCCL=OFF). It is a multi-GPU collective library that made
+          # the binary hard-depend on libnccl.so.2 at runtime — breaking
+          # single-GPU consumer machines that only have the driver. With it off,
+          # no nccl symbols are referenced, so no `-lnccl` link flag is needed
+          # and the binary depends only on libcuda.so.1 (the driver).
 
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
@@ -374,11 +367,10 @@ jobs:
           #   sm_89 = Ada Lovelace (RTX 4000)
           #   sm_120 = Blackwell (RTX 5000)
           CMAKE_CUDA_ARCHITECTURES: "86;89;120"
-          # Same NCCL link fix as build-cuda: the devel image defines
-          # GGML_USE_NCCL (find_package(NCCL) succeeds), but llama-cpp-sys-2
-          # never emits `cargo:rustc-link-lib=nccl`, so the final rustc link
-          # sees nccl* symbols undefined without this flag.
-          RUSTFLAGS: "-C link-arg=-lnccl"
+          # NCCL disabled at the CMake level (GGML_CUDA_NCCL=OFF in build.rs), so
+          # no `-lnccl` and no libnccl.so.2 runtime dependency — critical here,
+          # since an ARM host with only the driver (no NCCL, no sudo) otherwise
+          # can't start the binary. See the x64 job for the full rationale.
 
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
