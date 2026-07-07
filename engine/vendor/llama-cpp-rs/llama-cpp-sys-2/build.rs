@@ -854,6 +854,17 @@ fn main() {
     if cfg!(feature = "cuda") {
         config.define("GGML_CUDA", "ON");
 
+        // Disable NCCL. It is a multi-GPU collective-communication library; with
+        // GGML_CUDA_NCCL on (the ggml default) and NCCL present in the build
+        // image, ggml-cuda links libnccl.so.2, which the final binary then
+        // hard-depends on at runtime. That breaks single-GPU consumer machines
+        // that only have the NVIDIA driver installed (no NCCL package) — the
+        // binary won't even start (`libnccl.so.2: cannot open shared object
+        // file`). EuLLM targets single-GPU inference, so turn it off: the CUDA
+        // binary then needs only libcuda.so.1 (the driver); cudart/cublas are
+        // linked statically.
+        config.define("GGML_CUDA_NCCL", "OFF");
+
         if cfg!(feature = "cuda-no-vmm") {
             config.define("GGML_CUDA_NO_VMM", "ON");
         }
