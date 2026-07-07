@@ -55,6 +55,7 @@ curl http://localhost:11434/v1/chat/completions \
 | 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
 | 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | ✅ Tested | RTX 3000/4000/5000 |
 | 🐧 Linux ARM64 | `eullm-linux-arm64` | ✅ Tested (community) | Validated on Raspberry Pi 400; RPi 4/5, Orange Pi 5+, Jetson, etc. |
+| 🐧 Linux ARM64 (NVIDIA) | `eullm-linux-arm64-cuda-12.8` | 🆕 New (v0.6.8) — [testing wanted](#-platform-status--help-us-test) | ARM host + discrete NVIDIA GPU (sm_86/89/120), e.g. RTX 3060 on an ARM server |
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | ✅ Tested (community) | Validated on M2 Pro (Metal); M1/M2/M3/M4 |
 | 🍎 macOS Intel | `eullm-macos-x64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | Pre-Apple-Silicon Macs |
 | 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | ✅ Tested | Standalone binary, CLI/server |
@@ -355,7 +356,7 @@ chmod +x eullm
 ./eullm run ./your-model.gguf
 ```
 
-Available for: Linux x64 (CPU, CUDA) ✅ · Windows x64 (CPU, CUDA) ✅ · Linux ARM64 + macOS Apple Silicon (Metal) ✅ *(community-validated)* · macOS x64 🧪 [community testing wanted](#-platform-status--help-us-test).
+Available for: Linux x64 (CPU, CUDA) ✅ · Windows x64 (CPU, CUDA) ✅ · Linux ARM64 + macOS Apple Silicon (Metal) ✅ *(community-validated)* · Linux ARM64 (CUDA) 🆕 *(new in v0.6.8)* · macOS x64 🧪 [community testing wanted](#-platform-status--help-us-test).
 
 ### Build from source
 
