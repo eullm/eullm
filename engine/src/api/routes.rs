@@ -40,6 +40,7 @@ pub fn api_routes() -> Router<S> {
         .route("/show", post(show_model))
         .route("/pull", post(pull_model))
         .route("/version", get(version))
+        .route("/unload", post(unload_model))
 }
 
 /// OpenAI-compatible routes (`/v1/*`).
@@ -375,6 +376,26 @@ async fn version(State(state): State<S>) -> Json<Value> {
         "version": env!("CARGO_PKG_VERSION"),
         "api_port": state.api_port,
     }))
+}
+
+/// Unload the currently loaded model, freeing its VRAM, without loading a
+/// replacement. EULLM extension (not part of the Ollama API) — the primary
+/// use case is handing GPU memory to a co-resident process (e.g. an
+/// embedding server used during RAG document ingestion) without restarting
+/// eullm. Send a request with a `model` field afterwards (or run `eullm run
+/// <model>` again) to load a model back in.
+async fn unload_model(State(state): State<S>) -> (StatusCode, Json<Value>) {
+    match state.unload().await {
+        Ok(Some(name)) => (StatusCode::OK, Json(json!({ "unloaded": name }))),
+        Ok(None) => (
+            StatusCode::OK,
+            Json(json!({ "unloaded": null, "message": "no model was loaded" })),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to unload model: {e}") })),
+        ),
+    }
 }
 
 /// List models — returns the currently loaded model (like Ollama) plus catalog entries.
