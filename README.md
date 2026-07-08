@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.3%20%E2%80%94%20multimodal-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.10-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -136,7 +136,43 @@ eullm serve --daemon --pidfile /var/run/eullm.pid    # custom PID file location
 > `ExecStart=/usr/local/bin/eullm serve` unit; graceful SIGTERM handling is
 > built in, so `docker stop` / `systemctl stop` shut the engine down cleanly.
 
+### Free VRAM without restarting (new in v0.6.10)
+
+`eullm unload` frees the currently loaded model's VRAM and leaves the server
+running with an empty slot — no restart, no dropped connections. A later
+request carrying a `model` field (or another `eullm run <model>`) loads a
+model back in.
+
+This is for sharing a GPU with another process that needs the VRAM
+temporarily — e.g. handing a RAG pipeline's embedding model room to run
+during document ingestion, then reloading the LLM once it's done:
+
+```bash
+eullm run qwen3-14b --fit --daemon    # LLM loaded, serving on :11434
+
+eullm unload                          # frees qwen3-14b's VRAM, server stays up
+#   → your embedding/reranker process now has room to load
+
+# ... run document ingestion ...
+
+# reload the LLM: any request carrying "model" does it automatically
+curl -s http://localhost:11434/api/generate \
+  -d '{"model": "qwen3-14b", "prompt": "ok"}' > /dev/null
+```
+
+`eullm unload [--port PORT]` is a thin wrapper around `POST /api/unload` (an
+EULLM extension, not part of the Ollama API) — call the endpoint directly
+from any language/script that already talks to the API port.
+
 ## What's ready today, what's coming
+
+**New in v0.6.10** — consumer-GPU and operations pass on top of v0.6.3:
+- **`--fit`** auto-sizes GPU-offloaded layers to free VRAM (CUDA), charging each layer its weight share *and* its KV-cache slice for the chosen context/cache type — quantizing the KV (`--cache-type-k/v q4_0`) frees room for more layers, the gain growing with context length. On by default from the interactive picker; opt-in on the scriptable CLI. Falls back to partial offload, or to a manual `--gpu-layers`, when it can't size the model.
+- **`hf.co/<repo>[:quant]` shorthand** — `eullm run hf.co/unsloth/Qwen3-14B-GGUF:Q4_K_M` pulls and runs any HuggingFace GGUF repo directly, catalog or not.
+- **Parallel, resumable downloads** — model pulls fan out across up to 16 concurrent HTTP Range requests (default 8) instead of one stream, and a dropped connection retries only the missing chunk instead of restarting the whole file.
+- **Linux ARM64 + NVIDIA CUDA** binary (`eullm-linux-arm64-cuda-12.8`) — validated end-to-end on an RTX 3060 12GB ARM server (qwen3-14b Q4, 33 tok/s, full GPU offload). Ships without an NCCL runtime dependency, so it starts with only the NVIDIA driver installed — no extra packages, no root required.
+- **`eullm unload`** / `POST /api/unload` — free the loaded model's VRAM and leave the server running, for handing GPU memory to a co-resident process (e.g. an embedding model during RAG ingestion) without a restart.
+- **`--gpu-layers -1`** now parses correctly (clap hyphen-value fix), and a broken model-store path (e.g. a dangling symlink to an unmounted volume) reports a clear error naming the path instead of a bare `EEXIST`.
 
 **New in v0.6.3** — first release with working Metal on Apple Silicon (earlier macOS binaries shipped CPU-only; now built with `--features metal`, community-validated on an Apple M2 Pro), first community-validated run on Linux ARM64 (Raspberry Pi 400), multimodal vision validated at runtime on the CUDA binary, and the first build produced entirely through the EU-hosted source mirrors (`eullm/llama.cpp` + `eullm/llama-cpp-rs`) instead of pulling upstream directly.
 
@@ -199,6 +235,7 @@ eullm list                                # Show local and available models
 eullm show legal-it-7b                    # Model details, metadata, compliance info
 eullm serve                               # Start API server without loading a model
 eullm serve --daemon                      # Same, detached in the background (PID + log file)
+eullm unload                              # Free the loaded model's VRAM without restarting the server
 
 # API endpoints (Ollama-compatible + OpenAI-compatible)
 # http://localhost:11434/api/generate
