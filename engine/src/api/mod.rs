@@ -123,24 +123,8 @@ impl AppState {
         // Without this, both old and new LlamaBackend instances would
         // coexist, and both models would be in VRAM simultaneously —
         // causing OOM or a C-level crash in llama.cpp.
-        {
-            let old_scheduler = {
-                let mut slot = self.slot.write().await;
-                let sched = slot.scheduler.take();
-                slot.engine = None;
-                slot.model_name = None;
-                sched
-            };
-            // Actively shut down the old scheduler thread (drops channel,
-            // wakes the thread, joins it).  This guarantees the old model
-            // and LlamaBackend are fully destroyed before we continue.
-            if let Some(handle) = old_scheduler {
-                tokio::task::spawn_blocking(move || handle.shutdown())
-                    .await
-                    .map_err(|e| format!("Failed to join scheduler thread: {e}"))?;
-            }
-            tracing::info!("Previous model fully unloaded");
-        }
+        self.unload_current().await?;
+        tracing::info!("Previous model fully unloaded");
 
         // ── 2. Load the new model ───────────────────────────────────
         let config = InferenceConfig {
@@ -200,6 +184,57 @@ impl AppState {
         }
 
         tracing::info!("Model swap complete → {model_name} (batch_size={batch_size})");
+        Ok(())
+    }
+
+    /// Unload the currently loaded model, freeing its VRAM, and leave the
+    /// slot empty. Unlike `swap_model`, this does not load a replacement —
+    /// a later request with a `model` field (or another `eullm run`) loads
+    /// a model again.
+    ///
+    /// The primary use case is freeing VRAM for a co-resident process (e.g.
+    /// an embedding model used during RAG document ingestion) without
+    /// restarting the eullm server. Serialized against `swap_model` via the
+    /// same lock, so an unload can't race a concurrent swap.
+    ///
+    /// Returns the name of the model that was unloaded, or `None` if the
+    /// slot was already empty (a no-op, not an error).
+    pub async fn unload(&self) -> Result<Option<String>, String> {
+        let _swap_guard = self.swap_lock.lock().await;
+
+        let previous = {
+            let slot = self.slot.read().await;
+            slot.model_name.clone()
+        };
+        if previous.is_none() {
+            return Ok(None);
+        }
+
+        self.unload_current().await?;
+        tracing::info!("Model unloaded — slot empty");
+        Ok(previous)
+    }
+
+    /// Shared unload step used by both `swap_model` and `unload`: take the
+    /// scheduler/engine out of the slot and wait for the scheduler's
+    /// dedicated OS thread to fully exit before returning, so the old
+    /// model's VRAM is guaranteed freed by the time this resolves — critical
+    /// both for swap (avoids two models coexisting in VRAM → OOM) and for a
+    /// standalone unload (the caller needs the VRAM actually free before
+    /// handing it to another process).
+    async fn unload_current(&self) -> Result<(), String> {
+        let old_scheduler = {
+            let mut slot = self.slot.write().await;
+            let sched = slot.scheduler.take();
+            slot.engine = None;
+            slot.model_name = None;
+            sched
+        };
+        if let Some(handle) = old_scheduler {
+            tokio::task::spawn_blocking(move || handle.shutdown())
+                .await
+                .map_err(|e| format!("Failed to join scheduler thread: {e}"))?;
+        }
         Ok(())
     }
 

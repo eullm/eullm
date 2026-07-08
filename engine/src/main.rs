@@ -227,6 +227,22 @@ enum Commands {
         #[arg(long, default_value = DEFAULT_PIDFILE)]
         pidfile: String,
     },
+    /// Unload the currently loaded model from a running eullm server,
+    /// freeing its VRAM — without restarting the server.
+    ///
+    /// A later request with a `model` field (or another `eullm run
+    /// <model>`) loads a model back in. Useful for temporarily handing GPU
+    /// memory to another process — e.g. an embedding model needed during
+    /// RAG document ingestion — then reloading the LLM once it's done.
+    ///
+    /// Examples:
+    ///   eullm unload
+    ///   eullm unload --port 11500
+    Unload {
+        /// Port of the running eullm API server
+        #[arg(short, long, default_value_t = 11434)]
+        port: u16,
+    },
     /// Import a model from a local Ollama installation
     ///
     /// Copies the GGUF blob from Ollama's storage into EULLM's model store,
@@ -477,6 +493,7 @@ async fn main() {
             let ui_port_opt = if ui { Some(ui_port) } else { None };
             cmd_serve(port, replace, ui_port_opt).await;
         }
+        Commands::Unload { port } => cmd_unload(port).await,
         Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
         Commands::Forge {
             source,
@@ -1604,6 +1621,44 @@ async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>) {
     {
         eprintln!("Server error: {e}");
         std::process::exit(1);
+    }
+}
+
+/// `eullm unload` — free the currently loaded model's VRAM on a running
+/// `eullm serve`/`eullm run` server, without restarting the process.
+///
+/// Thin CLI wrapper around `POST /api/unload`. The server keeps running
+/// with an empty model slot; a later request with a `model` field (or
+/// another `eullm run <model>`) loads a model back in.
+async fn cmd_unload(port: u16) {
+    let url = format!("http://127.0.0.1:{port}/api/unload");
+    let client = match reqwest::Client::builder().build() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error building HTTP client: {e}");
+            std::process::exit(1);
+        }
+    };
+    let response = match client.post(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!(
+                "Error: could not reach eullm server at {url}: {e}\n  \
+                 Is it running? (`eullm serve` or `eullm run <model>`)"
+            );
+            std::process::exit(1);
+        }
+    };
+    if !response.status().is_success() {
+        eprintln!("Error: server returned HTTP {}", response.status());
+        std::process::exit(1);
+    }
+    match response.json::<serde_json::Value>().await {
+        Ok(body) => match body.get("unloaded").and_then(|v| v.as_str()) {
+            Some(name) => println!("Unloaded '{name}'. VRAM freed."),
+            None => println!("No model was loaded."),
+        },
+        Err(e) => eprintln!("Error reading response: {e}"),
     }
 }
 
