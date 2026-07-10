@@ -339,10 +339,9 @@ pub fn parse_hf_ref(s: &str) -> Option<HfRef> {
         &trimmed[trimmed.len() - stripped.len()..]
     } else if let Some(stripped) = lower.strip_prefix("hf://") {
         &trimmed[trimmed.len() - stripped.len()..]
-    } else if let Some(stripped) = lower.strip_prefix("hf:") {
-        &trimmed[trimmed.len() - stripped.len()..]
     } else {
-        return None;
+        let stripped = lower.strip_prefix("hf:")?;
+        &trimmed[trimmed.len() - stripped.len()..]
     };
 
     // Split off an optional ":<quant>" suffix. The repo itself is `owner/repo`

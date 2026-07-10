@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.11-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.12-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -164,7 +164,7 @@ curl -s http://localhost:11434/api/generate \
 EULLM extension, not part of the Ollama API) — call the endpoint directly
 from any language/script that already talks to the API port.
 
-### Run MoE models on a small GPU (`--cpu-moe`, new in v0.6.11)
+### Run MoE models on a small GPU (`--cpu-moe` / `--n-cpu-moe`, new in v0.6.11 / v0.6.12)
 
 MoE models (Qwen3-30B-A3B, Qwen3.6-35B-A3B, …) route each token through only
 a handful of experts, but the expert weights make up most of the file on
@@ -189,7 +189,24 @@ tensors) and `--ctx-size` as usual. No effect on dense (non-MoE) models —
 the tensor pattern simply matches nothing. Available on `eullm run` and
 `eullm serve` (applied to every model the server loads or swaps to).
 
+`--cpu-moe` is all-or-nothing — every expert tensor moves to CPU RAM, which
+can leave VRAM idle if the model would fit with only some layers offloaded.
+`--n-cpu-moe N` (new in v0.6.12) offers finer control: only the first `N`
+transformer layers' expert tensors move to CPU, the rest stay on GPU.
+Mirrors upstream llama.cpp's `--n-cpu-moe` exactly. Mutually exclusive with
+`--cpu-moe`.
+
+```bash
+# Offload only the first 12 layers' experts to CPU RAM, keep the rest on GPU
+eullm run hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M --n-cpu-moe 12
+```
+
+Picking `N` is currently manual — start low and raise it until the model
+loads without OOM (`--fit` does not yet auto-size `N`).
+
 ## What's ready today, what's coming
+
+**New in v0.6.12** — **`--n-cpu-moe N`**: finer-grained sibling of `--cpu-moe` — offload only the first `N` layers' MoE expert tensors to CPU RAM instead of all of them, so a model that doesn't quite fit under the blanket `--cpu-moe` flag can still use the VRAM it has. See "Run MoE models on a small GPU" above.
 
 **New in v0.6.11** — **`--cpu-moe`**: run MoE models (Qwen3-30B-A3B, Qwen3.6-35B-A3B, …) on a small GPU by keeping expert tensors on CPU RAM while attention, embeddings, and the KV cache stay on GPU — VRAM headroom whole-layer `--gpu-layers` offload can't reach. See "Run MoE models on a small GPU" above.
 

@@ -150,6 +150,14 @@ pub struct InferenceConfig {
     /// No effect on dense (non-MoE) models — the tensor pattern simply
     /// matches nothing.
     pub cpu_moe: bool,
+    /// Keep MoE expert tensors on CPU RAM for only the first `n_cpu_moe`
+    /// transformer layers (0 = disabled), leaving the rest on GPU. Finer
+    /// grained than `cpu_moe`: lets a model that doesn't fully fit in VRAM
+    /// offload just enough expert weight to close the gap instead of moving
+    /// every expert tensor to CPU. Equivalent to llama.cpp's `--n-cpu-moe`.
+    /// Mutually exclusive with `cpu_moe` (blanket override wins if both are
+    /// set — checked at the CLI layer).
+    pub n_cpu_moe: u32,
 }
 
 impl Default for InferenceConfig {
@@ -169,6 +177,7 @@ impl Default for InferenceConfig {
             cache_type_v: KvCacheType::F16,
             mmproj_path: None,
             cpu_moe: false,
+            n_cpu_moe: 0,
         }
     }
 }
@@ -418,9 +427,29 @@ impl InferenceEngine {
             LlamaModelParams::default().with_n_gpu_layers(1000)
         };
         let mut model_params = pin!(model_params);
+        // Patterns passed to `add_cpu_buft_override` are stored as raw pointers
+        // (not copied) inside `model_params`, so they must outlive the
+        // `load_from_file` call below — keep them bound in this local.
+        let n_cpu_moe_patterns: Vec<std::ffi::CString> = (0..config.n_cpu_moe)
+            .map(|i| {
+                std::ffi::CString::new(format!(
+                    r"blk\.{i}\.ffn_(up|down|gate|gate_up)_(ch|)exps"
+                ))
+                .expect("pattern has no interior NUL")
+            })
+            .collect();
         if config.cpu_moe {
             tracing::info!("--cpu-moe: keeping MoE expert tensors on CPU RAM");
             model_params.as_mut().add_cpu_moe_override();
+        } else if config.n_cpu_moe > 0 {
+            tracing::info!(
+                "--n-cpu-moe {}: keeping MoE expert tensors on CPU RAM for the first {} layers",
+                config.n_cpu_moe,
+                config.n_cpu_moe
+            );
+            for pattern in &n_cpu_moe_patterns {
+                model_params.as_mut().add_cpu_buft_override(pattern);
+            }
         }
 
         tracing::info!("Loading model: {}", config.model_path.display());

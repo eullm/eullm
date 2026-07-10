@@ -60,6 +60,10 @@ pub struct AppState {
     /// Keep MoE expert tensors on CPU RAM (see `InferenceConfig::cpu_moe`).
     /// Applied to every model this server loads or swaps to.
     pub cpu_moe: bool,
+    /// Keep MoE expert tensors on CPU RAM for only the first N layers (see
+    /// `InferenceConfig::n_cpu_moe`). Applied to every model this server
+    /// loads or swaps to.
+    pub n_cpu_moe: u32,
 
     /// Enable transparent web fetching: URLs in user messages are fetched
     /// and their content is injected into the prompt before inference.
@@ -145,6 +149,7 @@ impl AppState {
             // the text-only fast path (None → no extra VRAM, no init cost).
             mmproj_path: mmproj_path.clone(),
             cpu_moe: self.cpu_moe,
+            n_cpu_moe: self.n_cpu_moe,
         };
 
         // The continuous-batching scheduler is text-only — it does not route
@@ -333,6 +338,7 @@ pub struct ServeConfig {
     pub cache_type_v: crate::inference::KvCacheType,
     pub batch_size: usize,
     pub cpu_moe: bool,
+    pub n_cpu_moe: u32,
     pub web_enabled: bool,
     pub store: ModelStore,
     /// Optional embedded chat UI. When `Some(port)`, a second listener is
@@ -364,6 +370,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         cache_type_v: cfg.cache_type_v,
         batch_size: cfg.batch_size,
         cpu_moe: cfg.cpu_moe,
+        n_cpu_moe: cfg.n_cpu_moe,
         web_enabled: cfg.web_enabled,
         api_port: cfg.port,
         store: cfg.store,
