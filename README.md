@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.10-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.11-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -164,7 +164,34 @@ curl -s http://localhost:11434/api/generate \
 EULLM extension, not part of the Ollama API) — call the endpoint directly
 from any language/script that already talks to the API port.
 
+### Run MoE models on a small GPU (`--cpu-moe`, new in v0.6.11)
+
+MoE models (Qwen3-30B-A3B, Qwen3.6-35B-A3B, …) route each token through only
+a handful of experts, but the expert weights make up most of the file on
+disk — `--gpu-layers`/`--fit` can only offload whole layers (all their
+experts included), so a 20+ GB MoE model still needs 20+ GB of VRAM to run
+mostly on GPU.
+
+`--cpu-moe` keeps just the expert tensors (`*.ffn_(up|down|gate)_exps`) on
+CPU RAM, while attention, embeddings, and — critically — the whole KV cache
+stay on GPU. Since only a few experts fire per token, this trades a small
+CPU-matmul cost for VRAM headroom `--gpu-layers` can't reach: a 22 GB MoE
+Q4_K_M can run at near-GPU speed on a 12 GB card, as long as system RAM
+holds the rest.
+
+```bash
+# Qwen3.6-35B-A3B, Q4_K_M (~22 GB) on a 12 GB GPU + enough system RAM
+eullm run hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M --cpu-moe --fit
+```
+
+Combines with `--gpu-layers`/`--fit` (which still size the non-expert
+tensors) and `--ctx-size` as usual. No effect on dense (non-MoE) models —
+the tensor pattern simply matches nothing. Available on `eullm run` and
+`eullm serve` (applied to every model the server loads or swaps to).
+
 ## What's ready today, what's coming
+
+**New in v0.6.11** — **`--cpu-moe`**: run MoE models (Qwen3-30B-A3B, Qwen3.6-35B-A3B, …) on a small GPU by keeping expert tensors on CPU RAM while attention, embeddings, and the KV cache stay on GPU — VRAM headroom whole-layer `--gpu-layers` offload can't reach. See "Run MoE models on a small GPU" above.
 
 **New in v0.6.10** — consumer-GPU and operations pass on top of v0.6.3:
 - **`--fit`** auto-sizes GPU-offloaded layers to free VRAM (CUDA), charging each layer its weight share *and* its KV-cache slice for the chosen context/cache type — quantizing the KV (`--cache-type-k/v q4_0`) frees room for more layers, the gain growing with context length. On by default from the interactive picker; opt-in on the scriptable CLI. Falls back to partial offload, or to a manual `--gpu-layers`, when it can't size the model.
@@ -229,6 +256,7 @@ eullm run ./model.gguf                    # Local GGUF file
 eullm run ./model.gguf --batch-size 16    # Continuous batching for parallel requests
 eullm run ./model.gguf --web              # Transparent web browsing (URLs in messages auto-fetched)
 eullm run legal-it-7b                     # From EU registry (coming soon)
+eullm run big-moe-model.gguf --cpu-moe --fit  # MoE: experts on CPU RAM, rest on GPU
 
 # CLI
 eullm list                                # Show local and available models

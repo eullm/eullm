@@ -102,6 +102,17 @@ enum Commands {
         #[arg(long)]
         fit_strict: bool,
 
+        /// For MoE models (e.g. Qwen3-30B-A3B): keep expert tensors
+        /// (`*.ffn_(up|down|gate)_exps`) on CPU RAM while attention,
+        /// embeddings, and the KV cache stay on GPU. Only a few experts fire
+        /// per token, so this trades a small compute cost for VRAM headroom
+        /// far beyond what --gpu-layers' whole-layer offload can reach — a
+        /// 20+ GB MoE model can run mostly-GPU-speed on a 12 GB card. No
+        /// effect on dense (non-MoE) models. Combines with --gpu-layers/--fit
+        /// (which still control the non-expert tensors) and --ctx-size.
+        #[arg(long)]
+        cpu_moe: bool,
+
         /// Context window size
         #[arg(short, long, default_value_t = 4096)]
         ctx_size: u32,
@@ -209,6 +220,12 @@ enum Commands {
         /// Enable continuous batching with N max concurrent requests (0 = sequential)
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
+
+        /// For MoE models: keep expert tensors on CPU RAM, attention +
+        /// embeddings + KV cache on GPU. Applied to every model this server
+        /// loads or swaps to. See `eullm run --help` for the full rationale.
+        #[arg(long)]
+        cpu_moe: bool,
 
         /// Enable the embedded chat UI (off by default for headless serve).
         /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
@@ -369,7 +386,7 @@ async fn main() {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
                 port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, ctx_size: 4096,
+                fit_strict: false, cpu_moe: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -380,7 +397,7 @@ async fn main() {
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
                 port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, ctx_size: 4096,
+                fit_strict: false, cpu_moe: false, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -421,6 +438,7 @@ async fn main() {
             gpu_layers,
             fit,
             fit_strict,
+            cpu_moe,
             ctx_size,
             threads,
             batch_size,
@@ -483,15 +501,15 @@ async fn main() {
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, cpu_moe, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve { port, replace, batch_size: _, ui, ui_port, daemon, pidfile } => {
+        Commands::Serve { port, replace, batch_size: _, cpu_moe, ui, ui_port, daemon, pidfile } => {
             let _ = (daemon, pidfile);
             let ui_port_opt = if ui { Some(ui_port) } else { None };
-            cmd_serve(port, replace, ui_port_opt).await;
+            cmd_serve(port, replace, ui_port_opt, cpu_moe).await;
         }
         Commands::Unload { port } => cmd_unload(port).await,
         Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
@@ -1195,6 +1213,7 @@ async fn cmd_run(
     gpu_layers: i32,
     fit: bool,
     fit_strict: bool,
+    cpu_moe: bool,
     ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
@@ -1353,6 +1372,7 @@ async fn cmd_run(
             cache_type_k,
             cache_type_v,
             mmproj_path: mmproj_for_config.clone(),
+            cpu_moe,
         };
 
         // The continuous-batching scheduler is text-only; multimodal models
@@ -1442,6 +1462,9 @@ async fn cmd_run(
         };
         println!("  GPU backend:   {gpu_backend}");
         println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
+        if cpu_moe {
+            println!("  CPU MoE:       enabled (expert tensors on CPU RAM)");
+        }
         if batch_size > 0 {
             let per_seq = ctx_size / batch_size as u32;
             println!("  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)");
@@ -1539,6 +1562,7 @@ async fn cmd_run(
             cache_type_k,
             cache_type_v,
             batch_size,
+            cpu_moe,
             web_enabled: web,
             store: api_store,
             ui_port,
@@ -1580,7 +1604,7 @@ async fn cmd_run(
     }
 }
 
-async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>) {
+async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
         ensure_port_available(p, replace).await;
@@ -1613,6 +1637,7 @@ async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>) {
         cache_type_k: inference::KvCacheType::Q8_0,
         cache_type_v: inference::KvCacheType::Q4_0,
         batch_size: 8,
+        cpu_moe,
         web_enabled: false,
         store,
         ui_port,

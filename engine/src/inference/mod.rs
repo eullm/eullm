@@ -140,6 +140,16 @@ pub struct InferenceConfig {
     /// image / audio input. When `None` or the feature is off, the engine
     /// runs text-only exactly as before.
     pub mmproj_path: Option<PathBuf>,
+    /// Keep MoE expert tensors (`*.ffn_(up|down|gate)_exps`) on CPU RAM
+    /// while everything else — attention, embeddings, shared/dense layers,
+    /// and the KV cache — loads onto GPU as usual. Equivalent to llama.cpp's
+    /// `--cpu-moe`. For MoE models the expert tensors are the bulk of the
+    /// file but only a handful fire per token, so this trades a small
+    /// compute-bandwidth cost (CPU matmul for the routed experts) for a much
+    /// smaller VRAM footprint than offloading whole layers via `gpu_layers`.
+    /// No effect on dense (non-MoE) models — the tensor pattern simply
+    /// matches nothing.
+    pub cpu_moe: bool,
 }
 
 impl Default for InferenceConfig {
@@ -158,6 +168,7 @@ impl Default for InferenceConfig {
             cache_type_k: KvCacheType::F16,
             cache_type_v: KvCacheType::F16,
             mmproj_path: None,
+            cpu_moe: false,
         }
     }
 }
@@ -406,7 +417,11 @@ impl InferenceEngine {
             // -1 = offload all layers
             LlamaModelParams::default().with_n_gpu_layers(1000)
         };
-        let model_params = pin!(model_params);
+        let mut model_params = pin!(model_params);
+        if config.cpu_moe {
+            tracing::info!("--cpu-moe: keeping MoE expert tensors on CPU RAM");
+            model_params.as_mut().add_cpu_moe_override();
+        }
 
         tracing::info!("Loading model: {}", config.model_path.display());
         let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params)

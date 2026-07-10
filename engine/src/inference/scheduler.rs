@@ -293,7 +293,11 @@ fn run_scheduler_loop(
     } else {
         LlamaModelParams::default().with_n_gpu_layers(1000)
     };
-    let model_params = pin!(model_params);
+    let mut model_params = pin!(model_params);
+    if config.cpu_moe {
+        tracing::info!("--cpu-moe: keeping MoE expert tensors on CPU RAM");
+        model_params.as_mut().add_cpu_moe_override();
+    }
 
     tracing::info!("Loading model: {}", config.model_path.display());
     let model = match LlamaModel::load_from_file(&backend, &config.model_path, &model_params) {
