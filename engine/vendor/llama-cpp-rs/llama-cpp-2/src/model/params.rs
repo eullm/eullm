@@ -213,7 +213,7 @@ impl LlamaModelParams {
     ) {
         let kv_override = self
             .kv_overrides
-            .get_mut(0)
+            .last_mut()
             .expect("kv_overrides did not have a next allocated");
 
         assert_eq!(kv_override.key[0], 0, "last kv_override was not empty");
@@ -257,7 +257,7 @@ impl LlamaModelParams {
     pub fn add_cpu_buft_override(mut self: Pin<&mut Self>, key: &CStr) {
         let buft_override = self
             .buft_overrides
-            .get_mut(0)
+            .last_mut()
             .expect("buft_overrides did not have a next allocated");
 
         assert!(
