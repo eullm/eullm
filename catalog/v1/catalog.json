@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-06-04",
+  "updated_at": "2026-07-10",
   "notes": "Catalog of permissively-licensed open-weight models, curated June 2026. Each entry's hf_repo + hf_filename has been HEAD-verified on huggingface.co at the time of update. unsloth/* is the preferred GGUF source (dynamic-quant, kept current); bartowski/* is the fallback when an unsloth repo is gated or absent. Models older than the listed entries (Qwen3-72B which never shipped, Mixtral-8x7B v1, Mistral-7B-v0.3, Mistral-Small-22B-2409, granite-3.1) were removed as either non-existent, gated, or superseded by the entries below. SHA256 digests are intentionally empty so the catalog stays usable without a multi-TB pre-scan: the engine treats empty digests as 'skip verification with a warning'.",
   "models": [
     {
@@ -367,7 +367,7 @@
     {
       "id": "qwen3.6-35b-a3b",
       "name": "Qwen 3.6 35B-A3B (MoE, Apr 2026)",
-      "description": "Qwen 3.6 mixture-of-experts. 35B total / 3B active per token: fast inference, dense-grade quality at MoE cost. Q4 uses unsloth's UD dynamic quant.",
+      "description": "Qwen 3.6 mixture-of-experts. 35B total / 3B active per token: fast inference, dense-grade quality at MoE cost. Q4 uses unsloth's UD dynamic quant. 24 GB VRAM for a normal full-GPU run, but MoE expert tensors are most of the file — on smaller cards use `--n-cpu-moe N` (or the blanket `--cpu-moe`) to keep experts on CPU RAM and fit far below that: validated on an RTX 3060 12GB at 35.6 tok/s with `--n-cpu-moe 24 --cache-type-k q8_0 --cache-type-v q8_0` (10.7 GB VRAM), vs. 26.5 tok/s with plain `--cpu-moe --fit` (2.5 GB VRAM). See README → \"Run MoE models on a small GPU\".",
       "params_b": 35.0,
       "quantization": "Q4_K_M",
       "size_bytes": 21000000000,
@@ -379,7 +379,7 @@
       "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
       "hf_filename": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
       "digest": "",
-      "recommended": false
+      "recommended": true
     }
   ]
 }
