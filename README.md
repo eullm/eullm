@@ -189,24 +189,57 @@ tensors) and `--ctx-size` as usual. No effect on dense (non-MoE) models —
 the tensor pattern simply matches nothing. Available on `eullm run` and
 `eullm serve` (applied to every model the server loads or swaps to).
 
-`--cpu-moe` is all-or-nothing — every expert tensor moves to CPU RAM, which
-can leave VRAM idle if the model would fit with only some layers offloaded.
-`--n-cpu-moe N` (new in v0.6.12) offers finer control: only the first `N`
-transformer layers' expert tensors move to CPU, the rest stay on GPU.
-Mirrors upstream llama.cpp's `--n-cpu-moe` exactly. Mutually exclusive with
-`--cpu-moe`.
+#### Finer control: `--n-cpu-moe N` (new in v0.6.12)
+
+`--cpu-moe` is all-or-nothing — **every** expert tensor in the model moves to
+CPU RAM, regardless of how much VRAM is actually free. On a card with more
+headroom than the blanket flag needs, that leaves GPU memory idle and pushes
+more matmuls onto the CPU than necessary, which costs tokens/sec: on a real
+run (Qwen3.6-35B-A3B Q4_K_M, RTX 3060 12GB, ARM64 host), `--cpu-moe --fit`
+used only ~2.5 GB of the 12 GB card and left the GPU at ~26% utilization
+while all 8 CPU cores sat at 80-90% — 26.5 tok/s.
+
+`--n-cpu-moe N` fixes that by offloading only the first `N` transformer
+layers' expert tensors to CPU RAM (`blk.0` through `blk.{N-1}`); every layer
+after that keeps its experts on GPU like normal. It's a direct port of
+upstream llama.cpp's own `--n-cpu-moe` flag — same per-layer regex, same
+semantics — so the two engines pick the same tensors for the same `N`.
 
 ```bash
 # Offload only the first 12 layers' experts to CPU RAM, keep the rest on GPU
-eullm run hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M --n-cpu-moe 12
+eullm run hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M --n-cpu-moe 12 --fit
 ```
 
-Picking `N` is currently manual — start low and raise it until the model
-loads without OOM (`--fit` does not yet auto-size `N`).
+**Picking `N`:** there's no auto-sizing yet (`--fit` doesn't know about
+`--n-cpu-moe`, that's planned for a future release) — dial it in manually:
+
+1. Start at `N = 0` (equivalent to no MoE offload — everything on GPU via
+   `--gpu-layers`/`--fit`) and watch it fail with an out-of-VRAM error, or
+   start high (e.g. `N` = total layer count, equivalent to `--cpu-moe`) and
+   confirm it loads.
+2. Move `N` down in steps (e.g. by 4-8 layers) and reload, watching VRAM
+   usage (`nvtop` / `nvidia-smi`) after each load. As `N` decreases, more
+   experts stay on GPU, VRAM usage rises, and tokens/sec should climb —
+   until VRAM runs out and the load fails again.
+3. The best `N` is the smallest value that still loads cleanly — that's the
+   most expert weight you can push back onto the GPU without OOM-ing.
+
+Each transformer layer's experts are roughly the same size, so as a rough
+starting point: `N ≈ total_layers × (1 − free_vram_gb / moe_tensors_gb)`,
+then adjust from there by trial and error per the steps above (`eullm show
+<model>` prints the layer count from GGUF metadata).
+
+`--cpu-moe` and `--n-cpu-moe` are **mutually exclusive** — passing both is a
+CLI error (`--cpu-moe` is the "give me all the headroom, don't ask
+questions" option; `--n-cpu-moe N` is the "I know how much I need" option).
+Like `--cpu-moe`, it combines with `--gpu-layers`/`--fit` (which still size
+the non-expert tensors) and `--ctx-size`, has no effect on dense (non-MoE)
+models, and is available on both `eullm run` and `eullm serve` (applied to
+every model the server loads or swaps to).
 
 ## What's ready today, what's coming
 
-**New in v0.6.12** — **`--n-cpu-moe N`**: finer-grained sibling of `--cpu-moe` — offload only the first `N` layers' MoE expert tensors to CPU RAM instead of all of them, so a model that doesn't quite fit under the blanket `--cpu-moe` flag can still use the VRAM it has. See "Run MoE models on a small GPU" above.
+**New in v0.6.12** — **`--n-cpu-moe N`**: finer-grained sibling of `--cpu-moe` — offload only the first `N` transformer layers' MoE expert tensors to CPU RAM instead of all of them, so a model whose VRAM sits idle under the blanket `--cpu-moe` flag can push more experts back onto the GPU and recover throughput. Direct port of upstream llama.cpp's `--n-cpu-moe` (same per-layer tensor pattern). Mutually exclusive with `--cpu-moe`. See "Run MoE models on a small GPU" above.
 
 **New in v0.6.11** — **`--cpu-moe`**: run MoE models (Qwen3-30B-A3B, Qwen3.6-35B-A3B, …) on a small GPU by keeping expert tensors on CPU RAM while attention, embeddings, and the KV cache stay on GPU — VRAM headroom whole-layer `--gpu-layers` offload can't reach. See "Run MoE models on a small GPU" above.
 
@@ -273,7 +306,8 @@ eullm run ./model.gguf                    # Local GGUF file
 eullm run ./model.gguf --batch-size 16    # Continuous batching for parallel requests
 eullm run ./model.gguf --web              # Transparent web browsing (URLs in messages auto-fetched)
 eullm run legal-it-7b                     # From EU registry (coming soon)
-eullm run big-moe-model.gguf --cpu-moe --fit  # MoE: experts on CPU RAM, rest on GPU
+eullm run big-moe-model.gguf --cpu-moe --fit  # MoE: all experts on CPU RAM, rest on GPU
+eullm run big-moe-model.gguf --n-cpu-moe 12   # MoE: only first 12 layers' experts on CPU RAM
 
 # CLI
 eullm list                                # Show local and available models
