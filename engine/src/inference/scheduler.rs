@@ -79,6 +79,28 @@ struct ActiveSequence {
     prefilled: bool,
     /// The last token sampled (used to feed the next decode step).
     last_token: Option<LlamaToken>,
+    /// The full prompt token sequence for this turn (post reuse-decision),
+    /// i.e. exactly what `model.str_to_token()` produced. Needed to
+    /// reconstruct this sequence's full resident-token history when it
+    /// completes.
+    prompt_tokens: Vec<LlamaToken>,
+    /// Every token actually sampled and successfully decoded so far this
+    /// turn, appended in lockstep with confirmed decode steps, never
+    /// speculatively.
+    generated_tokens: Vec<LlamaToken>,
+}
+
+/// An idle sequence slot together with the exact token history currently
+/// resident in its KV cache, reused across requests via longest-common-prefix
+/// matching, mirroring upstream llama.cpp server's slot model
+/// (tools/server/server-context.cpp, get_available_slot /
+/// server_tokens::get_common_prefix).
+struct CachedSlot {
+    seq_id: i32,
+    /// Full token history (prompt ++ generated) currently resident in this
+    /// seq_id's KV cache. Empty for a never-used or just-hard-reset slot.
+    tokens: Vec<LlamaToken>,
+    last_used: std::time::Instant,
 }
 
 /// Handle returned to callers for submitting requests.
@@ -266,6 +288,85 @@ fn ctx_oom_hint(requested_tokens: u32) -> String {
     )
 }
 
+/// Minimum fraction of a new prompt that must match an idle slot's cached
+/// history before we route to it preferentially — mirrors llama.cpp server's
+/// default `--slot-prompt-similarity` (0.1).
+const SLOT_PROMPT_SIMILARITY: f32 = 0.1;
+
+/// Length of the longest common prefix between two token sequences, compared
+/// by token id (never by text — this is what makes it immune to BPE
+/// tokenizer merge-boundary drift at the seam between old and new content).
+/// Mirrors llama.cpp server's `server_tokens::get_common_prefix`.
+fn common_prefix_len(a: &[LlamaToken], b: &[LlamaToken]) -> usize {
+    a.iter().zip(b.iter()).take_while(|(x, y)| x == y).count()
+}
+
+/// Pick the best idle slot for a newly-tokenized prompt, removing it from
+/// the idle pool. Returns `(seq_id, reuse_len)` where `reuse_len` is how many
+/// leading tokens of `new_tokens` are already correctly resident in that
+/// slot's KV cache and do NOT need to be re-decoded.
+///
+/// Selection mirrors llama.cpp server's `get_available_slot`: prefer the
+/// idle slot with the highest match fraction (`common_prefix_len /
+/// new_tokens.len()`) if it clears `SLOT_PROMPT_SIMILARITY` (ties broken by
+/// least-recently-used); otherwise fall back to the least-recently-used idle
+/// slot regardless of match fraction.
+///
+/// `reuse_len` is always capped at `new_tokens.len().saturating_sub(1)`: even
+/// a 100% cache hit must leave the final prompt token to be freshly decoded,
+/// because llama.cpp only produces logits for positions decoded with
+/// `logits=true` in THIS call — a cached KV entry alone cannot yield a fresh
+/// logit distribution to sample the first reply token from. This also
+/// guarantees the "sample from prefill logits at output index -1" convention
+/// (exactly one token in the batch has logits enabled) stays correct in
+/// every case, including a full cache hit.
+fn pick_slot(idle_slots: &mut Vec<CachedSlot>, new_tokens: &[LlamaToken]) -> (i32, usize) {
+    debug_assert!(!idle_slots.is_empty(), "pick_slot called with no idle slots");
+
+    let mut best_idx = 0usize;
+    let mut best_prefix = 0usize;
+    let mut best_sim = -1.0f32;
+
+    for (i, slot) in idle_slots.iter().enumerate() {
+        let prefix = common_prefix_len(&slot.tokens, new_tokens);
+        let sim = if new_tokens.is_empty() {
+            0.0
+        } else {
+            prefix as f32 / new_tokens.len() as f32
+        };
+
+        // Use `total_cmp` (rather than `==`/`>` on `f32` directly) to keep
+        // this clippy::float_cmp-clean while still breaking exact ties by
+        // least-recently-used.
+        let better = match sim.total_cmp(&best_sim) {
+            std::cmp::Ordering::Greater => true,
+            std::cmp::Ordering::Equal => slot.last_used < idle_slots[best_idx].last_used,
+            std::cmp::Ordering::Less => false,
+        };
+        if better {
+            best_idx = i;
+            best_prefix = prefix;
+            best_sim = sim;
+        }
+    }
+
+    if best_sim < SLOT_PROMPT_SIMILARITY {
+        // No slot clears the similarity threshold — fall back to the
+        // least-recently-used idle slot, regardless of match fraction.
+        let (lru_idx, _) = idle_slots
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, s)| s.last_used)
+            .expect("idle_slots is non-empty (see debug_assert above)");
+        best_idx = lru_idx;
+        best_prefix = common_prefix_len(&idle_slots[best_idx].tokens, new_tokens);
+    }
+
+    let slot = idle_slots.swap_remove(best_idx);
+    let reuse_len = best_prefix.min(new_tokens.len().saturating_sub(1));
+    (slot.seq_id, reuse_len)
+}
+
 // ── Scheduler loop (runs on a dedicated thread) ─────────────────────────────
 
 fn run_scheduler_loop(
@@ -432,9 +533,17 @@ fn run_scheduler_loop(
     backend.void_logs();
 
     let mut active: Vec<ActiveSequence> = Vec::with_capacity(sched_config.max_batch_size);
-    // Pool of reusable seq_ids in range [0, max_batch_size).
-    // llama.cpp requires seq_id < n_seq_max, so we recycle them.
-    let mut free_seq_ids: Vec<i32> = (0..sched_config.max_batch_size as i32).rev().collect();
+    // Pool of idle sequence slots in range [0, max_batch_size), each carrying
+    // the token history currently resident in its KV cache so a later
+    // request can reuse a matching prefix instead of a full re-prefill.
+    // llama.cpp requires seq_id < n_seq_max, so we recycle seq_ids.
+    let mut idle_slots: Vec<CachedSlot> = (0..sched_config.max_batch_size as i32)
+        .map(|seq_id| CachedSlot {
+            seq_id,
+            tokens: Vec::new(),
+            last_used: std::time::Instant::now(),
+        })
+        .collect();
     // Pre-allocate the decode batch once — reused every iteration to avoid
     // repeated malloc/free in the hot decode loop.
     let mut decode_batch = LlamaBatch::new(sched_config.max_batch_size.max(1), 1);
@@ -472,10 +581,37 @@ fn run_scheduler_loop(
         while active.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
                 Ok(scheduled) => {
-                    let seq_id = match free_seq_ids.pop() {
-                        Some(id) => id,
-                        None => break, // No free slots — should not happen due to active.len() check
+                    // Tokenize BEFORE picking a slot: slot selection is
+                    // content-addressed (longest-common-prefix against each
+                    // idle slot's cached history), so the token ids must be
+                    // known first. If tokenization fails, no slot has been
+                    // touched yet, so there is nothing to reclaim.
+                    let bos = if scheduled.request.raw { AddBos::Never } else { AddBos::Always };
+                    let tokens = match model.str_to_token(&scheduled.request.prompt, bos) {
+                        Ok(t) => t,
+                        Err(e) => {
+                            let _ = scheduled.tx.try_send(StreamEvent::Error(format!(
+                                "Tokenization failed: {e}"
+                            )));
+                            continue;
+                        }
                     };
+
+                    // A prompt that tokenizes to zero tokens (e.g. raw:true
+                    // with an empty prompt string, AddBos::Never) has no
+                    // token to ever produce logits from — reject early
+                    // rather than let `tokens.len() - 1` underflow below.
+                    if tokens.is_empty() {
+                        let _ = scheduled.tx.try_send(StreamEvent::Error(
+                            "Prompt must contain at least one token".into(),
+                        ));
+                        continue;
+                    }
+
+                    if idle_slots.is_empty() {
+                        break; // No free slots — should not happen due to active.len() check
+                    }
+                    let (seq_id, reuse_len) = pick_slot(&mut idle_slots, &tokens);
 
                     let req = &scheduled.request;
                     let seed = req.seed.unwrap_or(seq_id as u32);
@@ -526,10 +662,12 @@ fn run_scheduler_loop(
                         start: std::time::Instant::now(),
                         prefilled: false,
                         last_token: None,
+                        prompt_tokens: tokens.clone(),
+                        generated_tokens: Vec::new(),
                     };
 
-                    // Tokenize and prefill immediately.
-                    match prefill_sequence(&model, &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx) {
+                    // Prefill the unreused suffix of the prompt into the context.
+                    match prefill_sequence(&mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, reuse_len) {
                         Ok((n_tokens, n_past, effective_max)) => {
                             let mut seq = seq;
                             seq.tokens_prompt = n_tokens;
@@ -545,10 +683,17 @@ fn run_scheduler_loop(
 
                             if model.is_eog_token(token) {
                                 send_done(&seq);
-                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                free_seq_ids.push(seq.seq_id);
+                                // Clean completion — the KV cache holds exactly
+                                // the prompt (this EOG token was never decoded),
+                                // so it's safe to keep and offer for reuse.
+                                idle_slots.push(CachedSlot {
+                                    seq_id: seq.seq_id,
+                                    tokens: resident_tokens(&seq),
+                                    last_used: std::time::Instant::now(),
+                                });
                             } else {
                                 seq.tokens_generated += 1;
+                                seq.generated_tokens.push(token);
 
                                 match model.token_to_piece(token, &mut seq.decoder, true, None) {
                                     Ok(piece) => {
@@ -558,8 +703,12 @@ fn run_scheduler_loop(
                                                     let _ = seq.tx.try_send(StreamEvent::Token(out));
                                                 }
                                                 send_done(&seq);
-                                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                                free_seq_ids.push(seq.seq_id);
+                                                // Clean completion.
+                                                idle_slots.push(CachedSlot {
+                                                    seq_id: seq.seq_id,
+                                                    tokens: resident_tokens(&seq),
+                                                    last_used: std::time::Instant::now(),
+                                                });
                                             }
                                             PieceOutcome::Emit(out) => {
                                                 if seq.tokens_generated >= seq.max_tokens {
@@ -570,8 +719,12 @@ fn run_scheduler_loop(
                                                         let _ = seq.tx.try_send(StreamEvent::Token(final_out));
                                                     }
                                                     send_done(&seq);
-                                                    let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                                    free_seq_ids.push(seq.seq_id);
+                                                    // Clean completion.
+                                                    idle_slots.push(CachedSlot {
+                                                        seq_id: seq.seq_id,
+                                                        tokens: resident_tokens(&seq),
+                                                        last_used: std::time::Instant::now(),
+                                                    });
                                                 } else {
                                                     if !out.is_empty() {
                                                         let _ = seq.tx.try_send(StreamEvent::Token(out));
@@ -584,8 +737,13 @@ fn run_scheduler_loop(
                                     }
                                     Err(_) => {
                                         send_done(&seq);
+                                        // Decode error — cache state suspect: full wipe.
                                         let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                        free_seq_ids.push(seq.seq_id);
+                                        idle_slots.push(CachedSlot {
+                                            seq_id: seq.seq_id,
+                                            tokens: Vec::new(),
+                                            last_used: std::time::Instant::now(),
+                                        });
                                     }
                                 }
                             }
@@ -596,7 +754,16 @@ fn run_scheduler_loop(
                             let _ = seq.tx.try_send(StreamEvent::Error(format!(
                                 "Prefill failed: {e}"
                             )));
-                            free_seq_ids.push(seq.seq_id);
+                            // Prefill may have partially decoded (or trimmed)
+                            // this slot's cache before failing — wipe it and
+                            // return an empty-history slot, matching the
+                            // other error paths' conservative default.
+                            let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                            idle_slots.push(CachedSlot {
+                                seq_id: seq.seq_id,
+                                tokens: Vec::new(),
+                                last_used: std::time::Instant::now(),
+                            });
                         }
                     }
                 }
@@ -642,11 +809,23 @@ fn run_scheduler_loop(
             );
             if let Err(e) = ctx.decode(&mut decode_batch) {
                 tracing::error!("Batch decode failed: {e}");
-                // Send errors to all active sequences and clear.
+                // Send errors to all active sequences and clear. This is a
+                // hard error potentially affecting every active sequence
+                // simultaneously — unsafe to assume any partial cache state,
+                // so fully wipe each one and return an empty-history slot
+                // (also fixes a pre-existing leak: these seq_ids used to be
+                // dropped from `active` without ever being returned to the
+                // pool).
                 for seq in active.drain(..) {
                     let _ = seq.tx.try_send(StreamEvent::Error(format!(
                         "Decode failed: {e}"
                     )));
+                    let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                    idle_slots.push(CachedSlot {
+                        seq_id: seq.seq_id,
+                        tokens: Vec::new(),
+                        last_used: std::time::Instant::now(),
+                    });
                 }
                 continue;
             }
@@ -663,6 +842,16 @@ fn run_scheduler_loop(
                 continue;
             }
 
+            // `seq.last_token` was just decoded by this iteration's batch
+            // `ctx.decode()` call (step 4, above) and is now physically
+            // resident in the KV cache at what was `seq.n_past` — bump it
+            // here, unconditionally, before any termination branch below
+            // can call `resident_tokens()`. (Previously this increment only
+            // happened on the non-terminal fallthrough at the bottom of the
+            // loop, which under-counted residency by exactly one token on
+            // every EOG/stop/max-tokens completion reached via this loop.)
+            seq.n_past += 1;
+
             let token = seq.sampler.sample(&ctx, logit_idx);
             seq.sampler.accept(token);
             logit_idx += 1;
@@ -671,11 +860,19 @@ fn run_scheduler_loop(
             if model.is_eog_token(token) {
                 send_done(seq);
                 to_remove.push(i);
-                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                // Clean completion — the KV cache holds exactly seq.n_past
+                // resident tokens (this EOG token was never decoded), so
+                // it's safe to keep and offer for reuse.
+                idle_slots.push(CachedSlot {
+                    seq_id: seq.seq_id,
+                    tokens: resident_tokens(seq),
+                    last_used: std::time::Instant::now(),
+                });
                 continue;
             }
 
             seq.tokens_generated += 1;
+            seq.generated_tokens.push(token);
 
             // Decode token to text.
             match model.token_to_piece(token, &mut seq.decoder, true, None) {
@@ -687,7 +884,12 @@ fn run_scheduler_loop(
                             }
                             send_done(seq);
                             to_remove.push(i);
-                            let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                            // Clean completion.
+                            idle_slots.push(CachedSlot {
+                                seq_id: seq.seq_id,
+                                tokens: resident_tokens(seq),
+                                last_used: std::time::Instant::now(),
+                            });
                             continue;
                         }
                         PieceOutcome::Emit(out) => {
@@ -695,8 +897,14 @@ fn run_scheduler_loop(
                                 && seq.tx.try_send(StreamEvent::Token(out)).is_err()
                             {
                                 // Receiver dropped — client disconnected.
+                                // Cache state is not confirmed-safe: full wipe.
                                 to_remove.push(i);
                                 let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                idle_slots.push(CachedSlot {
+                                    seq_id: seq.seq_id,
+                                    tokens: Vec::new(),
+                                    last_used: std::time::Instant::now(),
+                                });
                                 continue;
                             }
                         }
@@ -705,7 +913,13 @@ fn run_scheduler_loop(
                 Err(_) => {
                     send_done(seq);
                     to_remove.push(i);
+                    // Decode error — cache state suspect: full wipe.
                     let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                    idle_slots.push(CachedSlot {
+                        seq_id: seq.seq_id,
+                        tokens: Vec::new(),
+                        last_used: std::time::Instant::now(),
+                    });
                     continue;
                 }
             }
@@ -719,44 +933,56 @@ fn run_scheduler_loop(
                 }
                 send_done(seq);
                 to_remove.push(i);
-                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                // Clean completion.
+                idle_slots.push(CachedSlot {
+                    seq_id: seq.seq_id,
+                    tokens: resident_tokens(seq),
+                    last_used: std::time::Instant::now(),
+                });
                 continue;
             }
 
+            // n_past was already bumped at the top of this iteration (see
+            // above) once the decode of this token was confirmed.
             seq.last_token = Some(token);
-            seq.n_past += 1;
         }
 
         // ── 6. Remove completed sequences (reverse order) ──────────────
+        // idle_slots already received exactly one CachedSlot per completed
+        // sequence above (clean-with-tokens or unsafe-with-empty-tokens) —
+        // this step only removes them from `active`.
         to_remove.sort_unstable();
         to_remove.dedup();
         for &i in to_remove.iter().rev() {
-            let removed = active.swap_remove(i);
-            free_seq_ids.push(removed.seq_id);
+            active.swap_remove(i);
         }
     }
 }
 
-/// Prefill a sequence's prompt tokens into the context.
+/// Prefill the unreused suffix of a sequence's prompt tokens into the context.
+///
+/// `tokens` is the FULL prompt token sequence (already tokenized by the
+/// caller) — used for context-budget accounting exactly as before.
+/// `reuse_len` is how many of its leading tokens are already resident in
+/// `seq.seq_id`'s KV cache from a previous turn and must NOT be re-decoded;
+/// only `tokens[reuse_len..]` is actually sent through `ctx.decode`.
 ///
 /// Returns `(prompt_tokens, n_past, effective_max_tokens)`.
 fn prefill_sequence(
-    model: &LlamaModel,
     ctx: &mut LlamaContext,
     config: &InferenceConfig,
     request: &GenerateRequest,
     seq: &ActiveSequence,
     per_seq_ctx: u32,
+    tokens: &[LlamaToken],
+    reuse_len: usize,
 ) -> Result<(u32, i32, u32), String> {
-    let bos = if request.raw { AddBos::Never } else { AddBos::Always };
-    let tokens = model
-        .str_to_token(&request.prompt, bos)
-        .map_err(|e| format!("Tokenization failed: {e}"))?;
-
     let n_tokens = tokens.len() as u32;
 
     // Effective context: per-request num_ctx (clamped to per-sequence limit)
-    // or the per-sequence default.
+    // or the per-sequence default. This operates on the FULL prompt token
+    // count regardless of how much of it is reused — context budget is
+    // about total resident positions, not how much was freshly decoded.
     let effective_ctx = request
         .num_ctx
         .map(|n| n.min(per_seq_ctx))
@@ -781,13 +1007,27 @@ fn prefill_sequence(
             n_tokens,
         );
     }
+
+    let fresh_decoded = tokens.len() - reuse_len;
     tracing::info!(
-        "Seq {}: prompt={} tokens, max_output={}, effective_ctx={}",
+        "Seq {}: prompt={} tokens, reused {} from cache, decoded {} fresh, max_output={}, effective_ctx={}",
         seq.seq_id,
         n_tokens,
+        reuse_len,
+        fresh_decoded,
         effective_max_tokens,
         effective_ctx,
     );
+
+    // Trim the chosen slot's stale KV-cache tail before decoding the fresh
+    // suffix. Always call this, even when reuse_len == 0: a picked slot can
+    // carry a non-empty, UNRELATED history in that case too (e.g. the LRU
+    // fallback, or any 1-token prompt where reuse_len is capped to 0
+    // regardless of match quality) — skipping the clear would leave a prior,
+    // unrelated conversation's KV data attached to this seq_id, silently
+    // blended into the new request's generation. Safe in every case:
+    // clearing an empty range (a never-used slot) is a no-op.
+    let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), Some(reuse_len as u32), None);
 
     // Prefill in chunks of n_batch tokens. llama.cpp asserts if a single
     // decode call processes more tokens than n_batch, which causes SIGABRT.
@@ -796,14 +1036,15 @@ fn prefill_sequence(
     let last_idx = tokens.len() - 1;
 
     tracing::debug!(
-        "Prefilling seq {} with {} tokens in chunks of {} (context_size={})",
+        "Prefilling seq {} with {} tokens (reused {}) in chunks of {} (context_size={})",
         seq.seq_id,
         tokens.len(),
+        reuse_len,
         chunk_size,
         config.context_size,
     );
 
-    for chunk_start in (0..tokens.len()).step_by(chunk_size) {
+    for chunk_start in (reuse_len..tokens.len()).step_by(chunk_size) {
         let chunk_end = (chunk_start + chunk_size).min(tokens.len());
         let chunk = &tokens[chunk_start..chunk_end];
         let mut batch = LlamaBatch::new(chunk.len().max(1), 1);
@@ -954,6 +1195,27 @@ fn estimate_kv_memory(
     }
 }
 
+/// Build the token history actually resident in `seq`'s KV cache right now,
+/// for caching as a reusable `CachedSlot` on a clean completion.
+///
+/// `seq.prompt_tokens ++ seq.generated_tokens` can be exactly one token
+/// longer than what is truly resident: the token that ends generation (EOG,
+/// a matched stop sequence, or a max_tokens truncation) is always sampled
+/// from the *previous* decode's logits, and only ever becomes physically
+/// resident in the KV cache once it is itself fed through `ctx.decode()` on
+/// a later iteration — which never happens when it is the token that ends
+/// the turn. `seq.n_past` is advanced only once a token is confirmed
+/// decoded, so it is always the true resident count; truncating to it drops
+/// that phantom trailing token when present, and is a no-op otherwise (e.g.
+/// on EOG, where `generated_tokens` was never extended for the terminating
+/// token in the first place).
+fn resident_tokens(seq: &ActiveSequence) -> Vec<LlamaToken> {
+    let mut full = seq.prompt_tokens.clone();
+    full.extend(seq.generated_tokens.iter().copied());
+    full.truncate(seq.n_past as usize);
+    full
+}
+
 /// Send a `StreamEvent::Done` to the sequence's channel.
 fn send_done(seq: &ActiveSequence) {
     let duration_ms = seq.start.elapsed().as_millis() as u64;
@@ -966,7 +1228,12 @@ fn send_done(seq: &ActiveSequence) {
 
 #[cfg(test)]
 mod tests {
-    use super::{process_piece, stop_prefix_holdback, PieceOutcome};
+    use super::{
+        common_prefix_len, pick_slot, process_piece, stop_prefix_holdback, CachedSlot,
+        PieceOutcome,
+    };
+    use llama_cpp_2::token::LlamaToken;
+    use std::time::{Duration, Instant};
 
     fn gemma_stops() -> Vec<String> {
         vec!["<end_of_turn>".to_string()]
@@ -1159,5 +1426,109 @@ mod tests {
         assert!(!stopped);
         assert_eq!(emitted, "hello world.");
         assert!(pending.is_empty());
+    }
+
+    fn toks(ids: &[i32]) -> Vec<LlamaToken> {
+        ids.iter().map(|&id| LlamaToken::new(id)).collect()
+    }
+
+    #[test]
+    fn common_prefix_len_empty_vs_empty() {
+        assert_eq!(common_prefix_len(&[], &[]), 0);
+    }
+
+    #[test]
+    fn common_prefix_len_full_match() {
+        let a = toks(&[1, 2, 3]);
+        let b = toks(&[1, 2, 3]);
+        assert_eq!(common_prefix_len(&a, &b), 3);
+    }
+
+    #[test]
+    fn common_prefix_len_partial_match() {
+        let a = toks(&[1, 2, 3, 4]);
+        let b = toks(&[1, 2, 9, 9]);
+        assert_eq!(common_prefix_len(&a, &b), 2);
+    }
+
+    #[test]
+    fn common_prefix_len_totally_disjoint() {
+        let a = toks(&[1, 2, 3]);
+        let b = toks(&[9, 8, 7]);
+        assert_eq!(common_prefix_len(&a, &b), 0);
+    }
+
+    #[test]
+    fn common_prefix_len_one_shorter_than_other() {
+        let a = toks(&[1, 2, 3, 4, 5]);
+        let b = toks(&[1, 2, 3]);
+        assert_eq!(common_prefix_len(&a, &b), 3);
+        assert_eq!(common_prefix_len(&b, &a), 3);
+    }
+
+    /// Build a `CachedSlot` whose `last_used` is `age_secs_ago` seconds in
+    /// the past — larger values are "more stale" (least recently used).
+    fn slot(seq_id: i32, tokens: Vec<LlamaToken>, age_secs_ago: u64) -> CachedSlot {
+        CachedSlot {
+            seq_id,
+            tokens,
+            last_used: Instant::now() - Duration::from_secs(age_secs_ago),
+        }
+    }
+
+    #[test]
+    fn pick_slot_best_match_above_threshold_wins_regardless_of_order() {
+        // Slot 0 is listed first and has a long history, but shares nothing
+        // with the new prompt. Slot 1 is listed second, has a shorter
+        // history, but is an exact prefix match — it must win even though
+        // it is neither first nor the longest.
+        let mut idle_slots = vec![
+            slot(0, toks(&[100, 101, 102, 103, 104, 105]), 100),
+            slot(1, toks(&[1, 2, 3]), 5),
+        ];
+        let new_tokens = toks(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let (seq_id, reuse_len) = pick_slot(&mut idle_slots, &new_tokens);
+        assert_eq!(seq_id, 1);
+        assert_eq!(reuse_len, 3);
+        // The winning slot must have been removed from the idle pool.
+        assert_eq!(idle_slots.len(), 1);
+        assert_eq!(idle_slots[0].seq_id, 0);
+    }
+
+    #[test]
+    fn pick_slot_falls_back_to_lru_when_nothing_clears_threshold() {
+        // None of these slots share a meaningful prefix with the new
+        // prompt (similarity 0.0 for all — well below the 0.1 threshold),
+        // so selection must fall back to the least-recently-used slot.
+        let mut idle_slots = vec![
+            slot(0, toks(&[900, 901]), 2),  // recently used
+            slot(1, toks(&[800, 801]), 50), // least recently used
+            slot(2, toks(&[700, 701]), 10),
+        ];
+        let new_tokens = toks(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let (seq_id, _reuse_len) = pick_slot(&mut idle_slots, &new_tokens);
+        assert_eq!(seq_id, 1, "must fall back to the least-recently-used slot");
+    }
+
+    #[test]
+    fn pick_slot_reuse_len_capped_at_len_minus_one_on_full_match() {
+        let full = toks(&[1, 2, 3, 4]);
+        let mut idle_slots = vec![slot(0, full.clone(), 1)];
+        let (seq_id, reuse_len) = pick_slot(&mut idle_slots, &full);
+        assert_eq!(seq_id, 0);
+        // Even a 100% cache hit must leave the final prompt token to be
+        // freshly decoded, so logits can be sampled from it.
+        assert_eq!(reuse_len, full.len() - 1);
+    }
+
+    #[test]
+    fn pick_slot_empty_new_tokens_does_not_panic() {
+        let mut idle_slots = vec![slot(0, toks(&[1, 2, 3]), 5), slot(1, Vec::new(), 10)];
+        let (seq_id, reuse_len) = pick_slot(&mut idle_slots, &[]);
+        // No panic (no divide-by-zero), and nothing to reuse.
+        assert_eq!(reuse_len, 0);
+        // Similarity is 0.0 for every slot against an empty prompt, so this
+        // falls back to LRU (slot 1, the more stale of the two).
+        assert_eq!(seq_id, 1);
     }
 }
