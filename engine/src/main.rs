@@ -2156,10 +2156,18 @@ async fn interactive_chat(
     let mut temperature: f32 = 0.8;
     let mut max_reply_tokens: u32 = 2048;
     // Sticky reasoning toggle. ON by default (reasoning models need it). When
-    // OFF we append the ` /no_think` soft-switch to each user turn — the
-    // mechanism the models actually honour (an injected empty <think></think>
-    // breaks reasoning models like DeepSeek-R1).
+    // OFF we append the ` /no_think` soft-switch to each user turn AND, for
+    // every model except the DeepSeek-R1 family, also force an empty
+    // `<think></think>` block in the template — the mechanism the API's
+    // `"think": false` param already uses. R1-style models are always-
+    // reasoning and never learned to see a pre-closed empty think block as
+    // anything but malformed input, so they keep relying on the soft-switch
+    // text alone.
     let mut think_mode = true;
+    let is_r1_family = {
+        let lower = model_name.to_lowercase();
+        lower.contains("deepseek-r1") || lower.contains("deepseek_r1")
+    };
 
     let mut history: Vec<ChatMessage> = vec![ChatMessage {
         role: "system",
@@ -2272,6 +2280,12 @@ async fn interactive_chat(
         let user_content = if think_mode { input.clone() } else { format!("{input} /no_think") };
         history.push(ChatMessage { role: "user", content: user_content });
 
+        // Whether to let build_prompt open the assistant turn normally
+        // (true) or force the empty `<think></think>` suppression (false).
+        // Only suppress via the template when reasoning is actually off AND
+        // the model isn't DeepSeek-R1-family (see think_mode's doc comment).
+        let think_arg = think_mode || is_r1_family;
+
         // Build prompt using the model-appropriate chat template.
         // If web browsing is enabled, fetch URLs and inject content into a
         // TEMPORARY message list — web content is NOT stored in history so it
@@ -2307,18 +2321,18 @@ async fn interactive_chat(
                     tmp.push(&web_msg);
                     tmp.push(history.last().unwrap());
                     let pairs: Vec<(&str, &str)> = tmp.iter().map(|m| (m.role, m.content.as_str())).collect();
-                    template.build_prompt(&pairs, true)
+                    template.build_prompt(&pairs, think_arg)
                 } else {
                     let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
-                    template.build_prompt(&pairs, true)
+                    template.build_prompt(&pairs, think_arg)
                 }
             } else {
                 let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
-                template.build_prompt(&pairs, true)
+                template.build_prompt(&pairs, think_arg)
             }
         } else {
             let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
-            template.build_prompt(&pairs, true)
+            template.build_prompt(&pairs, think_arg)
         };
 
         // Rough token estimate: ~4 chars per token. Leave room for the response.
