@@ -681,18 +681,18 @@ fn run_scheduler_loop(
                     let mut prefill_result = prefill_sequence(
                         &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
                     );
-                    if let Err(ref e) = prefill_result {
-                        if effective_reuse_len > 0 {
-                            tracing::warn!(
-                                "Seq {}: reused prefill failed ({e}), retrying with a full fresh prefill",
-                                seq.seq_id,
-                            );
-                            let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                            effective_reuse_len = 0;
-                            prefill_result = prefill_sequence(
-                                &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
-                            );
-                        }
+                    if let Err(ref e) = prefill_result
+                        && effective_reuse_len > 0
+                    {
+                        tracing::warn!(
+                            "Seq {}: reused prefill failed ({e}), retrying with a full fresh prefill",
+                            seq.seq_id,
+                        );
+                        let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                        effective_reuse_len = 0;
+                        prefill_result = prefill_sequence(
+                            &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
+                        );
                     }
 
                     match prefill_result {
