@@ -667,7 +667,35 @@ fn run_scheduler_loop(
                     };
 
                     // Prefill the unreused suffix of the prompt into the context.
-                    match prefill_sequence(&mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, reuse_len) {
+                    //
+                    // If a reused (partial) prefill fails, retry once with a
+                    // full fresh prefill (reuse_len=0) before giving up. This
+                    // keeps prefix reuse strictly fallback-safe: whatever the
+                    // underlying cause (llama.cpp's llama_decode returns -1
+                    // for several distinct reasons that this binding's error
+                    // type collapses into one message, so the exact cause
+                    // isn't always visible here), the worst case is paying
+                    // for the old, proven full-reprefill behavior — never a
+                    // hard failure of the user's request.
+                    let mut effective_reuse_len = reuse_len;
+                    let mut prefill_result = prefill_sequence(
+                        &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
+                    );
+                    if let Err(ref e) = prefill_result {
+                        if effective_reuse_len > 0 {
+                            tracing::warn!(
+                                "Seq {}: reused prefill failed ({e}), retrying with a full fresh prefill",
+                                seq.seq_id,
+                            );
+                            let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                            effective_reuse_len = 0;
+                            prefill_result = prefill_sequence(
+                                &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
+                            );
+                        }
+                    }
+
+                    match prefill_result {
                         Ok((n_tokens, n_past, effective_max)) => {
                             let mut seq = seq;
                             seq.tokens_prompt = n_tokens;
