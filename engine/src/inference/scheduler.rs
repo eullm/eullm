@@ -1055,7 +1055,26 @@ fn prefill_sequence(
     // unrelated conversation's KV data attached to this seq_id, silently
     // blended into the new request's generation. Safe in every case:
     // clearing an empty range (a never-used slot) is a no-op.
-    let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), Some(reuse_len as u32), None);
+    //
+    // The return value matters for reuse_len > 0: llama.cpp's recurrent
+    // memory (Mamba/SSM-style layers, e.g. Qwen3.6's hybrid attention+SSM
+    // architecture) can only roll back a bounded number of tokens
+    // (`n_rs_seq`, 0 by default — we never set it). A partial trim request
+    // beyond that bound returns `false` and leaves the recurrent state
+    // untouched, silently stale relative to the trimmed attention KV cache.
+    // Treat that as a hard failure of this reuse attempt rather than
+    // proceeding on divergent state — the caller retries with reuse_len=0,
+    // which requests a full clear (`p0=0, p1=max`) and always succeeds.
+    let cleared = ctx
+        .clear_kv_cache_seq(Some(seq.seq_id as u32), Some(reuse_len as u32), None)
+        .unwrap_or(false);
+    if reuse_len > 0 && !cleared {
+        return Err(format!(
+            "Seq {}: KV-cache rollback to reuse_len={reuse_len} was rejected (likely a \
+             recurrent/hybrid model architecture); reuse is unsafe here",
+            seq.seq_id,
+        ));
+    }
 
     // Prefill in chunks of n_batch tokens. llama.cpp asserts if a single
     // decode call processes more tokens than n_batch, which causes SIGABRT.
