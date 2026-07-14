@@ -2,6 +2,35 @@
 
 Real stress test that **proves** whether an inference server processes requests in parallel or just queues them sequentially.
 
+## `reuse_validation.py` — roadmap 0.7-A real-hardware checklist
+
+Validates the KV-cache prefix reuse scheduler against the checklist in
+[`docs/roadmap-engine-0.7-1.0.md`](../docs/roadmap-engine-0.7-1.0.md) § 0.7-A:
+a 20-turn growing-history conversation, 8 concurrent conversations, abrupt
+mid-stream disconnects, a slow-consuming client (the v0.6.20 `Full`-vs-`Closed`
+channel regression test), and byte-identical output at a fixed seed.
+
+```bash
+pip install aiohttp
+
+python bench/reuse_validation.py \
+    --url http://localhost:11434 \
+    --model Qwen3.5-9B-Q4_K_M \
+    --server-log /path/to/eullm/server.log
+```
+
+Run a subset with `--tests multiturn,slow-consumer` (see `--help` for every
+flag: turn/concurrency counts, token budgets, timeouts). Exit code is nonzero
+if any test fails. Pass `--baseline-url` to diff the determinism test's output
+against a second server (e.g. an old binary on another port) for a true A/B
+instead of a self-comparison.
+
+This exercises the same scheduler code path the `--cli` REPL uses (both
+resend the full growing history and share the scheduler), so it doubles as
+an automated stand-in for the 20-turn CLI conversation check — driving the
+REPL by hand and grepping its log for `reused N from cache` remains a useful
+manual cross-check but isn't required to run this suite.
+
 ## What it measures
 
 | Metric | What it proves |
