@@ -754,11 +754,42 @@ fn run_scheduler_loop(
                                                         last_used: std::time::Instant::now(),
                                                     });
                                                 } else {
-                                                    if !out.is_empty() {
-                                                        let _ = seq.tx.try_send(StreamEvent::Token(out));
+                                                    // Check for a dropped receiver even when `out`
+                                                    // is empty (piece fully absorbed into the stop/
+                                                    // filter holdback buffer) — a disconnect must not
+                                                    // depend on there being bytes to send. A `Full`
+                                                    // channel (slow-consuming client, not a dropped
+                                                    // one) must NOT be treated the same way: the
+                                                    // token is best-effort dropped, but the sequence
+                                                    // and its cache stay alive.
+                                                    let disconnected = if out.is_empty() {
+                                                        seq.tx.is_closed()
+                                                    } else {
+                                                        match seq.tx.try_send(StreamEvent::Token(out)) {
+                                                            Ok(()) => false,
+                                                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                                                tracing::warn!(
+                                                                    "Seq {}: event channel full, dropping a token (client consuming too slowly)",
+                                                                    seq.seq_id,
+                                                                );
+                                                                false
+                                                            }
+                                                            Err(mpsc::error::TrySendError::Closed(_)) => true,
+                                                        }
+                                                    };
+                                                    if disconnected {
+                                                        // Cache state is not confirmed-safe (mid
+                                                        // first-token piece): full wipe.
+                                                        let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                                        idle_slots.push(CachedSlot {
+                                                            seq_id: seq.seq_id,
+                                                            tokens: Vec::new(),
+                                                            last_used: std::time::Instant::now(),
+                                                        });
+                                                    } else {
+                                                        seq.last_token = Some(token);
+                                                        active.push(seq);
                                                     }
-                                                    seq.last_token = Some(token);
-                                                    active.push(seq);
                                                 }
                                             }
                                         }
@@ -921,9 +952,28 @@ fn run_scheduler_loop(
                             continue;
                         }
                         PieceOutcome::Emit(out) => {
-                            if !out.is_empty()
-                                && seq.tx.try_send(StreamEvent::Token(out)).is_err()
-                            {
+                            // Checked regardless of whether `out` is empty (piece fully
+                            // absorbed into the stop/filter holdback buffer) — a disconnect
+                            // must not depend on there being bytes to send. A `Full` channel
+                            // (slow-consuming client, not a dropped one) must NOT be treated
+                            // as a disconnect: the token is best-effort dropped, but the
+                            // sequence and its cache stay alive.
+                            let disconnected = if out.is_empty() {
+                                seq.tx.is_closed()
+                            } else {
+                                match seq.tx.try_send(StreamEvent::Token(out)) {
+                                    Ok(()) => false,
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        tracing::warn!(
+                                            "Seq {}: event channel full, dropping a token (client consuming too slowly)",
+                                            seq.seq_id,
+                                        );
+                                        false
+                                    }
+                                    Err(mpsc::error::TrySendError::Closed(_)) => true,
+                                }
+                            };
+                            if disconnected {
                                 // Receiver dropped — client disconnected.
                                 // Cache state is not confirmed-safe: full wipe.
                                 to_remove.push(i);
