@@ -754,29 +754,7 @@ fn run_scheduler_loop(
                                                         last_used: std::time::Instant::now(),
                                                     });
                                                 } else {
-                                                    // Check for a dropped receiver even when `out`
-                                                    // is empty (piece fully absorbed into the stop/
-                                                    // filter holdback buffer) — a disconnect must not
-                                                    // depend on there being bytes to send. A `Full`
-                                                    // channel (slow-consuming client, not a dropped
-                                                    // one) must NOT be treated the same way: the
-                                                    // token is best-effort dropped, but the sequence
-                                                    // and its cache stay alive.
-                                                    let disconnected = if out.is_empty() {
-                                                        seq.tx.is_closed()
-                                                    } else {
-                                                        match seq.tx.try_send(StreamEvent::Token(out)) {
-                                                            Ok(()) => false,
-                                                            Err(mpsc::error::TrySendError::Full(_)) => {
-                                                                tracing::warn!(
-                                                                    "Seq {}: event channel full, dropping a token (client consuming too slowly)",
-                                                                    seq.seq_id,
-                                                                );
-                                                                false
-                                                            }
-                                                            Err(mpsc::error::TrySendError::Closed(_)) => true,
-                                                        }
-                                                    };
+                                                    let disconnected = send_or_detect_disconnect(&seq.tx, out, seq.seq_id);
                                                     if disconnected {
                                                         // Cache state is not confirmed-safe (mid
                                                         // first-token piece): full wipe.
@@ -952,27 +930,7 @@ fn run_scheduler_loop(
                             continue;
                         }
                         PieceOutcome::Emit(out) => {
-                            // Checked regardless of whether `out` is empty (piece fully
-                            // absorbed into the stop/filter holdback buffer) — a disconnect
-                            // must not depend on there being bytes to send. A `Full` channel
-                            // (slow-consuming client, not a dropped one) must NOT be treated
-                            // as a disconnect: the token is best-effort dropped, but the
-                            // sequence and its cache stay alive.
-                            let disconnected = if out.is_empty() {
-                                seq.tx.is_closed()
-                            } else {
-                                match seq.tx.try_send(StreamEvent::Token(out)) {
-                                    Ok(()) => false,
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        tracing::warn!(
-                                            "Seq {}: event channel full, dropping a token (client consuming too slowly)",
-                                            seq.seq_id,
-                                        );
-                                        false
-                                    }
-                                    Err(mpsc::error::TrySendError::Closed(_)) => true,
-                                }
-                            };
+                            let disconnected = send_or_detect_disconnect(&seq.tx, out, seq.seq_id);
                             if disconnected {
                                 // Receiver dropped — client disconnected.
                                 // Cache state is not confirmed-safe: full wipe.
@@ -1313,6 +1271,32 @@ fn resident_tokens(seq: &ActiveSequence) -> Vec<LlamaToken> {
     full
 }
 
+/// Deliver a decoded chunk to the client and report whether it has actually
+/// disconnected.
+///
+/// Checked regardless of whether `out` is empty (the piece may have been
+/// fully absorbed into the stop/filter holdback buffer in `process_piece`)
+/// — a disconnect must not depend on there being bytes to send. A `Full`
+/// channel (a slow-consuming but still-connected client) must NOT be treated
+/// as a disconnect: the token is best-effort dropped (logged), but the
+/// sequence and its KV cache stay alive. Only a `Closed` channel — the
+/// receiver was actually dropped — is a real disconnect.
+fn send_or_detect_disconnect(tx: &mpsc::Sender<StreamEvent>, out: String, seq_id: i32) -> bool {
+    if out.is_empty() {
+        return tx.is_closed();
+    }
+    match tx.try_send(StreamEvent::Token(out)) {
+        Ok(()) => false,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::warn!(
+                "Seq {seq_id}: event channel full, dropping a token (client consuming too slowly)",
+            );
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => true,
+    }
+}
+
 /// Send a `StreamEvent::Done` to the sequence's channel.
 fn send_done(seq: &ActiveSequence) {
     let duration_ms = seq.start.elapsed().as_millis() as u64;
@@ -1326,11 +1310,12 @@ fn send_done(seq: &ActiveSequence) {
 #[cfg(test)]
 mod tests {
     use super::{
-        common_prefix_len, pick_slot, process_piece, stop_prefix_holdback, CachedSlot,
-        PieceOutcome,
+        common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
+        stop_prefix_holdback, CachedSlot, PieceOutcome, StreamEvent,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
+    use tokio::sync::mpsc;
 
     fn gemma_stops() -> Vec<String> {
         vec!["<end_of_turn>".to_string()]
@@ -1627,5 +1612,40 @@ mod tests {
         // Similarity is 0.0 for every slot against an empty prompt, so this
         // falls back to LRU (slot 1, the more stale of the two).
         assert_eq!(seq_id, 1);
+    }
+
+    #[test]
+    fn full_channel_is_not_treated_as_a_disconnect() {
+        let (tx, _rx) = mpsc::channel::<StreamEvent>(1);
+        // Fill the one buffered slot without ever draining it — a
+        // slow-consuming but still-connected client, not a dropped one.
+        tx.try_send(StreamEvent::Token("first".to_string())).unwrap();
+        let disconnected = send_or_detect_disconnect(&tx, "second".to_string(), 0);
+        assert!(!disconnected, "a Full channel must not be treated as a disconnect");
+    }
+
+    #[test]
+    fn closed_channel_is_detected_with_pending_output() {
+        let (tx, rx) = mpsc::channel::<StreamEvent>(4);
+        drop(rx);
+        let disconnected = send_or_detect_disconnect(&tx, "hello".to_string(), 0);
+        assert!(disconnected, "a Closed channel with bytes to send must be detected");
+    }
+
+    #[test]
+    fn closed_channel_is_detected_even_with_empty_output() {
+        let (tx, rx) = mpsc::channel::<StreamEvent>(4);
+        drop(rx);
+        // Empty `out` (piece fully absorbed into the stop/filter holdback
+        // buffer) must not let a disconnect slip through undetected.
+        let disconnected = send_or_detect_disconnect(&tx, String::new(), 0);
+        assert!(disconnected, "a Closed channel must be detected even with nothing to send");
+    }
+
+    #[test]
+    fn open_channel_with_empty_output_is_not_a_disconnect() {
+        let (tx, _rx) = mpsc::channel::<StreamEvent>(4);
+        let disconnected = send_or_detect_disconnect(&tx, String::new(), 0);
+        assert!(!disconnected);
     }
 }
