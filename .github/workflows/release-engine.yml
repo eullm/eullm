@@ -5,6 +5,12 @@ on:
     tags:
       - "engine-v*"
       - "EuLLM-v*"
+  # Manual dispatch runs ONLY build-arm-cix-p1 (see its `if:` below) - lets
+  # that job be iterated on and re-run from the Actions tab without a real
+  # tag, without paying for the rest of the release matrix (Windows CUDA
+  # alone is a ~50 min cold build), and without ever creating a GitHub
+  # Release (the `release` job only runs on an actual tag push).
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -43,6 +49,9 @@ env:
 
 jobs:
   build:
+    # Manual dispatch is for testing build-arm-cix-p1 in isolation - skip
+    # the rest of the matrix there.
+    if: ${{ github.event_name == 'push' }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,6 +164,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
   build-cuda:
+    if: ${{ github.event_name == 'push' }}
     strategy:
       matrix:
         include:
@@ -282,6 +292,7 @@ jobs:
   # Targets ARM hosts with a discrete NVIDIA GPU (Ampere Altra / Grace + RTX,
   # ARM dev kits, etc.). Compiling CUDA needs only nvcc, not a GPU on the runner.
   build-cuda-arm64:
+    if: ${{ github.event_name == 'push' }}
     strategy:
       matrix:
         include:
@@ -471,6 +482,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
   build-windows:
+    if: ${{ github.event_name == 'push' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
@@ -544,6 +556,7 @@ jobs:
           path: eullm-windows-x64.exe
 
   build-windows-cuda:
+    if: ${{ github.event_name == 'push' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
@@ -719,7 +732,10 @@ jobs:
       - build-windows-cuda
     # Run as long as at least one upstream job built something. We never
     # want a single failing build to nuke a release after CI on the others.
-    if: ${{ !cancelled() }}
+    # Also never run on a manual workflow_dispatch (that's only for testing
+    # build-arm-cix-p1 in isolation, and there's no real tag to attach a
+    # release to on that trigger).
+    if: ${{ !cancelled() && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

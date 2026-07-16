@@ -82,6 +82,12 @@ binary on purpose** — it will SIGILL on any ARM64 host that lacks these
 exact ISA extensions (Raspberry Pi, Graviton, etc.), so it's not listed in
 the README's general platform table.
 
+To iterate on the job itself without cutting a real tag (and without
+paying for the other 5 platform builds, or creating a GitHub Release):
+Actions tab → *Release Engine* → *Run workflow* (`workflow_dispatch`) on
+this branch. That trigger runs `build-arm-cix-p1` only — every other job,
+and the release step itself, are skipped on manual dispatch.
+
 ### Cross-compiling for the CIX P1
 
 ```bash
