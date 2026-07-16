@@ -1,5 +1,14 @@
 # bench/ — Stress Test & Parallelism Verification
 
+## POSCAR WP4 — CIX P1 ARM CPU baseline
+
+See [`docs/arm-cix-p1-cpu-profile.md`](../docs/arm-cix-p1-cpu-profile.md) for
+the full build profile, i8mm/repack runtime verification, and thread-pinning
+recipe for the Radxa Orion O6 (CIX P1). `detect_arm_big_cores.sh` finds the
+big Cortex-A720 cores on the actual board (core numbering isn't stable
+across firmware, so this can't be a hardcoded range); `arm_cpu_bench.py` is
+the T4.1 prefill/decode baseline harness.
+
 Real stress test that **proves** whether an inference server processes requests in parallel or just queues them sequentially.
 
 ## `reuse_validation.py` — roadmap 0.7-A real-hardware checklist

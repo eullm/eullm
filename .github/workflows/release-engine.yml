@@ -5,6 +5,12 @@ on:
     tags:
       - "engine-v*"
       - "EuLLM-v*"
+  # Manual dispatch runs ONLY build-arm-cix-p1 (see its `if:` below) - lets
+  # that job be iterated on and re-run from the Actions tab without a real
+  # tag, without paying for the rest of the release matrix (Windows CUDA
+  # alone is a ~50 min cold build), and without ever creating a GitHub
+  # Release (the `release` job only runs on an actual tag push).
+  workflow_dispatch: {}
 
 permissions:
   contents: write
@@ -43,6 +49,9 @@ env:
 
 jobs:
   build:
+    # Manual dispatch is for testing build-arm-cix-p1 in isolation - skip
+    # the rest of the matrix there.
+    if: ${{ github.event_name == 'push' }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,6 +164,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
   build-cuda:
+    if: ${{ github.event_name == 'push' }}
     strategy:
       matrix:
         include:
@@ -282,6 +292,7 @@ jobs:
   # Targets ARM hosts with a discrete NVIDIA GPU (Ampere Altra / Grace + RTX,
   # ARM dev kits, etc.). Compiling CUDA needs only nvcc, not a GPU on the runner.
   build-cuda-arm64:
+    if: ${{ github.event_name == 'push' }}
     strategy:
       matrix:
         include:
@@ -389,7 +400,89 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  # CIX P1 (Armv9.2-A: SVE2, BF16, I8MM, DotProd) CPU-only profile — POSCAR
+  # WP4 baseline for the Radxa Orion O6. Deliberately a SEPARATE artifact
+  # from `build`'s generic eullm-linux-arm64: baking these ISA extensions
+  # into the generic binary would SIGILL on any ARM64 host that doesn't
+  # have them (Raspberry Pi, Graviton, other SoCs). Native ubuntu-24.04-arm
+  # runner rather than cross-compiling from x86_64: its default gcc is
+  # already GCC 13 (Ubuntu 22.04's gcc-aarch64-linux-gnu cross package is
+  # 11.2.0, too old to parse -march=armv9.2-a at all), so no toolchain
+  # upgrade step is needed here the way a cross-compile job would.
+  # See docs/arm-cix-p1-cpu-profile.md for the full profile writeup.
+  build-arm-cix-p1:
+    strategy:
+      matrix:
+        include:
+          - artifact: eullm-linux-arm64-cix-p1
+
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: aarch64-cix-p1
+
+      - name: Install sccache
+        shell: bash
+        run: |
+          SCCACHE_VER=0.8.0
+          TMPSC=$(mktemp -d)
+          curl -sSfL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-aarch64-unknown-linux-musl.tar.gz" \
+            -o "${TMPSC}/sccache.tar.gz"
+          tar -xzf "${TMPSC}/sccache.tar.gz" -C "${TMPSC}"
+          find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
+          chmod +x /usr/local/bin/sccache
+          rm -rf "${TMPSC}"
+          # Same S3 reachability probe as every other build job: a backend
+          # outage degrades to a cache-less build, never a failed one.
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
+          sccache --version
+          sccache --start-server || true
+
+      - name: Install build dependencies
+        run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
+
+      - name: Build engine (CIX P1 profile)
+        run: cargo build --release -p eullm-engine
+        env:
+          # Read by engine/vendor/llama-cpp-rs/llama-cpp-sys-2/build.rs; falls
+          # back to the generic armv8-a baseline everywhere this isn't set.
+          LLAMA_GGML_CPU_ARM_ARCH: armv9.2-a+sve2+bf16+i8mm+dotprod
+
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        shell: bash
+        run: sccache --show-stats || true
+
+      - name: Package binary
+        run: |
+          cp target/release/eullm ${{ matrix.artifact }}
+          strip --strip-all ${{ matrix.artifact }} 2>/dev/null || strip -x ${{ matrix.artifact }} 2>/dev/null || true
+          chmod +x ${{ matrix.artifact }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
   build-windows:
+    if: ${{ github.event_name == 'push' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
@@ -463,6 +556,7 @@ jobs:
           path: eullm-windows-x64.exe
 
   build-windows-cuda:
+    if: ${{ github.event_name == 'push' }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
@@ -633,11 +727,15 @@ jobs:
       - build
       - build-cuda
       - build-cuda-arm64
+      - build-arm-cix-p1
       - build-windows
       - build-windows-cuda
     # Run as long as at least one upstream job built something. We never
     # want a single failing build to nuke a release after CI on the others.
-    if: ${{ !cancelled() }}
+    # Also never run on a manual workflow_dispatch (that's only for testing
+    # build-arm-cix-p1 in isolation, and there's no real tag to attach a
+    # release to on that trigger).
+    if: ${{ !cancelled() && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -677,6 +775,7 @@ jobs:
             artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
             artifacts/eullm-linux-arm64/eullm-linux-arm64
             artifacts/eullm-linux-arm64-cuda-12.8/eullm-linux-arm64-cuda-12.8
+            artifacts/eullm-linux-arm64-cix-p1/eullm-linux-arm64-cix-p1
             artifacts/eullm-macos-x64/eullm-macos-x64
             artifacts/eullm-macos-arm64/eullm-macos-arm64
             artifacts/eullm-windows-x64/eullm-windows-x64.exe

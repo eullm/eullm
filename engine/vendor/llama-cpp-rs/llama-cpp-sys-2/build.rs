@@ -814,8 +814,16 @@ fn main() {
         // If the target-cpu is not specified as native, we take off the native ARM64 support.
         // It is useful in docker environments where the native feature is not enabled.
         config.define("GGML_NATIVE", "OFF");
-        config.define("GGML_CPU_ARM_ARCH", "armv8-a");
+        // Cross-compiling can't rely on GGML_NATIVE's `-mcpu=native` probe (that
+        // probes the BUILD host, not the TARGET device), so the baseline defaults
+        // to the lowest common aarch64 denominator. Override for a known target
+        // device's exact core (e.g. `armv9.2-a+sve2+bf16+i8mm` for a CIX P1 board)
+        // via this env var so its optional ISA extensions actually get used
+        // instead of silently falling back to plain armv8-a codegen.
+        let arm_arch = env::var("LLAMA_GGML_CPU_ARM_ARCH").unwrap_or_else(|_| "armv8-a".to_string());
+        config.define("GGML_CPU_ARM_ARCH", &arm_arch);
     }
+    println!("cargo:rerun-if-env-changed=LLAMA_GGML_CPU_ARM_ARCH");
 
     if cfg!(feature = "vulkan") {
         config.define("GGML_VULKAN", "ON");
