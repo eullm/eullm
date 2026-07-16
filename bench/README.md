@@ -10,13 +10,28 @@ a 20-turn growing-history conversation, 8 concurrent conversations, abrupt
 mid-stream disconnects, a slow-consuming client (the v0.6.20 `Full`-vs-`Closed`
 channel regression test), and byte-identical output at a fixed seed.
 
+Start the server headless first — note this is `eullm run <model>`, not
+`eullm serve` (which starts the API with no model loaded and expects a
+`model` field per-request instead). `--no-ui` skips the browser/chat-UI
+auto-open, and `< /dev/null` keeps stdin a non-tty so it doesn't drop into
+the interactive REPL when backgrounded. Bump `--ctx-size` for a 20-turn
+growing conversation plus `--batch-size` concurrent slots — the default
+4096 is split across all slots (`ctx_size / batch_size`) and fills up fast:
+
+```bash
+bin/eullm run <model-id-or-path> --no-ui --batch-size 8 --ctx-size 16384 \
+    < /dev/null > server.log 2>&1 &
+```
+
+Then:
+
 ```bash
 pip install aiohttp
 
 python bench/reuse_validation.py \
     --url http://localhost:11434 \
-    --model Qwen3.5-9B-Q4_K_M \
-    --server-log /path/to/eullm/server.log
+    --model <same-model-id-or-path> \
+    --server-log server.log
 ```
 
 Run a subset with `--tests multiturn,slow-consumer` (see `--help` for every
