@@ -69,6 +69,19 @@ generic arm64 job included) is unaffected unless it opts in.
 `llama.cpp` submodule at all, only how our own build script drives an
 option it already exposes.
 
+### Prebuilt binary from CI
+
+Every tagged release now also builds `eullm-linux-arm64-cix-p1` (job
+`build-arm-cix-p1` in `release-engine.yml`), on GitHub's native
+`ubuntu-24.04-arm` runners — its default `gcc` is already 13.x, so no
+toolchain upgrade step is needed there the way a cross-compile job would.
+Grab it from the [latest release](https://github.com/eullm/eullm/releases/latest)
+instead of building it yourself if a tagged version is recent enough.
+**This is a separate artifact from the generic `eullm-linux-arm64`
+binary on purpose** — it will SIGILL on any ARM64 host that lacks these
+exact ISA extensions (Raspberry Pi, Graviton, etc.), so it's not listed in
+the README's general platform table.
+
 ### Cross-compiling for the CIX P1
 
 ```bash
