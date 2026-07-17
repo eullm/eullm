@@ -369,15 +369,36 @@ answer**, confirmed directly against upstream source
 `--rs-seq` remains available in eullm (default 0) as an experimental
 escape hatch, but the correct guidance is to leave it at 0 for this model
 class. Full re-prefill per turn is a real, sourced, upstream architectural
-limitation shared by llama.cpp's own reference server — not an eullm gap —
-and the practical mitigations today are conversation-length management and
-non-thinking mode to bound the per-turn re-prefill growth rate, not a
-larger rollback window. Building eullm's own bounded checkpoint mechanism
-(mirroring the server's `--ctx-checkpoints`/`--checkpoint-min-step`
-design: a capped number of full-state snapshots at bounded spacing,
-falling back to full reprocessing only when no checkpoint covers the
-request) is the right longer-term fix, and is a natural next roadmap item
-rather than pushing further on `n_rs_seq`.
+limitation shared by llama.cpp's own reference server — not an eullm gap.
+
+**Implemented (v0.6.24): `--ctx-checkpoints`/`--checkpoint-min-step`.**
+Rather than stopping at "leave `--rs-seq` at 0 and accept full re-prefill,"
+eullm now ships the mechanism the analysis above pointed to: a bounded
+pool of full-state snapshots (`state_seq_get_data_ext`/
+`state_seq_set_data_ext`, the same primitives llama.cpp server uses for
+`server_prompt_checkpoint`), taken at the end of each clean turn and
+LRU-evicted once the pool (`--ctx-checkpoints`, default 0/disabled) is
+full. When a request's live resident slot doesn't cover enough of the
+prompt to avoid the recurrent-rollback rejection above, the scheduler now
+checks for a checkpoint that covers more of it and restores from there —
+paying for at most `--checkpoint-min-step` tokens of fresh decode instead
+of the entire conversation, with worst-case memory bounded by
+`ctx_checkpoints × (one sequence's state size)` rather than `n_rs_seq`'s
+`(1 + N)` multiplier. Verified in this environment (no ARM hardware, no
+35B model available here) two ways: (1) a standalone FFI-level check —
+capture a checkpoint mid-conversation, restore it into a completely fresh
+sequence, and confirm the subsequent greedy-decoded continuation is
+byte-identical to the original uninterrupted sequence's continuation, on
+a real TinyLlama-1.1B GGUF; (2) a live multi-turn run through the actual
+scheduler/API path with `--ctx-checkpoints 3 --checkpoint-min-step 2`,
+confirming checkpoints are taken each turn, eviction kicks in once the
+pool fills, and ordinary KV-cache reuse is unaffected. The
+checkpoint-*restore* fallback path specifically (as opposed to capture)
+still needs validation on the actual hybrid 35B model on real Orion
+hardware — TinyLlama is dense and never hits the recurrent-rollback
+rejection that triggers it, so this environment could only prove the
+underlying save/restore primitives are sound, not the end-to-end hybrid
+scenario. See the README's `--ctx-checkpoints` section for usage.
 
 **Separately, and independent of the caching question:** the official
 Qwen3.6 chat template strips historical `<think>` reasoning blocks between
@@ -387,13 +408,36 @@ documented intended usage and is worth fixing regardless of the caching
 outcome, though it wasn't established as the cause of the small
 prefix-match (ruled out in the code-reading step above).
 
+### 8.3 Quantization: switching off Q4_K_M for a confirmed ARM-accelerated format
+
+Separate from caching, §4 already established that ggml's ARM
+online-repack fast-GEMM path only covers **Q4_0, Q8_0, and IQ4_NL** — not
+Q4_K_M, which is what the currently-deployed `qwen3.6-35b-a3b` GGUF uses
+(runs the generic k-quant vec_dot path with no repack acceleration).
+`unsloth/Qwen3.6-35B-A3B-GGUF` on HuggingFace publishes an imatrix-
+calibrated `UD-IQ4_NL` quant (`Qwen3.6-35B-A3B-UD-IQ4_NL.gguf`, 18.04 GB —
+smaller than the current file, comfortably inside 61GB RAM) alongside the
+larger `UD-IQ4_NL_XL` (19.5 GB) and a `Q8_0` (36.9 GB, likely too large
+and, per §7, doubles memory-bandwidth pressure working against the
+already bandwidth-bound decode path). Switching to `UD-IQ4_NL` is an
+untested-here (no ARM hardware, no 35B model in this environment)
+but concretely actionable next step for the Orion — re-run the T4.1
+benchmark (§7) before/after to quantify the actual prefill/decode delta,
+since i8mm/dotprod repack gains show up mainly in prefill (§7's
+bandwidth-bound decode caveat still applies).
+
 ## Known open items
 
-- **Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get KV-cache prefix
-  reuse today** — a known, sourced, upstream llama.cpp limitation, not an
-  eullm gap; see § 8.2 for the full investigation and why `--rs-seq` is
-  not the fix. eullm's own bounded-checkpoint mechanism, mirroring
-  llama.cpp server's `--ctx-checkpoints` design, is the tracked follow-up.
+- **Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get ordinary KV-cache
+  prefix reuse** — a known, sourced, upstream llama.cpp limitation, not an
+  eullm gap; see § 8.2. `--ctx-checkpoints`/`--checkpoint-min-step`
+  (v0.6.24) is the shipped mitigation, but its restore path is only
+  verified against the underlying FFI primitives here (no ARM hardware,
+  no 35B model in this environment) — validating it end to end on the
+  actual hybrid model on real Orion hardware is the next concrete step.
+- `qwen3.6-35b-a3b` currently runs Q4_K_M, which has no ARM repack fast
+  path; switching to the Unsloth `UD-IQ4_NL` GGUF (confirmed
+  ARM-accelerated format, smaller file) is untested here — see § 8.3.
 - eullm's chat template resends historical `<think>` blocks verbatim,
   unlike the official Qwen3.6 template's default (strip past reasoning
   unless `preserve_thinking` is set) — see § 8.2, last paragraph.

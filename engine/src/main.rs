@@ -143,6 +143,25 @@ enum Commands {
         #[arg(long, default_value_t = 0)]
         rs_seq: u32,
 
+        /// Max full-sequence-state checkpoints kept for prompt-prefix
+        /// restore (bounded alternative to --rs-seq for hybrid/recurrent
+        /// architectures — see the README's "--ctx-checkpoints" section).
+        /// 0 (default) disables checkpointing: no snapshot is ever taken,
+        /// matching pre-checkpoint behavior exactly. Mirrors llama.cpp
+        /// server's flag of the same name (default there: 32); kept off
+        /// here since each checkpoint costs one sequence's full state
+        /// size. Only useful together with continuous batching
+        /// (--batch-size > 0, the default for `run`).
+        #[arg(long, default_value_t = 0)]
+        ctx_checkpoints: usize,
+
+        /// Minimum new tokens since the closest existing checkpoint of the
+        /// same conversation before taking another one. Mirrors llama.cpp
+        /// server's `--checkpoint-min-step` (default there: 8192). Only
+        /// consulted when --ctx-checkpoints > 0.
+        #[arg(long, default_value_t = 8192)]
+        checkpoint_min_step: u32,
+
         /// Context window size
         #[arg(short, long, default_value_t = 4096)]
         ctx_size: u32,
@@ -271,6 +290,17 @@ enum Commands {
         /// loads or swaps to. See `eullm run --help` for the full rationale.
         #[arg(long, default_value_t = 0)]
         rs_seq: u32,
+
+        /// Max full-sequence-state checkpoints kept for prompt-prefix
+        /// restore. Applied to every model this server loads or swaps to.
+        /// See `eullm run --help` for the full rationale.
+        #[arg(long, default_value_t = 0)]
+        ctx_checkpoints: usize,
+
+        /// Minimum new tokens since the closest existing checkpoint before
+        /// taking another one. See `eullm run --help` for the full rationale.
+        #[arg(long, default_value_t = 8192)]
+        checkpoint_min_step: u32,
 
         /// Enable the embedded chat UI (off by default for headless serve).
         /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
@@ -438,7 +468,8 @@ async fn main() {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
                 port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0, ctx_size: 4096,
+                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0,
+                ctx_checkpoints: 0, checkpoint_min_step: 8192, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -449,7 +480,8 @@ async fn main() {
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
                 port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0, ctx_size: 4096,
+                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0,
+                ctx_checkpoints: 0, checkpoint_min_step: 8192, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -493,6 +525,8 @@ async fn main() {
             cpu_moe,
             n_cpu_moe,
             rs_seq,
+            ctx_checkpoints,
+            checkpoint_min_step,
             ctx_size,
             threads,
             batch_size,
@@ -560,12 +594,12 @@ async fn main() {
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, cpu_moe, n_cpu_moe, rs_seq, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve { port, replace, batch_size: _, cpu_moe, n_cpu_moe, rs_seq, ui, ui_port, daemon, pidfile } => {
+        Commands::Serve { port, replace, batch_size: _, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step, ui, ui_port, daemon, pidfile } => {
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
@@ -573,7 +607,7 @@ async fn main() {
                 std::process::exit(1);
             }
             let ui_port_opt = if ui { Some(ui_port) } else { None };
-            cmd_serve(port, replace, ui_port_opt, cpu_moe, n_cpu_moe, rs_seq).await;
+            cmd_serve(port, replace, ui_port_opt, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step).await;
         }
         Commands::Unload { port } => cmd_unload(port).await,
         Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
@@ -1280,6 +1314,8 @@ async fn cmd_run(
     cpu_moe: bool,
     n_cpu_moe: u32,
     rs_seq: u32,
+    ctx_checkpoints: usize,
+    checkpoint_min_step: u32,
     ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
@@ -1462,6 +1498,8 @@ async fn cmd_run(
             let sched_config = SchedulerConfig {
                 max_batch_size: batch_size,
                 queue_capacity: batch_size * 8,
+                ctx_checkpoints,
+                checkpoint_min_step,
             };
             let sched = BatchScheduler::new(config, sched_config);
             match sched.start() {
@@ -1537,6 +1575,9 @@ async fn cmd_run(
         }
         if rs_seq > 0 {
             println!("  RS rollback:   {rs_seq} (recurrent-state window for hybrid/SSM architectures)");
+        }
+        if ctx_checkpoints > 0 {
+            println!("  Checkpoints:   {ctx_checkpoints} max, every {checkpoint_min_step}+ new tokens (prompt-prefix restore)");
         }
         if batch_size > 0 {
             let per_seq = ctx_size / batch_size as u32;
@@ -1638,6 +1679,8 @@ async fn cmd_run(
             cpu_moe,
             n_cpu_moe,
             rs_seq,
+            ctx_checkpoints,
+            checkpoint_min_step,
             web_enabled: web,
             store: api_store,
             ui_port,
@@ -1679,7 +1722,8 @@ async fn cmd_run(
     }
 }
 
-async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool, n_cpu_moe: u32, rs_seq: u32) {
+#[allow(clippy::too_many_arguments)]
+async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool, n_cpu_moe: u32, rs_seq: u32, ctx_checkpoints: usize, checkpoint_min_step: u32) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
         ensure_port_available(p, replace).await;
@@ -1715,6 +1759,8 @@ async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool
         cpu_moe,
         n_cpu_moe,
         rs_seq,
+        ctx_checkpoints,
+        checkpoint_min_step,
         web_enabled: false,
         store,
         ui_port,

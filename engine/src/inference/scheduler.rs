@@ -36,6 +36,25 @@ pub struct SchedulerConfig {
     pub max_batch_size: usize,
     /// How many requests can wait in the submission queue before back-pressure.
     pub queue_capacity: usize,
+    /// Max number of full-sequence-state checkpoints kept for prompt-prefix
+    /// restore, across all sequences (content-addressed, like idle slots —
+    /// not tied to any one seq_id). `0` (default) disables checkpointing
+    /// entirely: no snapshot is ever taken, matching pre-checkpoint
+    /// behavior exactly. Mirrors llama.cpp server's `--ctx-checkpoints`
+    /// (default there: 32); kept off by default here because each
+    /// checkpoint costs one full sequence-state snapshot and most setups
+    /// don't need it. Exists specifically for hybrid/recurrent
+    /// architectures (Qwen3.5/3.6) where KV-cache prefix reuse otherwise
+    /// falls back to a full re-prefill whenever the live resident slot's
+    /// matched prefix is shorter than what an earlier checkpoint of the
+    /// same conversation would cover — see the `--ctx-checkpoints` section
+    /// of the README.
+    pub ctx_checkpoints: usize,
+    /// Minimum number of new tokens since the closest existing checkpoint
+    /// of the same lineage before taking another one. Mirrors llama.cpp
+    /// server's `--checkpoint-min-step` (default there: 8192). Only
+    /// consulted when `ctx_checkpoints > 0`.
+    pub checkpoint_min_step: u32,
 }
 
 impl Default for SchedulerConfig {
@@ -43,6 +62,8 @@ impl Default for SchedulerConfig {
         Self {
             max_batch_size: 8,
             queue_capacity: 64,
+            ctx_checkpoints: 0,
+            checkpoint_min_step: 8192,
         }
     }
 }
@@ -101,6 +122,39 @@ struct CachedSlot {
     /// seq_id's KV cache. Empty for a never-used or just-hard-reset slot.
     tokens: Vec<LlamaToken>,
     last_used: std::time::Instant,
+}
+
+/// A full-sequence-state snapshot captured at a "clean completion" boundary
+/// (end of a turn), keyed by the exact token prefix it corresponds to.
+///
+/// Exists for one specific case `CachedSlot`/`pick_slot` can't handle: an
+/// idle slot's *live* resident history is a single, ever-mutating position
+/// (whatever this seq_id decoded most recently) — if a later request's
+/// matched prefix against it is short (e.g. the resident history moved on
+/// to a different conversation, or — the case that motivated this — the
+/// prompt re-tokenizes with a shorter common prefix than the true shared
+/// content would suggest), `prefill_sequence`'s in-place KV-cache trim to
+/// that short prefix is what gets rejected on hybrid/recurrent
+/// architectures (their recurrent state can't roll back to an arbitrary
+/// earlier position — see `prefill_sequence`). A checkpoint is a
+/// *point-in-time copy*, not a live position: restoring one doesn't ask the
+/// recurrent state to roll back anything, it just loads a complete,
+/// internally-consistent snapshot into a freshly-cleared seq_id, exactly as
+/// if that sequence had just finished decoding up to `tokens.len()`.
+///
+/// A small, bounded count of these (see `SchedulerConfig::ctx_checkpoints`)
+/// mirrors llama.cpp server's `server_prompt_checkpoint`
+/// (`--ctx-checkpoints`/`--checkpoint-min-step`) rather than the
+/// unbounded-memory-cost `n_rs_seq` rollback window — see the README's
+/// `--ctx-checkpoints` section for the full rationale.
+struct PromptCheckpoint {
+    /// The exact resident token vector this snapshot was captured at.
+    tokens: Vec<LlamaToken>,
+    /// Raw bytes from `state_seq_get_data_ext` — opaque to us, meaningful
+    /// only to `state_seq_set_data_ext` on a context loaded with the same
+    /// model.
+    state: Vec<u8>,
+    created_at: std::time::Instant,
 }
 
 /// Handle returned to callers for submitting requests.
@@ -367,6 +421,99 @@ fn pick_slot(idle_slots: &mut Vec<CachedSlot>, new_tokens: &[LlamaToken]) -> (i3
     (slot.seq_id, reuse_len)
 }
 
+/// The best checkpoint (if any) whose full token vector is an exact prefix
+/// of `tokens` — the longest one wins. A checkpoint is a point-in-time
+/// snapshot, not diffable, so any divergence within its own span makes it
+/// unusable; only an exact, complete prefix match is considered.
+fn best_checkpoint<'a>(
+    checkpoints: &'a [PromptCheckpoint],
+    tokens: &[LlamaToken],
+) -> Option<&'a PromptCheckpoint> {
+    checkpoints
+        .iter()
+        .filter(|c| !c.tokens.is_empty() && common_prefix_len(&c.tokens, tokens) == c.tokens.len())
+        .max_by_key(|c| c.tokens.len())
+}
+
+/// Capture a full-state snapshot of `seq_id`'s current context state, keyed
+/// by its exact resident token vector. Checkpointing is a best-effort
+/// optimization, never a correctness requirement, so any failure (zero-size
+/// state, a short read) is swallowed and reported as `None` rather than
+/// propagated — the caller simply skips storing a checkpoint for this turn.
+fn take_checkpoint(ctx: &LlamaContext, seq_id: i32, tokens: Vec<LlamaToken>) -> Option<PromptCheckpoint> {
+    let flags = llama_cpp_2::LlamaStateSeqFlags::empty();
+    let size = ctx.state_seq_get_size_ext(seq_id, flags);
+    if size == 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; size];
+    // SAFETY: `buf` is exactly `size` bytes, the amount `state_seq_get_size_ext`
+    // just reported is needed for this seq_id's current state.
+    let written = unsafe { ctx.state_seq_get_data_ext(buf.as_mut_ptr(), seq_id, flags) };
+    if written == 0 || written > buf.len() {
+        return None;
+    }
+    buf.truncate(written);
+    Some(PromptCheckpoint {
+        tokens,
+        state: buf,
+        created_at: std::time::Instant::now(),
+    })
+}
+
+/// Called at every "clean completion" point (EOG / stop-sequence / max-tokens
+/// reached via a decode this scheduler controlled — never via an error or a
+/// disconnect) where the KV/recurrent state for `seq.seq_id` is confirmed
+/// correct and safe to keep. Returns the sequence to the idle-slot pool for
+/// ordinary longest-common-prefix reuse and, if `--ctx-checkpoints` is
+/// enabled and enough new tokens have accrued since the closest existing
+/// checkpoint of the same lineage, additionally snapshots the full state so
+/// a later request that diverges earlier than this slot's live resident
+/// history can restore from here instead of paying for a full re-prefill
+/// from position 0 (see `PromptCheckpoint`).
+fn finish_sequence_clean(
+    ctx: &LlamaContext,
+    seq: &ActiveSequence,
+    idle_slots: &mut Vec<CachedSlot>,
+    checkpoints: &mut Vec<PromptCheckpoint>,
+    sched_config: &SchedulerConfig,
+) {
+    let tokens = resident_tokens(seq);
+
+    if sched_config.ctx_checkpoints > 0 && !tokens.is_empty() {
+        let due = match best_checkpoint(checkpoints, &tokens) {
+            Some(ancestor) => tokens.len() - ancestor.tokens.len() >= sched_config.checkpoint_min_step as usize,
+            None => true,
+        };
+        if due && let Some(checkpoint) = take_checkpoint(ctx, seq.seq_id, tokens.clone()) {
+            if checkpoints.len() >= sched_config.ctx_checkpoints
+                && let Some((evict_idx, _)) = checkpoints.iter().enumerate().min_by_key(|(_, c)| c.created_at)
+            {
+                let evicted = checkpoints.swap_remove(evict_idx);
+                tracing::debug!(
+                    "Checkpoint pool full — evicting oldest ({} tokens) to make room",
+                    evicted.tokens.len(),
+                );
+            }
+            tracing::debug!(
+                "Seq {}: checkpointed at {} tokens ({} bytes, {} of {} slots used)",
+                seq.seq_id,
+                checkpoint.tokens.len(),
+                checkpoint.state.len(),
+                checkpoints.len() + 1,
+                sched_config.ctx_checkpoints,
+            );
+            checkpoints.push(checkpoint);
+        }
+    }
+
+    idle_slots.push(CachedSlot {
+        seq_id: seq.seq_id,
+        tokens,
+        last_used: std::time::Instant::now(),
+    });
+}
+
 // ── Scheduler loop (runs on a dedicated thread) ─────────────────────────────
 
 fn run_scheduler_loop(
@@ -544,6 +691,9 @@ fn run_scheduler_loop(
             last_used: std::time::Instant::now(),
         })
         .collect();
+    // Bounded pool of full-sequence-state snapshots (see `PromptCheckpoint`).
+    // Empty and never grows when `sched_config.ctx_checkpoints == 0`.
+    let mut checkpoints: Vec<PromptCheckpoint> = Vec::new();
     // Pre-allocate the decode batch once — reused every iteration to avoid
     // repeated malloc/free in the hot decode loop.
     let mut decode_batch = LlamaBatch::new(sched_config.max_batch_size.max(1), 1);
@@ -668,15 +818,16 @@ fn run_scheduler_loop(
 
                     // Prefill the unreused suffix of the prompt into the context.
                     //
-                    // If a reused (partial) prefill fails, retry once with a
-                    // full fresh prefill (reuse_len=0) before giving up. This
-                    // keeps prefix reuse strictly fallback-safe: whatever the
-                    // underlying cause (llama.cpp's llama_decode returns -1
-                    // for several distinct reasons that this binding's error
-                    // type collapses into one message, so the exact cause
-                    // isn't always visible here), the worst case is paying
-                    // for the old, proven full-reprefill behavior — never a
-                    // hard failure of the user's request.
+                    // If a reused (partial) prefill fails, try a bounded
+                    // checkpoint restore (see `PromptCheckpoint`) before
+                    // falling back to a full fresh prefill (reuse_len=0).
+                    // This keeps prefix reuse strictly fallback-safe: whatever
+                    // the underlying cause (llama.cpp's llama_decode returns
+                    // -1 for several distinct reasons that this binding's
+                    // error type collapses into one message, so the exact
+                    // cause isn't always visible here), the worst case is
+                    // paying for the old, proven full-reprefill behavior —
+                    // never a hard failure of the user's request.
                     let mut effective_reuse_len = reuse_len;
                     let mut prefill_result = prefill_sequence(
                         &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
@@ -684,12 +835,48 @@ fn run_scheduler_loop(
                     if let Err(ref e) = prefill_result
                         && effective_reuse_len > 0
                     {
-                        tracing::warn!(
-                            "Seq {}: reused prefill failed ({e}), retrying with a full fresh prefill",
-                            seq.seq_id,
-                        );
+                        tracing::warn!("Seq {}: reused prefill failed ({e})", seq.seq_id);
                         let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
                         effective_reuse_len = 0;
+
+                        // Before giving up to a full re-prefill from position
+                        // 0, check whether a checkpoint covers a longer
+                        // prefix of this request than the rejected in-place
+                        // rollback did. This is exactly the scenario
+                        // checkpoints exist for: the live slot's resident
+                        // history diverged too early for the (hybrid/
+                        // recurrent-incapable) in-place trim above, but an
+                        // earlier full-state snapshot of the same lineage
+                        // might still cover most of the prompt. Restoring is
+                        // best-effort: if the restore call itself fails, or
+                        // the retried prefill still errors, this simply falls
+                        // through to the reuse_len=0 attempt below exactly as
+                        // if no checkpoint had been found.
+                        if let Some(checkpoint) = best_checkpoint(&checkpoints, &tokens) {
+                            let restore_len = checkpoint.tokens.len();
+                            // SAFETY: `checkpoint.state` was produced by this
+                            // same scheduler's `take_checkpoint` on this same
+                            // context/model earlier in its lifetime.
+                            let restored = unsafe {
+                                ctx.state_seq_set_data_ext(
+                                    &checkpoint.state,
+                                    seq.seq_id,
+                                    llama_cpp_2::LlamaStateSeqFlags::empty(),
+                                )
+                            };
+                            if restored {
+                                tracing::info!(
+                                    "Seq {}: restoring from a {restore_len}-token checkpoint instead of a full re-prefill",
+                                    seq.seq_id,
+                                );
+                                effective_reuse_len = restore_len;
+                            }
+                        }
+
+                        tracing::warn!(
+                            "Seq {}: retrying prefill with reuse_len={effective_reuse_len}",
+                            seq.seq_id,
+                        );
                         prefill_result = prefill_sequence(
                             &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
                         );
@@ -714,11 +901,7 @@ fn run_scheduler_loop(
                                 // Clean completion — the KV cache holds exactly
                                 // the prompt (this EOG token was never decoded),
                                 // so it's safe to keep and offer for reuse.
-                                idle_slots.push(CachedSlot {
-                                    seq_id: seq.seq_id,
-                                    tokens: resident_tokens(&seq),
-                                    last_used: std::time::Instant::now(),
-                                });
+                                finish_sequence_clean(&ctx, &seq, &mut idle_slots, &mut checkpoints, &sched_config);
                             } else {
                                 seq.tokens_generated += 1;
                                 seq.generated_tokens.push(token);
@@ -732,11 +915,7 @@ fn run_scheduler_loop(
                                                 }
                                                 send_done(&seq);
                                                 // Clean completion.
-                                                idle_slots.push(CachedSlot {
-                                                    seq_id: seq.seq_id,
-                                                    tokens: resident_tokens(&seq),
-                                                    last_used: std::time::Instant::now(),
-                                                });
+                                                finish_sequence_clean(&ctx, &seq, &mut idle_slots, &mut checkpoints, &sched_config);
                                             }
                                             PieceOutcome::Emit(out) => {
                                                 if seq.tokens_generated >= seq.max_tokens {
@@ -748,11 +927,7 @@ fn run_scheduler_loop(
                                                     }
                                                     send_done(&seq);
                                                     // Clean completion.
-                                                    idle_slots.push(CachedSlot {
-                                                        seq_id: seq.seq_id,
-                                                        tokens: resident_tokens(&seq),
-                                                        last_used: std::time::Instant::now(),
-                                                    });
+                                                    finish_sequence_clean(&ctx, &seq, &mut idle_slots, &mut checkpoints, &sched_config);
                                                 } else {
                                                     let disconnected = send_or_detect_disconnect(&seq.tx, out, seq.seq_id);
                                                     if disconnected {
@@ -900,11 +1075,7 @@ fn run_scheduler_loop(
                 // Clean completion — the KV cache holds exactly seq.n_past
                 // resident tokens (this EOG token was never decoded), so
                 // it's safe to keep and offer for reuse.
-                idle_slots.push(CachedSlot {
-                    seq_id: seq.seq_id,
-                    tokens: resident_tokens(seq),
-                    last_used: std::time::Instant::now(),
-                });
+                finish_sequence_clean(&ctx, seq, &mut idle_slots, &mut checkpoints, &sched_config);
                 continue;
             }
 
@@ -922,11 +1093,7 @@ fn run_scheduler_loop(
                             send_done(seq);
                             to_remove.push(i);
                             // Clean completion.
-                            idle_slots.push(CachedSlot {
-                                seq_id: seq.seq_id,
-                                tokens: resident_tokens(seq),
-                                last_used: std::time::Instant::now(),
-                            });
+                            finish_sequence_clean(&ctx, seq, &mut idle_slots, &mut checkpoints, &sched_config);
                             continue;
                         }
                         PieceOutcome::Emit(out) => {
@@ -970,11 +1137,7 @@ fn run_scheduler_loop(
                 send_done(seq);
                 to_remove.push(i);
                 // Clean completion.
-                idle_slots.push(CachedSlot {
-                    seq_id: seq.seq_id,
-                    tokens: resident_tokens(seq),
-                    last_used: std::time::Instant::now(),
-                });
+                finish_sequence_clean(&ctx, seq, &mut idle_slots, &mut checkpoints, &sched_config);
                 continue;
             }
 
@@ -1310,8 +1473,8 @@ fn send_done(seq: &ActiveSequence) {
 #[cfg(test)]
 mod tests {
     use super::{
-        common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
-        stop_prefix_holdback, CachedSlot, PieceOutcome, StreamEvent,
+        best_checkpoint, common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
+        stop_prefix_holdback, CachedSlot, PieceOutcome, PromptCheckpoint, StreamEvent,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
@@ -1612,6 +1775,54 @@ mod tests {
         // Similarity is 0.0 for every slot against an empty prompt, so this
         // falls back to LRU (slot 1, the more stale of the two).
         assert_eq!(seq_id, 1);
+    }
+
+    /// Build a `PromptCheckpoint` with a given token vector and age (used
+    /// only for eviction-order assertions — `take_checkpoint`'s actual
+    /// state-byte capture needs a real llama.cpp context and isn't
+    /// exercised by these pure-logic tests).
+    fn checkpoint(tokens: Vec<LlamaToken>, age_secs_ago: u64) -> PromptCheckpoint {
+        PromptCheckpoint {
+            tokens,
+            state: vec![0u8; 1],
+            created_at: Instant::now() - Duration::from_secs(age_secs_ago),
+        }
+    }
+
+    #[test]
+    fn best_checkpoint_picks_longest_exact_prefix_match() {
+        let checkpoints = vec![
+            checkpoint(toks(&[1, 2, 3]), 10),
+            checkpoint(toks(&[1, 2, 3, 4, 5]), 5),
+            checkpoint(toks(&[9, 9, 9]), 1), // not a prefix at all
+        ];
+        let tokens = toks(&[1, 2, 3, 4, 5, 6, 7]);
+        let best = best_checkpoint(&checkpoints, &tokens).expect("a matching checkpoint exists");
+        assert_eq!(best.tokens, toks(&[1, 2, 3, 4, 5]));
+    }
+
+    #[test]
+    fn best_checkpoint_rejects_non_prefix_matches() {
+        // Shares a long common prefix by token-id comparison, but the
+        // checkpoint's own tail (token 99) diverges from the request before
+        // the checkpoint ends — not a valid restore point.
+        let checkpoints = vec![checkpoint(toks(&[1, 2, 99]), 1)];
+        let tokens = toks(&[1, 2, 3, 4]);
+        assert!(best_checkpoint(&checkpoints, &tokens).is_none());
+    }
+
+    #[test]
+    fn best_checkpoint_none_when_no_checkpoints() {
+        assert!(best_checkpoint(&[], &toks(&[1, 2, 3])).is_none());
+    }
+
+    #[test]
+    fn best_checkpoint_ignores_empty_checkpoint() {
+        // An empty-token checkpoint would trivially "match" every request
+        // (a zero-length prefix always matches) but restoring it would be
+        // equivalent to restoring nothing — must never be selected.
+        let checkpoints = vec![checkpoint(Vec::new(), 1)];
+        assert!(best_checkpoint(&checkpoints, &toks(&[1, 2, 3])).is_none());
     }
 
     #[test]
