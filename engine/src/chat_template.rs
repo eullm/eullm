@@ -59,12 +59,37 @@ impl ChatTemplate {
     ///
     /// `think` controls Qwen3 thinking mode (ChatML only):
     /// - `true`  → open assistant turn normally (thinking enabled)
-    /// - `false` → inject `<think>\n</think>` to suppress thinking
+    /// - `false` → inject `think_suppression_prefix()` to suppress thinking
+    ///
+    /// IMPORTANT for callers storing the resulting turn into history for a
+    /// future request: when `think` is `false`, the text this function
+    /// injects becomes part of what the model actually decodes for this
+    /// turn (it's sent as part of the prompt, right before generation). Any
+    /// later reconstruction of this turn's content that omits it produces
+    /// text that no longer matches what's really resident in that turn's KV
+    /// cache — silently breaking prefix-based KV reuse on every subsequent
+    /// turn that includes this one in its history (confirmed on real
+    /// hardware: sticky `/no_think` degraded reuse to a small, unstable
+    /// fraction; turning it off restored ~99% reuse with no other change).
+    /// Prepend `think_suppression_prefix()` to the stored assistant content
+    /// whenever `think` was `false` for that turn — see `interactive_chat`.
     pub fn build_prompt(&self, messages: &[(&str, &str)], think: bool) -> String {
         match self {
             Self::ChatML => self.build_chatml(messages, think),
             Self::Gemma  => self.build_gemma(messages),
             Self::Llama2 => self.build_llama2(messages),
+        }
+    }
+
+    /// The literal text `build_prompt` injects right after the assistant
+    /// turn opener when `think=false`, to suppress thinking mode (ChatML
+    /// only — empty for templates that don't support a `think` toggle).
+    /// See `build_prompt`'s doc comment for why storing history correctly
+    /// requires re-applying this, not just omitting it.
+    pub fn think_suppression_prefix(&self) -> &'static str {
+        match self {
+            Self::ChatML => "<think>\n</think>\n\n",
+            Self::Gemma | Self::Llama2 => "",
         }
     }
 
@@ -79,10 +104,9 @@ impl ChatTemplate {
             out.push_str(content);
             out.push_str("<|im_end|>\n");
         }
-        if think {
-            out.push_str("<|im_start|>assistant\n");
-        } else {
-            out.push_str("<|im_start|>assistant\n<think>\n</think>\n\n");
+        out.push_str("<|im_start|>assistant\n");
+        if !think {
+            out.push_str(self.think_suppression_prefix());
         }
         out
     }
@@ -200,5 +224,27 @@ mod tests {
         let msgs = vec![("user", "hello")];
         let prompt = ChatTemplate::ChatML.build_prompt(&msgs, false);
         assert!(prompt.contains("<think>\n</think>"));
+    }
+
+    #[test]
+    fn test_think_suppression_prefix_round_trips_into_build_prompt() {
+        // What think_suppression_prefix() returns must be exactly the text
+        // build_prompt actually injects when think=false — otherwise a
+        // caller reconstructing history with it would still produce text
+        // that doesn't match what was really resident in that turn's KV
+        // cache (the bug this function exists to let callers avoid).
+        let msgs = vec![("user", "hello")];
+        let suppressed = ChatTemplate::ChatML.build_prompt(&msgs, false);
+        let normal = ChatTemplate::ChatML.build_prompt(&msgs, true);
+        assert_eq!(
+            suppressed,
+            format!("{normal}{}", ChatTemplate::ChatML.think_suppression_prefix())
+        );
+    }
+
+    #[test]
+    fn test_think_suppression_prefix_empty_for_non_chatml() {
+        assert_eq!(ChatTemplate::Gemma.think_suppression_prefix(), "");
+        assert_eq!(ChatTemplate::Llama2.think_suppression_prefix(), "");
     }
 }

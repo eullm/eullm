@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.24-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.26-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -299,6 +299,74 @@ conversations reasonably short, and use non-thinking mode (`--think off` /
 official `preserve_thinking: false` behavior) to bound how fast the
 re-prefill cost grows per turn.
 
+### The actual root cause of small/unstable reuse: retokenizing history every turn
+
+Real-hardware testing surfaced something sharper than "the rollback window
+is too small": even a substantial reused-prefix match (661 of 1394 tokens)
+was rejected outright, not partially honored — this architecture's
+recurrent memory has no partial credit, only "the entire prefix matches
+exactly" or "full re-prefill." That raised the question of why the
+match was ever small or unstable in the first place (31/326, 322/608,
+29/671 tokens across separate turns), given a continuing conversation is,
+at the text level, a pure append: `build_chatml` and friends are
+deterministic string concatenation with no timestamps or randomness, so
+the shared prefix of turn N and turn N+1's prompts is guaranteed
+byte-identical *as text*.
+
+The gap was in what eullm did with that text: it retokenized the entire
+growing prompt from scratch on every single turn (`model.str_to_token()`
+over the full resent history), and independently retokenizing the same
+text twice — once as originally decoded, again as part of a longer
+string — is not guaranteed by BPE to land on the same token ids. On this
+model that instability was severe enough to wreck the match almost every
+turn. Checkpoints (below) don't help this specific failure: a checkpoint
+taken at a turn boundary has the exact same content as the live slot at
+that instant, so for the very next turn it can never do better than the
+live slot's own (unstable) match.
+
+**The fix:** eullm now checks whether an idle slot's cached text is an
+exact, literal prefix of the new prompt *before* tokenizing anything. If
+it is, the slot's already-known, already-correct tokens are reused
+directly for that portion, and only the new suffix text gets tokenized —
+the shared history is never retokenized at all, so BPE instability over
+that portion is structurally impossible, not just tolerated. Falls back
+to the previous full-tokenize + token-level longest-common-prefix matching
+whenever no exact text prefix exists (a genuinely new conversation, an
+edited/branching history, or a cold-started slot) — no regression versus
+today's behavior in those cases. No new flag; this applies automatically
+wherever prefix reuse already applied. Verified on a real running server
+(TinyLlama, real multi-turn conversation through the actual API path):
+after the fix, `reused N from cache` reports the *entire* previous turn's
+resident length every time, not a small unstable fraction — confirmed via
+a dedicated debug log line (`exact text-prefix match — reusing N tokens
+without retokenizing`). Whether this actually resolves the hybrid 35B
+model's rollback rejection on real ARM hardware — as opposed to a dense
+model in this sandbox — is the next thing to check on real Orion hardware.
+
+**A second, sharper bug behind the same symptom: `/no_think` (`eullm run
+--cli`'s sticky reasoning toggle) actively corrupted history reconstruction.**
+Confirmed on real hardware: with `/no_think` sticky off across several
+turns, reuse degraded to a small unstable fraction (matching the pattern
+above); disabling `/no_think` entirely, with *no other change*, restored
+~99% reuse even on the version before the text-prefix fix. Root cause,
+found by reading `interactive_chat()`: suppressing thinking mode injects a
+literal `<think>\n</think>\n\n` right before the model's turn — text the
+model actually decodes as part of that turn's resident state — but this
+injection was never re-added when reconstructing that turn for a later
+request's history, only the model's own subsequent output was stored. Every
+`/no_think` turn's reconstructed text permanently diverged from what was
+truly resident from that point on, compounding with each additional
+`/no_think` turn — text-level, not a tokenizer quirk, and the text-prefix
+fix above correctly detects this as a genuine mismatch (not a false
+positive) rather than papering over it. Fixed by exposing
+`ChatTemplate::think_suppression_prefix()` (the exact injected text, unit
+tested against `build_prompt` byte-for-byte) and re-applying it when
+storing a suppressed turn's response into history. Verified end to end
+through the real `--cli` REPL (a pty, not just the HTTP API — the REPL
+only activates on an actual TTY): `/no_think` held on for a 3-turn
+conversation, `reused N from cache` matched the *entire* prior turn every
+time (87/87, then 154/154), zero `reused prefill failed` warnings.
+
 ### `--ctx-checkpoints` / `--checkpoint-min-step`: bounded checkpoint restore
 
 The actual fix for the gap above, mirroring llama.cpp server's own
@@ -333,6 +401,10 @@ an identical continuation to the original, uninterrupted state) before
 shipping.
 
 ## What's ready today, what's coming
+
+**New in v0.6.26** — Fixed `eullm run --cli`'s `/no_think` sticky toggle silently corrupting KV-cache reuse: the injected think-suppression text was never re-added when reconstructing a suppressed turn for later history, so every `/no_think` turn permanently diverged from what was truly resident. Confirmed on real hardware to be the dominant cause of small/unstable reuse in practice — see "`/no_think`" above.
+
+**New in v0.6.25** — KV-cache prefix reuse no longer retokenizes a continuing conversation's shared history from scratch every turn. When an idle slot's cached text is an exact prefix of the new prompt, its already-known tokens are reused directly and only the new suffix is tokenized, eliminating BPE re-tokenization instability as a cause of small/unstable reuse — see "The actual root cause of small/unstable reuse" above.
 
 **New in v0.6.24** — **`--ctx-checkpoints N` / `--checkpoint-min-step N`**: bounded full-state checkpoint pool for KV-cache restore on hybrid/recurrent architectures, mirroring llama.cpp server's `--ctx-checkpoints` design. The real fix for the gap `--rs-seq` couldn't safely close — see "`--ctx-checkpoints` / `--checkpoint-min-step`" above.
 

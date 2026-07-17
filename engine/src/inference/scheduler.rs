@@ -109,6 +109,21 @@ struct ActiveSequence {
     /// turn, appended in lockstep with confirmed decode steps, never
     /// speculatively.
     generated_tokens: Vec<LlamaToken>,
+    /// The exact request prompt text this turn was given, verbatim. Paired
+    /// with `prompt_tokens` (its tokenization) so a future request whose
+    /// prompt text starts with `prompt_text ++ raw_generated_pieces` can
+    /// reuse `prompt_tokens ++ generated_tokens` directly instead of
+    /// retokenizing — see `text_prefix_match`.
+    prompt_text: String,
+    /// Every text piece this turn has actually produced via `token_to_piece`,
+    /// one entry per `generated_tokens` push, same order — deliberately NOT
+    /// the client-visible stream (which has stop sequences erased for
+    /// display). Kept as one `String` per token rather than pre-concatenated
+    /// so `resident_text` can drop exactly the trailing entries for
+    /// not-yet-decoded tokens (see its doc comment: `generated_tokens` is
+    /// pushed for the newly-sampled token before that token's own decode
+    /// call has happened, so it's briefly one ahead of `n_past`).
+    raw_generated_pieces: Vec<String>,
 }
 
 /// An idle sequence slot together with the exact token history currently
@@ -121,6 +136,14 @@ struct CachedSlot {
     /// Full token history (prompt ++ generated) currently resident in this
     /// seq_id's KV cache. Empty for a never-used or just-hard-reset slot.
     tokens: Vec<LlamaToken>,
+    /// The exact text (see `ActiveSequence::prompt_text`/`raw_generated_pieces`)
+    /// that `tokens` is the tokenization of. Empty for a never-used or
+    /// just-hard-reset slot. Lets `text_prefix_match` detect "this new
+    /// request is exactly this slot's text plus more" WITHOUT retokenizing
+    /// the shared part — sidesteps BPE re-tokenization instability entirely
+    /// for the common continuing-conversation case, rather than trying to
+    /// detect/tolerate its consequences after the fact.
+    text: String,
     last_used: std::time::Instant,
 }
 
@@ -421,6 +444,35 @@ fn pick_slot(idle_slots: &mut Vec<CachedSlot>, new_tokens: &[LlamaToken]) -> (i3
     (slot.seq_id, reuse_len)
 }
 
+/// The idle slot (if any) whose exact resident text is a non-empty prefix
+/// of `prompt` — i.e. this request is exactly that slot's conversation
+/// continued with more text appended, byte for byte. Picks the LONGEST such
+/// match if more than one slot's text qualifies. Returns its index into
+/// `idle_slots`.
+///
+/// Deliberately a plain string comparison, not a tokenization. Prompt
+/// templates built from a growing message list (see `chat_template.rs`)
+/// are purely deterministic string concatenation — no timestamps, no
+/// randomness — so the shared prefix of two prompts from the same
+/// conversation is guaranteed byte-identical at the TEXT level. The token
+/// level has no such guarantee: retokenizing that same shared text
+/// independently, twice (once as it was originally decoded, again as part
+/// of a longer growing string), is not guaranteed by BPE to produce the
+/// same token ids — merge decisions can be sensitive to what follows.
+/// Matching on text and reusing the slot's already-known-correct tokens for
+/// the matched portion sidesteps that instability entirely for the common
+/// continuing-conversation case, instead of retokenizing the whole prompt
+/// every turn and relying on `pick_slot`'s token-level LCP to detect (but
+/// not prevent) however much of it came out different this time.
+fn text_prefix_match(idle_slots: &[CachedSlot], prompt: &str) -> Option<usize> {
+    idle_slots
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| !slot.text.is_empty() && prompt.starts_with(slot.text.as_str()))
+        .max_by_key(|(_, slot)| slot.text.len())
+        .map(|(idx, _)| idx)
+}
+
 /// The best checkpoint (if any) whose full token vector is an exact prefix
 /// of `tokens` — the longest one wins. A checkpoint is a point-in-time
 /// snapshot, not diffable, so any divergence within its own span makes it
@@ -510,6 +562,7 @@ fn finish_sequence_clean(
     idle_slots.push(CachedSlot {
         seq_id: seq.seq_id,
         tokens,
+        text: resident_text(seq),
         last_used: std::time::Instant::now(),
     });
 }
@@ -688,6 +741,7 @@ fn run_scheduler_loop(
         .map(|seq_id| CachedSlot {
             seq_id,
             tokens: Vec::new(),
+            text: String::new(),
             last_used: std::time::Instant::now(),
         })
         .collect();
@@ -731,37 +785,80 @@ fn run_scheduler_loop(
         while active.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
                 Ok(scheduled) => {
+                    let prompt_text = scheduled.request.prompt.clone();
+
+                    // Fast path: if some idle slot's cached text is an exact
+                    // (byte-for-byte) prefix of this prompt, reuse its
+                    // already-known-correct tokens directly for that part
+                    // and tokenize ONLY the new suffix text — never
+                    // retokenizing the shared history at all. This sidesteps
+                    // BPE re-tokenization instability entirely for the
+                    // common continuing-conversation case, instead of
+                    // retokenizing the whole growing prompt every turn and
+                    // hoping it lands on the same token ids as last time
+                    // (see `text_prefix_match`'s doc comment).
+                    let fast_path = text_prefix_match(&idle_slots, &prompt_text).and_then(|idx| {
+                        let matched_len = idle_slots[idx].text.len();
+                        match model.str_to_token(&prompt_text[matched_len..], AddBos::Never) {
+                            Ok(suffix_tokens) => {
+                                let slot = idle_slots.swap_remove(idx);
+                                let base_len = slot.tokens.len();
+                                let mut tokens = slot.tokens;
+                                tokens.extend(suffix_tokens);
+                                let reuse_len = base_len.min(tokens.len().saturating_sub(1));
+                                tracing::debug!(
+                                    "Seq {}: exact text-prefix match — reusing {base_len} tokens \
+                                     without retokenizing, {} new",
+                                    slot.seq_id,
+                                    tokens.len() - base_len,
+                                );
+                                Some((tokens, slot.seq_id, reuse_len))
+                            }
+                            // Suffix tokenization failed (rare) — the slot
+                            // was never removed from idle_slots, so this
+                            // falls through to the full-tokenize path below
+                            // exactly as if there had been no text match.
+                            Err(_) => None,
+                        }
+                    });
+
                     // Tokenize BEFORE picking a slot: slot selection is
                     // content-addressed (longest-common-prefix against each
                     // idle slot's cached history), so the token ids must be
                     // known first. If tokenization fails, no slot has been
                     // touched yet, so there is nothing to reclaim.
-                    let bos = if scheduled.request.raw { AddBos::Never } else { AddBos::Always };
-                    let tokens = match model.str_to_token(&scheduled.request.prompt, bos) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            let _ = scheduled.tx.try_send(StreamEvent::Error(format!(
-                                "Tokenization failed: {e}"
-                            )));
-                            continue;
+                    let (tokens, seq_id, reuse_len) = match fast_path {
+                        Some(result) => result,
+                        None => {
+                            let bos = if scheduled.request.raw { AddBos::Never } else { AddBos::Always };
+                            let tokens = match model.str_to_token(&prompt_text, bos) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    let _ = scheduled.tx.try_send(StreamEvent::Error(format!(
+                                        "Tokenization failed: {e}"
+                                    )));
+                                    continue;
+                                }
+                            };
+
+                            // A prompt that tokenizes to zero tokens (e.g. raw:true
+                            // with an empty prompt string, AddBos::Never) has no
+                            // token to ever produce logits from — reject early
+                            // rather than let `tokens.len() - 1` underflow below.
+                            if tokens.is_empty() {
+                                let _ = scheduled.tx.try_send(StreamEvent::Error(
+                                    "Prompt must contain at least one token".into(),
+                                ));
+                                continue;
+                            }
+
+                            if idle_slots.is_empty() {
+                                break; // No free slots — should not happen due to active.len() check
+                            }
+                            let (seq_id, reuse_len) = pick_slot(&mut idle_slots, &tokens);
+                            (tokens, seq_id, reuse_len)
                         }
                     };
-
-                    // A prompt that tokenizes to zero tokens (e.g. raw:true
-                    // with an empty prompt string, AddBos::Never) has no
-                    // token to ever produce logits from — reject early
-                    // rather than let `tokens.len() - 1` underflow below.
-                    if tokens.is_empty() {
-                        let _ = scheduled.tx.try_send(StreamEvent::Error(
-                            "Prompt must contain at least one token".into(),
-                        ));
-                        continue;
-                    }
-
-                    if idle_slots.is_empty() {
-                        break; // No free slots — should not happen due to active.len() check
-                    }
-                    let (seq_id, reuse_len) = pick_slot(&mut idle_slots, &tokens);
 
                     let req = &scheduled.request;
                     let seed = req.seed.unwrap_or(seq_id as u32);
@@ -814,6 +911,8 @@ fn run_scheduler_loop(
                         last_token: None,
                         prompt_tokens: tokens.clone(),
                         generated_tokens: Vec::new(),
+                        prompt_text,
+                        raw_generated_pieces: Vec::new(),
                     };
 
                     // Prefill the unreused suffix of the prompt into the context.
@@ -908,6 +1007,9 @@ fn run_scheduler_loop(
 
                                 match model.token_to_piece(token, &mut seq.decoder, true, None) {
                                     Ok(piece) => {
+                                        // Mirrors generated_tokens: every decoded piece, unfiltered
+                                        // by stop-sequence truncation (see field doc comment).
+                                        seq.raw_generated_pieces.push(piece.clone());
                                         match process_piece(&mut seq.pending, &seq.stop_sequences, &seq.filter_sequences, &piece) {
                                             PieceOutcome::Stop(out) => {
                                                 if !out.is_empty() {
@@ -937,6 +1039,7 @@ fn run_scheduler_loop(
                                                         idle_slots.push(CachedSlot {
                                                             seq_id: seq.seq_id,
                                                             tokens: Vec::new(),
+                                                            text: String::new(),
                                                             last_used: std::time::Instant::now(),
                                                         });
                                                     } else {
@@ -954,6 +1057,7 @@ fn run_scheduler_loop(
                                         idle_slots.push(CachedSlot {
                                             seq_id: seq.seq_id,
                                             tokens: Vec::new(),
+                                            text: String::new(),
                                             last_used: std::time::Instant::now(),
                                         });
                                     }
@@ -974,6 +1078,7 @@ fn run_scheduler_loop(
                             idle_slots.push(CachedSlot {
                                 seq_id: seq.seq_id,
                                 tokens: Vec::new(),
+                                text: String::new(),
                                 last_used: std::time::Instant::now(),
                             });
                         }
@@ -1036,6 +1141,7 @@ fn run_scheduler_loop(
                     idle_slots.push(CachedSlot {
                         seq_id: seq.seq_id,
                         tokens: Vec::new(),
+                        text: String::new(),
                         last_used: std::time::Instant::now(),
                     });
                 }
@@ -1085,6 +1191,9 @@ fn run_scheduler_loop(
             // Decode token to text.
             match model.token_to_piece(token, &mut seq.decoder, true, None) {
                 Ok(piece) => {
+                    // Mirrors generated_tokens: every decoded piece, unfiltered
+                    // by stop-sequence truncation (see field doc comment).
+                    seq.raw_generated_pieces.push(piece.clone());
                     match process_piece(&mut seq.pending, &seq.stop_sequences, &seq.filter_sequences, &piece) {
                         PieceOutcome::Stop(out) => {
                             if !out.is_empty() {
@@ -1106,6 +1215,7 @@ fn run_scheduler_loop(
                                 idle_slots.push(CachedSlot {
                                     seq_id: seq.seq_id,
                                     tokens: Vec::new(),
+                                    text: String::new(),
                                     last_used: std::time::Instant::now(),
                                 });
                                 continue;
@@ -1121,6 +1231,7 @@ fn run_scheduler_loop(
                     idle_slots.push(CachedSlot {
                         seq_id: seq.seq_id,
                         tokens: Vec::new(),
+                        text: String::new(),
                         last_used: std::time::Instant::now(),
                     });
                     continue;
@@ -1434,6 +1545,33 @@ fn resident_tokens(seq: &ActiveSequence) -> Vec<LlamaToken> {
     full
 }
 
+/// Text companion to `resident_tokens`: the exact text whose tokenization
+/// is `resident_tokens(seq)`, used by `text_prefix_match` to skip
+/// retokenizing history that's already known.
+///
+/// Mirrors `resident_tokens`'s own phantom-trailing-token handling exactly,
+/// at the text level: drops the same number of trailing entries from
+/// `raw_generated_pieces` (each one token's decoded text, same order as
+/// `generated_tokens`) as `resident_tokens` drops from `generated_tokens`,
+/// so the two stay a consistent (text, tokens) pair for the same resident
+/// content. Falls back to an empty string — never matched by
+/// `text_prefix_match` — if the two ever get out of step (defensive; should
+/// not happen since both are extended in lockstep by the same call sites).
+fn resident_text(seq: &ActiveSequence) -> String {
+    let full_len = seq.prompt_tokens.len() + seq.generated_tokens.len();
+    let n_past = seq.n_past as usize;
+    if n_past < seq.prompt_tokens.len() || n_past > full_len {
+        return String::new();
+    }
+    let extra = full_len - n_past;
+    let keep = seq.raw_generated_pieces.len().saturating_sub(extra);
+    let mut text = seq.prompt_text.clone();
+    for piece in &seq.raw_generated_pieces[..keep] {
+        text.push_str(piece);
+    }
+    text
+}
+
 /// Deliver a decoded chunk to the client and report whether it has actually
 /// disconnected.
 ///
@@ -1474,7 +1612,8 @@ fn send_done(seq: &ActiveSequence) {
 mod tests {
     use super::{
         best_checkpoint, common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
-        stop_prefix_holdback, CachedSlot, PieceOutcome, PromptCheckpoint, StreamEvent,
+        stop_prefix_holdback, text_prefix_match, CachedSlot, PieceOutcome, PromptCheckpoint,
+        StreamEvent,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
@@ -1717,6 +1856,17 @@ mod tests {
         CachedSlot {
             seq_id,
             tokens,
+            text: String::new(),
+            last_used: Instant::now() - Duration::from_secs(age_secs_ago),
+        }
+    }
+
+    /// Like `slot`, but with resident text set (for `text_prefix_match` tests).
+    fn text_slot(seq_id: i32, tokens: Vec<LlamaToken>, text: &str, age_secs_ago: u64) -> CachedSlot {
+        CachedSlot {
+            seq_id,
+            tokens,
+            text: text.to_string(),
             last_used: Instant::now() - Duration::from_secs(age_secs_ago),
         }
     }
@@ -1775,6 +1925,51 @@ mod tests {
         // Similarity is 0.0 for every slot against an empty prompt, so this
         // falls back to LRU (slot 1, the more stale of the two).
         assert_eq!(seq_id, 1);
+    }
+
+    #[test]
+    fn text_prefix_match_finds_exact_continuation() {
+        let idle_slots = vec![text_slot(0, toks(&[1, 2, 3]), "hello world", 5)];
+        let idx = text_prefix_match(&idle_slots, "hello world, how are you?");
+        assert_eq!(idx, Some(0));
+    }
+
+    #[test]
+    fn text_prefix_match_rejects_non_prefix() {
+        // Shares a long common substring, but not as a PREFIX of the new
+        // prompt — must not match.
+        let idle_slots = vec![text_slot(0, toks(&[1, 2, 3]), "hello world", 5)];
+        let idx = text_prefix_match(&idle_slots, "well, hello world");
+        assert_eq!(idx, None);
+    }
+
+    #[test]
+    fn text_prefix_match_picks_longest_among_multiple() {
+        let idle_slots = vec![
+            text_slot(0, toks(&[1]), "hello", 10),
+            text_slot(1, toks(&[1, 2]), "hello world", 5),
+        ];
+        let idx = text_prefix_match(&idle_slots, "hello world, extended further");
+        assert_eq!(idx, Some(1));
+    }
+
+    #[test]
+    fn text_prefix_match_ignores_empty_slot_text() {
+        let idle_slots = vec![text_slot(0, Vec::new(), "", 1)];
+        assert_eq!(text_prefix_match(&idle_slots, "anything"), None);
+    }
+
+    #[test]
+    fn text_prefix_match_exact_equal_text_matches() {
+        // The new prompt is IDENTICAL to the slot's resident text (a
+        // retried/duplicate request) — an empty suffix, still a valid match.
+        let idle_slots = vec![text_slot(0, toks(&[1, 2]), "same text", 1)];
+        assert_eq!(text_prefix_match(&idle_slots, "same text"), Some(0));
+    }
+
+    #[test]
+    fn text_prefix_match_none_when_no_slots() {
+        assert_eq!(text_prefix_match(&[], "anything"), None);
     }
 
     /// Build a `PromptCheckpoint` with a given token vector and age (used
