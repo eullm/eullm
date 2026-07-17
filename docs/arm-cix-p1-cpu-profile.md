@@ -278,8 +278,125 @@ judge the profile's effect from the REPL's end-of-turn tok/s line alone
 (that's decode-dominated when the prompt is short) — run the sweep above
 and look at the `prefill` numbers specifically.
 
+## 8. Hybrid/recurrent MoE models (Qwen3.5/3.6) on this profile
+
+`qwen3.6-35b-a3b` (~21GB Q4_K_M-ish GGUF, `general.architecture =
+qwen35moe`, ~3B active params/token via MoE routing) was tested live on the
+Orion as a throughput case study, since MoE's lower active-param count
+should suit a bandwidth-bound CPU decode path better than a dense model of
+similar size. Two separate things were found and are documented here in
+full because both required tracing into upstream llama.cpp source and its
+issue tracker to actually resolve, not just local experimentation.
+
+### 8.1 Decode throughput is genuinely good, and matches upstream's own numbers
+
+Observed: ~10.2 tok/s decode vs. 2.8-3.3 tok/s for the dense `qwen3-14b` on
+the same hardware. This is consistent with CPU decode being
+memory-bandwidth-bound (§7) — only the ~3B active-expert weights need to
+stream per token for MoE, vs. the full parameter count for a dense model.
+This is a genuinely good WP4 result and needs no further work.
+
+### 8.2 KV-cache prefix reuse does not work on this architecture — root cause, and why `--rs-seq` is not the fix
+
+Multi-turn conversations on this model showed a small, unstable
+longest-common-prefix match on reuse (e.g. 31/326, 322/608, 29/671 tokens
+across separate test turns) and repeated `reused prefill failed ... likely
+a recurrent/hybrid model architecture` warnings — i.e. reuse barely
+engages and falls back to a full re-prefill almost every turn, unlike the
+~97-99% reuse confirmed working on the dense `qwen3-14b` (§ above). Two
+hypotheses were checked directly against eullm's own code and ruled out:
+
+- **Client-side think-block stripping was suspected, then ruled out by
+  reading the code.** `interactive_chat()` in `engine/src/main.rs` and
+  `build_chatml()` in `engine/src/chat_template.rs` both store and resend
+  every past turn's raw text verbatim, with no stripping of `<think>`
+  blocks. `think_mode` only affects how the *current* turn's assistant-open
+  tag renders, not past messages. This isn't the cause of the small match.
+- **Wrong-architecture-clamp was suspected, then ruled out with a direct
+  GGUF metadata check.** `general.architecture = qwen35moe` maps to
+  `LLM_ARCH_QWEN35MOE`, which *is* on llama.cpp's
+  `llm_arch_supports_rs_rollback` allow-list (confirmed in
+  `src/llama-arch.cpp`) — so the reuse rejection isn't an unsupported-arch
+  clamp; `n_rs_seq` really is being applied and really is insufficient at
+  the values tried.
+
+What the research (below) actually established: full re-prefill on every
+turn is the current, upstream-acknowledged ceiling for this whole
+architecture class on llama.cpp, independent of eullm. llama.cpp's own
+server hits the identical condition and logs the near-identical message
+(`tools/server/server-context.cpp`): *"forcing full prompt re-processing
+due to lack of cache data (likely due to SWA or hybrid/recurrent memory,
+see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)"*.
+Multiple open upstream issues track this for the Qwen3-Next/Qwen3.5/3.6
+family specifically: checkpoints repeatedly invalidated
+(`llama.cpp#19794`, `#24055`), multi-minute turns at moderate context
+(`llama.cpp#22384`, `#20225`), and a request to at least mitigate it via
+conversation truncation, closed not-planned (`llama.cpp#19838`). A
+narrower, more promising upstream direction exists but wasn't ready to use
+at research time: `llama.cpp#24785` ("server: add recurrent state
+shrink/expand for prompt cache") explicitly targets this model family,
+noting ~75% of Qwen3.6's layers carry recurrent state.
+
+**Why `--rs-seq` (the eullm flag added to try to fix this) is not the
+answer**, confirmed directly against upstream source
+(`common/common.cpp`, `tools/server/server-context.cpp`,
+`src/llama-memory-recurrent.cpp`):
+
+1. Upstream's own server never uses `n_rs_seq` for prompt/conversation
+   caching. It's derived exclusively from speculative-decoding draft
+   length (`need_n_rs_seq()` — single digits to low teens) and is
+   explicitly zeroed everywhere else (`cparams_dft.n_rs_seq = 0`). Using
+   it as a general rollback window for chat history, as we tried, is
+   using a speculative-decoding primitive outside its intended domain.
+2. Real-hardware testing confirmed this is actively unsafe at useful
+   values: recurrent-state tensors scale by `(1 + n_rs_seq)`
+   (`n_rows = mem_size * (1 + n_rs_seq)`, confirmed in source). At
+   `--rs-seq 64`, RES grew from ~21GB to ~44.6GB with heavy swap
+   thrashing and near-zero throughput; at `--rs-seq 512`, the engine
+   crashed (`ggml_new_object: not enough space in the context's memory
+   pool`, a `GGML_ASSERT(obj_new)` failure inside `graph_reserve`) — the
+   same failure signature as a previously-fixed ubatch-scaling bug on
+   Qwen3-Next (`llama.cpp#17578`, fixed by `#17794`, "graph size scaling
+   with something other than a static reservation"), now recurring for
+   `n_rs_seq` specifically and, as far as could be found, not yet
+   reported upstream.
+3. The feature is simply new and untested at this scale: its only
+   upstream test coverage (`llama.cpp#25758`) merged the day before this
+   was written, against a small synthetic Qwen3.5 model — not anything
+   near 35B.
+
+**Conclusion (this is the actual finding, not a punted investigation):**
+`--rs-seq` remains available in eullm (default 0) as an experimental
+escape hatch, but the correct guidance is to leave it at 0 for this model
+class. Full re-prefill per turn is a real, sourced, upstream architectural
+limitation shared by llama.cpp's own reference server — not an eullm gap —
+and the practical mitigations today are conversation-length management and
+non-thinking mode to bound the per-turn re-prefill growth rate, not a
+larger rollback window. Building eullm's own bounded checkpoint mechanism
+(mirroring the server's `--ctx-checkpoints`/`--checkpoint-min-step`
+design: a capped number of full-state snapshots at bounded spacing,
+falling back to full reprocessing only when no checkpoint covers the
+request) is the right longer-term fix, and is a natural next roadmap item
+rather than pushing further on `n_rs_seq`.
+
+**Separately, and independent of the caching question:** the official
+Qwen3.6 chat template strips historical `<think>` reasoning blocks between
+turns by default (`preserve_thinking` is opt-in) — eullm's own template
+resends them verbatim. This is a genuine deviation from the model's
+documented intended usage and is worth fixing regardless of the caching
+outcome, though it wasn't established as the cause of the small
+prefix-match (ruled out in the code-reading step above).
+
 ## Known open items
 
+- **Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get KV-cache prefix
+  reuse today** — a known, sourced, upstream llama.cpp limitation, not an
+  eullm gap; see § 8.2 for the full investigation and why `--rs-seq` is
+  not the fix. eullm's own bounded-checkpoint mechanism, mirroring
+  llama.cpp server's `--ctx-checkpoints` design, is the tracked follow-up.
+- eullm's chat template resends historical `<think>` blocks verbatim,
+  unlike the official Qwen3.6 template's default (strip past reasoning
+  unless `preserve_thinking` is set) — see § 8.2, last paragraph.
 - Exact big-core clock ceiling (2.6 vs 2.8 GHz) varies by silicon revision —
   read it on the actual unit, don't assume.
 - Power telemetry is unconfirmed; treat as absent until verified with

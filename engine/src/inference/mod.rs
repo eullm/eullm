@@ -160,20 +160,40 @@ pub struct InferenceConfig {
     /// set — checked at the CLI layer).
     pub n_cpu_moe: u32,
     /// Recurrent-state rollback window (llama.cpp's `n_rs_seq`) for hybrid/
-    /// recurrent architectures (Mamba-style SSM layers, e.g. Qwen3.5/3.6's
-    /// hybrid attention+SSM design). `0` (default, matching
-    /// `llama_context_default_params()`) means KV-cache prefix reuse can
-    /// never roll back that architecture's recurrent state at all — every
-    /// reused-prefill attempt with `reuse_len > 0` is rejected and the
-    /// scheduler falls back to a full re-prefill (see
-    /// `prefill_sequence` in `inference/scheduler.rs`). Setting this allows
-    /// rollback up to that many positions back. No effect on architectures
-    /// that don't support recurrent-state rollback
-    /// (`llm_arch_supports_rs_rollback` in llama.cpp) or on non-hybrid
-    /// models. Opt-in (default 0, i.e. today's behavior unchanged) because
-    /// the memory cost — recurrent-state tensors scale by a factor of
-    /// `(1 + n_rs_seq)` — hasn't been measured on real hybrid-model
-    /// hardware; tune it once it has been.
+    /// recurrent architectures (Mamba/Gated-DeltaNet-style SSM layers, e.g.
+    /// Qwen3.5/3.6's hybrid attention+SSM design). `0` (default, matching
+    /// `llama_context_default_params()`, strongly recommended) means
+    /// KV-cache prefix reuse can never roll back that architecture's
+    /// recurrent state at all — every reused-prefill attempt with
+    /// `reuse_len > 0` is rejected and the scheduler falls back to a full
+    /// re-prefill (see `prefill_sequence` in `inference/scheduler.rs`).
+    ///
+    /// This is NOT a general conversation/KV-reuse knob, despite the
+    /// naming suggesting otherwise. Confirmed against upstream llama.cpp
+    /// source (`tools/server/server-context.cpp`, `common/common.cpp`):
+    /// the official server only ever derives `n_rs_seq` from
+    /// speculative-decoding draft length (`need_n_rs_seq()`, single-digit
+    /// to low-teens) and hard-zeroes it on non-speculative paths
+    /// (`cparams_dft.n_rs_seq = 0`). The server's own mechanism for
+    /// cross-turn prompt reuse on hybrid/recurrent architectures is a
+    /// different, bounded feature — periodic full-state
+    /// `server_prompt_checkpoint` snapshots (`--ctx-checkpoints`, default
+    /// 32, `--checkpoint-min-step`, default 8192 tokens) with a graceful
+    /// full-reprocessing fallback when no checkpoint covers the request.
+    /// eullm does not yet implement an equivalent bounded-checkpoint
+    /// mechanism; that is the correct future direction for this problem,
+    /// not raising `rs_seq`.
+    ///
+    /// Setting this nonzero allows rollback up to that many positions
+    /// back, but recurrent-state tensors scale by a factor of
+    /// `(1 + n_rs_seq)` (confirmed in `llama-memory-recurrent.cpp`:
+    /// `n_rows = mem_size * (1 + n_rs_seq)`), so even moderate values (64)
+    /// have been observed to multiply resident memory by 2x+ on a 35B
+    /// hybrid MoE model. No effect on architectures that don't support
+    /// recurrent-state rollback (`llm_arch_supports_rs_rollback` in
+    /// llama.cpp) or on non-hybrid models. Kept as an experimental,
+    /// off-by-default escape hatch — not a recommended path to KV reuse
+    /// on hybrid/recurrent architectures today.
     pub rs_seq: u32,
 }
 

@@ -122,14 +122,24 @@ enum Commands {
         n_cpu_moe: u32,
 
         /// Recurrent-state rollback window for hybrid/recurrent
-        /// architectures (Mamba-style SSM layers, e.g. Qwen3.5/3.6's hybrid
-        /// attention+SSM design). 0 (default) means KV-cache prefix reuse
-        /// can never roll back that architecture's recurrent state, so
-        /// every reused turn falls back to a full re-prefill. No effect on
-        /// non-hybrid models or on architectures that don't support
-        /// recurrent-state rollback. Experimental: the memory cost
-        /// (recurrent-state tensors scale by 1+N) hasn't been characterized
-        /// across models — start low and watch memory use.
+        /// architectures (Mamba/Gated-DeltaNet-style SSM layers, e.g.
+        /// Qwen3.5/3.6's hybrid attention+SSM design). 0 (default, strongly
+        /// recommended) leaves it off. NOT a conversation/KV-cache-reuse
+        /// knob: upstream llama.cpp reserves n_rs_seq for bounded
+        /// speculative-decoding draft-token rollback and hard-zeroes it
+        /// outside that path (`cparams_dft.n_rs_seq = 0`); it is not what
+        /// the official server uses for cross-turn prompt caching on these
+        /// architectures (that's the separate, bounded `--ctx-checkpoints`
+        /// snapshot mechanism). Every recurrent-state tensor scales by
+        /// `(1 + N)`, so nonzero values can multiply resident memory by
+        /// tens of GB and are not yet validated upstream past a small
+        /// synthetic test model. On hybrid/recurrent architectures without
+        /// this set, expect KV-cache prefix reuse to fall back to a full
+        /// re-prefill on every turn — this is a known, still-open upstream
+        /// limitation (llama.cpp's own server logs the identical
+        /// "forcing full prompt re-processing due to lack of cache data
+        /// (likely due to SWA or hybrid/recurrent memory)" fallback), not
+        /// an eullm-specific gap.
         #[arg(long, default_value_t = 0)]
         rs_seq: u32,
 
@@ -255,8 +265,10 @@ enum Commands {
         n_cpu_moe: u32,
 
         /// Recurrent-state rollback window for hybrid/recurrent
-        /// architectures. Applied to every model this server loads or
-        /// swaps to. See `eullm run --help` for the full rationale.
+        /// architectures. 0 (default) strongly recommended — this is a
+        /// speculative-decoding rollback primitive upstream, not a
+        /// conversation-caching one. Applied to every model this server
+        /// loads or swaps to. See `eullm run --help` for the full rationale.
         #[arg(long, default_value_t = 0)]
         rs_seq: u32,
 
