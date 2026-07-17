@@ -121,6 +121,18 @@ enum Commands {
         #[arg(long, default_value_t = 0)]
         n_cpu_moe: u32,
 
+        /// Recurrent-state rollback window for hybrid/recurrent
+        /// architectures (Mamba-style SSM layers, e.g. Qwen3.5/3.6's hybrid
+        /// attention+SSM design). 0 (default) means KV-cache prefix reuse
+        /// can never roll back that architecture's recurrent state, so
+        /// every reused turn falls back to a full re-prefill. No effect on
+        /// non-hybrid models or on architectures that don't support
+        /// recurrent-state rollback. Experimental: the memory cost
+        /// (recurrent-state tensors scale by 1+N) hasn't been characterized
+        /// across models — start low and watch memory use.
+        #[arg(long, default_value_t = 0)]
+        rs_seq: u32,
+
         /// Context window size
         #[arg(short, long, default_value_t = 4096)]
         ctx_size: u32,
@@ -241,6 +253,12 @@ enum Commands {
         /// with --cpu-moe. See `eullm run --help` for the full rationale.
         #[arg(long, default_value_t = 0)]
         n_cpu_moe: u32,
+
+        /// Recurrent-state rollback window for hybrid/recurrent
+        /// architectures. Applied to every model this server loads or
+        /// swaps to. See `eullm run --help` for the full rationale.
+        #[arg(long, default_value_t = 0)]
+        rs_seq: u32,
 
         /// Enable the embedded chat UI (off by default for headless serve).
         /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
@@ -408,7 +426,7 @@ async fn main() {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
                 port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, ctx_size: 4096,
+                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -419,7 +437,7 @@ async fn main() {
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
                 port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, ctx_size: 4096,
+                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0, ctx_size: 4096,
                 threads: None, batch_size: 1, no_flash_attn: false,
                 n_batch: 2048, cache_type_k: "f16".into(),
                 cache_type_v: "f16".into(), web: false, no_ui: false,
@@ -462,6 +480,7 @@ async fn main() {
             fit_strict,
             cpu_moe,
             n_cpu_moe,
+            rs_seq,
             ctx_size,
             threads,
             batch_size,
@@ -529,12 +548,12 @@ async fn main() {
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, cpu_moe, n_cpu_moe, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
+            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, cpu_moe, n_cpu_moe, rs_seq, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve { port, replace, batch_size: _, cpu_moe, n_cpu_moe, ui, ui_port, daemon, pidfile } => {
+        Commands::Serve { port, replace, batch_size: _, cpu_moe, n_cpu_moe, rs_seq, ui, ui_port, daemon, pidfile } => {
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
@@ -542,7 +561,7 @@ async fn main() {
                 std::process::exit(1);
             }
             let ui_port_opt = if ui { Some(ui_port) } else { None };
-            cmd_serve(port, replace, ui_port_opt, cpu_moe, n_cpu_moe).await;
+            cmd_serve(port, replace, ui_port_opt, cpu_moe, n_cpu_moe, rs_seq).await;
         }
         Commands::Unload { port } => cmd_unload(port).await,
         Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
@@ -1248,6 +1267,7 @@ async fn cmd_run(
     fit_strict: bool,
     cpu_moe: bool,
     n_cpu_moe: u32,
+    rs_seq: u32,
     ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
@@ -1408,6 +1428,7 @@ async fn cmd_run(
             mmproj_path: mmproj_for_config.clone(),
             cpu_moe,
             n_cpu_moe,
+            rs_seq,
         };
 
         // The continuous-batching scheduler is text-only; multimodal models
@@ -1501,6 +1522,9 @@ async fn cmd_run(
             println!("  CPU MoE:       enabled (expert tensors on CPU RAM)");
         } else if n_cpu_moe > 0 {
             println!("  CPU MoE:       first {n_cpu_moe} layers (expert tensors on CPU RAM)");
+        }
+        if rs_seq > 0 {
+            println!("  RS rollback:   {rs_seq} (recurrent-state window for hybrid/SSM architectures)");
         }
         if batch_size > 0 {
             let per_seq = ctx_size / batch_size as u32;
@@ -1601,6 +1625,7 @@ async fn cmd_run(
             batch_size,
             cpu_moe,
             n_cpu_moe,
+            rs_seq,
             web_enabled: web,
             store: api_store,
             ui_port,
@@ -1642,7 +1667,7 @@ async fn cmd_run(
     }
 }
 
-async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool, n_cpu_moe: u32) {
+async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool, n_cpu_moe: u32, rs_seq: u32) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
         ensure_port_available(p, replace).await;
@@ -1677,6 +1702,7 @@ async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool
         batch_size: 8,
         cpu_moe,
         n_cpu_moe,
+        rs_seq,
         web_enabled: false,
         store,
         ui_port,

@@ -86,7 +86,8 @@ pub(crate) fn build_ctx_params_with_cache(
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
         .with_n_threads(config.threads as i32)
-        .with_n_threads_batch(config.threads as i32);
+        .with_n_threads_batch(config.threads as i32)
+        .with_n_rs_seq(config.rs_seq);
 
     if cache_type_k != KvCacheType::F16 || cache_type_v != KvCacheType::F16 {
         params = params.with_type_k(cache_type_k).with_type_v(cache_type_v);
@@ -158,6 +159,22 @@ pub struct InferenceConfig {
     /// Mutually exclusive with `cpu_moe` (blanket override wins if both are
     /// set — checked at the CLI layer).
     pub n_cpu_moe: u32,
+    /// Recurrent-state rollback window (llama.cpp's `n_rs_seq`) for hybrid/
+    /// recurrent architectures (Mamba-style SSM layers, e.g. Qwen3.5/3.6's
+    /// hybrid attention+SSM design). `0` (default, matching
+    /// `llama_context_default_params()`) means KV-cache prefix reuse can
+    /// never roll back that architecture's recurrent state at all — every
+    /// reused-prefill attempt with `reuse_len > 0` is rejected and the
+    /// scheduler falls back to a full re-prefill (see
+    /// `prefill_sequence` in `inference/scheduler.rs`). Setting this allows
+    /// rollback up to that many positions back. No effect on architectures
+    /// that don't support recurrent-state rollback
+    /// (`llm_arch_supports_rs_rollback` in llama.cpp) or on non-hybrid
+    /// models. Opt-in (default 0, i.e. today's behavior unchanged) because
+    /// the memory cost — recurrent-state tensors scale by a factor of
+    /// `(1 + n_rs_seq)` — hasn't been measured on real hybrid-model
+    /// hardware; tune it once it has been.
+    pub rs_seq: u32,
 }
 
 impl Default for InferenceConfig {
@@ -178,6 +195,7 @@ impl Default for InferenceConfig {
             mmproj_path: None,
             cpu_moe: false,
             n_cpu_moe: 0,
+            rs_seq: 0,
         }
     }
 }
