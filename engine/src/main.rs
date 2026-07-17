@@ -2501,11 +2501,22 @@ async fn interactive_chat(
             print!("{stats_line}");
         }
 
-        // Add assistant response to history.
+        // Add assistant response to history. When this turn suppressed
+        // thinking (think_arg == false), the model actually decoded
+        // `think_suppression_prefix()` right before this response — stored
+        // history must include it too, or every later turn that includes
+        // this one reconstructs text that no longer matches what's really
+        // resident in this turn's KV cache, breaking prefix-based KV reuse
+        // from here on (see `ChatTemplate::build_prompt`'s doc comment).
         if !response_text.is_empty() {
+            let content = if think_arg {
+                response_text
+            } else {
+                format!("{}{response_text}", template.think_suppression_prefix())
+            };
             history.push(ChatMessage {
                 role: "assistant",
-                content: response_text,
+                content,
             });
         }
     }
