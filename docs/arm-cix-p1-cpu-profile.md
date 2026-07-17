@@ -288,21 +288,30 @@ and look at the `prefill` numbers specifically.
   through our Rust bindings; see § 5.
 - eullm doesn't print a CPU-feature-flags line of its own (§3) — the repack
   log is the only confirmed-working runtime verification today.
-- **Open**: on the first real conversation (turn 2, prompt grown from 26 to
-  1357 tokens by the prior turn's history), generation stalled at 100% CPU
-  for a long time before producing output, and decode tok/s did not
-  noticeably improve over a pre-i8mm build (see §7 for why that's expected
-  for decode specifically). Whether KV-cache prefix reuse (roadmap 0.7-A)
-  is actually engaging on the `--cli` REPL path on this build hasn't been
-  confirmed — if it isn't, turn 2 would be a full re-prefill of ~1300+
-  tokens instead of reusing turn 1's resident history, which would also
-  explain the stall. That's scheduler behavior, not this build profile;
-  tracked separately from this document.
+- **Resolved, unrelated bug found along the way**: the first real Orion run
+  showed no `tracing::info!` output at all (no "reused N from cache" line,
+  no scheduler/context startup info — only `println!`/raw ggml C++ logs).
+  Root cause: `Cargo.toml` declares `[[bin]] name = "eullm"` but the default
+  `EnvFilter` fallback (used whenever `RUST_LOG` isn't set) was
+  `"eullm_engine=info"` — never matching the actual `eullm::...` targets,
+  silently disabling all engine-side logging by default, on every platform.
+  Fixed by correcting the fallback to `"eullm=info"`; reproduced and
+  verified fixed on x86 first, unrelated to ARM/i8mm.
+- **Now resolved thanks to the above fix**: with logging actually visible,
+  a real multi-turn `qwen3-14b` conversation confirmed KV-cache prefix
+  reuse (roadmap 0.7-A) *is* engaging correctly on the `--cli` path —
+  turn 2 (`prompt=504, reused=485, decoded 19 fresh`) and turn 3
+  (`prompt=1081, reused=1042, decoded 39 fresh`) each reused essentially
+  the entire prior turn's resident history, decoding only the new
+  suffix. The earlier "stalled at 100% CPU for a long time" observation
+  on the very first (pre-fix) run was therefore not a reuse failure —
+  most likely plain prefill latency with no progress indicator, or an
+  unrelated one-off on that specific run.
 
 **Confirmed on real CIX P1 hardware (Orion, 2026-07-17):** the build
 profile itself works — `q4_K_8x8`/`q6_K_8x8` in the repack log on a real
-`qwen3-14b` (Q4_K_M) run is direct proof i8mm is active (§4). Everything
-else in this document was written from reading the vendored `ggml`/
-`llama.cpp` source and a cross-compile smoke test (no ARM hardware in the
-environment that wrote it) — the two items above are what that first real
-run actually surfaced as needing a closer look, not the build profile.
+`qwen3-14b` (Q4_K_M) run is direct proof i8mm is active (§4), and the
+logging fix above let the same run confirm KV-cache reuse is also working
+correctly on this build. Everything else in this document was written
+from reading the vendored `ggml`/`llama.cpp` source and a cross-compile
+smoke test (no ARM hardware in the environment that wrote it).
