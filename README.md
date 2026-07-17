@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.22-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.23-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -237,7 +237,37 @@ the non-expert tensors) and `--ctx-size`, has no effect on dense (non-MoE)
 models, and is available on both `eullm run` and `eullm serve` (applied to
 every model the server loads or swaps to).
 
+### KV-cache reuse on hybrid/recurrent models (`--rs-seq`, experimental, new in v0.6.22)
+
+KV-cache prefix reuse (below) keeps working correctly on hybrid
+attention+SSM architectures (Qwen3.5/3.6's Mamba-style design) — but by
+default it can never actually *reuse* anything on them. Every reused turn
+gets rejected and silently falls back to a full re-prefill of the whole
+conversation, because llama.cpp's recurrent-state memory only supports
+rolling back as far as `n_rs_seq` snapshots (0 by default), and eullm never
+configured it. This is easy to miss: nothing errors, the response is just
+correct but slow, and the giveaway is a growing prefill cost turn over turn
+(watch for `reused prefill failed ... likely a recurrent/hybrid model
+architecture` warnings in the log).
+
+`--rs-seq N` sets that rollback window, letting reuse actually succeed up
+to `N` positions back:
+
+```bash
+eullm run qwen3.6-35b-a3b --cli --no-ui --rs-seq 512
+```
+
+Has no effect on dense (non-hybrid) models, or on architectures llama.cpp
+doesn't support recurrent rollback for (harmlessly clamped to 0 either
+way — safe to leave on across different models). Available on both
+`eullm run` and `eullm serve`. **Experimental**: recurrent-state tensors
+scale by a factor of `(1 + N)`, and that memory cost hasn't been
+characterized across models yet — start with a modest value and watch
+memory use before raising it.
+
 ## What's ready today, what's coming
+
+**New in v0.6.22** — **`--rs-seq N`**: opt-in rollback window that lets KV-cache prefix reuse actually succeed on hybrid attention+SSM models (Qwen3.5/3.6) instead of silently falling back to a full re-prefill every turn. See "KV-cache reuse on hybrid/recurrent models" above.
 
 **New in v0.6.18** — **KV-cache prefix reuse**: multi-turn conversations (both the `--cli` REPL and `/api/generate`, which both resend the full growing history as the prompt on every call) no longer re-prefill the entire conversation from scratch on every turn. The scheduler now matches each incoming prompt against its idle sequence slots by longest common token-id prefix (mirroring upstream llama.cpp server's slot model) and only decodes the unreused suffix, keeping the rest resident in the KV cache. No new parameter, no client changes — purely content-addressed, works transparently on both surfaces since they share the same scheduler path.
 
