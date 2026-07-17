@@ -68,6 +68,13 @@ pub struct AppState {
     /// (see `InferenceConfig::rs_seq`). Applied to every model this server
     /// loads or swaps to.
     pub rs_seq: u32,
+    /// Max full-sequence-state checkpoints kept for prompt-prefix restore
+    /// (see `SchedulerConfig::ctx_checkpoints`). 0 disables checkpointing.
+    /// Applied to every model this server loads or swaps to.
+    pub ctx_checkpoints: usize,
+    /// Min new tokens since the closest checkpoint before taking another
+    /// one (see `SchedulerConfig::checkpoint_min_step`).
+    pub checkpoint_min_step: u32,
 
     /// Enable transparent web fetching: URLs in user messages are fetched
     /// and their content is injected into the prompt before inference.
@@ -167,12 +174,16 @@ impl AppState {
             override_batch_size.unwrap_or(self.batch_size)
         };
         let model_name = normalized.clone();
+        let ctx_checkpoints_for_swap = self.ctx_checkpoints;
+        let checkpoint_min_step_for_swap = self.checkpoint_min_step;
 
         let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
             if batch_size > 0 {
                 let sched_config = SchedulerConfig {
                     max_batch_size: batch_size,
                     queue_capacity: batch_size * 8,
+                    ctx_checkpoints: ctx_checkpoints_for_swap,
+                    checkpoint_min_step: checkpoint_min_step_for_swap,
                 };
                 let sched = BatchScheduler::new(config, sched_config);
                 match sched.start() {
@@ -345,6 +356,8 @@ pub struct ServeConfig {
     pub cpu_moe: bool,
     pub n_cpu_moe: u32,
     pub rs_seq: u32,
+    pub ctx_checkpoints: usize,
+    pub checkpoint_min_step: u32,
     pub web_enabled: bool,
     pub store: ModelStore,
     /// Optional embedded chat UI. When `Some(port)`, a second listener is
@@ -378,6 +391,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         cpu_moe: cfg.cpu_moe,
         n_cpu_moe: cfg.n_cpu_moe,
         rs_seq: cfg.rs_seq,
+        ctx_checkpoints: cfg.ctx_checkpoints,
+        checkpoint_min_step: cfg.checkpoint_min_step,
         web_enabled: cfg.web_enabled,
         api_port: cfg.port,
         store: cfg.store,
