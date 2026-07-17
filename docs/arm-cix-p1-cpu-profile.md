@@ -118,31 +118,42 @@ LLAMA_GGML_CPU_ARM_ARCH="armv9.2-a+sve2+bf16+i8mm+dotprod" cargo build --release
 
 ## 3. Verify the ISA path is actually active at runtime
 
-Start the engine and look at the `system_info:` line it prints at startup
-(`common_params_get_system_info` in llama.cpp, called from `cmd_run`). It
-lists every compiled-in feature the CPU backend detected as present, e.g.:
+**Correction (from the first real run on an Orion, 2026-07-17):** an
+earlier version of this section pointed at a `system_info:` startup line
+that this binary does not actually print — `common_params_get_system_info`
+/ `llama_print_system_info` is never called anywhere in `engine/src/` or
+the Rust bindings. That was an unverified claim carried over from generic
+llama.cpp CLI behavior; eullm's own startup banner is different and
+doesn't include it. Confirmed by grepping a real run's log and finding
+nothing. The repack log below (§4) is the verification method that
+actually works, and doubles as proof the ISA path is active — repacking
+to an i8mm-gated tier can't happen unless `ggml_cpu_has_matmul_int8()`
+(and `ggml_cpu_has_neon()`) returned true, so a `_8x8` tier in that log
+**is** the runtime confirmation, not just an indirect signal.
 
-```
-system_info: n_threads = 8 / 12 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | SVE = 1 | SVE_CNT = 16 | DOTPROD = 1 | LLAMAFILE = 1 |
-```
+If a dedicated feature-flags line is wanted later, `llama_print_system_info()`
+is a plain `llama.h` C API (not gated behind the `common` feature) that
+isn't wired into eullm today — a few lines to add if this indirect check
+ever isn't enough.
 
-`MATMUL_INT8 = 1` is i8mm, `SVE = 1` (+ `SVE_CNT`, the vector length in
-bytes) confirms SVE2, `DOTPROD = 1` confirms dotprod. If any of these are
-missing, the `-march` override either wasn't picked up (check
-`LLAMA_GGML_CPU_ARM_ARCH` was actually exported before the build, and that
-`CMakeCache.txt` in the build directory shows it) or the toolchain silently
-fell back to a lower baseline (check the compiler actually recognized the
-flag — the GCC 13+/Clang 14+ requirement above).
+## 4. Confirm quantized tensors trigger the i8mm repack path
 
-## 4. Confirm Q4_0 quantization triggers the i8mm repack path
+Repacking happens at model-load time, into an interleaved layout matched
+to whatever the CPU backend detected (`ggml/src/ggml-cpu/repack.cpp`,
+`get_tensor_traits`). The exact gating differs per quant type — read from
+the source, not by analogy across types:
 
-Q4_0 tensors get repacked at model-load time into an interleaved layout
-matched to whatever the CPU backend detected (`ggml/src/ggml-cpu/repack.cpp`,
-`get_tensor_traits`): SVE 8x8 if `SVE_CNT` happens to equal 32 bytes, else
-i8mm-backed `q4_0_4x8` if i8mm is present (this is the CIX P1's expected
-path — a 256-bit SVE vector length isn't confirmed for this core, and even
-if present the codepath still needs the exact 32-byte match), else
-dotprod-only `q4_0_4x4`, else the plain unpacked path.
+| Quant type | `_8x8` tier requires | Fallback tiers |
+|---|---|---|
+| Q4_K | `ggml_cpu_has_neon() \|\| ggml_cpu_has_matmul_int8()` (both, per the `&&`) | `q4_K_8x4` (NEON+dotprod) |
+| Q6_K | same: NEON + i8mm | (no lower ARM tier) |
+| Q4_0 | AVX2, **or** `ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == 32` (SVE2 8x8 tier — needs a 256-bit SVE implementation specifically, not just SVE2 present) | `q4_0_4x8` (NEON+i8mm), then `q4_0_4x4` (NEON+dotprod) |
+
+Most real models are Q4_K_M (a Q4_K/Q6_K mix — llama.cpp's own default
+quant, and this engine's registry default too), not plain Q4_0, so **the
+Q4_K/Q6_K row is what you'll actually see day to day.** `_8x8` for either
+of those is unambiguous i8mm confirmation on ARM (no AVX2 alternative
+path to confuse it with, unlike Q4_0's `_8x8`).
 
 This repack step logs at `GGML_LOG_DEBUG` — and EULLM does not suppress
 logs until *after* the inference context is created (`scheduler.rs` calls
@@ -156,17 +167,12 @@ eullm run <model> --no-ui --threads 4 < /dev/null 2>&1 | grep -i "repack tensor"
 grep -i "repack tensor" server.log
 ```
 
-Expect lines like:
-
-```
-ggml_backend_cpu_x86_repack_buffer_type_get_extra_bufts?: repack tensor blk.0.attn_q.weight with q4_0_4x8
-```
-
-(exact function-name prefix depends on the call site — the load-bearing
-part is `with q4_0_4x8`, confirming the i8mm/smmla kernel was selected, vs
-`q4_0_4x4` for dotprod-only or `q4_0_8x8` for the SVE path). Only Q4_0
-tensors with `ne[1] % 4 == 0` are eligible — true for essentially every
-real weight matrix, but worth knowing if a specific tensor is missing from
+**Confirmed working on real CIX P1 hardware (Orion, 2026-07-17)**, running
+`qwen3-14b` (Q4_K_M): every tensor repacked to `q4_K_8x8` or `q6_K_8x8`,
+e.g. `repack: repack tensor blk.0.attn_q.weight with q4_K_8x8` — i8mm
+confirmed active per the table above. Only tensors meeting the tier's
+`ne[1] % N == 0` shape requirement are eligible — true for essentially
+every real weight matrix, but worth knowing if a specific tensor is missing from
 the log.
 
 ## 5. Thread pinning — big cores only
@@ -178,6 +184,12 @@ outright), while Radxa's own BSP firmware exposes all 12 across 5 cpufreq
 policies. A real capture on one firmware showed `cpu0` = big, `cpu1-4` =
 little, `cpu5-8` = medium, `cpu9-11` = big — the 4 big cores are
 non-contiguous even within one boot. Always detect on the actual unit.
+
+**Confirmed on a real Orion (2026-07-17):** `htop` showed exactly 8 cores
+(0-7), consistent with the SystemReady UEFI firmware case above — no A520
+little cores visible, so on that unit every visible core is already a
+"fast" tier and pinning is moot unless the firmware is switched to
+Radxa's BSP build (which exposes all 12).
 
 `bench/detect_arm_big_cores.sh` does this: it reads each online core's
 `MIDR_EL1` (Cortex-A720 = part `0xd81`, Cortex-A520 = part `0xd80`,
@@ -254,6 +266,18 @@ to track regressions or gains against this baseline. `--notes` exists
 specifically so the pinning/thread config used for a given run travels with
 its numbers instead of being tribal knowledge.
 
+**Why decode tok/s alone can look unchanged even with i8mm confirmed
+active** (observed on the first real run): single-token decode is
+typically memory-bandwidth-bound on CPU, not compute-bound — every token
+requires streaming the *entire* quantized weight set through the core
+once, regardless of how fast the multiply-accumulate itself runs. i8mm/
+SVE2 speed up the arithmetic, which mostly shows up in **prefill**
+(batched matmul over many tokens at once, genuinely compute-bound) and
+barely moves decode, which is bounded by DRAM bandwidth instead. Don't
+judge the profile's effect from the REPL's end-of-turn tok/s line alone
+(that's decode-dominated when the prompt is short) — run the sweep above
+and look at the `prefill` numbers specifically.
+
 ## Known open items
 
 - Exact big-core clock ceiling (2.6 vs 2.8 GHz) varies by silicon revision —
@@ -262,11 +286,23 @@ its numbers instead of being tribal knowledge.
   `ls /sys/class/hwmon/*/name` on real hardware.
 - Native ggml threadpool cpumask pinning (beyond `taskset`) isn't exposed
   through our Rust bindings; see § 5.
-- None of this document's runtime claims (system_info output, repack log
-  lines, actual tok/s) have been executed on real CIX P1 hardware — this
-  environment has no ARM device. The build itself was verified end to end
-  by cross-compiling in this environment (GCC 13.3.0 cross-toolchain,
-  confirmed via the resulting `CMakeCache.txt` and `flags.make`); the
-  runtime behavior described in §§ 3-4 follows directly from reading the
-  vendored `ggml`/`llama.cpp` source, not from an actual run. Please
-  confirm on the Orion and report back if anything here doesn't match.
+- eullm doesn't print a CPU-feature-flags line of its own (§3) — the repack
+  log is the only confirmed-working runtime verification today.
+- **Open**: on the first real conversation (turn 2, prompt grown from 26 to
+  1357 tokens by the prior turn's history), generation stalled at 100% CPU
+  for a long time before producing output, and decode tok/s did not
+  noticeably improve over a pre-i8mm build (see §7 for why that's expected
+  for decode specifically). Whether KV-cache prefix reuse (roadmap 0.7-A)
+  is actually engaging on the `--cli` REPL path on this build hasn't been
+  confirmed — if it isn't, turn 2 would be a full re-prefill of ~1300+
+  tokens instead of reusing turn 1's resident history, which would also
+  explain the stall. That's scheduler behavior, not this build profile;
+  tracked separately from this document.
+
+**Confirmed on real CIX P1 hardware (Orion, 2026-07-17):** the build
+profile itself works — `q4_K_8x8`/`q6_K_8x8` in the repack log on a real
+`qwen3-14b` (Q4_K_M) run is direct proof i8mm is active (§4). Everything
+else in this document was written from reading the vendored `ggml`/
+`llama.cpp` source and a cross-compile smoke test (no ARM hardware in the
+environment that wrote it) — the two items above are what that first real
+run actually surfaced as needing a closer look, not the build profile.
