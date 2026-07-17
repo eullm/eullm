@@ -369,7 +369,14 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "eullm_engine=info".into()),
+                // Module paths are rooted at the [[bin]] name ("eullm" in
+                // Cargo.toml), not the package name ("eullm-engine") - there's
+                // no separate lib.rs, so every tracing::info!/warn! call site
+                // resolves its target under "eullm::...". "eullm_engine=info"
+                // never matched anything, silently disabling all engine
+                // logging (KV-reuse diagnostics, context/scheduler startup
+                // info, etc.) unless RUST_LOG was set explicitly.
+                .unwrap_or_else(|_| "eullm=info".into()),
         )
         .init();
 
