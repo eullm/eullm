@@ -199,6 +199,12 @@ All code is Apache 2.0. Only models with fully permissive licenses are supported
 
 Meta Llama is excluded due to branding requirements.
 
+## Dependency provenance: mirrors, not forks
+
+EULLM Engine depends on two upstream projects — [`ggml-org/llama.cpp`](https://github.com/ggml-org/llama.cpp) and [`utilityai/llama-cpp-rs`](https://github.com/utilityai/llama-cpp-rs) — and neither is forked. A scheduled job (`.github/workflows/mirror-sync.yml`, daily at 03:17 UTC) mirrors both upstream repos verbatim, including all tags, into `eullm/llama.cpp` and `eullm/llama-cpp-rs`. The Engine's git submodule and Cargo path dependency point at those EU-hosted mirrors, not at upstream directly, and every release is built against a tag on the mirror.
+
+The reason is durability, not divergence: tags pushed to the mirror are immutable, so even if upstream history is rewritten or a repo disappears, every version EULLM has ever depended on stays pinnable. We track upstream, we don't diverge from it — any patch we need goes through upstream's own contribution process first.
+
 ## Infrastructure
 
 All EULLM infrastructure runs on EU servers:

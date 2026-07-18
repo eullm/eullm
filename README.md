@@ -504,12 +504,12 @@ The **EU AI Act** (Regulation 2024/1689) takes effect August 2, 2026. High-risk 
 European SMEs need AI models that:
 
 - **Run locally** on their own hardware or EU servers
-- **Comply** with GDPR and the AI Act out of the box
+- **Make GDPR and AI Act audit-trail requirements easier to satisfy**
 - **Speak their language** and understand their domain
 - **Carry their brand** — not "Powered by Qwen" or "Built with Llama"
 - **Cost nothing** in ongoing API fees
 
-EULLM is the missing infrastructure.
+EULLM aims to close that gap.
 
 ## The solution
 
