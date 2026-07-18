@@ -49,9 +49,9 @@
 >   a small, unstable fraction before it worked (see below) — this wasn't a
 >   default that "just worked," it required finding why it didn't
 >
-> This is the WP4 (Sovereign AI / EuLLM Integration) proof point for the
-> POSCAR EIC Transition effort: a large, capable open model, genuinely
-> running on sovereign, GPU-free, low-power EU hardware — not a toy demo on
+> This is the WP4 (Sovereign AI / EuLLM Integration) proof point: a large,
+> capable open model, genuinely running on sovereign, GPU-free, low-power
+> EU hardware — not a toy demo on
 > a small distilled model.
 
 ## Try it now

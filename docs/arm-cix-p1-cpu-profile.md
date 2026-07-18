@@ -1,4 +1,4 @@
-# CIX P1 (Armv9.2-A) CPU build profile — POSCAR WP4
+# CIX P1 (Armv9.2-A) CPU build profile — WP4
 
 CPU-only baseline for running EULLM Engine on the CIX P1 SoC (Radxa Orion O6
 mini-ITX board, also sold as the smaller Orion O6N Nano-ITX with the same
