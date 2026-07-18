@@ -1,6 +1,6 @@
 # bench/ — Stress Test & Parallelism Verification
 
-## POSCAR WP4 — CIX P1 ARM CPU baseline
+## WP4 — CIX P1 ARM CPU baseline
 
 See [`docs/arm-cix-p1-cpu-profile.md`](../docs/arm-cix-p1-cpu-profile.md) for
 the full build profile, i8mm/repack runtime verification, and thread-pinning

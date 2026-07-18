@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""POSCAR WP4 / T4.1 baseline — separate PREFILL and DECODE throughput on CPU.
+"""WP4 / T4.1 baseline — separate PREFILL and DECODE throughput on CPU.
 
 Measures prefill tok/s (across a sweep of prompt lengths) and decode tok/s
 (at a fixed generation length) against a running `eullm run`/`eullm serve`
@@ -213,7 +213,7 @@ async def run_decode_bench(session, args, power_sampler):
 
 
 async def main_async(args):
-    print(f"eullm ARM CPU baseline (POSCAR WP4 / T4.1) - {args.url}  model={args.model}")
+    print(f"eullm ARM CPU baseline (WP4 / T4.1) - {args.url}  model={args.model}")
     if args.notes:
         print(f"notes: {args.notes}")
 

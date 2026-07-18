@@ -400,8 +400,8 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
-  # CIX P1 (Armv9.2-A: SVE2, BF16, I8MM, DotProd) CPU-only profile — POSCAR
-  # WP4 baseline for the Radxa Orion O6. Deliberately a SEPARATE artifact
+  # CIX P1 (Armv9.2-A: SVE2, BF16, I8MM, DotProd) CPU-only profile — WP4
+  # baseline for the Radxa Orion O6. Deliberately a SEPARATE artifact
   # from `build`'s generic eullm-linux-arm64: baking these ISA extensions
   # into the generic binary would SIGILL on any ARM64 host that doesn't
   # have them (Raspberry Pi, Graviton, other SoCs). Native ubuntu-24.04-arm
