@@ -32,7 +32,7 @@
 
 ---
 
-> ### 🇪🇺 Proven: a 35B-parameter model, fully local, on European ARM hardware, no GPU
+> ### 🇪🇺 Proven: a 35B-parameter model, fully local, on EU-available ARM hardware, no GPU
 >
 > A 35B-parameter hybrid MoE model (`qwen3.6-35b-a3b`, ~3B active params/token)
 > running entirely on CPU on a **Radxa Orion O6 (CIX P1 SoC, Armv9.2-A,
