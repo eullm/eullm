@@ -48,10 +48,6 @@
 >
 > A large, capable open model, genuinely running on sovereign, GPU-free,
 > low-power EU hardware — not a toy demo on a small distilled model.
->
-> *(Getting multi-turn reuse to actually work on this architecture took two
-> engine-side fixes — see "The actual root cause of small/unstable reuse"
-> further down for the technical detail.)*
 
 ## Try it now
 
