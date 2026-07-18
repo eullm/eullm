@@ -45,14 +45,13 @@
 >   reuses the *entire* prior turn's resident state, verified across 6+
 >   consecutive turns at both 4096 and 16384-token context, with both F16 and
 >   Q8_0 KV cache — not a lucky first turn, a sustained, reproducible result
-> - Root-caused and fixed two real bugs that were silently degrading this to
->   a small, unstable fraction before it worked (see below) — this wasn't a
->   default that "just worked," it required finding why it didn't
 >
-> This is the WP4 (Sovereign AI / EuLLM Integration) proof point: a large,
-> capable open model, genuinely running on sovereign, GPU-free, low-power
-> EU hardware — not a toy demo on
-> a small distilled model.
+> A large, capable open model, genuinely running on sovereign, GPU-free,
+> low-power EU hardware — not a toy demo on a small distilled model.
+>
+> *(Getting multi-turn reuse to actually work on this architecture took two
+> engine-side fixes — see "The actual root cause of small/unstable reuse"
+> further down for the technical detail.)*
 
 ## Try it now
 
