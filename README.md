@@ -203,7 +203,7 @@ holds the rest.
 
 ```bash
 # Qwen3.6-35B-A3B, Q4_K_M (~22 GB) on a 12 GB GPU + enough system RAM
-eullm run hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M --cpu-moe --fit
+eullm run qwen3.6-35b-a3b --cpu-moe --fit
 ```
 
 Combines with `--gpu-layers`/`--fit` (which still size the non-expert
@@ -229,7 +229,7 @@ semantics — so the two engines pick the same tensors for the same `N`.
 
 ```bash
 # Offload only the first 12 layers' experts to CPU RAM, keep the rest on GPU
-eullm run hf.co/bartowski/Qwen_Qwen3.6-35B-A3B-GGUF:Q4_K_M --n-cpu-moe 12 --fit
+eullm run qwen3.6-35b-a3b --n-cpu-moe 12 --fit
 ```
 
 **Picking `N`:** there's no auto-sizing yet (`--fit` doesn't know about
