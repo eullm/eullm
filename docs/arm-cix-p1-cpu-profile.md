@@ -372,75 +372,114 @@ class. Full re-prefill per turn is a real, sourced, upstream architectural
 limitation shared by llama.cpp's own reference server — not an eullm gap.
 
 **Implemented (v0.6.24): `--ctx-checkpoints`/`--checkpoint-min-step`.**
-Rather than stopping at "leave `--rs-seq` at 0 and accept full re-prefill,"
-eullm now ships the mechanism the analysis above pointed to: a bounded
-pool of full-state snapshots (`state_seq_get_data_ext`/
+A bounded pool of full-state snapshots (`state_seq_get_data_ext`/
 `state_seq_set_data_ext`, the same primitives llama.cpp server uses for
 `server_prompt_checkpoint`), taken at the end of each clean turn and
-LRU-evicted once the pool (`--ctx-checkpoints`, default 0/disabled) is
-full. When a request's live resident slot doesn't cover enough of the
-prompt to avoid the recurrent-rollback rejection above, the scheduler now
-checks for a checkpoint that covers more of it and restores from there —
-paying for at most `--checkpoint-min-step` tokens of fresh decode instead
-of the entire conversation, with worst-case memory bounded by
-`ctx_checkpoints × (one sequence's state size)` rather than `n_rs_seq`'s
-`(1 + N)` multiplier. Verified in this environment (no ARM hardware, no
-35B model available here) two ways: (1) a standalone FFI-level check —
-capture a checkpoint mid-conversation, restore it into a completely fresh
-sequence, and confirm the subsequent greedy-decoded continuation is
-byte-identical to the original uninterrupted sequence's continuation, on
-a real TinyLlama-1.1B GGUF; (2) a live multi-turn run through the actual
-scheduler/API path with `--ctx-checkpoints 3 --checkpoint-min-step 2`,
-confirming checkpoints are taken each turn, eviction kicks in once the
-pool fills, and ordinary KV-cache reuse is unaffected. The
-checkpoint-*restore* fallback path specifically (as opposed to capture)
-still needs validation on the actual hybrid 35B model on real Orion
-hardware — TinyLlama is dense and never hits the recurrent-rollback
-rejection that triggers it, so this environment could only prove the
-underlying save/restore primitives are sound, not the end-to-end hybrid
-scenario. See the README's `--ctx-checkpoints` section for usage.
+LRU-evicted once the pool fills. Implemented and verified correct at the
+FFI level (checkpoint → restore into a fresh sequence → byte-identical
+continuation, on a real TinyLlama GGUF) and safe on memory (no blowup,
+unlike `n_rs_seq`). **But on real Orion hardware against the real 35B
+model, it turned out not to be what fixed the problem** — structurally,
+a checkpoint taken at a turn boundary has the exact same content as the
+live idle slot at that instant, so for the very next turn it can never do
+better than the live slot's own match. It remains useful for a different
+scenario (several conversations competing for few slots, where the live
+slot has been overwritten since an older checkpoint was taken), not for
+a single growing conversation, which is what actually needed fixing here.
 
-**Separately, and independent of the caching question:** the official
-Qwen3.6 chat template strips historical `<think>` reasoning blocks between
-turns by default (`preserve_thinking` is opt-in) — eullm's own template
-resends them verbatim. This is a genuine deviation from the model's
-documented intended usage and is worth fixing regardless of the caching
-outcome, though it wasn't established as the cause of the small
-prefix-match (ruled out in the code-reading step above).
+**What actually fixed it (v0.6.25 + v0.6.26), confirmed end to end on real
+Orion hardware against the real hybrid 35B model:**
 
-### 8.3 Quantization: switching off Q4_K_M for a confirmed ARM-accelerated format
+1. **v0.6.25 — stop retokenizing history every turn.** The real root
+   cause of the small/unstable match (31/326, 322/608, 29/671 across
+   separate turns) wasn't the rollback window being too small — a
+   substantial match (661/1394) was rejected outright too, no partial
+   credit. `build_chatml` is deterministic string concatenation, so the
+   shared prefix of turn N and N+1's prompts is byte-identical *as
+   text*; the bug was that eullm retokenized that shared text from
+   scratch every turn, and retokenizing the same text twice isn't
+   guaranteed by BPE to produce the same token ids. Fixed by matching on
+   exact text prefix before tokenizing anything, reusing the already-known
+   tokens for the matched portion and tokenizing only the new suffix —
+   see the README's "The actual root cause of small/unstable reuse"
+   section for the full writeup.
+2. **v0.6.26 — `/no_think` was corrupting history reconstruction.**
+   A second, independent bug with the same symptom: `eullm run --cli`'s
+   sticky `/no_think` toggle injects `<think>\n</think>\n\n` right before
+   generation — text the model actually decodes as part of that turn's
+   resident state — but this was never re-added when reconstructing that
+   turn for later history, so every `/no_think` turn permanently diverged
+   from what was truly resident, compounding turn over turn. Confirmed on
+   real hardware to be the *dominant* cause of the degradation in
+   practice (disabling `/no_think` alone, no other change, restored ~99%
+   reuse even before the v0.6.25 fix existed). Fixed by exposing
+   `ChatTemplate::think_suppression_prefix()` and re-applying it when
+   storing a suppressed turn into history.
 
-Separate from caching, §4 already established that ggml's ARM
-online-repack fast-GEMM path only covers **Q4_0, Q8_0, and IQ4_NL** — not
-Q4_K_M, which is what the currently-deployed `qwen3.6-35b-a3b` GGUF uses
-(runs the generic k-quant vec_dot path with no repack acceleration).
-`unsloth/Qwen3.6-35B-A3B-GGUF` on HuggingFace publishes an imatrix-
-calibrated `UD-IQ4_NL` quant (`Qwen3.6-35B-A3B-UD-IQ4_NL.gguf`, 18.04 GB —
-smaller than the current file, comfortably inside 61GB RAM) alongside the
-larger `UD-IQ4_NL_XL` (19.5 GB) and a `Q8_0` (36.9 GB, likely too large
-and, per §7, doubles memory-bandwidth pressure working against the
-already bandwidth-bound decode path). Switching to `UD-IQ4_NL` is an
-untested-here (no ARM hardware, no 35B model in this environment)
-but concretely actionable next step for the Orion — re-run the T4.1
-benchmark (§7) before/after to quantify the actual prefill/decode delta,
-since i8mm/dotprod repack gains show up mainly in prefill (§7's
-bandwidth-bound decode caveat still applies).
+**Result, real Orion hardware, real `qwen3.6-35b-a3b`, both fixes
+together:** `reused N from cache` matched the *entire* previous turn's
+resident length across 6+ consecutive turns spanning multiple topics
+(fractals → Italian parliament), at both 4096 and 16384-token context,
+with F16 and Q8_0 KV cache — zero `reused prefill failed` warnings.
+Decode held at ~9-11 tok/s throughout, unaffected by growing conversation
+length since prefill cost stopped scaling with it. This is the confirmed
+WP4 headline result — see the README's proof-of-concept callout at the
+top.
+
+### 8.3 Quantization on ARM: smaller file, but *slower* — tested and confirmed
+
+§4 established that ggml's ARM online-repack fast-GEMM path covers
+**Q4_0, Q4_K, Q5_K, Q6_K, IQ4_NL, MXFP4, and Q8_0** (confirmed by reading
+`ggml-cpu/repack.cpp`'s type-dispatch directly) — not every quant type.
+Tested `unsloth/Qwen3.6-35B-A3B-GGUF`'s `UD-IQ4_NL` (18.04 GB, imatrix
+calibrated) against the Q4_K_M file already in use (each with a freshly
+truncated log to avoid cross-run contamination), comparing the loader's
+own `- type X: N tensors` breakdown and `file size` line:
+
+| | Q4_K_M | UD-IQ4_NL |
+|---|---|---|
+| Shared (both files) | 361 × f32, 251 × q8_0 | 361 × f32, 251 × q8_0 |
+| Variable | 80 × Q4_K + 37 × Q5_K + 4 × Q6_K | 37 × IQ4_NL + **80 × IQ3_S** + 4 × Q6_K |
+| File size | 20.60 GiB (5.11 BPW) | 16.79 GiB (4.16 BPW) |
+| ARM-accelerated variable tensors | 121/121 (100%) | 41/121 (34%) |
+
+**Result: the smaller file is slower in practice** (measured ~7.6-9.1
+tok/s vs ~9.5-10.7 tok/s on identical prompts). The size reduction comes
+from Unsloth's dynamic per-tensor quantization pushing the majority of
+variable tensors to **IQ3_S** — confirmed absent from `repack.cpp`'s
+type list, so it runs the unaccelerated generic path — instead of the
+fully-accelerated `Q4_K`/`Q5_K`/`Q6_K` mix Q4_K_M uses. `IQ4_NL` itself
+*is* ARM-accelerated (confirmed, same file), but only 37 of the 121
+variable tensors actually used it here; the naming ("UD-IQ4_NL") reflects
+the target average bit-rate, not a guarantee that IQ4_NL blocks dominate
+the file. **Recommendation for CPU-only ARM: prefer Q4_K_M (or any
+quantization where the variable tensors are entirely on the accelerated
+list) over a smaller "IQ4_NL-named" dynamic quant** — file size and ARM
+decode speed are not the same axis for this class of quant.
 
 ## Known open items
 
-- **Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get ordinary KV-cache
-  prefix reuse** — a known, sourced, upstream llama.cpp limitation, not an
-  eullm gap; see § 8.2. `--ctx-checkpoints`/`--checkpoint-min-step`
-  (v0.6.24) is the shipped mitigation, but its restore path is only
-  verified against the underlying FFI primitives here (no ARM hardware,
-  no 35B model in this environment) — validating it end to end on the
-  actual hybrid model on real Orion hardware is the next concrete step.
-- `qwen3.6-35b-a3b` currently runs Q4_K_M, which has no ARM repack fast
-  path; switching to the Unsloth `UD-IQ4_NL` GGUF (confirmed
-  ARM-accelerated format, smaller file) is untested here — see § 8.3.
-- eullm's chat template resends historical `<think>` blocks verbatim,
-  unlike the official Qwen3.6 template's default (strip past reasoning
-  unless `preserve_thinking` is set) — see § 8.2, last paragraph.
+- ~~Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get ordinary KV-cache
+  prefix reuse~~ — **resolved (v0.6.25 + v0.6.26)**, confirmed on real
+  Orion hardware against the real 35B model: 100% exact-match reuse
+  across 6+ consecutive turns, multiple topics, both 4096/16384 context
+  and F16/Q8_0 KV cache. Root cause was retokenization instability +
+  a `/no_think` history-corruption bug, not the rollback window size —
+  see § 8.2. `--ctx-checkpoints` remains implemented and safe but turned
+  out not to be the fix for this particular scenario.
+- ~~`qwen3.6-35b-a3b` running Q4_K_M vs switching to UD-IQ4_NL~~ —
+  **tested, resolved**: UD-IQ4_NL is measurably *slower* despite being
+  smaller (34% of its variable tensors are ARM-accelerated vs 100% for
+  Q4_K_M) — see § 8.3. Q4_K_M is the better choice for this hardware, not
+  a fallback.
+- eullm's chat template resends historical `<think>` blocks verbatim when
+  thinking is *on*, unlike the official Qwen3.6 template's default
+  (strip past reasoning unless `preserve_thinking` is set). This is a
+  separate, still-open, lower-priority deviation from official behavior —
+  distinct from the (now-fixed) `/no_think`-suppression persistence bug,
+  and doesn't block the reuse result above (verbatim resend is actually
+  what makes exact-text-prefix matching work reliably when thinking is
+  on).
 - Exact big-core clock ceiling (2.6 vs 2.8 GHz) varies by silicon revision —
   read it on the actual unit, don't assume.
 - Power telemetry is unconfirmed; treat as absent until verified with

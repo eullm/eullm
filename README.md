@@ -32,6 +32,28 @@
 
 ---
 
+> ### 🇪🇺 Proven: a 35B-parameter model, fully local, on European ARM hardware, no GPU
+>
+> A 35B-parameter hybrid MoE model (`qwen3.6-35b-a3b`, ~3B active params/token)
+> running entirely on CPU on a **Radxa Orion O6 (CIX P1 SoC, Armv9.2-A,
+> 12-core, ~20W board power)** — no GPU, no NPU, consumer-grade EU-available
+> hardware:
+>
+> - **~9-11 tok/s decode**, sustained across real multi-turn conversations
+>   and multiple topics
+> - **Multi-turn KV-cache reuse confirmed at 100% exact match** — every turn
+>   reuses the *entire* prior turn's resident state, verified across 6+
+>   consecutive turns at both 4096 and 16384-token context, with both F16 and
+>   Q8_0 KV cache — not a lucky first turn, a sustained, reproducible result
+> - Root-caused and fixed two real bugs that were silently degrading this to
+>   a small, unstable fraction before it worked (see below) — this wasn't a
+>   default that "just worked," it required finding why it didn't
+>
+> This is the WP4 (Sovereign AI / EuLLM Integration) proof point for the
+> POSCAR EIC Transition effort: a large, capable open model, genuinely
+> running on sovereign, GPU-free, low-power EU hardware — not a toy demo on
+> a small distilled model.
+
 ## Try it now
 
 **EULLM Engine is a drop-in Ollama replacement built in Rust.** Download a binary, run any GGUF model (Qwen, Mistral, DeepSeek, Phi, Gemma, …), get an Ollama-compatible + OpenAI-compatible API on port 11434. No Python, no Docker, no telemetry.
@@ -334,14 +356,16 @@ to the previous full-tokenize + token-level longest-common-prefix matching
 whenever no exact text prefix exists (a genuinely new conversation, an
 edited/branching history, or a cold-started slot) — no regression versus
 today's behavior in those cases. No new flag; this applies automatically
-wherever prefix reuse already applied. Verified on a real running server
-(TinyLlama, real multi-turn conversation through the actual API path):
-after the fix, `reused N from cache` reports the *entire* previous turn's
-resident length every time, not a small unstable fraction — confirmed via
-a dedicated debug log line (`exact text-prefix match — reusing N tokens
-without retokenizing`). Whether this actually resolves the hybrid 35B
-model's rollback rejection on real ARM hardware — as opposed to a dense
-model in this sandbox — is the next thing to check on real Orion hardware.
+wherever prefix reuse already applied. Verified twice: first on a sandboxed
+server (TinyLlama, real multi-turn conversation through the actual API
+path) via a dedicated debug log line (`exact text-prefix match — reusing N
+tokens without retokenizing`); then — the result that actually matters —
+**on real Orion hardware against the real 35B hybrid model**, where it
+resolved the rollback rejection completely: `reused N from cache`
+consistently matched the *entire* previous turn's resident length across
+6+ consecutive turns spanning multiple topics, at both 4096 and
+16384-token context, with F16 and Q8_0 KV cache — zero `reused prefill
+failed` warnings once both this fix and the one below landed together.
 
 **A second, sharper bug behind the same symptom: `/no_think` (`eullm run
 --cli`'s sticky reasoning toggle) actively corrupted history reconstruction.**
@@ -399,6 +423,35 @@ specifically for the hybrid/recurrent case above. Verified end to end
 (capture → restore into a fresh sequence → continued generation produces
 an identical continuation to the original, uninterrupted state) before
 shipping.
+
+### On ARM CPU: a smaller quantized file can be *slower*, not faster
+
+Counter-intuitive finding from real-hardware testing, worth documenting
+because "pick the smaller file" is the natural instinct and is wrong here.
+ggml's ARM online-repack fast-matmul path (i8mm/dotprod-accelerated) is
+registered for specific tensor types only — confirmed by reading
+`ggml-cpu/repack.cpp` directly: `Q4_0`, `Q4_K`, `Q5_K`, `Q6_K`, `IQ4_NL`,
+`MXFP4`, `Q8_0`. Comparing two real quantizations of the same 35B model
+side by side (clean, isolated logs — `- type ... tensors` + `file size`
+lines from the loader, no cross-run contamination):
+
+| | Q4_K_M | "UD-IQ4_NL" (Unsloth Dynamic) |
+|---|---|---|
+| Shared tensors | 361 × f32, 251 × q8_0 | 361 × f32, 251 × q8_0 |
+| Variable tensors | 80 × Q4_K + 37 × Q5_K + 4 × Q6_K | 37 × IQ4_NL + **80 × IQ3_S** + 4 × Q6_K |
+| File size | 20.60 GiB (5.11 BPW) | 16.79 GiB (4.16 BPW) — smaller |
+| ARM-accelerated tensors | **121 / 121** (100%) | 41 / 121 (34%) |
+
+The smaller file's size comes from pushing the majority of its "variable"
+tensors down to **IQ3_S** — a codebook-based format with **no registered
+ARM repack kernel at all** (confirmed absent from `repack.cpp`; `Q5_K`, by
+contrast, *is* registered and ARM-accelerated, gated the same way as
+`Q4_K`/`Q6_K`). Result: the "smaller, IQ4_NL" file is measurably *slower*
+in practice, because two-thirds of its variable tensors run the
+unaccelerated generic path. **For CPU-only ARM deployments, prefer a
+quantization where every non-shared tensor type is on the accelerated
+list above over a smaller file that isn't** — file size and ARM decode
+speed are not the same axis.
 
 ## What's ready today, what's coming
 
