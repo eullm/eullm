@@ -5,11 +5,13 @@
 //! During early development, models are fetched from HuggingFace.
 
 use std::fs;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+
+use sha2::{Digest, Sha256};
 
 /// Progress callback: (bytes_downloaded, total_bytes).
 /// `total_bytes` is 0 if the server didn't send Content-Length.
@@ -56,10 +58,16 @@ pub fn default_connections() -> usize {
 ///
 /// If the download fails at any point, the partial `.part` file is removed
 /// before returning the error, so failed pulls don't leave gigabytes of
-/// orphaned bytes on disk.
+/// orphaned bytes on disk. This includes a SHA-256 mismatch against
+/// `expected_sha256` (when given) — verification runs on the `.part` file
+/// before it's renamed into place, so a corrupted or tampered download is
+/// never left at `dest` under any name. Pass `None` when no digest is known
+/// (e.g. an arbitrary user-supplied URL) — the file is downloaded but not
+/// verified, with a warning logged.
 pub async fn download_file(
     url: &str,
     dest: &Path,
+    expected_sha256: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Ensure parent directory exists up-front so we can put the .part there.
@@ -68,7 +76,7 @@ pub async fn download_file(
     }
     let tmp_path = dest.with_extension("gguf.part");
 
-    let result = download_file_smart(url, dest, &tmp_path, on_progress).await;
+    let result = download_file_smart(url, dest, &tmp_path, expected_sha256, on_progress).await;
     if result.is_err() {
         // Best-effort cleanup. Ignore the error: we already have a real error
         // to report, and not being able to delete a transient file shouldn't
@@ -78,12 +86,59 @@ pub async fn download_file(
     result
 }
 
+/// Hash `path` with SHA-256, reading in fixed-size chunks so a multi-GB file
+/// is never loaded into memory at once.
+fn sha256_file(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(&hasher.finalize()))
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Verify `path`'s SHA-256 against `expected` (accepts either a bare hex
+/// digest or a `sha256:`-prefixed one, matching the catalog's format).
+/// Does nothing when `expected` is `None` or empty — most download call
+/// sites (arbitrary URLs, off-catalog pulls) have no digest to check.
+fn verify_digest_if_present(path: &Path, expected: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(expected) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
+        tracing::warn!(
+            "No integrity digest recorded for {} — downloaded without SHA-256 verification",
+            path.display()
+        );
+        return Ok(());
+    };
+    let expected = expected.strip_prefix("sha256:").unwrap_or(expected);
+
+    let actual = sha256_file(path)?;
+    if !actual.eq_ignore_ascii_case(expected) {
+        return Err(format!(
+            "SHA-256 mismatch for {}: expected {expected}, got {actual}. \
+             The download may be corrupted or the source may have changed.",
+            path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
 /// Probe the URL for Range support and either fan out into parallel chunk
 /// workers or fall back to a single streaming download.
 async fn download_file_smart(
     url: &str,
     dest: &Path,
     tmp_path: &Path,
+    expected_sha256: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::builder()
@@ -100,7 +155,7 @@ async fn download_file_smart(
 
     if !supports_range || total == 0 || connections <= 1 {
         // Legacy path: one connection, sequential stream.
-        return download_stream(&client, url, tmp_path, dest, on_progress).await;
+        return download_stream(&client, url, tmp_path, dest, expected_sha256, on_progress).await;
     }
 
     // Pre-allocate the destination so chunk workers can write at their offsets.
@@ -131,6 +186,7 @@ async fn download_file_smart(
     }
     drop(workers);
 
+    verify_digest_if_present(tmp_path, expected_sha256)?;
     fs::rename(tmp_path, dest)?;
     Ok(())
 }
@@ -250,6 +306,7 @@ async fn download_stream(
     url: &str,
     tmp_path: &Path,
     dest: &Path,
+    expected_sha256: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let response = client.get(url).send().await?;
@@ -283,6 +340,7 @@ async fn download_stream(
     file.flush()?;
     drop(file);
 
+    verify_digest_if_present(tmp_path, expected_sha256)?;
     fs::rename(tmp_path, dest)?;
 
     Ok(())
@@ -295,6 +353,7 @@ pub async fn download_from_huggingface(
     repo: &str,
     filename: &str,
     dest: &Path,
+    expected_sha256: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url = format!(
@@ -302,7 +361,7 @@ pub async fn download_from_huggingface(
         repo, filename
     );
     tracing::info!("Downloading from HuggingFace: {url}");
-    download_file(&url, dest, on_progress).await
+    download_file(&url, dest, expected_sha256, on_progress).await
 }
 
 /// A parsed HuggingFace repo reference, e.g. `hf.co/owner/repo:Q4_K_M`.
@@ -533,6 +592,47 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_temp_file(contents: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("eullm-sha256-test-{}", uuid::Uuid::new_v4()));
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn sha256_file_matches_a_known_vector() {
+        // sha256("") — the empty-string test vector everyone can check by hand.
+        let path = write_temp_file(b"");
+        let hash = sha256_file(&path).unwrap();
+        fs::remove_file(&path).ok();
+        assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    }
+
+    #[test]
+    fn verify_digest_if_present_accepts_a_match() {
+        let path = write_temp_file(b"hello eullm");
+        let hash = sha256_file(&path).unwrap();
+        let result = verify_digest_if_present(&path, Some(&format!("sha256:{hash}")));
+        fs::remove_file(&path).ok();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn verify_digest_if_present_rejects_a_mismatch() {
+        let path = write_temp_file(b"hello eullm");
+        let wrong_digest = format!("sha256:{}", "0".repeat(64));
+        let result = verify_digest_if_present(&path, Some(&wrong_digest));
+        fs::remove_file(&path).ok();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_digest_if_present_skips_when_none_or_empty() {
+        let path = write_temp_file(b"hello eullm");
+        assert!(verify_digest_if_present(&path, None).is_ok());
+        assert!(verify_digest_if_present(&path, Some("")).is_ok());
+        fs::remove_file(&path).ok();
+    }
 
     #[test]
     fn split_ranges_exact_multiple() {

@@ -734,7 +734,7 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
                 let _ = std::io::Write::flush(&mut std::io::stderr());
             }
         });
-        download_from_huggingface(&hf.repo, &filename, &gguf_dest, Some(progress)).await
+        download_from_huggingface(&hf.repo, &filename, &gguf_dest, None, Some(progress)).await
     };
     eprintln!();
 
@@ -828,7 +828,7 @@ async fn cmd_pull_url(store: &ModelStore, url: &str) {
                 let _ = std::io::Write::flush(&mut std::io::stderr());
             }
         });
-        download_file(url, &gguf_dest, Some(progress)).await
+        download_file(url, &gguf_dest, None, Some(progress)).await
     };
     eprintln!();
 
@@ -962,7 +962,8 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
             }
         });
 
-        download_from_huggingface(&hf_repo, &hf_filename, &gguf_dest, Some(progress)).await
+        let expected_sha256 = if entry_clone.digest.is_empty() { None } else { Some(entry_clone.digest.as_str()) };
+        download_from_huggingface(&hf_repo, &hf_filename, &gguf_dest, expected_sha256, Some(progress)).await
     };
 
     eprintln!(); // newline after progress
@@ -1057,7 +1058,7 @@ async fn download_mmproj(
         }
     });
 
-    match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, Some(progress)).await {
+    match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, None, Some(progress)).await {
         Ok(()) => {
             eprintln!();
             println!("  mmproj ready ({}).", mmproj_filename);
