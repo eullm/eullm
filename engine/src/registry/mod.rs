@@ -7,8 +7,8 @@
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use sha2::{Digest, Sha256};
@@ -110,7 +110,10 @@ fn hex_encode(bytes: &[u8]) -> String {
 /// digest or a `sha256:`-prefixed one, matching the catalog's format).
 /// Does nothing when `expected` is `None` or empty — most download call
 /// sites (arbitrary URLs, off-catalog pulls) have no digest to check.
-fn verify_digest_if_present(path: &Path, expected: Option<&str>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+fn verify_digest_if_present(
+    path: &Path,
+    expected: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let Some(expected) = expected.map(str::trim).filter(|s| !s.is_empty()) else {
         tracing::warn!(
             "No integrity digest recorded for {} — downloaded without SHA-256 verification",
@@ -312,12 +315,7 @@ async fn download_stream(
     let response = client.get(url).send().await?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "Download failed: HTTP {} from {}",
-            response.status(),
-            url
-        )
-        .into());
+        return Err(format!("Download failed: HTTP {} from {}", response.status(), url).into());
     }
 
     let total = response.content_length().unwrap_or(0);
@@ -356,10 +354,7 @@ pub async fn download_from_huggingface(
     expected_sha256: Option<&str>,
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!(
-        "https://huggingface.co/{}/resolve/main/{}",
-        repo, filename
-    );
+    let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, filename);
     tracing::info!("Downloading from HuggingFace: {url}");
     download_file(&url, dest, expected_sha256, on_progress).await
 }
@@ -472,7 +467,10 @@ fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String
     // If a quant was requested and it disambiguates to a single file, use it
     // even if other (non-matching) shards exist.
     if requested_quant.is_some() {
-        let non_shard: Vec<&&String> = candidates.iter().filter(|f| !is_shard(f.as_str())).collect();
+        let non_shard: Vec<&&String> = candidates
+            .iter()
+            .filter(|f| !is_shard(f.as_str()))
+            .collect();
         if non_shard.len() == 1 {
             return Ok(non_shard[0].to_string());
         }
@@ -605,7 +603,10 @@ mod tests {
         let path = write_temp_file(b"");
         let hash = sha256_file(&path).unwrap();
         fs::remove_file(&path).ok();
-        assert_eq!(hash, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+        assert_eq!(
+            hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[test]

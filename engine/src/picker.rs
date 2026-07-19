@@ -14,7 +14,7 @@
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 
-use crate::models::{catalog, CatalogEntry, ModelStore};
+use crate::models::{CatalogEntry, ModelStore, catalog};
 
 /// What the user picked.
 #[derive(Debug, Clone)]
@@ -144,14 +144,21 @@ fn prompt_user(
     }
 
     if !catalog_models.is_empty() {
-        println!("  │  CATALOG ({} models, all permissive licenses)", catalog_models.len());
+        println!(
+            "  │  CATALOG ({} models, all permissive licenses)",
+            catalog_models.len()
+        );
 
         // Order: recommended first, then by params asc, then by name.
         let mut ordered: Vec<(usize, &CatalogEntry)> = catalog_models.iter().enumerate().collect();
         ordered.sort_by(|a, b| {
             b.1.recommended
                 .cmp(&a.1.recommended)
-                .then_with(|| a.1.params_b.partial_cmp(&b.1.params_b).unwrap_or(std::cmp::Ordering::Equal))
+                .then_with(|| {
+                    a.1.params_b
+                        .partial_cmp(&b.1.params_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
                 .then_with(|| a.1.id.cmp(&b.1.id))
         });
 
@@ -163,10 +170,10 @@ fn prompt_user(
             let local_tag = if store.exists(&m.id) { "[local]" } else { "" };
             let rec_tag = if m.recommended { "[recommended]" } else { "" };
             let tags = match (local_tag, rec_tag) {
-                ("", "")     => String::new(),
-                ("", r)      => r.to_string(),
-                (l, "")      => l.to_string(),
-                (l, r)       => format!("{l} {r}"),
+                ("", "") => String::new(),
+                ("", r) => r.to_string(),
+                (l, "") => l.to_string(),
+                (l, r) => format!("{l} {r}"),
             };
             println!(
                 "  │   {:>3}) {} {:<28} {:>8}  {:<14} {}",

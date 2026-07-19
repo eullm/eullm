@@ -60,9 +60,7 @@ struct ArrayPatch {
 
 /// Known GGUF metadata keys that Ollama may write with too few array elements.
 /// Each entry is (key_name, expected_element_count).
-const KNOWN_FIXES: &[(&str, u64)] = &[
-    ("qwen35.rope.dimension_sections", 4),
-];
+const KNOWN_FIXES: &[(&str, u64)] = &[("qwen35.rope.dimension_sections", 4)];
 
 /// Check whether a GGUF file needs Ollama compatibility patches.  If so,
 /// write a patched copy to `dst` and return `Ok(true)`.  If no patching is
@@ -118,9 +116,7 @@ pub fn patch_gguf_if_needed(src: &Path, dst: &Path) -> io::Result<bool> {
                     target_count: target,
                     elem_size: elem_sz,
                 });
-                tracing::info!(
-                    "GGUF patch: {key} has {count} elements, extending to {target}"
-                );
+                tracing::info!("GGUF patch: {key} has {count} elements, extending to {target}");
             }
         } else {
             skip_gguf_value(&mut f, vtype)?;

@@ -70,11 +70,7 @@ impl CatalogEntry {
     /// Model family derived from the id prefix: `qwen3-8b` → `qwen3`.
     /// Used by Ollama-compatible `/api/show` to fill the `family` field.
     pub fn base(&self) -> String {
-        self.id
-            .split('-')
-            .next()
-            .unwrap_or(&self.id)
-            .to_string()
+        self.id.split('-').next().unwrap_or(&self.id).to_string()
     }
 
     /// Source HF path, used by Ollama-compatible `/api/show`.
@@ -193,7 +189,10 @@ mod tests {
     #[test]
     fn find_model_works_with_short_id() {
         assert!(find_model("qwen3-8b").is_some());
-        assert!(find_model("QWEN3-8B").is_some(), "should be case-insensitive");
+        assert!(
+            find_model("QWEN3-8B").is_some(),
+            "should be case-insensitive"
+        );
         assert!(find_model("does-not-exist").is_none());
     }
 

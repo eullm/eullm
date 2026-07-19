@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use models::{catalog, ModelStore};
+use models::{ModelStore, catalog};
 
 use crate::inference::{BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig};
 
@@ -43,7 +43,12 @@ const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Metal)");
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (ROCm)");
 #[cfg(feature = "vulkan")]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Vulkan)");
-#[cfg(not(any(feature = "cuda", feature = "metal", feature = "rocm", feature = "vulkan")))]
+#[cfg(not(any(
+    feature = "cuda",
+    feature = "metal",
+    feature = "rocm",
+    feature = "vulkan"
+)))]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
 
 #[derive(Parser)]
@@ -411,7 +416,8 @@ async fn main() {
         let args: Vec<String> = std::env::args().collect();
         if args.contains(&"--daemon".to_string()) {
             // Find --pidfile value.
-            let pidfile = args.iter()
+            let pidfile = args
+                .iter()
                 .position(|a| a == "--pidfile")
                 .and_then(|i| args.get(i + 1))
                 .map(|s| s.as_str())
@@ -467,25 +473,55 @@ async fn main() {
         None => match picker::pick(&store).await {
             Some(picker::Picked::Local(path)) => Commands::Run {
                 model: Some(path.to_string_lossy().into_owned()),
-                port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0,
-                ctx_checkpoints: 0, checkpoint_min_step: 8192, ctx_size: 4096,
-                threads: None, batch_size: 1, no_flash_attn: false,
-                n_batch: 2048, cache_type_k: "f16".into(),
-                cache_type_v: "f16".into(), web: false, no_ui: false,
-                cli: false, ui_port: 11435, daemon: false,
+                port: 11434,
+                replace: false,
+                gpu_layers: -1,
+                fit: true,
+                fit_strict: false,
+                cpu_moe: false,
+                n_cpu_moe: 0,
+                rs_seq: 0,
+                ctx_checkpoints: 0,
+                checkpoint_min_step: 8192,
+                ctx_size: 4096,
+                threads: None,
+                batch_size: 1,
+                no_flash_attn: false,
+                n_batch: 2048,
+                cache_type_k: "f16".into(),
+                cache_type_v: "f16".into(),
+                web: false,
+                no_ui: false,
+                cli: false,
+                ui_port: 11435,
+                daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
                 image: None,
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
-                port: 11434, replace: false, gpu_layers: -1, fit: true,
-                fit_strict: false, cpu_moe: false, n_cpu_moe: 0, rs_seq: 0,
-                ctx_checkpoints: 0, checkpoint_min_step: 8192, ctx_size: 4096,
-                threads: None, batch_size: 1, no_flash_attn: false,
-                n_batch: 2048, cache_type_k: "f16".into(),
-                cache_type_v: "f16".into(), web: false, no_ui: false,
-                cli: false, ui_port: 11435, daemon: false,
+                port: 11434,
+                replace: false,
+                gpu_layers: -1,
+                fit: true,
+                fit_strict: false,
+                cpu_moe: false,
+                n_cpu_moe: 0,
+                rs_seq: 0,
+                ctx_checkpoints: 0,
+                checkpoint_min_step: 8192,
+                ctx_size: 4096,
+                threads: None,
+                batch_size: 1,
+                no_flash_attn: false,
+                n_batch: 2048,
+                cache_type_k: "f16".into(),
+                cache_type_v: "f16".into(),
+                web: false,
+                no_ui: false,
+                cli: false,
+                ui_port: 11435,
+                daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
                 image: None,
             },
@@ -507,7 +543,9 @@ async fn main() {
                 eprintln!("  eullm pull <catalog-id>               Download a catalog model");
                 eprintln!("  eullm --help                          Show full help");
                 eprintln!();
-                eprintln!("Tip: launch `eullm` from an interactive terminal to pick a model from a menu.");
+                eprintln!(
+                    "Tip: launch `eullm` from an interactive terminal to pick a model from a menu."
+                );
                 std::process::exit(1);
             }
         },
@@ -576,10 +614,12 @@ async fn main() {
             // merged upstream. Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
             let model_lower = model.to_lowercase();
             let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
-            let needs_correction = ctk != inference::KvCacheType::F16
-                || ctv != inference::KvCacheType::F16;
+            let needs_correction =
+                ctk != inference::KvCacheType::F16 || ctv != inference::KvCacheType::F16;
             if is_gemma4 && needs_correction {
-                eprintln!("[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v}).");
+                eprintln!(
+                    "[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v})."
+                );
                 eprintln!("[EULLM] Mixed SWA architecture (D=512/256) requires f16 KV cache.");
                 eprintln!("[EULLM] Auto-correcting to f16/f16.");
                 ctk = inference::KvCacheType::F16;
@@ -587,30 +627,85 @@ async fn main() {
             }
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
-                eprintln!("Use --cpu-moe to offload all experts, or --n-cpu-moe N to offload only the first N layers.");
+                eprintln!(
+                    "Use --cpu-moe to offload all experts, or --n-cpu-moe N to offload only the first N layers."
+                );
                 std::process::exit(1);
             }
             let ui_port_opt = if no_ui { None } else { Some(ui_port) };
             // Auto-open the browser chat unless the user asked for terminal-only
             // (--cli / --no-chat) or disabled the UI entirely (--no-ui).
             let open_chat = !cli && ui_port_opt.is_some();
-            cmd_run(&store, &model, port, replace, gpu_layers, fit, fit_strict, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step, ctx_size, threads, batch_size, !no_flash_attn, n_batch, ctk, ctv, web, ui_port_opt, open_chat, image).await;
+            cmd_run(
+                &store,
+                &model,
+                port,
+                replace,
+                gpu_layers,
+                fit,
+                fit_strict,
+                cpu_moe,
+                n_cpu_moe,
+                rs_seq,
+                ctx_checkpoints,
+                checkpoint_min_step,
+                ctx_size,
+                threads,
+                batch_size,
+                !no_flash_attn,
+                n_batch,
+                ctk,
+                ctv,
+                web,
+                ui_port_opt,
+                open_chat,
+                image,
+            )
+            .await;
         }
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve { port, replace, batch_size, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step, ui, ui_port, daemon, pidfile } => {
+        Commands::Serve {
+            port,
+            replace,
+            batch_size,
+            cpu_moe,
+            n_cpu_moe,
+            rs_seq,
+            ctx_checkpoints,
+            checkpoint_min_step,
+            ui,
+            ui_port,
+            daemon,
+            pidfile,
+        } => {
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
-                eprintln!("Use --cpu-moe to offload all experts, or --n-cpu-moe N to offload only the first N layers.");
+                eprintln!(
+                    "Use --cpu-moe to offload all experts, or --n-cpu-moe N to offload only the first N layers."
+                );
                 std::process::exit(1);
             }
             let ui_port_opt = if ui { Some(ui_port) } else { None };
-            cmd_serve(port, replace, ui_port_opt, batch_size, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step).await;
+            cmd_serve(
+                port,
+                replace,
+                ui_port_opt,
+                batch_size,
+                cpu_moe,
+                n_cpu_moe,
+                rs_seq,
+                ctx_checkpoints,
+                checkpoint_min_step,
+            )
+            .await;
         }
         Commands::Unload { port } => cmd_unload(port).await,
-        Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
+        Commands::ImportOllama { model, ollama_dir } => {
+            cmd_import_ollama(&store, &model, ollama_dir.as_deref())
+        }
         Commands::Forge {
             source,
             profile,
@@ -680,10 +775,20 @@ fn hf_ref_to_model_id(hf: &registry::HfRef) -> String {
     let id: String = base
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let id = id.trim_matches('-').to_string();
-    if id.is_empty() { "model".to_string() } else { id }
+    if id.is_empty() {
+        "model".to_string()
+    } else {
+        id
+    }
 }
 
 /// Pull a GGUF from a HuggingFace repo shorthand, outside the catalog.
@@ -722,8 +827,8 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
 
     let result = {
         use crate::registry::{download_from_huggingface, format_progress};
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
         let last_printed = Arc::new(AtomicU64::new(0));
         let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
@@ -777,10 +882,20 @@ fn url_to_model_id(url: &str) -> (String, String) {
     let id: String = stem
         .to_lowercase()
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     let id = id.trim_matches('-').to_string();
-    let id = if id.is_empty() { "model".to_string() } else { id };
+    let id = if id.is_empty() {
+        "model".to_string()
+    } else {
+        id
+    };
 
     // Ensure the stored filename ends in .gguf so gguf_path() finds it.
     let filename = if filename.to_lowercase().ends_with(".gguf") {
@@ -816,8 +931,8 @@ async fn cmd_pull_url(store: &ModelStore, url: &str) {
 
     let result = {
         use crate::registry::{download_file, format_progress};
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
         let last_printed = Arc::new(AtomicU64::new(0));
         let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
@@ -908,7 +1023,10 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
     println!("Pulling {} ...", entry.name);
     println!(
         "  {} | {} | ~{}GB VRAM | {}",
-        entry.description, entry.base(), entry.vram_gb, entry.license
+        entry.description,
+        entry.base(),
+        entry.vram_gb,
+        entry.license
     );
 
     if entry.hf_repo.is_empty() {
@@ -947,8 +1065,8 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
     // panics with "Cannot start a runtime from within a runtime".
     let result = {
         use crate::registry::{download_from_huggingface, format_progress};
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
 
         let last_printed = Arc::new(AtomicU64::new(0));
 
@@ -962,8 +1080,19 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
             }
         });
 
-        let expected_sha256 = if entry_clone.digest.is_empty() { None } else { Some(entry_clone.digest.as_str()) };
-        download_from_huggingface(&hf_repo, &hf_filename, &gguf_dest, expected_sha256, Some(progress)).await
+        let expected_sha256 = if entry_clone.digest.is_empty() {
+            None
+        } else {
+            Some(entry_clone.digest.as_str())
+        };
+        download_from_huggingface(
+            &hf_repo,
+            &hf_filename,
+            &gguf_dest,
+            expected_sha256,
+            Some(progress),
+        )
+        .await
     };
 
     eprintln!(); // newline after progress
@@ -1045,8 +1174,8 @@ async fn download_mmproj(
     println!("  Destination: {}", mmproj_dest.display());
 
     use crate::registry::{download_from_huggingface, format_progress};
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     let last_printed = Arc::new(AtomicU64::new(0));
     let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
@@ -1058,7 +1187,15 @@ async fn download_mmproj(
         }
     });
 
-    match download_from_huggingface(mmproj_repo, mmproj_filename, &mmproj_dest, None, Some(progress)).await {
+    match download_from_huggingface(
+        mmproj_repo,
+        mmproj_filename,
+        &mmproj_dest,
+        None,
+        Some(progress),
+    )
+    .await
+    {
         Ok(()) => {
             eprintln!();
             println!("  mmproj ready ({}).", mmproj_filename);
@@ -1116,8 +1253,17 @@ fn cmd_list(store: &ModelStore) {
                     id, size, m.vram_gb, m.status, desc
                 );
             }
-            println!("\nRun one with: eullm run <NAME>   (e.g. eullm run {})",
-                models.first().map(|m| if m.id.is_empty() { m.name.as_str() } else { m.id.as_str() }).unwrap_or("<NAME>"));
+            println!(
+                "\nRun one with: eullm run <NAME>   (e.g. eullm run {})",
+                models
+                    .first()
+                    .map(|m| if m.id.is_empty() {
+                        m.name.as_str()
+                    } else {
+                        m.id.as_str()
+                    })
+                    .unwrap_or("<NAME>")
+            );
         }
         Err(e) => {
             eprintln!("Error listing models: {e}");
@@ -1131,7 +1277,11 @@ fn cmd_show(store: &ModelStore, model: &str) {
     match store.get(model) {
         Ok(Some(manifest)) => {
             // Show the addressable id and the fresh catalog name when known.
-            let id = if manifest.id.is_empty() { model } else { &manifest.id };
+            let id = if manifest.id.is_empty() {
+                model
+            } else {
+                &manifest.id
+            };
             let display_name = catalog::find_model(id)
                 .map(|e| e.name.clone())
                 .unwrap_or_else(|| manifest.name.clone());
@@ -1209,7 +1359,11 @@ fn cmd_rm(store: &ModelStore, model: &str, force: bool) {
     }
 
     match store.delete(model) {
-        Ok(Some(freed)) => println!("Removed '{}' ({} freed).", manifest.name, format_bytes(freed)),
+        Ok(Some(freed)) => println!(
+            "Removed '{}' ({} freed).",
+            manifest.name,
+            format_bytes(freed)
+        ),
         Ok(None) => println!("Nothing to remove (already gone)."),
         Err(e) => {
             eprintln!("Error removing model: {e}");
@@ -1271,7 +1425,10 @@ async fn ensure_port_available(port: u16, replace: bool) {
             eprintln!();
             eprintln!("Options:");
             eprintln!("  1. Stop the existing service on port {port}");
-            eprintln!("  2. Use a different port:  eullm serve --port {}", port + 1);
+            eprintln!(
+                "  2. Use a different port:  eullm serve --port {}",
+                port + 1
+            );
             std::process::exit(1);
         }
     }
@@ -1432,7 +1589,9 @@ async fn cmd_run(
         if fit {
             let kv_bpe_k = inference::cache_type_bytes_per_elem(&cache_type_k);
             let kv_bpe_v = inference::cache_type_bytes_per_elem(&cache_type_v);
-            match fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v) {
+            match fit::run_fit(
+                &gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v,
+            ) {
                 fit::FitOutcome::Proceed(n) => gpu_layers = n,
                 fit::FitOutcome::Abort => {
                     // Clean return: don't load, don't bind a port. If we were
@@ -1538,9 +1697,7 @@ async fn cmd_run(
         eprintln!();
     }
 
-    let short = model_name
-        .strip_prefix("eullm/")
-        .unwrap_or(&model_name);
+    let short = model_name.strip_prefix("eullm/").unwrap_or(&model_name);
     let mode = if scheduler.is_some() {
         format!("continuous batching (max {batch_size} concurrent)")
     } else {
@@ -1568,21 +1725,34 @@ async fn cmd_run(
             "none (CPU only!)"
         };
         println!("  GPU backend:   {gpu_backend}");
-        println!("  GPU layers:    {}", if gpu_layers < 0 { "all".to_string() } else { gpu_layers.to_string() });
+        println!(
+            "  GPU layers:    {}",
+            if gpu_layers < 0 {
+                "all".to_string()
+            } else {
+                gpu_layers.to_string()
+            }
+        );
         if cpu_moe {
             println!("  CPU MoE:       enabled (expert tensors on CPU RAM)");
         } else if n_cpu_moe > 0 {
             println!("  CPU MoE:       first {n_cpu_moe} layers (expert tensors on CPU RAM)");
         }
         if rs_seq > 0 {
-            println!("  RS rollback:   {rs_seq} (recurrent-state window for hybrid/SSM architectures)");
+            println!(
+                "  RS rollback:   {rs_seq} (recurrent-state window for hybrid/SSM architectures)"
+            );
         }
         if ctx_checkpoints > 0 {
-            println!("  Checkpoints:   {ctx_checkpoints} max, every {checkpoint_min_step}+ new tokens (prompt-prefix restore)");
+            println!(
+                "  Checkpoints:   {ctx_checkpoints} max, every {checkpoint_min_step}+ new tokens (prompt-prefix restore)"
+            );
         }
         if batch_size > 0 {
             let per_seq = ctx_size / batch_size as u32;
-            println!("  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)");
+            println!(
+                "  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)"
+            );
             // The continuous-batching scheduler splits ctx_size evenly across
             // slots, so a single conversation that builds up history can only
             // use ctx_size / batch_size tokens before hitting "does not fit".
@@ -1595,9 +1765,7 @@ async fn cmd_run(
                 let one_slot = ctx_size;
                 let target_per_slot = 32768u32;
                 let target_total = target_per_slot.saturating_mul(batch_size as u32);
-                println!(
-                    "    For single-chat use:   --batch-size 1   (full {one_slot} tokens)"
-                );
+                println!("    For single-chat use:   --batch-size 1   (full {one_slot} tokens)");
                 println!(
                     "    For 32k per slot:      --ctx-size {target_total}   (= 32768 × {batch_size} slots)"
                 );
@@ -1605,12 +1773,18 @@ async fn cmd_run(
         } else {
             println!("  Context:       {ctx_size}");
         }
-        println!("  Flash attn:    {} (auto-detect)", if flash_attn { "enabled" } else { "disabled" });
+        println!(
+            "  Flash attn:    {} (auto-detect)",
+            if flash_attn { "enabled" } else { "disabled" }
+        );
         let k_name = inference::cache_type_display(&cache_type_k);
         let v_name = inference::cache_type_display(&cache_type_v);
         println!("  KV cache:      K={k_name} V={v_name}");
         if kv_k_mib > 0.0 || kv_v_mib > 0.0 {
-            println!("  KV memory:     K={:.0} MiB, V={:.0} MiB", kv_k_mib, kv_v_mib);
+            println!(
+                "  KV memory:     K={:.0} MiB, V={:.0} MiB",
+                kv_k_mib, kv_v_mib
+            );
         }
         if web {
             println!("  Web browsing:  enabled (URLs in messages are fetched and injected)");
@@ -1632,7 +1806,9 @@ async fn cmd_run(
             let eng = match engine.as_ref() {
                 Some(e) => e.clone(),
                 None => {
-                    eprintln!("Error: multimodal one-shot needs the sequential engine but none is loaded.");
+                    eprintln!(
+                        "Error: multimodal one-shot needs the sequential engine but none is loaded."
+                    );
                     std::process::exit(1);
                 }
             };
@@ -1640,7 +1816,9 @@ async fn cmd_run(
             return;
         }
         #[cfg(not(feature = "multimodal"))]
-        unreachable!("multimodal_oneshot==true is gated on --image, which is refused on text-only builds");
+        unreachable!(
+            "multimodal_oneshot==true is gated on --image, which is refused on text-only builds"
+        );
     }
 
     // Clone the scheduler handle for the interactive REPL before moving into api::serve.
@@ -1699,7 +1877,9 @@ async fn cmd_run(
     if open_chat && let Some(p) = ui_port {
         let url = format!("http://localhost:{p}/");
         match open_browser(&url) {
-            Ok(()) => println!("Opening chat in your browser: {url}\n  (use --cli to stay in the terminal)\n"),
+            Ok(()) => println!(
+                "Opening chat in your browser: {url}\n  (use --cli to stay in the terminal)\n"
+            ),
             Err(_) => println!("Open the chat in your browser: {url}\n"),
         }
     }
@@ -1722,7 +1902,17 @@ async fn cmd_run(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, batch_size: usize, cpu_moe: bool, n_cpu_moe: u32, rs_seq: u32, ctx_checkpoints: usize, checkpoint_min_step: u32) {
+async fn cmd_serve(
+    port: u16,
+    replace: bool,
+    ui_port: Option<u16>,
+    batch_size: usize,
+    cpu_moe: bool,
+    n_cpu_moe: u32,
+    rs_seq: u32,
+    ctx_checkpoints: usize,
+    checkpoint_min_step: u32,
+) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
         ensure_port_available(p, replace).await;
@@ -1863,8 +2053,13 @@ struct OllamaManifest {
 /// the only shape ever produced by Ollama's own manifests. Rejects anything
 /// else before it becomes a filesystem path component.
 fn is_valid_sha256_digest(digest: &str) -> bool {
-    let Some(hex) = digest.strip_prefix("sha256:") else { return false };
-    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    let Some(hex) = digest.strip_prefix("sha256:") else {
+        return false;
+    };
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 #[cfg(test)]
@@ -1873,7 +2068,10 @@ mod digest_validation_tests {
 
     #[test]
     fn accepts_a_real_shaped_digest() {
-        assert!(is_valid_sha256_digest(&format!("sha256:{}", "a".repeat(64))));
+        assert!(is_valid_sha256_digest(&format!(
+            "sha256:{}",
+            "a".repeat(64)
+        )));
     }
 
     #[test]
@@ -1891,7 +2089,10 @@ mod digest_validation_tests {
 
     #[test]
     fn rejects_uppercase_hex() {
-        assert!(!is_valid_sha256_digest(&format!("sha256:{}", "A".repeat(64))));
+        assert!(!is_valid_sha256_digest(&format!(
+            "sha256:{}",
+            "A".repeat(64)
+        )));
     }
 }
 
@@ -1919,9 +2120,14 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
     };
 
     if !ollama_root.exists() {
-        eprintln!("Error: Ollama directory not found: {}", ollama_root.display());
+        eprintln!(
+            "Error: Ollama directory not found: {}",
+            ollama_root.display()
+        );
         eprintln!("  Is Ollama installed? Try: ollama --version");
-        eprintln!("  Or specify a custom path: eullm import-ollama {model} --ollama-dir /path/to/ollama");
+        eprintln!(
+            "  Or specify a custom path: eullm import-ollama {model} --ollama-dir /path/to/ollama"
+        );
         std::process::exit(1);
     }
 
@@ -1963,7 +2169,11 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
                         if let Ok(tags) = std::fs::read_dir(entry.path()) {
                             for tag in tags.flatten() {
                                 let tag_name = tag.file_name();
-                                println!("  {}:{}", name.to_string_lossy(), tag_name.to_string_lossy());
+                                println!(
+                                    "  {}:{}",
+                                    name.to_string_lossy(),
+                                    tag_name.to_string_lossy()
+                                );
                             }
                         }
                     }
@@ -2008,7 +2218,10 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
     };
 
     if !is_valid_sha256_digest(&model_layer.digest) {
-        eprintln!("Error: malformed digest in Ollama manifest for '{model}': {}", model_layer.digest);
+        eprintln!(
+            "Error: malformed digest in Ollama manifest for '{model}': {}",
+            model_layer.digest
+        );
         std::process::exit(1);
     }
 
@@ -2060,7 +2273,9 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
     // (e.g. qwen35.rope.dimension_sections with 3 elements instead of 4).
     let patched = match gguf_patch::patch_gguf_if_needed(&blob_path, &dest_path) {
         Ok(true) => {
-            println!("  Patched GGUF metadata during copy (fixed array lengths for llama.cpp compatibility).");
+            println!(
+                "  Patched GGUF metadata during copy (fixed array lengths for llama.cpp compatibility)."
+            );
             true
         }
         Ok(false) => false,
@@ -2125,7 +2340,8 @@ fn copy_with_progress(
     use std::io::{Read, Write};
 
     let mut reader = std::io::BufReader::with_capacity(8 * 1024 * 1024, std::fs::File::open(src)?);
-    let mut writer = std::io::BufWriter::with_capacity(8 * 1024 * 1024, std::fs::File::create(dst)?);
+    let mut writer =
+        std::io::BufWriter::with_capacity(8 * 1024 * 1024, std::fs::File::create(dst)?);
 
     let mut copied: u64 = 0;
     let mut buf = vec![0u8; 8 * 1024 * 1024]; // 8MB buffer
@@ -2277,12 +2493,14 @@ async fn interactive_chat(
 ) {
     // Effective per-slot context — with continuous batching the total ctx
     // is divided among slots; injected web content must fit in one slot.
-    let effective_ctx = if batch_size > 1 { ctx_size / batch_size as u32 } else { ctx_size };
+    let effective_ctx = if batch_size > 1 {
+        ctx_size / batch_size as u32
+    } else {
+        ctx_size
+    };
     use std::io::{BufRead, Write};
 
-    let short = model_name
-        .strip_prefix("eullm/")
-        .unwrap_or(model_name);
+    let short = model_name.strip_prefix("eullm/").unwrap_or(model_name);
 
     let mut temperature: f32 = 0.8;
     let mut max_reply_tokens: u32 = 2048;
@@ -2358,7 +2576,10 @@ async fn interactive_chat(
             println!("Commands:");
             println!("  /bye              Exit the chat");
             println!("  /clear            Clear conversation history");
-            println!("  /think            Enable reasoning (current: {})", if think_mode { "on" } else { "off" });
+            println!(
+                "  /think            Enable reasoning (current: {})",
+                if think_mode { "on" } else { "off" }
+            );
             println!("  /no_think         Disable reasoning (sticky until /think)");
             println!("  /temp <0.0–2.0>   Set temperature (current: {temperature:.1})");
             println!("  /maxtokens <n>    Set max reply tokens (current: {max_reply_tokens})");
@@ -2408,8 +2629,15 @@ async fn interactive_chat(
 
         // Add user message to permanent history. When reasoning is toggled
         // off, append the ` /no_think` soft-switch the models actually honour.
-        let user_content = if think_mode { input.clone() } else { format!("{input} /no_think") };
-        history.push(ChatMessage { role: "user", content: user_content });
+        let user_content = if think_mode {
+            input.clone()
+        } else {
+            format!("{input} /no_think")
+        };
+        history.push(ChatMessage {
+            role: "user",
+            content: user_content,
+        });
 
         // Whether to let build_prompt open the assistant turn normally
         // (true) or force the empty `<think></think>` suppression (false).
@@ -2428,11 +2656,27 @@ async fn interactive_chat(
                 let existing_chars: usize = history.iter().map(|m| m.content.len()).sum();
                 let mut injected = Vec::new();
                 for url in &urls {
-                    match crate::tools::fetch_for_context(url, effective_ctx, existing_chars, &input).await {
+                    match crate::tools::fetch_for_context(
+                        url,
+                        effective_ctx,
+                        existing_chars,
+                        &input,
+                    )
+                    .await
+                    {
                         Ok((content, truncated)) => {
-                            let note = if truncated { " [truncated to fit context]" } else { "" };
+                            let note = if truncated {
+                                " [truncated to fit context]"
+                            } else {
+                                ""
+                            };
                             injected.push(format!("[Web content from {url}{note}]\n\n{content}"));
-                            eprintln!("[web] fetched {} ({} chars{})", url, content.len(), if truncated { ", truncated" } else { "" });
+                            eprintln!(
+                                "[web] fetched {} ({} chars{})",
+                                url,
+                                content.len(),
+                                if truncated { ", truncated" } else { "" }
+                            );
                         }
                         Err(e) => {
                             injected.push(format!("[Failed to fetch {url}: {e}]"));
@@ -2451,18 +2695,28 @@ async fn interactive_chat(
                     let mut tmp: Vec<&ChatMessage> = history[..insert_at].iter().collect();
                     tmp.push(&web_msg);
                     tmp.push(history.last().unwrap());
-                    let pairs: Vec<(&str, &str)> = tmp.iter().map(|m| (m.role, m.content.as_str())).collect();
+                    let pairs: Vec<(&str, &str)> =
+                        tmp.iter().map(|m| (m.role, m.content.as_str())).collect();
                     template.build_prompt(&pairs, think_arg)
                 } else {
-                    let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+                    let pairs: Vec<(&str, &str)> = history
+                        .iter()
+                        .map(|m| (m.role, m.content.as_str()))
+                        .collect();
                     template.build_prompt(&pairs, think_arg)
                 }
             } else {
-                let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+                let pairs: Vec<(&str, &str)> = history
+                    .iter()
+                    .map(|m| (m.role, m.content.as_str()))
+                    .collect();
                 template.build_prompt(&pairs, think_arg)
             }
         } else {
-            let pairs: Vec<(&str, &str)> = history.iter().map(|m| (m.role, m.content.as_str())).collect();
+            let pairs: Vec<(&str, &str)> = history
+                .iter()
+                .map(|m| (m.role, m.content.as_str()))
+                .collect();
             template.build_prompt(&pairs, think_arg)
         };
 
@@ -2511,7 +2765,9 @@ async fn interactive_chat(
                             // Erase the stop token (+ any trailing whitespace) from
                             // the terminal using backspaces.
                             let suffix_len = response_text.len() - trimmed.len() + stop.len();
-                            let erase_chars = response_text[response_text.len() - suffix_len..].chars().count();
+                            let erase_chars = response_text[response_text.len() - suffix_len..]
+                                .chars()
+                                .count();
                             let erase = "\x08 \x08".repeat(erase_chars);
                             print!("{erase}");
                             let _ = std::io::stdout().flush();
@@ -2656,7 +2912,10 @@ fn daemonize(pidfile: &str) {
 #[cfg(unix)]
 fn install_abort_handler() {
     unsafe {
-        libc::signal(libc::SIGABRT, abort_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGABRT,
+            abort_handler as *const () as libc::sighandler_t,
+        );
     }
 }
 
@@ -2714,10 +2973,7 @@ fn format_bytes(bytes: u64) -> String {
 /// This is the MVP entry point for the mtmd integration — deliberately tiny.
 /// API/UI multimodal surface is intentionally out of scope here.
 #[cfg(feature = "multimodal")]
-async fn run_multimodal_oneshot(
-    engine: Arc<InferenceEngine>,
-    image_path: PathBuf,
-) {
+async fn run_multimodal_oneshot(engine: Arc<InferenceEngine>, image_path: PathBuf) {
     use llama_cpp_2::mtmd::mtmd_default_marker;
     use std::io::Read;
     use tokio::sync::mpsc;
@@ -2730,7 +2986,11 @@ async fn run_multimodal_oneshot(
             std::process::exit(1);
         }
     };
-    eprintln!("Media loaded: {} ({} bytes)", image_path.display(), media_bytes.len());
+    eprintln!(
+        "Media loaded: {} ({} bytes)",
+        image_path.display(),
+        media_bytes.len()
+    );
 
     // 2. Read the user prompt from stdin (if piped) or fall back to a default.
     let mut user_prompt = String::new();
@@ -2780,7 +3040,11 @@ async fn run_multimodal_oneshot(
                 let _ = stdout.write_all(t.as_bytes());
                 let _ = stdout.flush();
             }
-            inference::StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
+            inference::StreamEvent::Done {
+                tokens_generated,
+                tokens_prompt,
+                duration_ms,
+            } => {
                 let _ = writeln!(stdout);
                 let _ = writeln!(
                     stdout,

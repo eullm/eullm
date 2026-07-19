@@ -13,10 +13,10 @@
 //!    cross-origin headaches for browsers.
 
 use axum::{
+    Router,
     http::header,
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 
 const INDEX_HTML: &str = include_str!("index.html");

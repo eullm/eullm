@@ -15,17 +15,17 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{header, StatusCode};
-use axum::response::sse::{Event, Sse};
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
-use axum::{routing::get, routing::post, Json, Router};
+use axum::response::sse::{Event, Sse};
+use axum::{Json, Router, routing::get, routing::post};
 use futures_util::stream::Stream;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
-use crate::inference::{GenerateRequest, InferenceEngine, SchedulerHandle, StreamEvent, JSON_GBNF};
+use crate::inference::{GenerateRequest, InferenceEngine, JSON_GBNF, SchedulerHandle, StreamEvent};
 use crate::models::EU_CATALOG;
 use crate::tools;
 
@@ -85,12 +85,15 @@ async fn ensure_model(
             }
         };
         if needs_swap {
-            state.swap_model(name, override_batch_size, override_ctx_size).await.map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": format!("Failed to load model '{name}': {e}") })),
-                )
-            })?;
+            state
+                .swap_model(name, override_batch_size, override_ctx_size)
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": format!("Failed to load model '{name}': {e}") })),
+                    )
+                })?;
         }
     }
 
@@ -99,7 +102,9 @@ async fn ensure_model(
     if slot.engine.is_none() && slot.scheduler.is_none() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": "No model loaded. Send a request with a \"model\" field, or use `eullm run <model>`." })),
+            Json(
+                json!({ "error": "No model loaded. Send a request with a \"model\" field, or use `eullm run <model>`." }),
+            ),
         ));
     }
 
@@ -145,7 +150,9 @@ fn parse_generate_params(body: &Value) -> SamplingParams {
     let top_k = get("top_k").and_then(|v| v.as_i64()).unwrap_or(40) as i32;
     let top_p = get("top_p").and_then(|v| v.as_f64()).unwrap_or(0.9) as f32;
     let min_p = get("min_p").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-    let repeat_penalty = get("repeat_penalty").and_then(|v| v.as_f64()).unwrap_or(1.1) as f32;
+    let repeat_penalty = get("repeat_penalty")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.1) as f32;
     let repeat_last_n = get("repeat_last_n").and_then(|v| v.as_i64()).unwrap_or(64) as i32;
     let seed = get("seed").and_then(|v| v.as_u64()).map(|v| v as u32);
     let num_ctx = get("num_ctx").and_then(|v| v.as_u64()).map(|v| v as u32);
@@ -153,7 +160,17 @@ fn parse_generate_params(body: &Value) -> SamplingParams {
     tracing::info!(
         "Request params: max_tokens={max_tokens}, temp={temperature:.2}, top_k={top_k}, top_p={top_p:.2}, repeat_penalty={repeat_penalty:.2}, num_ctx={num_ctx:?}"
     );
-    SamplingParams { max_tokens, temperature, top_k, top_p, min_p, repeat_penalty, repeat_last_n, seed, num_ctx }
+    SamplingParams {
+        max_tokens,
+        temperature,
+        top_k,
+        top_p,
+        min_p,
+        repeat_penalty,
+        repeat_last_n,
+        seed,
+        num_ctx,
+    }
 }
 
 fn is_streaming(body: &Value) -> bool {
@@ -188,7 +205,7 @@ fn parse_format_grammar(body: &Value) -> Option<String> {
 /// images. Accepts both raw base64 and the `data:...;base64,...` prefix.
 #[cfg(feature = "multimodal")]
 fn extract_multimodal_payload(messages: &[Value]) -> Option<(String, Vec<Vec<u8>>)> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     let last_user = messages
         .iter()
         .rev()
@@ -303,9 +320,9 @@ async fn inject_web_content(
     };
 
     // Find last user message
-    let last_user_idx = messages.iter().rposition(|m| {
-        m.get("role").and_then(|v| v.as_str()) == Some("user")
-    });
+    let last_user_idx = messages
+        .iter()
+        .rposition(|m| m.get("role").and_then(|v| v.as_str()) == Some("user"));
     let idx = match last_user_idx {
         Some(i) => i,
         None => return messages,
@@ -323,8 +340,14 @@ async fn inject_web_content(
     }
 
     // Estimate prompt chars already used (rough: all messages joined)
-    let existing_chars: usize = messages.iter()
-        .map(|m| m.get("content").and_then(|v| v.as_str()).unwrap_or("").len())
+    let existing_chars: usize = messages
+        .iter()
+        .map(|m| {
+            m.get("content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .len()
+        })
         .sum();
 
     let mut injections: Vec<String> = Vec::new();
@@ -336,10 +359,13 @@ async fn inject_web_content(
                 } else {
                     ""
                 };
-                injections.push(format!(
-                    "[Web content from {url}{note}]\n\n{content}"
-                ));
-                tracing::info!("Web: fetched {} ({} chars{})", url, content.len(), if truncated { ", truncated" } else { "" });
+                injections.push(format!("[Web content from {url}{note}]\n\n{content}"));
+                tracing::info!(
+                    "Web: fetched {} ({} chars{})",
+                    url,
+                    content.len(),
+                    if truncated { ", truncated" } else { "" }
+                );
             }
             Err(e) => {
                 injections.push(format!("[Failed to fetch {url}: {e}]"));
@@ -484,8 +510,14 @@ async fn generate(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let override_batch_size = body.get("batch_size").and_then(|v| v.as_u64()).map(|v| v as usize);
-    let override_ctx_size = body.get("ctx_size").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let override_batch_size = body
+        .get("batch_size")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let override_ctx_size = body
+        .get("ctx_size")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
@@ -527,11 +559,18 @@ async fn generate(
         let rx = sched.submit(request);
 
         if is_streaming(&body) {
-            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaGenerate))
+            Ok(ndjson_stream_response(
+                rx,
+                model,
+                StreamFormat::OllamaGenerate,
+            ))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
                 collect_stream(rx).await.map_err(|e| {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": e })),
+                    )
                 })?;
 
             let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
@@ -561,15 +600,29 @@ async fn generate(
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
-            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaGenerate))
+            Ok(ndjson_stream_response(
+                rx,
+                model,
+                StreamFormat::OllamaGenerate,
+            ))
         } else {
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
                 move || engine.generate(&request)
             })
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Task error: {e}") })),
+                )
+            })?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Inference error: {e}") })),
+                )
+            })?;
 
             let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
             audit.input_tokens = result.tokens_prompt;
@@ -589,7 +642,8 @@ async fn generate(
                 "prompt_eval_duration": 0,
                 "eval_count": result.tokens_generated,
                 "eval_duration": result.duration_ms * 1_000_000
-            })).into_response())
+            }))
+            .into_response())
         }
     }
 }
@@ -599,8 +653,14 @@ async fn chat(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let override_batch_size = body.get("batch_size").and_then(|v| v.as_u64()).map(|v| v as usize);
-    let override_ctx_size = body.get("ctx_size").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let override_batch_size = body
+        .get("batch_size")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let override_ctx_size = body
+        .get("ctx_size")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
@@ -610,7 +670,13 @@ async fn chat(
         .cloned()
         .unwrap_or_default();
 
-    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size, state.batch_size).await;
+    let messages = inject_web_content(
+        messages,
+        state.web_enabled,
+        state.ctx_size,
+        state.batch_size,
+    )
+    .await;
 
     // ── Multimodal MVP branch ──────────────────────────────────────────
     // If the last user message carries `images`, route through the
@@ -659,9 +725,13 @@ async fn chat(
             return Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat));
         }
         let rx = multimodal_to_channel(engine, mm_request, media);
-        let (text, tokens_generated, tokens_prompt, duration_ms) = collect_stream(rx)
-            .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))))?;
+        let (text, tokens_generated, tokens_prompt, duration_ms) =
+            collect_stream(rx).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e })),
+                )
+            })?;
         let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
         audit.input_tokens = tokens_prompt;
         audit.output_tokens = tokens_generated;
@@ -721,7 +791,10 @@ async fn chat(
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
                 collect_stream(rx).await.map_err(|e| {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": e })),
+                    )
                 })?;
 
             let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
@@ -745,7 +818,8 @@ async fn chat(
                 "prompt_eval_duration": 0,
                 "eval_count": tokens_generated,
                 "eval_duration": duration_ms * 1_000_000
-            })).into_response())
+            }))
+            .into_response())
         }
     } else {
         let engine = Arc::clone(snap.engine.as_ref().unwrap());
@@ -759,8 +833,18 @@ async fn chat(
                 move || engine.generate(&request)
             })
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Task error: {e}") })),
+                )
+            })?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Inference error: {e}") })),
+                )
+            })?;
 
             let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
             audit.input_tokens = result.tokens_prompt;
@@ -783,7 +867,8 @@ async fn chat(
                 "prompt_eval_duration": 0,
                 "eval_count": result.tokens_generated,
                 "eval_duration": result.duration_ms * 1_000_000
-            })).into_response())
+            }))
+            .into_response())
         }
     }
 }
@@ -853,8 +938,14 @@ async fn chat_completions(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let override_batch_size = body.get("batch_size").and_then(|v| v.as_u64()).map(|v| v as usize);
-    let override_ctx_size = body.get("ctx_size").and_then(|v| v.as_u64()).map(|v| v as u32);
+    let override_batch_size = body
+        .get("batch_size")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    let override_ctx_size = body
+        .get("ctx_size")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
@@ -864,7 +955,13 @@ async fn chat_completions(
         .cloned()
         .unwrap_or_default();
 
-    let messages = inject_web_content(messages, state.web_enabled, state.ctx_size, state.batch_size).await;
+    let messages = inject_web_content(
+        messages,
+        state.web_enabled,
+        state.ctx_size,
+        state.batch_size,
+    )
+    .await;
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
@@ -905,7 +1002,10 @@ async fn chat_completions(
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
                 collect_stream(rx).await.map_err(|e| {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e })))
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": e })),
+                    )
                 })?;
 
             let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
@@ -932,7 +1032,8 @@ async fn chat_completions(
                     "completion_tokens": tokens_generated,
                     "total_tokens": tokens_prompt + tokens_generated
                 }
-            })).into_response())
+            }))
+            .into_response())
         }
     } else {
         let engine = Arc::clone(snap.engine.as_ref().unwrap());
@@ -947,8 +1048,18 @@ async fn chat_completions(
                 move || engine.generate(&request)
             })
             .await
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Task error: {e}") }))))?
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Inference error: {e}") }))))?;
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Task error: {e}") })),
+                )
+            })?
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("Inference error: {e}") })),
+                )
+            })?;
 
             let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
             audit.input_tokens = result.tokens_prompt;
@@ -974,7 +1085,8 @@ async fn chat_completions(
                     "completion_tokens": result.tokens_generated,
                     "total_tokens": result.tokens_prompt + result.tokens_generated
                 }
-            })).into_response())
+            }))
+            .into_response())
         }
     }
 }
@@ -1111,7 +1223,12 @@ fn sequential_to_channel(
     rx
 }
 
-fn format_token_event(piece: &str, model: &str, completion_id: &str, format: StreamFormat) -> Value {
+fn format_token_event(
+    piece: &str,
+    model: &str,
+    completion_id: &str,
+    format: StreamFormat,
+) -> Value {
     match format {
         StreamFormat::OllamaGenerate => json!({
             "model": model,
