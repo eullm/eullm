@@ -27,7 +27,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tokio::sync::mpsc;
 
-use super::{GenerateRequest, InferenceConfig, StreamEvent};
+use super::{random_seed_fallback, GenerateRequest, InferenceConfig, StreamEvent};
 
 /// Configuration for the batch scheduler.
 #[derive(Debug, Clone)]
@@ -861,7 +861,7 @@ fn run_scheduler_loop(
                     };
 
                     let req = &scheduled.request;
-                    let seed = req.seed.unwrap_or(seq_id as u32);
+                    let seed = req.seed.unwrap_or_else(|| random_seed_fallback(seq_id as u32));
                     let sampler = {
                         let mut chain: Vec<LlamaSampler> = Vec::new();
                         // Grammar (if any) must be first in the chain

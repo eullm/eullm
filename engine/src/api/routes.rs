@@ -131,10 +131,15 @@ fn parse_generate_params(body: &Value) -> SamplingParams {
         body.get(key).or_else(|| options.and_then(|o| o.get(key)))
     };
 
+    // Ollama's real default is unbounded (-1: generate until context is
+    // full or a stop condition), not a small fixed cap — confirmed against
+    // Ollama's own docs/source, see ollama/ollama#7691. Leaving this
+    // unbounded here is safe because prefill_sequence() always clamps it to
+    // the remaining context budget regardless of what's requested.
     let max_tokens = get("max_tokens")
         .or_else(|| get("num_predict"))
         .and_then(|v| v.as_u64())
-        .unwrap_or(512) as u32;
+        .unwrap_or(u32::MAX as u64) as u32;
     // Defaults match Ollama: temperature=0.8, top_k=40, top_p=0.9, repeat_penalty=1.1
     let temperature = get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.8) as f32;
     let top_k = get("top_k").and_then(|v| v.as_i64()).unwrap_or(40) as i32;
@@ -1216,4 +1221,29 @@ fn model_names_match(loaded: &str, normalized_request: &str) -> bool {
         .and_then(|s| s.to_str())
         .unwrap_or(normalized_request);
     loaded_stem == request_stem
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A reasoning model doing free-text tool-calling can burn through
+    // hundreds of tokens of <think> before producing anything else — a
+    // small fixed cap here (the old default was 512) truncates mid-block
+    // and leaves a text-based tool-calling client (e.g. Cline) holding an
+    // unclosed tag. Confirmed on real hardware: see the v0.6.27 changelog.
+    #[test]
+    fn max_tokens_defaults_to_unbounded_not_a_small_fixed_cap() {
+        let sp = parse_generate_params(&json!({}));
+        assert_eq!(sp.max_tokens, u32::MAX);
+    }
+
+    #[test]
+    fn max_tokens_still_honors_an_explicit_client_value() {
+        let sp = parse_generate_params(&json!({ "max_tokens": 128 }));
+        assert_eq!(sp.max_tokens, 128);
+
+        let sp = parse_generate_params(&json!({ "options": { "num_predict": 256 } }));
+        assert_eq!(sp.max_tokens, 256);
+    }
 }
