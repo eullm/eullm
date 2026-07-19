@@ -15,8 +15,8 @@
 
 use std::num::NonZeroU32;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -27,7 +27,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tokio::sync::mpsc;
 
-use super::{random_seed_fallback, GenerateRequest, InferenceConfig, StreamEvent};
+use super::{GenerateRequest, InferenceConfig, StreamEvent, random_seed_fallback};
 
 /// Configuration for the batch scheduler.
 #[derive(Debug, Clone)]
@@ -225,7 +225,14 @@ impl SchedulerHandle {
         let (tx, rx) = mpsc::channel::<StreamEvent>(256);
 
         // Best-effort send — if the queue is full the request is rejected.
-        if self.tx.try_send(ScheduledRequest { request, tx: tx.clone() }).is_err() {
+        if self
+            .tx
+            .try_send(ScheduledRequest {
+                request,
+                tx: tx.clone(),
+            })
+            .is_err()
+        {
             let _ = tx.try_send(StreamEvent::Error(
                 "Scheduler queue full — try again later".into(),
             ));
@@ -269,14 +276,14 @@ impl BatchScheduler {
     ///
     /// Blocks until the model is fully loaded so that callers can rely on the
     /// handle being ready for inference when this method returns.
-    pub fn start(self) -> Result<(SchedulerHandle, ModelReadyInfo), Box<dyn std::error::Error + Send + Sync>> {
+    pub fn start(
+        self,
+    ) -> Result<(SchedulerHandle, ModelReadyInfo), Box<dyn std::error::Error + Send + Sync>> {
         // Validate model exists before spawning the thread.
         if !self.config.model_path.exists() {
-            return Err(format!(
-                "Model file not found: {}",
-                self.config.model_path.display()
-            )
-            .into());
+            return Err(
+                format!("Model file not found: {}", self.config.model_path.display()).into(),
+            );
         }
 
         let (req_tx, req_rx) =
@@ -301,7 +308,15 @@ impl BatchScheduler {
                 // Catch panics from Rust code. This won't catch C-level abort()
                 // from llama.cpp (see SIGABRT handler in main.rs for that).
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    run_scheduler_loop(config, sched_config, req_rx, notify_clone, notify_mutex_clone, shutdown_clone, ready_tx)
+                    run_scheduler_loop(
+                        config,
+                        sched_config,
+                        req_rx,
+                        notify_clone,
+                        notify_mutex_clone,
+                        shutdown_clone,
+                        ready_tx,
+                    )
                 })) {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => {
@@ -317,7 +332,9 @@ impl BatchScheduler {
                         };
                         tracing::error!("Scheduler thread panicked: {msg}");
                         eprintln!("\n[EULLM] FATAL: Scheduler thread panicked: {msg}");
-                        eprintln!("[EULLM] The inference engine has stopped. Restart eullm to continue.");
+                        eprintln!(
+                            "[EULLM] The inference engine has stopped. Restart eullm to continue."
+                        );
                     }
                 }
             })?;
@@ -329,13 +346,16 @@ impl BatchScheduler {
             Err(_) => return Err("Scheduler thread exited before model was loaded".into()),
         };
 
-        Ok((SchedulerHandle {
-            tx: req_tx,
-            notify,
-            notify_mutex,
-            shutdown,
-            thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
-        }, model_info))
+        Ok((
+            SchedulerHandle {
+                tx: req_tx,
+                notify,
+                notify_mutex,
+                shutdown,
+                thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
+            },
+            model_info,
+        ))
     }
 }
 
@@ -398,7 +418,10 @@ fn common_prefix_len(a: &[LlamaToken], b: &[LlamaToken]) -> usize {
 /// (exactly one token in the batch has logits enabled) stays correct in
 /// every case, including a full cache hit.
 fn pick_slot(idle_slots: &mut Vec<CachedSlot>, new_tokens: &[LlamaToken]) -> (i32, usize) {
-    debug_assert!(!idle_slots.is_empty(), "pick_slot called with no idle slots");
+    debug_assert!(
+        !idle_slots.is_empty(),
+        "pick_slot called with no idle slots"
+    );
 
     let mut best_idx = 0usize;
     let mut best_prefix = 0usize;
@@ -492,7 +515,11 @@ fn best_checkpoint<'a>(
 /// optimization, never a correctness requirement, so any failure (zero-size
 /// state, a short read) is swallowed and reported as `None` rather than
 /// propagated — the caller simply skips storing a checkpoint for this turn.
-fn take_checkpoint(ctx: &LlamaContext, seq_id: i32, tokens: Vec<LlamaToken>) -> Option<PromptCheckpoint> {
+fn take_checkpoint(
+    ctx: &LlamaContext,
+    seq_id: i32,
+    tokens: Vec<LlamaToken>,
+) -> Option<PromptCheckpoint> {
     let flags = llama_cpp_2::LlamaStateSeqFlags::empty();
     let size = ctx.state_seq_get_size_ext(seq_id, flags);
     if size == 0 {
@@ -534,12 +561,17 @@ fn finish_sequence_clean(
 
     if sched_config.ctx_checkpoints > 0 && !tokens.is_empty() {
         let due = match best_checkpoint(checkpoints, &tokens) {
-            Some(ancestor) => tokens.len() - ancestor.tokens.len() >= sched_config.checkpoint_min_step as usize,
+            Some(ancestor) => {
+                tokens.len() - ancestor.tokens.len() >= sched_config.checkpoint_min_step as usize
+            }
             None => true,
         };
         if due && let Some(checkpoint) = take_checkpoint(ctx, seq.seq_id, tokens.clone()) {
             if checkpoints.len() >= sched_config.ctx_checkpoints
-                && let Some((evict_idx, _)) = checkpoints.iter().enumerate().min_by_key(|(_, c)| c.created_at)
+                && let Some((evict_idx, _)) = checkpoints
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, c)| c.created_at)
             {
                 let evicted = checkpoints.swap_remove(evict_idx);
                 tracing::debug!(
@@ -664,27 +696,36 @@ fn run_scheduler_loop(
             if has_quantized_cache {
                 if has_mixed_tq {
                     // Mixed TQ fallback: try the heavier (more precise) type for both.
-                    let heavier = if let (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v))
-                        = (config.cache_type_k, config.cache_type_v) {
-                        if k >= v { config.cache_type_k } else { config.cache_type_v }
-                    } else {
-                        config.cache_type_k
-                    };
+                    let heavier =
+                        if let (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v)) =
+                            (config.cache_type_k, config.cache_type_v)
+                        {
+                            if k >= v {
+                                config.cache_type_k
+                            } else {
+                                config.cache_type_v
+                            }
+                        } else {
+                            config.cache_type_k
+                        };
                     let name = super::cache_type_display(&heavier);
                     eprintln!("[EULLM] Mixed TQ failed — trying {name}/{name}...");
 
-                    let ctx_params = super::build_ctx_params_with_cache(
-                        &config, ctx_size, heavier, heavier,
-                    ).with_n_seq_max(sched_config.max_batch_size as u32);
+                    let ctx_params =
+                        super::build_ctx_params_with_cache(&config, ctx_size, heavier, heavier)
+                            .with_n_seq_max(sched_config.max_batch_size as u32);
 
                     match model.new_context(&backend, ctx_params) {
                         Ok(c) => c,
                         Err(_) => {
                             eprintln!("[EULLM] {name} also failed — falling back to F16/F16");
                             let ctx_params = super::build_ctx_params_with_cache(
-                                &config, ctx_size,
-                                super::KvCacheType::F16, super::KvCacheType::F16,
-                            ).with_n_seq_max(sched_config.max_batch_size as u32);
+                                &config,
+                                ctx_size,
+                                super::KvCacheType::F16,
+                                super::KvCacheType::F16,
+                            )
+                            .with_n_seq_max(sched_config.max_batch_size as u32);
                             match model.new_context(&backend, ctx_params) {
                                 Ok(c) => c,
                                 Err(e3) => {
@@ -703,9 +744,12 @@ fn run_scheduler_loop(
                         config.cache_type_k, config.cache_type_v,
                     );
                     let ctx_params = super::build_ctx_params_with_cache(
-                        &config, ctx_size,
-                        super::KvCacheType::F16, super::KvCacheType::F16,
-                    ).with_n_seq_max(sched_config.max_batch_size as u32);
+                        &config,
+                        ctx_size,
+                        super::KvCacheType::F16,
+                        super::KvCacheType::F16,
+                    )
+                    .with_n_seq_max(sched_config.max_batch_size as u32);
 
                     match model.new_context(&backend, ctx_params) {
                         Ok(c) => c,
@@ -719,9 +763,7 @@ fn run_scheduler_loop(
                     }
                 }
             } else {
-                let msg = format!(
-                    "Context allocation failed (likely out of VRAM): {e}\n{hint}"
-                );
+                let msg = format!("Context allocation failed (likely out of VRAM): {e}\n{hint}");
                 let _ = ready_tx.send(Err(msg.clone()));
                 return Err(msg.into());
             }
@@ -774,9 +816,14 @@ fn run_scheduler_loop(
     loop {
         // ── 0. Check shutdown flag ────────────────────────────────────
         if shutdown.load(Ordering::SeqCst) {
-            tracing::info!("Shutdown requested — draining {} active sequences", active.len());
+            tracing::info!(
+                "Shutdown requested — draining {} active sequences",
+                active.len()
+            );
             for seq in &active {
-                let _ = seq.tx.try_send(StreamEvent::Error("Server shutting down".into()));
+                let _ = seq
+                    .tx
+                    .try_send(StreamEvent::Error("Server shutting down".into()));
             }
             return Ok(());
         }
@@ -830,7 +877,11 @@ fn run_scheduler_loop(
                     let (tokens, seq_id, reuse_len) = match fast_path {
                         Some(result) => result,
                         None => {
-                            let bos = if scheduled.request.raw { AddBos::Never } else { AddBos::Always };
+                            let bos = if scheduled.request.raw {
+                                AddBos::Never
+                            } else {
+                                AddBos::Always
+                            };
                             let tokens = match model.str_to_token(&prompt_text, bos) {
                                 Ok(t) => t,
                                 Err(e) => {
@@ -861,19 +912,28 @@ fn run_scheduler_loop(
                     };
 
                     let req = &scheduled.request;
-                    let seed = req.seed.unwrap_or_else(|| random_seed_fallback(seq_id as u32));
+                    let seed = req
+                        .seed
+                        .unwrap_or_else(|| random_seed_fallback(seq_id as u32));
                     let sampler = {
                         let mut chain: Vec<LlamaSampler> = Vec::new();
                         // Grammar (if any) must be first in the chain
                         if let Some(ref grammar_str) = req.grammar {
                             match LlamaSampler::grammar(&model, grammar_str, "root") {
                                 Ok(gs) => chain.push(gs),
-                                Err(e) => tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained"),
+                                Err(e) => tracing::warn!(
+                                    "Grammar sampler init failed ({e:?}), falling back to unconstrained"
+                                ),
                             }
                         }
                         // Repeat penalty (Ollama default: 1.1, last 64 tokens)
                         if req.repeat_penalty != 1.0 {
-                            chain.push(LlamaSampler::penalties(req.repeat_last_n, req.repeat_penalty, 0.0, 0.0));
+                            chain.push(LlamaSampler::penalties(
+                                req.repeat_last_n,
+                                req.repeat_penalty,
+                                0.0,
+                                0.0,
+                            ));
                         }
                         // Top-K (Ollama default: 40)
                         if req.top_k > 0 {
@@ -929,7 +989,13 @@ fn run_scheduler_loop(
                     // never a hard failure of the user's request.
                     let mut effective_reuse_len = reuse_len;
                     let mut prefill_result = prefill_sequence(
-                        &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
+                        &mut ctx,
+                        &config,
+                        &scheduled.request,
+                        &seq,
+                        per_seq_ctx,
+                        &tokens,
+                        effective_reuse_len,
                     );
                     if let Err(ref e) = prefill_result
                         && effective_reuse_len > 0
@@ -977,7 +1043,13 @@ fn run_scheduler_loop(
                             seq.seq_id,
                         );
                         prefill_result = prefill_sequence(
-                            &mut ctx, &config, &scheduled.request, &seq, per_seq_ctx, &tokens, effective_reuse_len,
+                            &mut ctx,
+                            &config,
+                            &scheduled.request,
+                            &seq,
+                            per_seq_ctx,
+                            &tokens,
+                            effective_reuse_len,
                         );
                     }
 
@@ -1000,7 +1072,13 @@ fn run_scheduler_loop(
                                 // Clean completion — the KV cache holds exactly
                                 // the prompt (this EOG token was never decoded),
                                 // so it's safe to keep and offer for reuse.
-                                finish_sequence_clean(&ctx, &seq, &mut idle_slots, &mut checkpoints, &sched_config);
+                                finish_sequence_clean(
+                                    &ctx,
+                                    &seq,
+                                    &mut idle_slots,
+                                    &mut checkpoints,
+                                    &sched_config,
+                                );
                             } else {
                                 seq.tokens_generated += 1;
                                 seq.generated_tokens.push(token);
@@ -1010,14 +1088,26 @@ fn run_scheduler_loop(
                                         // Mirrors generated_tokens: every decoded piece, unfiltered
                                         // by stop-sequence truncation (see field doc comment).
                                         seq.raw_generated_pieces.push(piece.clone());
-                                        match process_piece(&mut seq.pending, &seq.stop_sequences, &seq.filter_sequences, &piece) {
+                                        match process_piece(
+                                            &mut seq.pending,
+                                            &seq.stop_sequences,
+                                            &seq.filter_sequences,
+                                            &piece,
+                                        ) {
                                             PieceOutcome::Stop(out) => {
                                                 if !out.is_empty() {
-                                                    let _ = seq.tx.try_send(StreamEvent::Token(out));
+                                                    let _ =
+                                                        seq.tx.try_send(StreamEvent::Token(out));
                                                 }
                                                 send_done(&seq);
                                                 // Clean completion.
-                                                finish_sequence_clean(&ctx, &seq, &mut idle_slots, &mut checkpoints, &sched_config);
+                                                finish_sequence_clean(
+                                                    &ctx,
+                                                    &seq,
+                                                    &mut idle_slots,
+                                                    &mut checkpoints,
+                                                    &sched_config,
+                                                );
                                             }
                                             PieceOutcome::Emit(out) => {
                                                 if seq.tokens_generated >= seq.max_tokens {
@@ -1025,17 +1115,31 @@ fn run_scheduler_loop(
                                                     let tail = std::mem::take(&mut seq.pending);
                                                     let final_out = out + &tail;
                                                     if !final_out.is_empty() {
-                                                        let _ = seq.tx.try_send(StreamEvent::Token(final_out));
+                                                        let _ = seq.tx.try_send(
+                                                            StreamEvent::Token(final_out),
+                                                        );
                                                     }
                                                     send_done(&seq);
                                                     // Clean completion.
-                                                    finish_sequence_clean(&ctx, &seq, &mut idle_slots, &mut checkpoints, &sched_config);
+                                                    finish_sequence_clean(
+                                                        &ctx,
+                                                        &seq,
+                                                        &mut idle_slots,
+                                                        &mut checkpoints,
+                                                        &sched_config,
+                                                    );
                                                 } else {
-                                                    let disconnected = send_or_detect_disconnect(&seq.tx, out, seq.seq_id);
+                                                    let disconnected = send_or_detect_disconnect(
+                                                        &seq.tx, out, seq.seq_id,
+                                                    );
                                                     if disconnected {
                                                         // Cache state is not confirmed-safe (mid
                                                         // first-token piece): full wipe.
-                                                        let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                                        let _ = ctx.clear_kv_cache_seq(
+                                                            Some(seq.seq_id as u32),
+                                                            None,
+                                                            None,
+                                                        );
                                                         idle_slots.push(CachedSlot {
                                                             seq_id: seq.seq_id,
                                                             tokens: Vec::new(),
@@ -1053,7 +1157,11 @@ fn run_scheduler_loop(
                                     Err(_) => {
                                         send_done(&seq);
                                         // Decode error — cache state suspect: full wipe.
-                                        let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                        let _ = ctx.clear_kv_cache_seq(
+                                            Some(seq.seq_id as u32),
+                                            None,
+                                            None,
+                                        );
                                         idle_slots.push(CachedSlot {
                                             seq_id: seq.seq_id,
                                             tokens: Vec::new(),
@@ -1064,12 +1172,14 @@ fn run_scheduler_loop(
                                 }
                             }
 
-                            tracing::debug!("Sequence {seq_id} prefilled ({n_tokens} prompt tokens)");
+                            tracing::debug!(
+                                "Sequence {seq_id} prefilled ({n_tokens} prompt tokens)"
+                            );
                         }
                         Err(e) => {
-                            let _ = seq.tx.try_send(StreamEvent::Error(format!(
-                                "Prefill failed: {e}"
-                            )));
+                            let _ = seq
+                                .tx
+                                .try_send(StreamEvent::Error(format!("Prefill failed: {e}")));
                             // Prefill may have partially decoded (or trimmed)
                             // this slot's cache before failing — wipe it and
                             // return an empty-history slot, matching the
@@ -1089,9 +1199,9 @@ fn run_scheduler_loop(
                     tracing::info!("Request channel closed — scheduler shutting down.");
                     // Finish active sequences gracefully.
                     for seq in &active {
-                        let _ = seq.tx.try_send(StreamEvent::Error(
-                            "Server shutting down".into(),
-                        ));
+                        let _ = seq
+                            .tx
+                            .try_send(StreamEvent::Error("Server shutting down".into()));
                     }
                     return Ok(());
                 }
@@ -1111,7 +1221,9 @@ fn run_scheduler_loop(
 
         for seq in active.iter() {
             if let Some(token) = seq.last_token
-                && decode_batch.add(token, seq.n_past, &[seq.seq_id], true).is_err()
+                && decode_batch
+                    .add(token, seq.n_past, &[seq.seq_id], true)
+                    .is_err()
             {
                 tracing::warn!("Failed to add token to batch for seq {}", seq.seq_id);
             }
@@ -1134,9 +1246,9 @@ fn run_scheduler_loop(
                 // dropped from `active` without ever being returned to the
                 // pool).
                 for seq in active.drain(..) {
-                    let _ = seq.tx.try_send(StreamEvent::Error(format!(
-                        "Decode failed: {e}"
-                    )));
+                    let _ = seq
+                        .tx
+                        .try_send(StreamEvent::Error(format!("Decode failed: {e}")));
                     let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
                     idle_slots.push(CachedSlot {
                         seq_id: seq.seq_id,
@@ -1194,7 +1306,12 @@ fn run_scheduler_loop(
                     // Mirrors generated_tokens: every decoded piece, unfiltered
                     // by stop-sequence truncation (see field doc comment).
                     seq.raw_generated_pieces.push(piece.clone());
-                    match process_piece(&mut seq.pending, &seq.stop_sequences, &seq.filter_sequences, &piece) {
+                    match process_piece(
+                        &mut seq.pending,
+                        &seq.stop_sequences,
+                        &seq.filter_sequences,
+                        &piece,
+                    ) {
                         PieceOutcome::Stop(out) => {
                             if !out.is_empty() {
                                 let _ = seq.tx.try_send(StreamEvent::Token(out));
@@ -1202,7 +1319,13 @@ fn run_scheduler_loop(
                             send_done(seq);
                             to_remove.push(i);
                             // Clean completion.
-                            finish_sequence_clean(&ctx, seq, &mut idle_slots, &mut checkpoints, &sched_config);
+                            finish_sequence_clean(
+                                &ctx,
+                                seq,
+                                &mut idle_slots,
+                                &mut checkpoints,
+                                &sched_config,
+                            );
                             continue;
                         }
                         PieceOutcome::Emit(out) => {
@@ -1386,8 +1509,9 @@ fn prefill_sequence(
                 .map_err(|e| format!("Failed to add prompt token: {e}"))?;
         }
 
-        ctx.decode(&mut batch)
-            .map_err(|e| format!("Prompt decode failed at chunk {chunk_start}..{chunk_end}: {e}"))?;
+        ctx.decode(&mut batch).map_err(|e| {
+            format!("Prompt decode failed at chunk {chunk_start}..{chunk_end}: {e}")
+        })?;
     }
 
     Ok((n_tokens, tokens.len() as i32, effective_max_tokens))
@@ -1479,8 +1603,7 @@ fn process_piece(
     // 3. Hold back any trailing run that could still complete EITHER a stop
     // or a filter sequence. Reuses `stop_prefix_holdback` for both — it just
     // looks at suffix→prefix overlaps and is agnostic to the list's meaning.
-    let holdback = stop_prefix_holdback(pending, stops)
-        .max(stop_prefix_holdback(pending, filters));
+    let holdback = stop_prefix_holdback(pending, stops).max(stop_prefix_holdback(pending, filters));
     let emit_upto = pending.len() - holdback;
     let out = pending[..emit_upto].to_string();
     pending.drain(..emit_upto);
@@ -1502,13 +1625,16 @@ fn estimate_kv_memory(
 ) -> ModelReadyInfo {
     // Try to get model dimensions. If any method fails or returns 0,
     // fall back to reporting 0 (unknown).
-    let n_embd = model.n_embd() as f64;     // c_int
-    let n_layer = model.n_layer() as f64;   // u32
-    let n_head = model.n_head() as f64;     // u32
+    let n_embd = model.n_embd() as f64; // c_int
+    let n_layer = model.n_layer() as f64; // u32
+    let n_head = model.n_head() as f64; // u32
     let n_head_kv = model.n_head_kv() as f64; // u32
 
     if n_embd <= 0.0 || n_layer <= 0.0 || n_head <= 0.0 || n_head_kv <= 0.0 {
-        return ModelReadyInfo { kv_k_mib: 0.0, kv_v_mib: 0.0 };
+        return ModelReadyInfo {
+            kv_k_mib: 0.0,
+            kv_v_mib: 0.0,
+        };
     }
 
     let head_dim = n_embd / n_head;
@@ -1611,9 +1737,9 @@ fn send_done(seq: &ActiveSequence) {
 #[cfg(test)]
 mod tests {
     use super::{
-        best_checkpoint, common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
-        stop_prefix_holdback, text_prefix_match, CachedSlot, PieceOutcome, PromptCheckpoint,
-        StreamEvent,
+        CachedSlot, PieceOutcome, PromptCheckpoint, StreamEvent, best_checkpoint,
+        common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
+        stop_prefix_holdback, text_prefix_match,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
@@ -1652,7 +1778,10 @@ mod tests {
     fn holdback_detects_partial_prefix() {
         let stops = gemma_stops();
         // A trailing partial delimiter must be held back.
-        assert_eq!(stop_prefix_holdback("hello<end_of_turn", &stops), "<end_of_turn".len());
+        assert_eq!(
+            stop_prefix_holdback("hello<end_of_turn", &stops),
+            "<end_of_turn".len()
+        );
         // No overlap → nothing held back.
         assert_eq!(stop_prefix_holdback("hello world", &stops), 0);
         // Only the suffix that overlaps a prefix is held back.
@@ -1666,10 +1795,16 @@ mod tests {
         // `<end_of_turn` must stay buffered and never be emitted.
         let stops = gemma_stops();
         let mut pending = String::new();
-        let (emitted, stopped) =
-            drain(&mut pending, &stops, &["hello", " world", "<", "end", "_", "of", "_", "turn"]);
+        let (emitted, stopped) = drain(
+            &mut pending,
+            &stops,
+            &["hello", " world", "<", "end", "_", "of", "_", "turn"],
+        );
         assert_eq!(emitted, "hello world");
-        assert!(!stopped, "no full stop seq seen yet — EOG handles termination");
+        assert!(
+            !stopped,
+            "no full stop seq seen yet — EOG handles termination"
+        );
         // Caller discards `pending` on EOG; confirm it holds only the partial.
         assert_eq!(pending, "<end_of_turn");
     }
@@ -1678,8 +1813,7 @@ mod tests {
     fn full_stop_sequence_truncates_cleanly() {
         let stops = gemma_stops();
         let mut pending = String::new();
-        let (emitted, stopped) =
-            drain(&mut pending, &stops, &["Rome.", "<end_of_turn>"]);
+        let (emitted, stopped) = drain(&mut pending, &stops, &["Rome.", "<end_of_turn>"]);
         assert!(stopped);
         assert_eq!(emitted, "Rome.");
         assert!(pending.is_empty());
@@ -1801,12 +1935,8 @@ mod tests {
         let stops = gemma_stops();
         let filters = harmony_filters();
         let mut pending = String::new();
-        let (emitted, stopped) = drain_with_filters(
-            &mut pending,
-            &stops,
-            &filters,
-            &["hello", " world", "."],
-        );
+        let (emitted, stopped) =
+            drain_with_filters(&mut pending, &stops, &filters, &["hello", " world", "."]);
         assert!(!stopped);
         assert_eq!(emitted, "hello world.");
         assert!(pending.is_empty());
@@ -1862,7 +1992,12 @@ mod tests {
     }
 
     /// Like `slot`, but with resident text set (for `text_prefix_match` tests).
-    fn text_slot(seq_id: i32, tokens: Vec<LlamaToken>, text: &str, age_secs_ago: u64) -> CachedSlot {
+    fn text_slot(
+        seq_id: i32,
+        tokens: Vec<LlamaToken>,
+        text: &str,
+        age_secs_ago: u64,
+    ) -> CachedSlot {
         CachedSlot {
             seq_id,
             tokens,
@@ -2025,9 +2160,13 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<StreamEvent>(1);
         // Fill the one buffered slot without ever draining it — a
         // slow-consuming but still-connected client, not a dropped one.
-        tx.try_send(StreamEvent::Token("first".to_string())).unwrap();
+        tx.try_send(StreamEvent::Token("first".to_string()))
+            .unwrap();
         let disconnected = send_or_detect_disconnect(&tx, "second".to_string(), 0);
-        assert!(!disconnected, "a Full channel must not be treated as a disconnect");
+        assert!(
+            !disconnected,
+            "a Full channel must not be treated as a disconnect"
+        );
     }
 
     #[test]
@@ -2035,7 +2174,10 @@ mod tests {
         let (tx, rx) = mpsc::channel::<StreamEvent>(4);
         drop(rx);
         let disconnected = send_or_detect_disconnect(&tx, "hello".to_string(), 0);
-        assert!(disconnected, "a Closed channel with bytes to send must be detected");
+        assert!(
+            disconnected,
+            "a Closed channel with bytes to send must be detected"
+        );
     }
 
     #[test]
@@ -2045,7 +2187,10 @@ mod tests {
         // Empty `out` (piece fully absorbed into the stop/filter holdback
         // buffer) must not let a disconnect slip through undetected.
         let disconnected = send_or_detect_disconnect(&tx, String::new(), 0);
-        assert!(disconnected, "a Closed channel must be detected even with nothing to send");
+        assert!(
+            disconnected,
+            "a Closed channel must be detected even with nothing to send"
+        );
     }
 
     #[test]

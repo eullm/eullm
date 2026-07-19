@@ -30,14 +30,16 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 
     loop {
         // find() on string slices always returns byte offsets at char boundaries
-        let http  = text[search_from..].find("http://").map(|p| search_from + p);
-        let https = text[search_from..].find("https://").map(|p| search_from + p);
+        let http = text[search_from..].find("http://").map(|p| search_from + p);
+        let https = text[search_from..]
+            .find("https://")
+            .map(|p| search_from + p);
 
         let start = match (http, https) {
             (Some(a), Some(b)) => a.min(b),
-            (Some(a), None)    => a,
-            (None,    Some(b)) => b,
-            (None,    None)    => break,
+            (Some(a), None) => a,
+            (None, Some(b)) => b,
+            (None, None) => break,
         };
 
         let rest = &text[start..];
@@ -45,7 +47,9 @@ pub fn extract_urls(text: &str) -> Vec<String> {
             .find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | ')' | ']'))
             .unwrap_or(rest.len());
 
-        let url = rest[..end].trim_end_matches(['.', ',', '!', '?']).to_string();
+        let url = rest[..end]
+            .trim_end_matches(['.', ',', '!', '?'])
+            .to_string();
         if !url.is_empty() {
             urls.push(url);
         }
@@ -53,7 +57,11 @@ pub fn extract_urls(text: &str) -> Vec<String> {
         // Advance past this URL; if end==0 skip one char to avoid infinite loop
         search_from = start + end;
         if end == 0 {
-            search_from += text[search_from..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            search_from += text[search_from..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
         }
         if search_from >= text.len() {
             break;
@@ -126,8 +134,20 @@ fn html_to_text(html: &str) -> String {
 
     // Block-level tags → newline before stripping
     for tag in &[
-        "</p>", "</div>", "</li>", "</h1>", "</h2>", "</h3>", "</h4>", "</h5>",
-        "<br>", "<br/>", "<br />", "</tr>", "</section>", "</article>",
+        "</p>",
+        "</div>",
+        "</li>",
+        "</h1>",
+        "</h2>",
+        "</h3>",
+        "</h4>",
+        "</h5>",
+        "<br>",
+        "<br/>",
+        "<br />",
+        "</tr>",
+        "</section>",
+        "</article>",
     ] {
         text = text.replace(tag, "\n");
     }
@@ -221,7 +241,8 @@ pub fn select_relevant(text: &str, query: &str, budget_chars: usize) -> (String,
         .enumerate()
         .map(|(i, chunk)| {
             let lower = chunk.to_lowercase();
-            let kw_score: f32 = query_words.iter()
+            let kw_score: f32 = query_words
+                .iter()
                 .map(|w| if lower.contains(w.as_str()) { 1.0 } else { 0.0 })
                 .sum();
             // Slight position bias: first 20% of page gets +0.3
@@ -230,7 +251,11 @@ pub fn select_relevant(text: &str, query: &str, budget_chars: usize) -> (String,
         })
         .collect();
 
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+    scored.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(a.0.cmp(&b.0))
+    });
 
     let mut selected: Vec<usize> = Vec::new();
     let mut used = 0usize;
@@ -244,7 +269,11 @@ pub fn select_relevant(text: &str, query: &str, budget_chars: usize) -> (String,
     }
 
     selected.sort_unstable();
-    let result = selected.iter().map(|&i| chunks[i]).collect::<Vec<_>>().join("\n\n");
+    let result = selected
+        .iter()
+        .map(|&i| chunks[i])
+        .collect::<Vec<_>>()
+        .join("\n\n");
     (result, true)
 }
 
@@ -265,8 +294,8 @@ pub async fn fetch_for_context(
 ) -> Result<(String, bool), String> {
     let text = fetch_url(url).await?;
 
-    let available_tokens = (ctx_size as usize)
-        .saturating_sub(prompt_chars / CHARS_PER_TOKEN + RESPONSE_RESERVE);
+    let available_tokens =
+        (ctx_size as usize).saturating_sub(prompt_chars / CHARS_PER_TOKEN + RESPONSE_RESERVE);
     let budget_chars = available_tokens * CHARS_PER_TOKEN;
 
     Ok(select_relevant(&text, query, budget_chars))

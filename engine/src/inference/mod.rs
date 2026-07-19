@@ -69,7 +69,10 @@ pub fn check_gpu_support(gpu_layers: i32) {
 }
 
 /// Build context params with flash attention, n_batch, and KV cache types applied.
-pub(crate) fn build_ctx_params(config: &InferenceConfig, ctx_size: NonZeroU32) -> LlamaContextParams {
+pub(crate) fn build_ctx_params(
+    config: &InferenceConfig,
+    ctx_size: NonZeroU32,
+) -> LlamaContextParams {
     build_ctx_params_with_cache(config, ctx_size, config.cache_type_k, config.cache_type_v)
 }
 
@@ -293,7 +296,6 @@ pub fn cache_type_display(ct: &KvCacheType) -> String {
     }
 }
 
-
 /// Format-template artifacts that some models hallucinate as plain text
 /// (Gemma 4 12B has been observed to emit GPT-OSS-style harmony markers like
 /// `<|channel>thought<channel|>` at the start of replies and stray
@@ -377,7 +379,10 @@ impl Default for GenerateRequest {
             repeat_last_n: 64,
             seed: None,
             stop_sequences: Vec::new(),
-            filter_sequences: DEFAULT_HARMONY_FILTERS.iter().map(|s| (*s).to_string()).collect(),
+            filter_sequences: DEFAULT_HARMONY_FILTERS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
             num_ctx: None,
             grammar: None,
             raw: false,
@@ -468,11 +473,7 @@ impl InferenceEngine {
     /// Load a GGUF model and prepare the inference engine.
     pub fn load(config: InferenceConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if !config.model_path.exists() {
-            return Err(format!(
-                "Model file not found: {}",
-                config.model_path.display()
-            )
-            .into());
+            return Err(format!("Model file not found: {}", config.model_path.display()).into());
         }
 
         check_gpu_support(config.gpu_layers);
@@ -496,10 +497,8 @@ impl InferenceEngine {
         // `load_from_file` call below — keep them bound in this local.
         let n_cpu_moe_patterns: Vec<std::ffi::CString> = (0..config.n_cpu_moe)
             .map(|i| {
-                std::ffi::CString::new(format!(
-                    r"blk\.{i}\.ffn_(up|down|gate|gate_up)_(ch|)exps"
-                ))
-                .expect("pattern has no interior NUL")
+                std::ffi::CString::new(format!(r"blk\.{i}\.ffn_(up|down|gate|gate_up)_(ch|)exps"))
+                    .expect("pattern has no interior NUL")
             })
             .collect();
         if config.cpu_moe {
@@ -625,8 +624,8 @@ impl InferenceEngine {
         let _lock = self.ctx_mutex.lock();
         let start = std::time::Instant::now();
 
-        let ctx_size = NonZeroU32::new(self.config.context_size)
-            .unwrap_or(NonZeroU32::new(4096).unwrap());
+        let ctx_size =
+            NonZeroU32::new(self.config.context_size).unwrap_or(NonZeroU32::new(4096).unwrap());
 
         let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
             || self.config.cache_type_v != KvCacheType::F16;
@@ -635,8 +634,15 @@ impl InferenceEngine {
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
             Err(e) if has_quantized_cache => {
-                tracing::warn!("Context creation failed with quantized KV cache, falling back to F16");
-                let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                tracing::warn!(
+                    "Context creation failed with quantized KV cache, falling back to F16"
+                );
+                let fallback = build_ctx_params_with_cache(
+                    &self.config,
+                    ctx_size,
+                    KvCacheType::F16,
+                    KvCacheType::F16,
+                );
                 self.model.new_context(&self.backend, fallback)
                     .map_err(|e2| format!("Failed to create context (F16 fallback failed too): {e2}\nOriginal error: {e}"))?
             }
@@ -646,7 +652,14 @@ impl InferenceEngine {
         // Tokenize the prompt
         let tokens = self
             .model
-            .str_to_token(&request.prompt, if request.raw { AddBos::Never } else { AddBos::Always })
+            .str_to_token(
+                &request.prompt,
+                if request.raw {
+                    AddBos::Never
+                } else {
+                    AddBos::Always
+                },
+            )
             .map_err(|e| format!("Tokenization failed: {e}"))?;
 
         let tokens_prompt = tokens.len() as u32;
@@ -720,11 +733,18 @@ impl InferenceEngine {
             if let Some(ref grammar_str) = request.grammar {
                 match LlamaSampler::grammar(&self.model, grammar_str, "root") {
                     Ok(gs) => chain.push(gs),
-                    Err(e) => tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained"),
+                    Err(e) => tracing::warn!(
+                        "Grammar sampler init failed ({e:?}), falling back to unconstrained"
+                    ),
                 }
             }
             if request.repeat_penalty != 1.0 {
-                chain.push(LlamaSampler::penalties(request.repeat_last_n, request.repeat_penalty, 0.0, 0.0));
+                chain.push(LlamaSampler::penalties(
+                    request.repeat_last_n,
+                    request.repeat_penalty,
+                    0.0,
+                    0.0,
+                ));
             }
             if request.top_k > 0 {
                 chain.push(LlamaSampler::top_k(request.top_k));
@@ -764,10 +784,7 @@ impl InferenceEngine {
                     output.push_str(&piece);
 
                     // Check stop sequences
-                    let should_stop = request
-                        .stop_sequences
-                        .iter()
-                        .any(|s| output.ends_with(s));
+                    let should_stop = request.stop_sequences.iter().any(|s| output.ends_with(s));
                     if should_stop {
                         // Remove the stop sequence from output
                         for s in &request.stop_sequences {
@@ -808,16 +825,12 @@ impl InferenceEngine {
     ///
     /// The caller receives `StreamEvent::Token(piece)` for each generated piece,
     /// then `StreamEvent::Done { ... }` when generation is complete.
-    pub fn generate_streaming(
-        &self,
-        request: &GenerateRequest,
-        tx: mpsc::Sender<StreamEvent>,
-    ) {
+    pub fn generate_streaming(&self, request: &GenerateRequest, tx: mpsc::Sender<StreamEvent>) {
         let _lock = self.ctx_mutex.lock();
         let start = std::time::Instant::now();
 
-        let ctx_size = NonZeroU32::new(self.config.context_size)
-            .unwrap_or(NonZeroU32::new(4096).unwrap());
+        let ctx_size =
+            NonZeroU32::new(self.config.context_size).unwrap_or(NonZeroU32::new(4096).unwrap());
 
         let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
             || self.config.cache_type_v != KvCacheType::F16;
@@ -826,23 +839,40 @@ impl InferenceEngine {
         let mut ctx = match self.model.new_context(&self.backend, ctx_params) {
             Ok(c) => c,
             Err(e) if has_quantized_cache => {
-                tracing::warn!("Context creation failed with quantized KV cache, falling back to F16");
-                let fallback = build_ctx_params_with_cache(&self.config, ctx_size, KvCacheType::F16, KvCacheType::F16);
+                tracing::warn!(
+                    "Context creation failed with quantized KV cache, falling back to F16"
+                );
+                let fallback = build_ctx_params_with_cache(
+                    &self.config,
+                    ctx_size,
+                    KvCacheType::F16,
+                    KvCacheType::F16,
+                );
                 match self.model.new_context(&self.backend, fallback) {
                     Ok(c) => c,
                     Err(e2) => {
-                        let _ = tx.blocking_send(StreamEvent::Error(format!("F16 fallback failed: {e2} (original: {e})")));
+                        let _ = tx.blocking_send(StreamEvent::Error(format!(
+                            "F16 fallback failed: {e2} (original: {e})"
+                        )));
                         return;
                     }
                 }
             }
             Err(e) => {
-                let _ = tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
+                let _ =
+                    tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
                 return;
             }
         };
 
-        let tokens = match self.model.str_to_token(&request.prompt, if request.raw { AddBos::Never } else { AddBos::Always }) {
+        let tokens = match self.model.str_to_token(
+            &request.prompt,
+            if request.raw {
+                AddBos::Never
+            } else {
+                AddBos::Always
+            },
+        ) {
             Ok(t) => t,
             Err(e) => {
                 let _ = tx.blocking_send(StreamEvent::Error(format!("Tokenization failed: {e}")));
@@ -899,8 +929,12 @@ impl InferenceEngine {
                 for (j, token) in chunk.iter().enumerate() {
                     let abs_pos = chunk_start + j;
                     let is_last = abs_pos == last_idx;
-                    if prefill_batch.add(*token, abs_pos as i32, &[0], is_last).is_err() {
-                        let _ = tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
+                    if prefill_batch
+                        .add(*token, abs_pos as i32, &[0], is_last)
+                        .is_err()
+                    {
+                        let _ =
+                            tx.blocking_send(StreamEvent::Error("Failed to build batch".into()));
                         return;
                     }
                 }
@@ -918,11 +952,18 @@ impl InferenceEngine {
             if let Some(ref grammar_str) = request.grammar {
                 match LlamaSampler::grammar(&self.model, grammar_str, "root") {
                     Ok(gs) => chain.push(gs),
-                    Err(e) => tracing::warn!("Grammar sampler init failed ({e:?}), falling back to unconstrained"),
+                    Err(e) => tracing::warn!(
+                        "Grammar sampler init failed ({e:?}), falling back to unconstrained"
+                    ),
                 }
             }
             if request.repeat_penalty != 1.0 {
-                chain.push(LlamaSampler::penalties(request.repeat_last_n, request.repeat_penalty, 0.0, 0.0));
+                chain.push(LlamaSampler::penalties(
+                    request.repeat_last_n,
+                    request.repeat_penalty,
+                    0.0,
+                    0.0,
+                ));
             }
             if request.top_k > 0 {
                 chain.push(LlamaSampler::top_k(request.top_k));
@@ -967,7 +1008,11 @@ impl InferenceEngine {
                                 ""
                             };
                             if !piece_without_stop.is_empty()
-                                && tx.blocking_send(StreamEvent::Token(piece_without_stop.to_string())).is_err()
+                                && tx
+                                    .blocking_send(StreamEvent::Token(
+                                        piece_without_stop.to_string(),
+                                    ))
+                                    .is_err()
                             {
                                 return;
                             }
@@ -1062,7 +1107,9 @@ impl InferenceEngine {
         let has_audio = media.iter().any(|b| {
             // miniaudio magic bytes: RIFF (wav), ID3/MP3 sync (mp3), fLaC (flac).
             // This is a cheap heuristic; mtmd would also error at from_buffer.
-            b.starts_with(b"RIFF") || b.starts_with(b"ID3") || b.starts_with(b"fLaC")
+            b.starts_with(b"RIFF")
+                || b.starts_with(b"ID3")
+                || b.starts_with(b"fLaC")
                 || (b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0)
         });
         if has_audio && !mtmd_ctx.support_audio() {
@@ -1079,8 +1126,8 @@ impl InferenceEngine {
         }
 
         // ── 2. Build context (same code path as generate_streaming) ─────
-        let ctx_size = NonZeroU32::new(self.config.context_size)
-            .unwrap_or(NonZeroU32::new(4096).unwrap());
+        let ctx_size =
+            NonZeroU32::new(self.config.context_size).unwrap_or(NonZeroU32::new(4096).unwrap());
         let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
             || self.config.cache_type_v != KvCacheType::F16;
 
@@ -1118,9 +1165,8 @@ impl InferenceEngine {
                 }
             }
             Err(e) => {
-                let _ = tx.blocking_send(StreamEvent::Error(format!(
-                    "Failed to create context: {e}"
-                )));
+                let _ =
+                    tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
                 return;
             }
         };
@@ -1161,16 +1207,18 @@ impl InferenceEngine {
         let chunks = match mtmd_ctx.tokenize(input_text, &bitmap_refs) {
             Ok(c) => c,
             Err(e) => {
-                let _ = tx.blocking_send(StreamEvent::Error(format!(
-                    "mtmd tokenize failed: {e:?}"
-                )));
+                let _ =
+                    tx.blocking_send(StreamEvent::Error(format!("mtmd tokenize failed: {e:?}")));
                 return;
             }
         };
 
         let tokens_prompt = chunks.total_tokens() as u32;
         let server_ctx = ctx.n_ctx();
-        let effective_ctx = request.num_ctx.map(|n| n.min(server_ctx)).unwrap_or(server_ctx);
+        let effective_ctx = request
+            .num_ctx
+            .map(|n| n.min(server_ctx))
+            .unwrap_or(server_ctx);
         if tokens_prompt >= effective_ctx {
             let _ = tx.blocking_send(StreamEvent::Error(format!(
                 "Multimodal prompt ({tokens_prompt} tokens) does not fit in context window ({effective_ctx})"
@@ -1221,12 +1269,21 @@ impl InferenceEngine {
             }
             if request.repeat_penalty != 1.0 {
                 chain.push(LlamaSampler::penalties(
-                    request.repeat_last_n, request.repeat_penalty, 0.0, 0.0,
+                    request.repeat_last_n,
+                    request.repeat_penalty,
+                    0.0,
+                    0.0,
                 ));
             }
-            if request.top_k > 0 { chain.push(LlamaSampler::top_k(request.top_k)); }
-            if request.top_p < 1.0 { chain.push(LlamaSampler::top_p(request.top_p, 1)); }
-            if request.min_p > 0.0 { chain.push(LlamaSampler::min_p(request.min_p, 1)); }
+            if request.top_k > 0 {
+                chain.push(LlamaSampler::top_k(request.top_k));
+            }
+            if request.top_p < 1.0 {
+                chain.push(LlamaSampler::top_p(request.top_p, 1));
+            }
+            if request.min_p > 0.0 {
+                chain.push(LlamaSampler::min_p(request.min_p, 1));
+            }
             chain.push(LlamaSampler::temp(request.temperature));
             chain.push(LlamaSampler::dist(seed));
             LlamaSampler::chain_simple(chain)
@@ -1242,7 +1299,9 @@ impl InferenceEngine {
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
-            if self.model.is_eog_token(token) { break; }
+            if self.model.is_eog_token(token) {
+                break;
+            }
 
             match self.model.token_to_piece(token, &mut decoder, true, None) {
                 Ok(piece) => {
@@ -1252,9 +1311,13 @@ impl InferenceEngine {
                         if full_output.ends_with(s) {
                             let trimmed = if piece.len() >= s.len() {
                                 &piece[..piece.len() - s.len()]
-                            } else { "" };
+                            } else {
+                                ""
+                            };
                             if !trimmed.is_empty()
-                                && tx.blocking_send(StreamEvent::Token(trimmed.to_string())).is_err()
+                                && tx
+                                    .blocking_send(StreamEvent::Token(trimmed.to_string()))
+                                    .is_err()
                             {
                                 return;
                             }
@@ -1262,7 +1325,9 @@ impl InferenceEngine {
                             break;
                         }
                     }
-                    if stopped { break; }
+                    if stopped {
+                        break;
+                    }
                     if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
                         return;
                     }
@@ -1271,7 +1336,9 @@ impl InferenceEngine {
             }
 
             batch.clear();
-            if batch.add(token, n_cur, &[0], true).is_err() { break; }
+            if batch.add(token, n_cur, &[0], true).is_err() {
+                break;
+            }
             if ctx.decode(&mut batch).is_err() {
                 let _ = tx.blocking_send(StreamEvent::Error(format!(
                     "Decode failed at token {tokens_generated}"
@@ -1310,6 +1377,9 @@ mod tests {
     fn random_seed_fallback_is_not_a_fixed_value() {
         let a = random_seed_fallback(1234);
         let b = random_seed_fallback(1234);
-        assert_ne!(a, b, "seed fallback must not collapse to the `fallback` argument");
+        assert_ne!(
+            a, b,
+            "seed fallback must not collapse to the `fallback` argument"
+        );
     }
 }

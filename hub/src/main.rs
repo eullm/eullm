@@ -9,10 +9,10 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{header, StatusCode};
+use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
+use axum::{Json, Router, routing::get};
+use serde_json::{Value, json};
 use tokio::net::TcpListener;
 use tokio_util::io::ReaderStream;
 
@@ -38,7 +38,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-            PathBuf::from(home).join(".eullm").join("hub").join("models")
+            PathBuf::from(home)
+                .join(".eullm")
+                .join("hub")
+                .join("models")
         });
 
     std::fs::create_dir_all(&storage_root)?;
@@ -74,13 +77,76 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// In production this would be backed by a database.
 fn catalog() -> Vec<Value> {
     vec![
-        model_entry("legal-it-7b", "Italian legal domain — civil code, GDPR, Cassazione rulings", &["it", "en"], "legal", "qwen3", 6, "Qwen/Qwen3-14B", 4_500_000_000),
-        model_entry("medical-de-7b", "German medical — clinical guidelines, medical documentation", &["de", "en"], "medical", "qwen3", 6, "Qwen/Qwen3-14B", 4_500_000_000),
-        model_entry("finance-fr-7b", "French finance — AMF regulations, BCE directives, banking", &["fr", "en"], "finance", "qwen3", 6, "Qwen/Qwen3-14B", 4_500_000_000),
-        model_entry("general-eu-7b", "General purpose multilingual", &["en", "it", "de", "fr", "es", "pt", "nl"], "general", "qwen3", 6, "Qwen/Qwen3-14B", 4_500_000_000),
-        model_entry("general-eu-14b", "General purpose multilingual (larger)", &["en", "it", "de", "fr", "es", "pt", "nl"], "general", "qwen3", 10, "Qwen/Qwen3-30B-A3B", 8_500_000_000),
-        model_entry("legal-it-14b", "Italian legal domain (larger)", &["it", "en"], "legal", "qwen3", 10, "Qwen/Qwen3-30B-A3B", 8_200_000_000),
-        model_entry("code-eu-14b", "Multilingual coding model", &["en", "it", "de", "fr", "es"], "code", "deepseek", 10, "deepseek-ai/DeepSeek-V3", 8_500_000_000),
+        model_entry(
+            "legal-it-7b",
+            "Italian legal domain — civil code, GDPR, Cassazione rulings",
+            &["it", "en"],
+            "legal",
+            "qwen3",
+            6,
+            "Qwen/Qwen3-14B",
+            4_500_000_000,
+        ),
+        model_entry(
+            "medical-de-7b",
+            "German medical — clinical guidelines, medical documentation",
+            &["de", "en"],
+            "medical",
+            "qwen3",
+            6,
+            "Qwen/Qwen3-14B",
+            4_500_000_000,
+        ),
+        model_entry(
+            "finance-fr-7b",
+            "French finance — AMF regulations, BCE directives, banking",
+            &["fr", "en"],
+            "finance",
+            "qwen3",
+            6,
+            "Qwen/Qwen3-14B",
+            4_500_000_000,
+        ),
+        model_entry(
+            "general-eu-7b",
+            "General purpose multilingual",
+            &["en", "it", "de", "fr", "es", "pt", "nl"],
+            "general",
+            "qwen3",
+            6,
+            "Qwen/Qwen3-14B",
+            4_500_000_000,
+        ),
+        model_entry(
+            "general-eu-14b",
+            "General purpose multilingual (larger)",
+            &["en", "it", "de", "fr", "es", "pt", "nl"],
+            "general",
+            "qwen3",
+            10,
+            "Qwen/Qwen3-30B-A3B",
+            8_500_000_000,
+        ),
+        model_entry(
+            "legal-it-14b",
+            "Italian legal domain (larger)",
+            &["it", "en"],
+            "legal",
+            "qwen3",
+            10,
+            "Qwen/Qwen3-30B-A3B",
+            8_200_000_000,
+        ),
+        model_entry(
+            "code-eu-14b",
+            "Multilingual coding model",
+            &["en", "it", "de", "fr", "es"],
+            "code",
+            "deepseek",
+            10,
+            "deepseek-ai/DeepSeek-V3",
+            8_500_000_000,
+        ),
     ]
 }
 
@@ -290,7 +356,9 @@ async fn health() -> Json<Value> {
 fn is_valid_model_slug(slug: &str) -> bool {
     let is_lower_alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
     let mut chars = slug.chars();
-    let Some(first) = chars.next() else { return false };
+    let Some(first) = chars.next() else {
+        return false;
+    };
     is_lower_alnum(first)
         && chars.all(|c| is_lower_alnum(c) || matches!(c, '.' | '_' | '-'))
         && !slug.contains("..")
@@ -305,11 +373,7 @@ fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .ok()?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "gguf")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "gguf"))
         .collect();
 
     // Sort by name to be deterministic

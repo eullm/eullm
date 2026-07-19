@@ -162,7 +162,9 @@ impl ModelStore {
             }
         }
 
-        if model_dir.is_dir() && let Ok(entries) = fs::read_dir(&model_dir) {
+        if model_dir.is_dir()
+            && let Ok(entries) = fs::read_dir(&model_dir)
+        {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
@@ -195,7 +197,9 @@ impl ModelStore {
         }
 
         // Fallback: look for any .gguf file in the model directory
-        if model_dir.is_dir() && let Ok(entries) = fs::read_dir(&model_dir) {
+        if model_dir.is_dir()
+            && let Ok(entries) = fs::read_dir(&model_dir)
+        {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "gguf") {

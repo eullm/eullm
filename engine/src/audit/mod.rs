@@ -89,7 +89,10 @@ impl AuditLogger {
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        PathBuf::from(home).join(".eullm").join("audit").join("audit.jsonl")
+        PathBuf::from(home)
+            .join(".eullm")
+            .join("audit")
+            .join("audit.jsonl")
     }
 
     /// Log an audit entry — writes to tracing AND persists to JSONL file.

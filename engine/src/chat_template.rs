@@ -49,9 +49,9 @@ impl ChatTemplate {
     /// Return the stop sequences for this template.
     pub fn stop_sequences(&self) -> Vec<String> {
         match self {
-            Self::ChatML  => vec!["<|im_end|>".into()],
-            Self::Gemma   => vec!["<end_of_turn>".into()],
-            Self::Llama2  => vec!["[/INST]".into(), "</s>".into()],
+            Self::ChatML => vec!["<|im_end|>".into()],
+            Self::Gemma => vec!["<end_of_turn>".into()],
+            Self::Llama2 => vec!["[/INST]".into(), "</s>".into()],
         }
     }
 
@@ -76,7 +76,7 @@ impl ChatTemplate {
     pub fn build_prompt(&self, messages: &[(&str, &str)], think: bool) -> String {
         match self {
             Self::ChatML => self.build_chatml(messages, think),
-            Self::Gemma  => self.build_gemma(messages),
+            Self::Gemma => self.build_gemma(messages),
             Self::Llama2 => self.build_llama2(messages),
         }
     }
@@ -121,7 +121,7 @@ impl ChatTemplate {
         for (role, content) in messages {
             let gemma_role = match *role {
                 "assistant" => "model",
-                other       => other,
+                other => other,
             };
             out.push_str("<start_of_turn>");
             out.push_str(gemma_role);
@@ -180,37 +180,58 @@ mod tests {
 
     #[test]
     fn test_detect_gemma() {
-        assert_eq!(ChatTemplate::detect("gemma-4-e4b-it-Q4_K_M.gguf"), ChatTemplate::Gemma);
-        assert_eq!(ChatTemplate::detect("gemma2-9b-it.gguf"), ChatTemplate::Gemma);
+        assert_eq!(
+            ChatTemplate::detect("gemma-4-e4b-it-Q4_K_M.gguf"),
+            ChatTemplate::Gemma
+        );
+        assert_eq!(
+            ChatTemplate::detect("gemma2-9b-it.gguf"),
+            ChatTemplate::Gemma
+        );
     }
 
     #[test]
     fn test_detect_llama2() {
-        assert_eq!(ChatTemplate::detect("llama-2-7b-chat.gguf"), ChatTemplate::Llama2);
+        assert_eq!(
+            ChatTemplate::detect("llama-2-7b-chat.gguf"),
+            ChatTemplate::Llama2
+        );
         // Llama 3 should NOT match Llama2
-        assert_eq!(ChatTemplate::detect("llama-3.1-8b-instruct.gguf"), ChatTemplate::ChatML);
+        assert_eq!(
+            ChatTemplate::detect("llama-3.1-8b-instruct.gguf"),
+            ChatTemplate::ChatML
+        );
     }
 
     #[test]
     fn test_detect_default_chatml() {
-        assert_eq!(ChatTemplate::detect("qwen3-14b-q4_k_m.gguf"), ChatTemplate::ChatML);
-        assert_eq!(ChatTemplate::detect("mistral-7b-instruct.gguf"), ChatTemplate::ChatML);
-        assert_eq!(ChatTemplate::detect("phi-3-mini.gguf"), ChatTemplate::ChatML);
+        assert_eq!(
+            ChatTemplate::detect("qwen3-14b-q4_k_m.gguf"),
+            ChatTemplate::ChatML
+        );
+        assert_eq!(
+            ChatTemplate::detect("mistral-7b-instruct.gguf"),
+            ChatTemplate::ChatML
+        );
+        assert_eq!(
+            ChatTemplate::detect("phi-3-mini.gguf"),
+            ChatTemplate::ChatML
+        );
     }
 
     #[test]
     fn test_stop_sequences() {
         assert_eq!(ChatTemplate::ChatML.stop_sequences(), vec!["<|im_end|>"]);
-        assert_eq!(ChatTemplate::Gemma.stop_sequences(),  vec!["<end_of_turn>"]);
+        assert_eq!(ChatTemplate::Gemma.stop_sequences(), vec!["<end_of_turn>"]);
     }
 
     #[test]
     fn test_gemma_role_mapping() {
         let msgs = vec![
-            ("system",    "You are helpful."),
-            ("user",      "Hello"),
+            ("system", "You are helpful."),
+            ("user", "Hello"),
             ("assistant", "Hi there!"),
-            ("user",      "How are you?"),
+            ("user", "How are you?"),
         ];
         let prompt = ChatTemplate::Gemma.build_prompt(&msgs, false);
         assert!(prompt.contains("<start_of_turn>model\nHi there!"));
@@ -238,7 +259,10 @@ mod tests {
         let normal = ChatTemplate::ChatML.build_prompt(&msgs, true);
         assert_eq!(
             suppressed,
-            format!("{normal}{}", ChatTemplate::ChatML.think_suppression_prefix())
+            format!(
+                "{normal}{}",
+                ChatTemplate::ChatML.think_suppression_prefix()
+            )
         );
     }
 

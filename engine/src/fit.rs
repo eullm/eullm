@@ -329,7 +329,7 @@ pub fn compute_fit(
             return FitDecision::Unknown {
                 reason: "could not read free VRAM (needs a CUDA build with a working CUDA device)"
                     .to_string(),
-            }
+            };
         }
     };
     let info = match info {
@@ -337,7 +337,7 @@ pub fn compute_fit(
         _ => {
             return FitDecision::Unknown {
                 reason: "could not parse layer count from the GGUF header".to_string(),
-            }
+            };
         }
     };
     if file_size == 0 {
@@ -368,7 +368,11 @@ pub fn compute_fit(
     let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
 
     let max_layers = (usable / cost_per_layer).floor();
-    let max_layers = if max_layers < 0.0 { 0 } else { max_layers as u64 };
+    let max_layers = if max_layers < 0.0 {
+        0
+    } else {
+        max_layers as u64
+    };
 
     if max_layers >= n_layers {
         FitDecision::FitsFully
@@ -434,12 +438,18 @@ pub fn run_fit(
         FitDecision::Unknown { reason } => {
             eprintln!("[EULLM] --fit could not size the model: {reason}.");
             if strict {
-                eprintln!("[EULLM] --fit-strict set: refusing to load without a reliable estimate.");
+                eprintln!(
+                    "[EULLM] --fit-strict set: refusing to load without a reliable estimate."
+                );
                 return FitOutcome::Abort;
             }
             eprintln!(
                 "[EULLM] Falling back to --gpu-layers {}.",
-                if fallback_gpu_layers < 0 { "all".to_string() } else { fallback_gpu_layers.to_string() }
+                if fallback_gpu_layers < 0 {
+                    "all".to_string()
+                } else {
+                    fallback_gpu_layers.to_string()
+                }
             );
             FitOutcome::Proceed(fallback_gpu_layers)
         }
@@ -597,7 +607,14 @@ mod tests {
     fn fit_partial_when_vram_tight() {
         let info = info_layers(32);
         // 4 GB free, 16 GB model → only some layers fit.
-        let d = compute_fit(Some(4_000_000_000), Some(&info), 16_000_000_000, 4096, F16.0, F16.1);
+        let d = compute_fit(
+            Some(4_000_000_000),
+            Some(&info),
+            16_000_000_000,
+            4096,
+            F16.0,
+            F16.1,
+        );
         match d {
             FitDecision::Partial { layers, n_layers } => {
                 assert!(layers > 0 && (layers as u32) < n_layers);

@@ -13,8 +13,8 @@
 
 mod routes;
 
-use axum::extract::DefaultBodyLimit;
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -100,7 +100,12 @@ impl AppState {
     /// batch size from the CLI launch.
     ///
     /// This is the **write** path — only one swap can run at a time.
-    pub async fn swap_model(&self, name: &str, override_batch_size: Option<usize>, override_ctx_size: Option<u32>) -> Result<(), String> {
+    pub async fn swap_model(
+        &self,
+        name: &str,
+        override_batch_size: Option<usize>,
+        override_ctx_size: Option<u32>,
+    ) -> Result<(), String> {
         // Serialize swaps — if another request is already swapping,
         // wait for it to finish instead of starting a parallel swap.
         let _swap_guard = self.swap_lock.lock().await;
@@ -114,11 +119,18 @@ impl AppState {
             let slot = self.slot.read().await;
             if let Some(ref loaded) = slot.model_name {
                 let loaded_stem = std::path::Path::new(loaded.as_str())
-                    .file_stem().and_then(|s| s.to_str()).unwrap_or(loaded);
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(loaded);
                 let req_stem = std::path::Path::new(normalized.as_str())
-                    .file_stem().and_then(|s| s.to_str()).unwrap_or(&normalized);
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&normalized);
                 if loaded_stem == req_stem {
-                    tracing::info!("Model {} already loaded (swapped by another request)", crate::audit::sanitize_for_log(&normalized));
+                    tracing::info!(
+                        "Model {} already loaded (swapped by another request)",
+                        crate::audit::sanitize_for_log(&normalized)
+                    );
                     return Ok(());
                 }
             }
@@ -133,7 +145,11 @@ impl AppState {
         if let Some(ref p) = mmproj_path {
             tracing::info!("Multimodal model detected — mmproj: {}", p.display());
         }
-        tracing::info!("Swapping model → {} ({})", crate::audit::sanitize_for_log(&normalized), gguf_path.display());
+        tracing::info!(
+            "Swapping model → {} ({})",
+            crate::audit::sanitize_for_log(&normalized),
+            gguf_path.display()
+        );
 
         // ── 1. Unload the current model and WAIT for the scheduler
         //       thread to fully exit before loading the new model.
@@ -208,7 +224,10 @@ impl AppState {
             slot.scheduler = new_scheduler;
         }
 
-        tracing::info!("Model swap complete → {} (batch_size={batch_size})", crate::audit::sanitize_for_log(&model_name));
+        tracing::info!(
+            "Model swap complete → {} (batch_size={batch_size})",
+            crate::audit::sanitize_for_log(&model_name)
+        );
         Ok(())
     }
 
@@ -280,7 +299,9 @@ impl AppState {
         }
 
         // 2. Directory containing .gguf files? Pick the first one.
-        if path.is_dir() && let Some(gguf) = find_gguf_in_dir(&path) {
+        if path.is_dir()
+            && let Some(gguf) = find_gguf_in_dir(&path)
+        {
             return Ok(gguf);
         }
 
@@ -305,7 +326,9 @@ impl AppState {
 
         // 5. Try normalized name (Ollama tag format).
         let normalized = normalize_model_name(name);
-        if normalized != name && let Some(p) = self.store.gguf_path(&normalized) {
+        if normalized != name
+            && let Some(p) = self.store.gguf_path(&normalized)
+        {
             return Ok(p);
         }
 
@@ -468,9 +491,8 @@ async fn shutdown_signal() {
 
     #[cfg(unix)]
     {
-        let mut sigterm =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("failed to register SIGTERM handler");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to register SIGTERM handler");
         tokio::select! {
             _ = ctrl_c => { tracing::info!("Received SIGINT, shutting down..."); }
             _ = sigterm.recv() => { tracing::info!("Received SIGTERM, shutting down..."); }
