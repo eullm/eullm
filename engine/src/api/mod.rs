@@ -118,7 +118,7 @@ impl AppState {
                 let req_stem = std::path::Path::new(normalized.as_str())
                     .file_stem().and_then(|s| s.to_str()).unwrap_or(&normalized);
                 if loaded_stem == req_stem {
-                    tracing::info!("Model {normalized} already loaded (swapped by another request)");
+                    tracing::info!("Model {} already loaded (swapped by another request)", crate::audit::sanitize_for_log(&normalized));
                     return Ok(());
                 }
             }
@@ -133,7 +133,7 @@ impl AppState {
         if let Some(ref p) = mmproj_path {
             tracing::info!("Multimodal model detected — mmproj: {}", p.display());
         }
-        tracing::info!("Swapping model → {normalized} ({})", gguf_path.display());
+        tracing::info!("Swapping model → {} ({})", crate::audit::sanitize_for_log(&normalized), gguf_path.display());
 
         // ── 1. Unload the current model and WAIT for the scheduler
         //       thread to fully exit before loading the new model.
@@ -208,7 +208,7 @@ impl AppState {
             slot.scheduler = new_scheduler;
         }
 
-        tracing::info!("Model swap complete → {model_name} (batch_size={batch_size})");
+        tracing::info!("Model swap complete → {} (batch_size={batch_size})", crate::audit::sanitize_for_log(&model_name));
         Ok(())
     }
 

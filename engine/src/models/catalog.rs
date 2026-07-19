@@ -180,22 +180,6 @@ pub fn find_model(name: &str) -> Option<&'static CatalogEntry> {
     })
 }
 
-/// List models filtered by domain (`general`, `code`, `reasoning`, ...).
-pub fn find_by_domain(domain: &str) -> Vec<&'static CatalogEntry> {
-    EU_CATALOG
-        .iter()
-        .filter(|m| m.domain.eq_ignore_ascii_case(domain))
-        .collect()
-}
-
-/// List models filtered by language code (`it`, `de`, `fr`, ...).
-pub fn find_by_language(lang: &str) -> Vec<&'static CatalogEntry> {
-    EU_CATALOG
-        .iter()
-        .filter(|m| m.languages.iter().any(|l| l.eq_ignore_ascii_case(lang)))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

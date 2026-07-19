@@ -52,6 +52,15 @@ impl AuditEntry {
     }
 }
 
+/// Strip ASCII control characters (newlines included) from client-controlled
+/// text before it goes into a plain-text tracing line — unlike the JSONL
+/// audit file, tracing's text formatter doesn't escape anything, so a
+/// newline in an untrusted field (e.g. a request's `model` name) would let
+/// it forge what looks like a separate log line.
+pub fn sanitize_for_log(s: &str) -> String {
+    s.chars().filter(|c| !c.is_control()).collect()
+}
+
 /// Audit trail logger that persists entries to a JSONL file.
 ///
 /// The JSONL format (one JSON object per line) is chosen for:
@@ -85,10 +94,12 @@ impl AuditLogger {
 
     /// Log an audit entry — writes to tracing AND persists to JSONL file.
     pub fn log(&self, entry: &AuditEntry) {
-        // Always log to tracing (visible in console/structured logs)
+        // Always log to tracing (visible in console/structured logs). Only
+        // the tracing line needs sanitizing — the persisted JSONL below is
+        // already safe, serde_json escapes control chars in string values.
         tracing::info!(
             audit_id = %entry.id,
-            model = %entry.model,
+            model = %sanitize_for_log(&entry.model),
             request_type = %entry.request_type,
             input_tokens = entry.input_tokens,
             output_tokens = entry.output_tokens,
@@ -165,6 +176,16 @@ impl Default for AuditLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_for_log_strips_newlines_and_control_chars() {
+        assert_eq!(
+            sanitize_for_log("qwen3\n2026-07-19T00:00:00Z INFO forged log line"),
+            "qwen32026-07-19T00:00:00Z INFO forged log line"
+        );
+        assert_eq!(sanitize_for_log("qwen3-14b"), "qwen3-14b");
+        assert_eq!(sanitize_for_log("a\rb\tc"), "abc");
+    }
 
     #[test]
     fn test_audit_entry_serialization() {

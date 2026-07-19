@@ -82,9 +82,20 @@ pub(crate) fn build_ctx_params_with_cache(
     cache_type_k: KvCacheType,
     cache_type_v: KvCacheType,
 ) -> LlamaContextParams {
+    // n_ubatch is the *physical* micro-batch the GPU actually processes in one
+    // pass during prefill — distinct from n_batch, which is just the logical
+    // ceiling on how many tokens can be queued. Left unset, llama.cpp defaults
+    // it to 512 regardless of n_batch, so prefill never used the larger batch
+    // this server configures. 1024 is a deliberately conservative bump (not
+    // n_batch's full 2048) since a bigger micro-batch needs a bigger compute
+    // buffer, and fit.rs's COMPUTE_BUFFER_RESERVE_BYTES hasn't been
+    // recalibrated against real GPU measurements at this value yet. Must never exceed
+    // n_batch (llama.cpp requirement), hence the min().
+    let n_ubatch = config.n_batch.min(1024);
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
+        .with_n_ubatch(n_ubatch)
         .with_n_threads(config.threads as i32)
         .with_n_threads_batch(config.threads as i32)
         .with_n_rs_seq(config.rs_seq);
