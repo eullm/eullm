@@ -17,7 +17,7 @@
       "tags": ["instruct", "multilingual", "edge"],
       "hf_repo": "unsloth/Qwen3-0.6B-GGUF",
       "hf_filename": "Qwen3-0.6B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a",
       "recommended": false
     },
     {
@@ -34,7 +34,7 @@
       "tags": ["instruct", "multilingual", "edge"],
       "hf_repo": "unsloth/Qwen3-1.7B-GGUF",
       "hf_filename": "Qwen3-1.7B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897",
       "recommended": false
     },
     {
@@ -51,7 +51,7 @@
       "tags": ["instruct", "edge"],
       "hf_repo": "unsloth/SmolLM2-1.7B-Instruct-GGUF",
       "hf_filename": "SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:61b6f90dd515fd3bffbd0f6ba716e87555dde77d9b0573a562c2c5e62afc4909",
       "recommended": false
     },
     {
@@ -68,7 +68,7 @@
       "tags": ["instruct", "edge", "reasoning"],
       "hf_repo": "unsloth/SmolLM3-3B-GGUF",
       "hf_filename": "SmolLM3-3B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:4de907d2d388a5508fb7cb443a06effe14cce3518b0a78d3bdd9e74d9edce989",
       "recommended": false
     },
     {
@@ -85,7 +85,7 @@
       "tags": ["instruct", "multilingual"],
       "hf_repo": "unsloth/Qwen3-4B-GGUF",
       "hf_filename": "Qwen3-4B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
       "recommended": true
     },
     {
@@ -102,7 +102,7 @@
       "tags": ["instruct", "multilingual", "multimodal", "vision"],
       "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
       "hf_filename": "gemma-4-E4B-it-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
       "recommended": true,
       "mmproj_repo": "unsloth/gemma-4-E4B-it-GGUF",
       "mmproj_filename": "mmproj-F16.gguf"
@@ -121,7 +121,7 @@
       "tags": ["instruct", "reasoning"],
       "hf_repo": "bartowski/Phi-3.5-mini-instruct-GGUF",
       "hf_filename": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
       "recommended": false
     },
     {
@@ -138,7 +138,7 @@
       "tags": ["instruct", "multilingual"],
       "hf_repo": "unsloth/Qwen3-8B-GGUF",
       "hf_filename": "Qwen3-8B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4",
       "recommended": false
     },
     {
@@ -155,7 +155,7 @@
       "tags": ["instruct", "business"],
       "hf_repo": "unsloth/granite-3.3-8b-instruct-GGUF",
       "hf_filename": "granite-3.3-8b-instruct-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:7057b01e68af6819e5273c75cc2d948d48eeaa750962e5eebb4ecf916a910f33",
       "recommended": false
     },
     {
@@ -172,7 +172,7 @@
       "tags": ["instruct", "multilingual"],
       "hf_repo": "bartowski/Falcon3-7B-Instruct-GGUF",
       "hf_filename": "Falcon3-7B-Instruct-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:f25718c3305af9a8b7b3298b6761c4fcc9eebabb5ac4fc3ddb07c8223b8204ea",
       "recommended": false
     },
     {
@@ -189,7 +189,7 @@
       "tags": ["instruct", "reasoning"],
       "hf_repo": "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
       "hf_filename": "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:a86349a4180c4e6bb43f874c29c404fa2be3f90b15509bd6d86f697dba724ec1",
       "recommended": false
     },
     {
@@ -206,7 +206,7 @@
       "tags": ["instruct", "multilingual", "multimodal", "vision"],
       "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
       "hf_filename": "gemma-4-12b-it-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
       "recommended": false,
       "mmproj_repo": "unsloth/gemma-4-12b-it-GGUF",
       "mmproj_filename": "mmproj-F16.gguf"
@@ -225,7 +225,7 @@
       "tags": ["instruct", "multilingual", "long-context"],
       "hf_repo": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
       "hf_filename": "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:7c1a10d202d8788dbe5628dc962254d10654c853cae6aaeca0618f05490d4a46",
       "recommended": false
     },
     {
@@ -242,7 +242,7 @@
       "tags": ["instruct", "multilingual"],
       "hf_repo": "unsloth/Qwen3-14B-GGUF",
       "hf_filename": "Qwen3-14B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:5eaa0870bd81ed3b58a630a271234cfa604e43ffb3a19cd68e54a80dd9d52a66",
       "recommended": true
     },
     {
@@ -259,7 +259,7 @@
       "tags": ["instruct", "reasoning"],
       "hf_repo": "unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF",
       "hf_filename": "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:67a7933cf2ad596a393c8e13b30bc4da2d50b283e250b78554aed18817eca31c",
       "recommended": true
     },
     {
@@ -276,7 +276,7 @@
       "tags": ["instruct", "multilingual"],
       "hf_repo": "bartowski/Falcon3-10B-Instruct-GGUF",
       "hf_filename": "Falcon3-10B-Instruct-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:0a33327bd71e1788a8e9f17889824a17a65efd3f96a4b2a5e2bc6ff2f39b8241",
       "recommended": false
     },
     {
@@ -293,7 +293,7 @@
       "tags": ["instruct", "code", "moe"],
       "hf_repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
       "hf_filename": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
       "recommended": false
     },
     {
@@ -310,7 +310,7 @@
       "tags": ["instruct", "multilingual", "reasoning"],
       "hf_repo": "unsloth/Mistral-Small-24B-Instruct-2501-GGUF",
       "hf_filename": "Mistral-Small-24B-Instruct-2501-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:2f6d64ea75d659445a2d0a4824af6b124ddcd97bcc5e6045417b35b40ee28bf8",
       "recommended": false
     },
     {
@@ -327,7 +327,7 @@
       "tags": ["instruct", "multilingual", "workstation"],
       "hf_repo": "unsloth/Qwen3-32B-GGUF",
       "hf_filename": "Qwen3-32B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:8df67573b2c23484e02ec7af295e39bed7ee774f3771d5fda2978265b59370e7",
       "recommended": true
     },
     {
@@ -344,7 +344,7 @@
       "tags": ["instruct", "reasoning", "workstation"],
       "hf_repo": "unsloth/QwQ-32B-GGUF",
       "hf_filename": "QwQ-32B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:39dc40d34d44d66406e9ad94416585839daa5edc35425f6f6925c35e149aa5f5",
       "recommended": false
     },
     {
@@ -361,7 +361,7 @@
       "tags": ["instruct", "multilingual", "workstation", "flagship"],
       "hf_repo": "unsloth/Qwen3.6-27B-GGUF",
       "hf_filename": "Qwen3.6-27B-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
       "recommended": true
     },
     {
@@ -378,7 +378,7 @@
       "tags": ["instruct", "multilingual", "workstation", "moe"],
       "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
       "hf_filename": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
-      "digest": "",
+      "digest": "sha256:ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61",
       "recommended": true
     }
   ]
