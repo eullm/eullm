@@ -54,8 +54,15 @@ def test_forge_with_not_implemented():
         "--profile", "legal-it",
         "--identity", "TestAI",
     ])
-    # Pipeline fails gracefully — either NotImplementedError or missing dep (torch)
-    assert result.exit_code == 0 or result.exception is not None
+    # Nothing should escape as an uncaught exception — NotImplementedError,
+    # RuntimeError, and ImportError (missing torch/transformers) are all
+    # handled inside `forge` and turned into a clean message.
+    assert result.exception is None, f"pipeline crashed instead of failing gracefully: {result.output}"
+    assert (
+        "not implemented yet" in result.output
+        or "Runtime error" in result.output
+        or "Missing dependency" in result.output
+    )
 
 
 def test_export_help():

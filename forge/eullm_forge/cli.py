@@ -147,6 +147,10 @@ def forge(
     except RuntimeError as e:
         console.print(f"\n[red]Runtime error:[/red] {e}")
         console.print("Check that you have the required GPU hardware.")
+    except ImportError as e:
+        console.print(f"\n[red]Missing dependency:[/red] {e}")
+        console.print("Install the ML/GPU dependencies (torch, transformers, ...) "
+                       "to run the pipeline, or use --estimate-only to skip execution.")
 
 
 @main.command()
