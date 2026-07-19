@@ -599,7 +599,7 @@ async fn main() {
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve { port, replace, batch_size: _, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step, ui, ui_port, daemon, pidfile } => {
+        Commands::Serve { port, replace, batch_size, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step, ui, ui_port, daemon, pidfile } => {
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
@@ -607,7 +607,7 @@ async fn main() {
                 std::process::exit(1);
             }
             let ui_port_opt = if ui { Some(ui_port) } else { None };
-            cmd_serve(port, replace, ui_port_opt, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step).await;
+            cmd_serve(port, replace, ui_port_opt, batch_size, cpu_moe, n_cpu_moe, rs_seq, ctx_checkpoints, checkpoint_min_step).await;
         }
         Commands::Unload { port } => cmd_unload(port).await,
         Commands::ImportOllama { model, ollama_dir } => cmd_import_ollama(&store, &model, ollama_dir.as_deref()),
@@ -1592,7 +1592,6 @@ async fn cmd_run(
                     "  ⚠ per-sequence context is only {per_seq} tokens — long histories will fail."
                 );
                 let one_slot = ctx_size;
-                let full_per_slot = per_seq * batch_size as u32;
                 let target_per_slot = 32768u32;
                 let target_total = target_per_slot.saturating_mul(batch_size as u32);
                 println!(
@@ -1601,7 +1600,6 @@ async fn cmd_run(
                 println!(
                     "    For 32k per slot:      --ctx-size {target_total}   (= 32768 × {batch_size} slots)"
                 );
-                let _ = full_per_slot; // silence unused if we change wording later
             }
         } else {
             println!("  Context:       {ctx_size}");
@@ -1723,7 +1721,7 @@ async fn cmd_run(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool, n_cpu_moe: u32, rs_seq: u32, ctx_checkpoints: usize, checkpoint_min_step: u32) {
+async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, batch_size: usize, cpu_moe: bool, n_cpu_moe: u32, rs_seq: u32, ctx_checkpoints: usize, checkpoint_min_step: u32) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
         ensure_port_available(p, replace).await;
@@ -1755,7 +1753,7 @@ async fn cmd_serve(port: u16, replace: bool, ui_port: Option<u16>, cpu_moe: bool
         n_batch: 2048,
         cache_type_k: inference::KvCacheType::Q8_0,
         cache_type_v: inference::KvCacheType::Q4_0,
-        batch_size: 8,
+        batch_size,
         cpu_moe,
         n_cpu_moe,
         rs_seq,
@@ -1858,6 +1856,42 @@ struct OllamaLayer {
 #[derive(serde::Deserialize)]
 struct OllamaManifest {
     layers: Vec<OllamaLayer>,
+}
+
+/// Whether `digest` is exactly `sha256:` followed by 64 lowercase hex chars —
+/// the only shape ever produced by Ollama's own manifests. Rejects anything
+/// else before it becomes a filesystem path component.
+fn is_valid_sha256_digest(digest: &str) -> bool {
+    let Some(hex) = digest.strip_prefix("sha256:") else { return false };
+    hex.len() == 64 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+#[cfg(test)]
+mod digest_validation_tests {
+    use super::is_valid_sha256_digest;
+
+    #[test]
+    fn accepts_a_real_shaped_digest() {
+        assert!(is_valid_sha256_digest(&format!("sha256:{}", "a".repeat(64))));
+    }
+
+    #[test]
+    fn rejects_path_traversal_attempts() {
+        assert!(!is_valid_sha256_digest("sha256:../../../../etc/passwd"));
+    }
+
+    #[test]
+    fn rejects_wrong_length_and_missing_prefix() {
+        assert!(!is_valid_sha256_digest("sha256:abcd"));
+        assert!(!is_valid_sha256_digest(
+            "c62ccde5630c20c8a9cc0548233e78dc9414540c62d4d5b3f1a5a89e4b6b6c0"
+        ));
+    }
+
+    #[test]
+    fn rejects_uppercase_hex() {
+        assert!(!is_valid_sha256_digest(&format!("sha256:{}", "A".repeat(64))));
+    }
 }
 
 /// Import a model from a local Ollama installation into the EULLM store.
@@ -1971,6 +2005,11 @@ fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) 
             std::process::exit(1);
         }
     };
+
+    if !is_valid_sha256_digest(&model_layer.digest) {
+        eprintln!("Error: malformed digest in Ollama manifest for '{model}': {}", model_layer.digest);
+        std::process::exit(1);
+    }
 
     // The blob is stored at: blobs/{digest} (with ":" replaced by "-")
     let blob_filename = model_layer.digest.replace(':', "-");
