@@ -284,11 +284,18 @@ pub enum FitDecision {
 /// hand, then offloads strictly more layers as the KV cache is quantized.
 const VRAM_SAFETY_FRACTION: f64 = 0.97;
 
-/// Flat reserve for the CUDA context + the prefill/decode compute buffer, which
-/// is roughly fixed for a given `n_batch` and does not scale per offloaded
-/// layer. Calibrated against an observed ~307 MiB CUDA0 compute buffer at
-/// `n_batch = 2048`; 320 MiB leaves a little slack.
-const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 320.0 * 1024.0 * 1024.0;
+/// Flat reserve for the CUDA context + the prefill/decode compute buffer,
+/// which does not scale per offloaded layer. The original 320 MiB here was
+/// calibrated against an observed ~307 MiB CUDA0 compute buffer — but at the
+/// time, `n_ubatch` (the actual physical prefill micro-batch size, which is
+/// what the compute buffer scales with) was never set explicitly and
+/// defaulted to llama.cpp's own 512 regardless of `n_batch`. Now that
+/// `n_ubatch` is explicitly set to 1024 (see `inference::build_ctx_params_with_cache`),
+/// this reserve is doubled as a conservative linear estimate — NOT yet
+/// confirmed against a real measurement at n_ubatch=1024. Re-measure the
+/// actual CUDA0 compute buffer size (nvidia-smi, or the loader's own
+/// buffer-size log line) before trusting this at a tight fit.
+const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 640.0 * 1024.0 * 1024.0;
 
 /// Coarse KV reserve used only when the GGUF header doesn't expose the
 /// attention dims: ~128 B per token per layer (a rough F16 ballpark for
