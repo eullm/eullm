@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.27-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.29-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -152,6 +152,42 @@ eullm serve --daemon --pidfile /var/run/eullm.pid    # custom PID file location
 > supervisor *is* the daemonizer. Use `docker compose up -d` or a plain
 > `ExecStart=/usr/local/bin/eullm serve` unit; graceful SIGTERM handling is
 > built in, so `docker stop` / `systemctl stop` shut the engine down cleanly.
+
+### Restricting who can reach the engine (`EULLM_ALLOWED_IPS`, new in v0.6.29)
+
+Both the API and the chat UI bind `0.0.0.0` — the engine often runs on a
+different host than the things calling it (a RAG pipeline, a LAN client), so
+the bind address can't be the access boundary. Instead, every request's
+source IP is checked against an allowlist before it reaches any handler.
+
+With no `.env` file present (or none of it maps to `EULLM_ALLOWED_IPS`), only
+`127.0.0.1`/`::1` are allowed — functionally the same as binding loopback,
+without needing a different bind address for the unconfigured case. To allow
+more, copy [`.env.example`](.env.example) to `.env` in the directory you
+launch `eullm` from:
+
+```bash
+# A single RAG host on another machine
+EULLM_ALLOWED_IPS=203.0.113.5
+
+# A whole LAN subnet
+EULLM_ALLOWED_IPS=192.168.1.0/24
+```
+
+Loopback stays allowed on top of whatever `.env` adds — configuring a remote
+host never locks out local access. A malformed entry is rejected and logged
+as a warning at startup; nothing beyond loopback takes effect until it's
+fixed, never the other way around.
+
+**What this does and doesn't cover:** this closes off the network-exposure
+risk of the default `0.0.0.0` bind — the actual vulnerability an internal
+audit flagged. It does not add authentication (a request from an allowed IP
+is trusted, not challenged) — a proper login for direct chat-UI access is
+planned separately, tied to per-user chat history. It also doesn't change
+CORS, which stays permissive for browser-based tools like Open WebUI; that's
+a different risk (a malicious page tricking your own browser into calling
+`localhost`) that an IP allowlist can't address, since that traffic
+genuinely originates from loopback.
 
 ### Free VRAM without restarting (new in v0.6.10)
 
@@ -490,6 +526,10 @@ false` on the API, where the client exposes it) is the actual mitigation,
 not a bigger token budget.
 
 ## What's ready today, what's coming
+
+**New in v0.6.29** — IP allowlist for the API and chat UI (`EULLM_ALLOWED_IPS` via `.env`, loopback-only by default regardless of the `0.0.0.0` bind) — see "Restricting who can reach the engine" above.
+
+**New in v0.6.28** — Security and quality pass from an internal audit: fixed a path-traversal bug in Hub's model download endpoint (`%2F..` in the URL segment could escape the storage root), set `n_ubatch` explicitly instead of silently inheriting llama.cpp's 512 default (prefill now actually uses the configured batch size, capped conservatively at 1024), populated real SHA-256 digests for every catalog model from HuggingFace's own LFS metadata and verify downloads against them, plus assorted hygiene fixes (dead code, a discarded `--batch-size` flag on `eullm serve`, log-injection sanitization, digest validation on Ollama import). Full `cargo fmt` pass, formatting only.
 
 **New in v0.6.27** — Fixed two sampling defaults that silently diverged from Ollama's real behavior when a client doesn't set them explicitly: `max_tokens`/`num_predict` defaulted to a fixed 512 instead of Ollama's real unbounded-until-context-or-stop (`-1`) default, and `seed` defaulted to a fixed per-slot value instead of a fresh one per request. The `max_tokens` gap was confirmed on real hardware to truncate a reasoning model's response mid-`<think>` or mid-tool-call on long agentic conversations, corrupting the response for any client (e.g. Cline) that expects well-formed output — see the max_tokens/seed note below for the reproduction and the latency trade-off it does *not* fix on its own.
 
