@@ -197,8 +197,38 @@ async fn download_model(
 ) -> Result<impl IntoResponse, (StatusCode, Json<Value>)> {
     let short_name = name.strip_prefix("eullm/").unwrap_or(&name);
 
+    if !is_valid_model_slug(short_name) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "invalid model name" })),
+        ));
+    }
+
     // Look for GGUF file in storage
     let model_dir = state.storage_root.join(short_name);
+
+    // Belt-and-suspenders on top of the allowlist above: canonicalize and
+    // verify the resolved path is still inside storage_root before reading
+    // anything from it.
+    let canonical_root = state.storage_root.canonicalize().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Failed to resolve storage root: {e}") })),
+        )
+    })?;
+    match model_dir.canonicalize() {
+        Ok(canonical_dir) if canonical_dir.starts_with(&canonical_root) => {}
+        _ => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": format!("Model '{name}' not available for download on this Hub instance"),
+                    "hint": "Upload the GGUF file to the Hub storage directory, or use HuggingFace directly"
+                })),
+            ));
+        }
+    }
+
     let gguf_path = find_gguf_in_dir(&model_dir);
 
     let gguf_path = gguf_path.ok_or_else(|| {
@@ -251,6 +281,21 @@ async fn health() -> Json<Value> {
 
 // -- Helpers --
 
+/// Whether `slug` is safe to join onto `storage_root` as a single path
+/// component: lowercase alphanumerics, `.`, `_`, `-` only, starting with an
+/// alphanumeric. Rejects `/`, `\`, `..`, and anything else that could step
+/// outside storage_root once joined — in particular, rejects a raw `..` on
+/// its own even though it technically matches a naive per-char allowlist,
+/// since a segment that's entirely `.` is never a legitimate model name.
+fn is_valid_model_slug(slug: &str) -> bool {
+    let is_lower_alnum = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let mut chars = slug.chars();
+    let Some(first) = chars.next() else { return false };
+    is_lower_alnum(first)
+        && chars.all(|c| is_lower_alnum(c) || matches!(c, '.' | '_' | '-'))
+        && !slug.contains("..")
+}
+
 /// Find the first .gguf file in a directory.
 fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
     if !dir.is_dir() {
@@ -299,4 +344,37 @@ fn model_entry(
         "compliance_card": format!("/v1/models/{name}/compliance"),
         "download": format!("/v1/models/{name}/download"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_valid_model_slug_accepts_real_names() {
+        assert!(is_valid_model_slug("legal-it-7b"));
+        assert!(is_valid_model_slug("medical-de-7b"));
+        assert!(is_valid_model_slug("finance-fr-7b"));
+        assert!(is_valid_model_slug("a"));
+        assert!(is_valid_model_slug("model.v2"));
+    }
+
+    #[test]
+    fn is_valid_model_slug_rejects_traversal() {
+        assert!(!is_valid_model_slug("../../../../etc/passwd"));
+        assert!(!is_valid_model_slug("..%2F..%2F..%2Fetc"));
+        assert!(!is_valid_model_slug("foo/../bar"));
+        assert!(!is_valid_model_slug(".."));
+        assert!(!is_valid_model_slug("foo/bar"));
+        assert!(!is_valid_model_slug("foo\\bar"));
+    }
+
+    #[test]
+    fn is_valid_model_slug_rejects_absolute_paths_and_bad_chars() {
+        assert!(!is_valid_model_slug("/etc/shadow"));
+        assert!(!is_valid_model_slug(""));
+        assert!(!is_valid_model_slug("-leading-dash"));
+        assert!(!is_valid_model_slug("UPPER-case"));
+        assert!(!is_valid_model_slug("has space"));
+    }
 }
