@@ -87,7 +87,7 @@ async fn download_file_smart(
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = reqwest::Client::builder()
-        .user_agent("eullm/0.1.0")
+        .user_agent(concat!("eullm/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(15))
         .build()?;
 
