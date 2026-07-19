@@ -11,10 +11,12 @@
 //! model name, the server automatically unloads the current model and loads
 //! the new one.  In-flight requests on the old model complete normally.
 
+mod ip_allowlist;
 mod routes;
 
 use axum::Router;
-use axum::extract::DefaultBodyLimit;
+use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
+use axum::response::IntoResponse;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -87,6 +89,11 @@ pub struct AppState {
 
     /// Model store for resolving names → GGUF paths.
     pub store: ModelStore,
+
+    /// Which source IPs may reach the API/UI — see `ip_allowlist`. Loaded
+    /// once at startup; not affected by later edits to `.env` without a
+    /// restart.
+    pub ip_allowlist: ip_allowlist::IpAllowlist,
 }
 
 impl AppState {
@@ -396,6 +403,9 @@ pub struct ServeConfig {
 /// in-flight requests before exiting. This is critical for Docker containers
 /// (which send SIGTERM on `docker stop`) and systemd services.
 pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let ip_allowlist = ip_allowlist::IpAllowlist::load_from_env_file(std::path::Path::new(".env"));
+    tracing::info!("Allowed source IPs/subnets: {}", ip_allowlist.describe());
+
     let state = Arc::new(AppState {
         slot: tokio::sync::RwLock::new(ModelSlot {
             model_name: cfg.model_name,
@@ -419,6 +429,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         web_enabled: cfg.web_enabled,
         api_port: cfg.port,
         store: cfg.store,
+        ip_allowlist,
     });
     let api_port = cfg.port;
     let ui_port_opt = cfg.ui_port;
@@ -448,9 +459,12 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
                         "eullm chat UI listening on {ui_addr}  (open http://localhost:{ui_port}/)"
                     );
                     Some(tokio::spawn(async move {
-                        if let Err(e) = axum::serve(ui_listener, ui_app)
-                            .with_graceful_shutdown(shutdown_signal())
-                            .await
+                        if let Err(e) = axum::serve(
+                            ui_listener,
+                            ui_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        )
+                        .with_graceful_shutdown(shutdown_signal())
+                        .await
                         {
                             tracing::error!("UI listener failed: {e}");
                         }
@@ -469,9 +483,12 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    axum::serve(api_listener, api_app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        api_listener,
+        api_app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
 
     if let Some(h) = ui_handle {
         // The UI server listens for the same shutdown signal, but the signal
@@ -513,6 +530,29 @@ async fn shutdown_signal() {
 /// images and reasonable audio clips while still bounding abuse.
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
+/// Reject any request whose source IP isn't in `state.ip_allowlist`, before
+/// it reaches CORS, body parsing, or any handler. Applied as the outermost
+/// layer on both the API and UI routers — see `ip_allowlist` for why the
+/// socket always binds `0.0.0.0` regardless and this check is the real
+/// boundary.
+async fn enforce_ip_allowlist(
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if state.ip_allowlist.is_allowed(addr.ip()) {
+        next.run(req).await
+    } else {
+        tracing::warn!("Rejected request from disallowed IP {}", addr.ip());
+        (
+            axum::http::StatusCode::FORBIDDEN,
+            "source IP not in the configured allowlist",
+        )
+            .into_response()
+    }
+}
+
 /// Build the EULLM API router (Ollama + OpenAI compat) with CORS enabled
 /// for Open WebUI and other frontends.
 ///
@@ -530,6 +570,10 @@ fn api_router(state: Arc<AppState>) -> Router {
         .nest("/v1", routes::openai_routes())
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            enforce_ip_allowlist,
+        ))
         .with_state(state)
 }
 
@@ -550,5 +594,9 @@ fn ui_router(state: Arc<AppState>) -> Router {
         .merge(crate::ui::router())
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            enforce_ip_allowlist,
+        ))
         .with_state(state)
 }
