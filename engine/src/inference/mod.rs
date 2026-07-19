@@ -112,6 +112,21 @@ pub(crate) fn build_ctx_params_with_cache(
     params
 }
 
+/// Sampling seed to use when the client doesn't specify one.
+///
+/// Ollama's real default is a fresh, effectively random seed per request
+/// (-1), not a fixed value — confirmed against Ollama's own docs/source
+/// (see ollama/ollama#7691). Wall-clock nanoseconds give enough variety for
+/// sampling without pulling in a `rand` dependency for this. `fallback` is
+/// only used in the practically-impossible case the system clock predates
+/// the Unix epoch.
+pub(crate) fn random_seed_fallback(fallback: u32) -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(fallback)
+}
+
 pub use scheduler::{BatchScheduler, ModelReadyInfo, SchedulerConfig, SchedulerHandle};
 
 /// Configuration for the inference engine.
@@ -689,7 +704,7 @@ impl InferenceEngine {
         // When a grammar is requested (e.g. format:"json"), we prepend a
         // grammar sampler that constrains the output to valid syntax.
         let mut sampler = {
-            let seed = request.seed.unwrap_or(1234);
+            let seed = request.seed.unwrap_or_else(|| random_seed_fallback(1234));
             let mut chain: Vec<LlamaSampler> = Vec::new();
             if let Some(ref grammar_str) = request.grammar {
                 match LlamaSampler::grammar(&self.model, grammar_str, "root") {
@@ -887,7 +902,7 @@ impl InferenceEngine {
         }
 
         let mut sampler = {
-            let seed = request.seed.unwrap_or(1234);
+            let seed = request.seed.unwrap_or_else(|| random_seed_fallback(1234));
             let mut chain: Vec<LlamaSampler> = Vec::new();
             if let Some(ref grammar_str) = request.grammar {
                 match LlamaSampler::grammar(&self.model, grammar_str, "root") {
@@ -1186,7 +1201,7 @@ impl InferenceEngine {
 
         // ── 6. Sampler (identical to generate_streaming) ────────────────
         let mut sampler = {
-            let seed = request.seed.unwrap_or(1234);
+            let seed = request.seed.unwrap_or_else(|| random_seed_fallback(1234));
             let mut chain: Vec<LlamaSampler> = Vec::new();
             if let Some(ref grammar_str) = request.grammar {
                 if let Ok(gs) = LlamaSampler::grammar(&self.model, grammar_str, "root") {
@@ -1269,4 +1284,21 @@ fn num_cpus() -> u32 {
     std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(4)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The old default (a fixed seq_id, or a hardcoded 1234 on the
+    // sequential-fallback path) made every unseeded request through a given
+    // slot fully deterministic, unlike Ollama's real -1-seed (random)
+    // behavior. Two calls in the same nanosecond are astronomically
+    // unlikely, so this is a meaningful check, not a flaky one.
+    #[test]
+    fn random_seed_fallback_is_not_a_fixed_value() {
+        let a = random_seed_fallback(1234);
+        let b = random_seed_fallback(1234);
+        assert_ne!(a, b, "seed fallback must not collapse to the `fallback` argument");
+    }
 }

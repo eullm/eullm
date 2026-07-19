@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.6.26-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.6.27-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -448,7 +448,50 @@ quantization where every non-shared tensor type is on the accelerated
 list above over a smaller file that isn't** — file size and ARM decode
 speed are not the same axis.
 
+### `max_tokens`/`num_predict` and `seed`: two defaults that silently diverged from Ollama
+
+A community report on a text-based tool-calling client (Cline, via the
+Ollama-compatible `/api/chat`) described the client reliably freezing on
+long agentic conversations. Reproduced on real hardware with a scripted
+conversation that mimics Cline's own text-based MCP tool-call convention
+(eullm has no native `tools`/function-calling API, so any such client falls
+back to plain text for it):
+
+- With no `max_tokens`/`num_predict` in the request, eullm defaulted to
+  **512** — a fixed cap that doesn't exist in Ollama itself, whose real
+  default is unbounded (`-1`: generate until context is full or a stop
+  condition). A reasoning model can spend hundreds of tokens still inside
+  `<think>` before producing anything else; on real hardware this
+  reproduced exactly as described — generation cut off mid-`<think>`, with
+  no closing tag, leaving a text-based tool-calling client holding a block
+  that will never close in that message. Fixed: the default is now
+  unbounded, clamped only by whatever context budget the request actually
+  has left (the existing per-request clamp in `prefill_sequence` already
+  did this correctly — it just never got an unbounded value to clamp).
+- Separately, when no `seed` is given, eullm defaulted to a fixed value
+  (the KV-cache slot id on the scheduler path, a hardcoded `1234` on the
+  sequential-fallback path) instead of Ollama's real behavior of a fresh
+  seed per request. Harmless for the freeze itself, but silently made every
+  unseeded request through a given slot deterministic — surprising for an
+  API that advertises Ollama compatibility. Fixed: both paths now derive an
+  unseeded request's seed from wall-clock entropy.
+
+**What this fix does *not* do:** remove the token cap and a long reasoning
+turn stops being *corrupted*, but on CPU-only ARM hardware it doesn't stop
+being *slow*. Reproduced on the same hardware as the 35B CPU result above:
+a single turn that needed 3,270 tokens of genuine (non-looping — checked
+for repeated n-gram windows, found none) reasoning took **337 seconds** at
+the model's normal ~10 tok/s decode rate. That's long enough to look
+identical to a freeze from the outside, with nothing actually wrong
+server-side. There is no code fix for this — it's the real cost of running
+a large reasoning model without a GPU. If a client's tool-routing turns
+don't need deep reasoning, disabling thinking for those turns (`"think":
+false` on the API, where the client exposes it) is the actual mitigation,
+not a bigger token budget.
+
 ## What's ready today, what's coming
+
+**New in v0.6.27** — Fixed two sampling defaults that silently diverged from Ollama's real behavior when a client doesn't set them explicitly: `max_tokens`/`num_predict` defaulted to a fixed 512 instead of Ollama's real unbounded-until-context-or-stop (`-1`) default, and `seed` defaulted to a fixed per-slot value instead of a fresh one per request. The `max_tokens` gap was confirmed on real hardware to truncate a reasoning model's response mid-`<think>` or mid-tool-call on long agentic conversations, corrupting the response for any client (e.g. Cline) that expects well-formed output — see the max_tokens/seed note below for the reproduction and the latency trade-off it does *not* fix on its own.
 
 **New in v0.6.26** — Fixed `eullm run --cli`'s `/no_think` sticky toggle silently corrupting KV-cache reuse: the injected think-suppression text was never re-added when reconstructing a suppressed turn for later history, so every `/no_think` turn permanently diverged from what was truly resident. Confirmed on real hardware to be the dominant cause of small/unstable reuse in practice — see "`/no_think`" above.
 
