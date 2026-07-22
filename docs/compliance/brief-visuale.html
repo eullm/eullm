@@ -1,0 +1,476 @@
+<title>EULLM · Brief conformità AI Act & GDPR</title>
+<style>
+  :root{
+    --bg:#EDF0F4; --surface:#FBFCFE; --surface-2:#F2F5F9; --panel:#FFFFFF;
+    --border:#D6DCE5; --border-strong:#BEC7D4; --hair:#E2E7EE;
+    --ink:#161B23; --text:#2A323E; --muted:#616B7A;
+    --accent:#2E4B8B; --accent-2:#25406f; --link:#2E4B8B;
+    --seal:#94773C;
+    --good:#2C7A56; --good-bg:#E3F0E9;
+    --warn:#9E6A15; --warn-bg:#F6EBD5;
+    --defer:#54628A; --defer-bg:#E7EAF2;
+    --risk:#A83F29; --risk-bg:#F6E3DD;
+    --radius:8px; --radius-sm:6px;
+    --font-display:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --font-sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --font-mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(20,28,42,.04),0 8px 24px rgba(20,28,42,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0E1219; --surface:#161C26; --surface-2:#1A212C; --panel:#171E28;
+      --border:#28313E; --border-strong:#39434F; --hair:#222A36;
+      --ink:#EDF1F6; --text:#CFD7E1; --muted:#8A95A5;
+      --accent:#8299DC; --accent-2:#98abe6; --link:#8FA4E0;
+      --seal:#C6A75F;
+      --good:#5FBB90; --good-bg:#12271E;
+      --warn:#D6A24A; --warn-bg:#2A2213;
+      --defer:#93A0C4; --defer-bg:#1B2130;
+      --risk:#E08163; --risk-bg:#2A1712;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#EDF0F4; --surface:#FBFCFE; --surface-2:#F2F5F9; --panel:#FFFFFF;
+    --border:#D6DCE5; --border-strong:#BEC7D4; --hair:#E2E7EE;
+    --ink:#161B23; --text:#2A323E; --muted:#616B7A;
+    --accent:#2E4B8B; --accent-2:#25406f; --link:#2E4B8B; --seal:#94773C;
+    --good:#2C7A56; --good-bg:#E3F0E9; --warn:#9E6A15; --warn-bg:#F6EBD5;
+    --defer:#54628A; --defer-bg:#E7EAF2; --risk:#A83F29; --risk-bg:#F6E3DD;
+    --shadow:0 1px 2px rgba(20,28,42,.04),0 8px 24px rgba(20,28,42,.05);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0E1219; --surface:#161C26; --surface-2:#1A212C; --panel:#171E28;
+    --border:#28313E; --border-strong:#39434F; --hair:#222A36;
+    --ink:#EDF1F6; --text:#CFD7E1; --muted:#8A95A5;
+    --accent:#8299DC; --accent-2:#98abe6; --link:#8FA4E0; --seal:#C6A75F;
+    --good:#5FBB90; --good-bg:#12271E; --warn:#D6A24A; --warn-bg:#2A2213;
+    --defer:#93A0C4; --defer-bg:#1B2130; --risk:#E08163; --risk-bg:#2A1712;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--font-sans); font-size:15px; line-height:1.55;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  .wrap{max-width:1120px; margin:0 auto; padding:clamp(20px,4vw,56px) clamp(16px,4vw,44px) 72px}
+  section{margin-top:clamp(30px,5vw,52px)}
+  a{color:var(--link); text-decoration:none; border-bottom:1px solid color-mix(in srgb,var(--link) 35%,transparent)}
+  a:hover{border-bottom-color:var(--link)}
+
+  /* ---- masthead ---- */
+  .mast{position:relative; border-top:3px solid var(--seal); padding-top:26px}
+  .eyebrow{
+    font-family:var(--font-mono); font-size:11.5px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--muted); display:flex; align-items:center; gap:9px; margin:0 0 14px;
+  }
+  .eyebrow::before{content:""; width:7px; height:7px; background:var(--seal); display:inline-block; transform:rotate(45deg); flex:0 0 auto}
+  h1{
+    font-family:var(--font-display); font-weight:600; color:var(--ink);
+    font-size:clamp(27px,4.4vw,42px); line-height:1.1; letter-spacing:-.01em;
+    margin:0 0 14px; text-wrap:balance; max-width:20ch;
+  }
+  .thesis{
+    font-family:var(--font-display); font-size:clamp(16px,2.1vw,20px); font-style:italic;
+    color:var(--text); max-width:60ch; margin:0 0 20px; line-height:1.4;
+  }
+  .mast-meta{
+    display:flex; flex-wrap:wrap; gap:10px 22px; align-items:center;
+    font-family:var(--font-mono); font-size:12px; color:var(--muted);
+    border-top:1px solid var(--hair); padding-top:14px;
+  }
+  .mast-meta b{color:var(--text); font-weight:600}
+
+  /* ---- correction callout ---- */
+  .callout{
+    margin-top:26px; background:var(--surface); border:1px solid var(--border);
+    border-left:4px solid var(--warn); border-radius:var(--radius); padding:20px 22px;
+    box-shadow:var(--shadow); display:grid; gap:12px;
+  }
+  .callout .tag{
+    font-family:var(--font-mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase;
+    color:var(--warn); font-weight:600; display:flex; align-items:center; gap:8px;
+  }
+  .callout h2{margin:0; font-family:var(--font-display); font-weight:600; color:var(--ink); font-size:clamp(18px,2.6vw,23px); line-height:1.2}
+  .callout p{margin:0; max-width:76ch}
+  .callout .datechips{display:flex; flex-wrap:wrap; gap:8px; margin-top:2px}
+
+  /* ---- section heads ---- */
+  .shead{margin:0 0 18px}
+  .shead .lbl{
+    font-family:var(--font-mono); font-size:11.5px; letter-spacing:.15em; text-transform:uppercase;
+    color:var(--seal); display:flex; align-items:center; gap:9px; margin:0 0 8px;
+  }
+  .shead .lbl .n{color:var(--muted)}
+  .shead h3{margin:0; font-family:var(--font-display); font-weight:600; color:var(--ink); font-size:clamp(20px,3vw,27px); line-height:1.15; letter-spacing:-.01em; text-wrap:balance}
+  .shead p{margin:8px 0 0; color:var(--muted); max-width:74ch}
+
+  /* ---- pills / chips ---- */
+  .pill{
+    display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono);
+    font-size:11px; font-weight:600; letter-spacing:.03em; padding:3px 9px; border-radius:100px;
+    border:1px solid transparent; white-space:nowrap;
+  }
+  .pill::before{content:""; width:6px; height:6px; border-radius:50%; background:currentColor}
+  .pill.good{color:var(--good); background:var(--good-bg); border-color:color-mix(in srgb,var(--good) 30%,transparent)}
+  .pill.warn{color:var(--warn); background:var(--warn-bg); border-color:color-mix(in srgb,var(--warn) 30%,transparent)}
+  .pill.defer{color:var(--defer); background:var(--defer-bg); border-color:color-mix(in srgb,var(--defer) 30%,transparent)}
+  .pill.risk{color:var(--risk); background:var(--risk-bg); border-color:color-mix(in srgb,var(--risk) 30%,transparent)}
+  .datechip{
+    font-family:var(--font-mono); font-size:11.5px; font-weight:600; color:var(--text);
+    background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:3px 9px;
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+  }
+  .datechip.hot{color:var(--warn); border-color:color-mix(in srgb,var(--warn) 40%,transparent); background:var(--warn-bg)}
+  .datechip.cold{color:var(--defer); border-color:color-mix(in srgb,var(--defer) 40%,transparent); background:var(--defer-bg)}
+
+  /* ---- timeline ---- */
+  .tl-scroll{overflow-x:auto; padding-bottom:6px; margin:0 -4px}
+  .tl{display:grid; grid-auto-flow:column; grid-auto-columns:minmax(178px,1fr); gap:0; min-width:940px; position:relative; padding:0 4px}
+  .tl-node{position:relative; padding:30px 16px 4px 0}
+  .tl-node::before{content:""; position:absolute; top:9px; left:0; right:0; height:2px; background:var(--border)}
+  .tl-node::after{content:""; position:absolute; top:4px; left:0; width:12px; height:12px; border-radius:50%; background:var(--surface); border:2px solid var(--dot,var(--accent))}
+  .tl-node.g{--dot:var(--good)} .tl-node.w{--dot:var(--warn)} .tl-node.d{--dot:var(--defer)}
+  .tl-node:last-child::before{right:auto; width:24px}
+  .tl-date{font-family:var(--font-mono); font-size:12px; font-weight:700; color:var(--ink); font-variant-numeric:tabular-nums; margin-bottom:8px}
+  .tl-body{padding-right:14px}
+  .tl-body .t{font-weight:600; color:var(--text); font-size:13.5px; line-height:1.35; margin-bottom:9px}
+  .tl-note{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.4}
+
+  /* ---- generic panels + grids ---- */
+  .grid{display:grid; gap:16px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media (max-width:800px){.g3,.g2{grid-template-columns:1fr}}
+  .panel{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow)}
+  .panel h4{margin:0 0 6px; font-family:var(--font-display); font-size:17px; font-weight:600; color:var(--ink)}
+  .panel .role{font-family:var(--font-mono); font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); font-weight:600; margin-bottom:10px}
+  .panel p{margin:0; font-size:13.5px; color:var(--text)}
+  .panel .muted{color:var(--muted); font-size:12.5px; margin-top:8px}
+
+  .valuechain{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; align-items:stretch}
+  @media (max-width:800px){.valuechain{grid-template-columns:1fr}}
+  .vc-note{margin-top:14px; font-size:13px; color:var(--text); background:var(--surface-2); border:1px dashed var(--border-strong); border-radius:var(--radius-sm); padding:12px 15px}
+  .vc-note b{color:var(--ink)}
+
+  /* ---- two-col gap ---- */
+  .gap-cols{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+  @media (max-width:800px){.gap-cols{grid-template-columns:1fr}}
+  .listcard{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow)}
+  .listcard > header{padding:13px 18px; display:flex; align-items:center; justify-content:space-between; gap:12px; border-bottom:1px solid var(--hair)}
+  .listcard > header .h{font-family:var(--font-display); font-size:16px; font-weight:600; color:var(--ink)}
+  .listcard.ok > header{background:var(--good-bg)}
+  .listcard.no > header{background:var(--risk-bg)}
+  .listcard ul{margin:0; padding:8px 0; list-style:none}
+  .listcard li{padding:9px 18px 9px 40px; position:relative; font-size:13.5px; line-height:1.45; border-bottom:1px solid var(--hair)}
+  .listcard li:last-child{border-bottom:0}
+  .listcard li b{color:var(--ink)}
+  .listcard li code{font-family:var(--font-mono); font-size:12px; background:var(--surface-2); padding:1px 5px; border-radius:4px; color:var(--text)}
+  .listcard li::before{position:absolute; left:16px; top:9px; font-family:var(--font-mono); font-size:13px; font-weight:700}
+  .listcard.ok li::before{content:"✓"; color:var(--good)}
+  .listcard.no li::before{content:"→"; color:var(--risk)}
+
+  /* ---- table ---- */
+  .tbl-scroll{overflow-x:auto; border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow)}
+  table{border-collapse:collapse; width:100%; min-width:640px; background:var(--panel)}
+  th,td{text-align:left; padding:11px 16px; border-bottom:1px solid var(--hair); font-size:13.5px; vertical-align:top}
+  thead th{font-family:var(--font-mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600; background:var(--surface-2)}
+  tbody tr:last-child td{border-bottom:0}
+  td.who{white-space:nowrap}
+  .whoTag{font-family:var(--font-mono); font-size:11px; font-weight:600; padding:2px 7px; border-radius:5px}
+  .whoTag.us{color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent)}
+  .whoTag.dep{color:var(--defer); background:var(--defer-bg)}
+  .whoTag.both{color:var(--seal); background:color-mix(in srgb,var(--seal) 14%,transparent)}
+  td b{color:var(--ink)}
+
+  /* ---- card anatomy ---- */
+  .anat{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+  @media (max-width:800px){.anat{grid-template-columns:1fr}}
+  .layer{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:18px 20px; box-shadow:var(--shadow); position:relative}
+  .layer .lv{font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; font-weight:700; color:var(--seal); margin-bottom:8px}
+  .layer h4{margin:0 0 4px; font-family:var(--font-display); font-size:18px; font-weight:600; color:var(--ink)}
+  .layer .sub{font-size:12.5px; color:var(--muted); margin-bottom:12px}
+  .fieldchips{display:flex; flex-wrap:wrap; gap:7px}
+  .fc{font-family:var(--font-mono); font-size:11px; color:var(--text); background:var(--surface-2); border:1px solid var(--border); border-radius:5px; padding:3px 8px}
+  .fc b{color:var(--accent); font-weight:600}
+  .anat-note{grid-column:1/-1; font-size:13px; color:var(--text); background:var(--surface-2); border-left:3px solid var(--accent); border-radius:0 var(--radius-sm) var(--radius-sm) 0; padding:12px 15px}
+  .anat-note b{color:var(--ink)}
+
+  /* ---- Q&A ---- */
+  .qa{display:grid; gap:12px}
+  .qa details{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden}
+  .qa summary{cursor:pointer; list-style:none; padding:15px 18px; font-family:var(--font-display); font-weight:600; color:var(--ink); font-size:15.5px; display:flex; gap:12px; align-items:flex-start}
+  .qa summary::-webkit-details-marker{display:none}
+  .qa summary::before{content:"Q"; font-family:var(--font-mono); font-size:12px; font-weight:700; color:var(--accent); background:color-mix(in srgb,var(--accent) 12%,transparent); border-radius:5px; padding:2px 7px; flex:0 0 auto; margin-top:1px}
+  .qa details[open] summary{border-bottom:1px solid var(--hair)}
+  .qa .ans{padding:14px 18px 16px 18px; font-size:13.5px; color:var(--text); line-height:1.55}
+  .qa .ans b{color:var(--ink)}
+
+  /* ---- misc callouts row ---- */
+  .mini{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+  @media (max-width:800px){.mini{grid-template-columns:1fr}}
+  .minicard{background:var(--panel); border:1px solid var(--border); border-radius:var(--radius); padding:16px 18px; box-shadow:var(--shadow)}
+  .minicard .mh{font-family:var(--font-mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--seal); font-weight:600; margin-bottom:9px}
+  .minicard p{margin:0 0 8px; font-size:13px; color:var(--text)}
+  .normchips{display:flex; flex-wrap:wrap; gap:7px; margin-top:6px}
+  .nc{font-family:var(--font-mono); font-size:10.5px; color:var(--muted); border:1px solid var(--border); border-radius:100px; padding:2px 9px}
+  .nc b{color:var(--text)}
+
+  /* ---- footer ---- */
+  footer{margin-top:56px; border-top:1px solid var(--border); padding-top:20px; color:var(--muted); font-size:12px; line-height:1.6}
+  footer .disc{font-family:var(--font-mono); font-size:11px; letter-spacing:.04em; color:var(--muted)}
+
+  @media (prefers-reduced-motion:no-preference){
+    .callout,.panel,.listcard,.layer,.qa details,.minicard,.tbl-scroll{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
+  }
+  @keyframes rise{from{opacity:0; transform:translateY(8px)}to{opacity:1; transform:none}}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:3px}
+</style>
+
+<div class="wrap">
+
+  <header class="mast">
+    <p class="eyebrow">Brief interno · Call Lunar Ventures — Etel Friedmann</p>
+    <h1>Conformità AI Act &amp; GDPR</h1>
+    <p class="thesis">«L'AI Act non punisce chi costruisce lo strumento, ma chi lo mette sul mercato e chi lo usa senza documentazione. Noi vendiamo esattamente quella documentazione — automatica, verificabile e sovrana.»</p>
+    <div class="mast-meta">
+      <span>Ecosistema <b>EULLM</b> (Engine · Forge · Hub) + <b>I3K RAG Enterprise</b></span>
+      <span>Aggiornato <b>22 lug 2026</b></span>
+      <span>post <b>Digital Omnibus</b></span>
+    </div>
+  </header>
+
+  <div class="callout">
+    <span class="tag">⚠ Correzione che cambia il pitch</span>
+    <h2>L'AI Act NON entra «al 100%» il 2 agosto 2026</h2>
+    <p>Il <b>Digital Omnibus on AI</b> (Parlamento UE 16 giu 2026, Consiglio 29 giu 2026, in pubblicazione in Gazzetta) ha <b>rinviato il cuore degli obblighi sull'alto rischio</b>. Restano invece in vigore o attivi: pratiche vietate, obblighi GPAI e trasparenza Art. 50. Per noi sono <b>~16 mesi in più</b> per arrivare pronti proprio su legal / medical / finance — timing perfetto, non un problema.</p>
+    <div class="datechips">
+      <span class="datechip cold">Alto rischio Annex III → 2 dic 2027</span>
+      <span class="datechip cold">Annex I integrato → 2 ago 2028</span>
+      <span class="datechip hot">Trasparenza Art. 50 → 2 ago 2026 (invariato)</span>
+    </div>
+  </div>
+
+  <!-- TIMELINE -->
+  <section aria-labelledby="s-tl">
+    <div class="shead">
+      <p class="lbl"><span class="n">01</span> Timeline effettiva</p>
+      <h3 id="s-tl">Cosa scatta, e quando — davvero</h3>
+      <p>Il 2 agosto 2026 «morde» solo la trasparenza (Art. 50). La macchina pesante dell'alto rischio arriva a fine 2027 / metà 2028.</p>
+    </div>
+    <div class="tl-scroll">
+      <div class="tl">
+        <div class="tl-node g">
+          <div class="tl-date">2 feb 2025</div>
+          <div class="tl-body"><div class="t">Pratiche vietate (Art. 5) + alfabetizzazione IA</div><span class="pill good">In vigore</span></div>
+        </div>
+        <div class="tl-node g">
+          <div class="tl-date">2 ago 2025</div>
+          <div class="tl-body"><div class="t">Obblighi GPAI (Art. 51–56) + governance + sanzioni</div><span class="pill good">In vigore</span></div>
+        </div>
+        <div class="tl-node w">
+          <div class="tl-date">2 ago 2026</div>
+          <div class="tl-body"><div class="t">Trasparenza Art. 50 — disclosure «stai parlando con un'IA»</div><span class="pill warn">Attivo · quick win</span><div class="tl-note">Deliverable a breve, spuntabile subito nell'Engine.</div></div>
+        </div>
+        <div class="tl-node w">
+          <div class="tl-date">2 dic 2026</div>
+          <div class="tl-body"><div class="t">Marcatura contenuti sintetici (50(2)) + nuovi divieti (deepfake intimi, CSAM)</div><span class="pill warn">Prossimo</span></div>
+        </div>
+        <div class="tl-node d">
+          <div class="tl-date">2 dic 2027</div>
+          <div class="tl-body"><div class="t">ALTO RISCHIO Annex III — provider (Art. 8–15), deployer (Art. 26), conformità, registro UE</div><span class="pill defer">Rinviato +16 mesi</span></div>
+        </div>
+        <div class="tl-node d">
+          <div class="tl-date">2 ago 2028</div>
+          <div class="tl-body"><div class="t">Alto rischio Annex I — IA in prodotti regolati (dispositivi medici…)</div><span class="pill defer">Rinviato</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- VALUE CHAIN -->
+  <section aria-labelledby="s-vc">
+    <div class="shead">
+      <p class="lbl"><span class="n">02</span> Dove siamo nella catena del valore</p>
+      <h3 id="s-vc">Provider di modelli + abilitatore — non deployer</h3>
+    </div>
+    <div class="valuechain">
+      <div class="panel">
+        <div class="role">Forge · Hub</div>
+        <h4>Provider / downstream provider</h4>
+        <p>Comprimiamo e ridistribuiamo modelli aperti sotto il marchio <code>eullm/…</code> → siamo provider del modello GPAI.</p>
+        <p class="muted">Test dell'1/3-compute: gestito documentando come se lo fossimo. &lt;10²⁵ FLOP ⇒ nessun rischio sistemico.</p>
+      </div>
+      <div class="panel">
+        <div class="role">Engine</div>
+        <h4>Abilitatore</h4>
+        <p>Far girare l'inferenza è <i>deploying</i>, non «providing». Distribuire un motore (come Ollama) non è fornire un modello.</p>
+        <p class="muted">La responsabilità nasce nell'uso, dove deve stare.</p>
+      </div>
+      <div class="panel">
+        <div class="role">Utilizzatore</div>
+        <h4>Deployer</h4>
+        <p>Chi usa il modello nel proprio contesto. Se l'uso è Annex III, gli obblighi da alto rischio sono <b>suoi</b>.</p>
+        <p class="muted">Noi gli forniamo gli strumenti per assolverli.</p>
+      </div>
+    </div>
+    <div class="vc-note">L'Omnibus ha <b>rafforzato l'Art. 25</b>: il provider a monte deve passare a valle documentazione tecnica, limiti noti e accesso per i test. → <b>La scheda di conformità È l'artefatto di quel passaggio.</b></div>
+  </section>
+
+  <!-- TODAY vs FUTURE -->
+  <section aria-labelledby="s-gap">
+    <div class="shead">
+      <p class="lbl"><span class="n">03</span> Oggi → Futuro</p>
+      <h3 id="s-gap">Cosa gira davvero, e il gap che è la roadmap</h3>
+      <p>Onestà con il codice: distinguere ciò che <i>funziona</i> da ciò che è <i>marketing</i>. Il gap non si nasconde — è la ragione del round.</p>
+    </div>
+    <div class="gap-cols">
+      <div class="listcard ok">
+        <header><span class="h">Gira davvero (in codice)</span><span class="pill good">Implementato</span></header>
+        <ul>
+          <li><b>Audit trail locale</b> — JSONL <code>~/.eullm/audit</code>, on-by-default, su tutte le API (solo <i>metadati</i>)</li>
+          <li><b>Zero telemetria</b> — nessun tracker, UI self-contained</li>
+          <li><b>IP allowlist</b> in ingresso (default loopback)</li>
+          <li><b>Verifica SHA-256</b> dei pesi scaricati</li>
+          <li><b>Anonimizzatore PII</b> in Forge — redige CF, IBAN, nomi da Cassazione prima del training</li>
+        </ul>
+      </div>
+      <div class="listcard no">
+        <header><span class="h">Gap = roadmap finanziabile</span><span class="pill risk">Da costruire</span></header>
+        <ul>
+          <li><b>Schede Hub statiche/hardcoded</b> — identiche per ogni modello, con asserzioni indifendibili (<code>gdpr_compliant:true</code>, «no personal data»)</li>
+          <li><b>README sovradimensionato</b> — «audit di ogni request/response», «dati solo in UE» (i download passano da HuggingFace)</li>
+          <li><b>Nessuna feature Art. 50</b> (disclosure / watermark) — assente</li>
+          <li><b>Nessuna generazione scheda</b> in Forge — provenienza non persistita</li>
+          <li><b>Residenza UE non forzata</b> per la distribuzione modelli</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- RESPONSIBILITY SPLIT -->
+  <section aria-labelledby="s-resp">
+    <div class="shead">
+      <p class="lbl"><span class="n">04</span> Ripartizione responsabilità</p>
+      <h3 id="s-resp">«Noi vs Utilizzatore» — questa tabella È il business model</h3>
+      <p>Ogni riga «deployer» è un punto in cui vendiamo lo strumento che gli fa spuntare la casella, senza ereditarne la responsabilità.</p>
+    </div>
+    <div class="tbl-scroll">
+      <table>
+        <thead><tr><th>Obbligo</th><th>Chi risponde</th><th>Strumento che forniamo NOI</th></tr></thead>
+        <tbody>
+          <tr><td><b>Riassunto dati di training</b> (53(1)(d))</td><td class="who"><span class="whoTag us">EULLM</span></td><td>Generatore in Forge + pubblicazione su Hub</td></tr>
+          <tr><td><b>Policy copyright / opt-out TDM</b> (53(1)(c))</td><td class="who"><span class="whoTag us">EULLM</span></td><td>Policy allegata alla scheda</td></tr>
+          <tr><td><b>Trasparenza Art. 50</b> (disclosure IA)</td><td class="who"><span class="whoTag dep">Deployer</span></td><td>Feature disclosure nell'Engine + istruzioni in scheda</td></tr>
+          <tr><td><b>Classificazione alto rischio</b> (Art. 6)</td><td class="who"><span class="whoTag dep">Deployer</span></td><td>Scheda che delimita l'uso + trigger di rischio</td></tr>
+          <tr><td><b>Data governance / Annex IV</b> (Art. 9–11)</td><td class="who"><span class="whoTag dep">Deployer</span></td><td>High-Risk Enablement Pack pre-compilato</td></tr>
+          <tr><td><b>Logging ≥6 mesi</b> (Art. 12/26)</td><td class="who"><span class="whoTag dep">Deployer</span></td><td>Audit trail dell'Engine (da estendere)</td></tr>
+          <tr><td><b>DPIA</b> (Art. 35 GDPR)</td><td class="who"><span class="whoTag dep">Deployer</span></td><td>Doc a supporto + audit compatibile Art. 30</td></tr>
+          <tr><td><b>Cancellazione dati</b> (Art. 17)</td><td class="who"><span class="whoTag dep">Deployer</span></td><td>RAG (cancellabile) + minimizzazione PII</td></tr>
+          <tr><td><b>Sicurezza</b> (Art. 32 GDPR / Art. 15 AI Act)</td><td class="who"><span class="whoTag both">Entrambi</span></td><td>On-prem + hardening + (roadmap) SBOM/CRA</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- COMPLIANCE CARD ANATOMY -->
+  <section aria-labelledby="s-card">
+    <div class="shead">
+      <p class="lbl"><span class="n">05</span> Le schede di conformità</p>
+      <h3 id="s-card">Come organizzarle — due livelli, per-modello, mai auto-assolutorie</h3>
+      <p>Riferite ai <b>modelli verticalizzati</b> (in sviluppo), non a quelli scaricabili oggi. Generate da Forge, servite dal Hub.</p>
+    </div>
+    <div class="anat">
+      <div class="layer">
+        <div class="lv">Livello A — sempre</div>
+        <h4>GPAI Model Compliance Card</h4>
+        <div class="sub">Per ogni modello. Impacchetta ciò che l'AI Act richiede.</div>
+        <div class="fieldchips">
+          <span class="fc"><b>Annex XI §1</b> descrizione + architettura</span>
+          <span class="fc"><b>53(1)(d)</b> riassunto training</span>
+          <span class="fc"><b>53(1)(c)</b> policy copyright</span>
+          <span class="fc"><b>Art. 50</b> note trasparenza</span>
+          <span class="fc">uso previsto + <b>trigger alto rischio</b></span>
+          <span class="fc">provenienza + <b>hash GGUF</b></span>
+        </div>
+      </div>
+      <div class="layer">
+        <div class="lv">Livello B — opzionale</div>
+        <h4>High-Risk Enablement Pack</h4>
+        <div class="sub">Per verticali sensibili (legal / medical / finance).</div>
+        <div class="fieldchips">
+          <span class="fc">pre-compila <b>Annex IV</b></span>
+          <span class="fc">mapping <b>Art. 26</b> deployer</span>
+          <span class="fc">design <b>sorveglianza umana</b></span>
+          <span class="fc">metriche di accuratezza</span>
+          <span class="fc">logging &amp; retention</span>
+        </div>
+      </div>
+      <div class="anat-note"><b>Da correggere:</b> via le asserzioni hardcoded (<code>gdpr_compliant:true</code>, «no personal data», <code>systemic_risk:false</code>). Al loro posto: fatti qualificati + disclaimer «informazioni per abilitare la conformità del deployer, non una valutazione di conformità». <b>La classificazione di rischio dipende dall'uso.</b></div>
+    </div>
+  </section>
+
+  <!-- GDPR + OTHER NORMS -->
+  <section aria-labelledby="s-norms">
+    <div class="shead">
+      <p class="lbl"><span class="n">06</span> GDPR &amp; altre norme</p>
+      <h3 id="s-norms">Il vantaggio on-prem, e cosa altro morde</h3>
+    </div>
+    <div class="mini">
+      <div class="minicard">
+        <div class="mh">GDPR · vantaggio strutturale on-prem</div>
+        <p>Inferenza locale ⇒ <b>fornitore di software, non responsabile del trattamento</b>. Niente Capo V, niente rischio «Schrems III». Un concorrente su cloud USA non può replicarlo.</p>
+        <p><b>RAG &gt; fine-tuning</b> per i dati personali: il vector store è cancellabile (Art. 17); i pesi no. EDPB Opinion 28/2024: il modello <b>non</b> è automaticamente anonimo. Art. 9 (medico/legale): doppia base. Art. 22/SCHUFA: human-in-the-loop.</p>
+      </div>
+      <div class="minicard">
+        <div class="mh">Le altre norme che ci riguardano</div>
+        <p>La linea <b>commerciale vs non-commerciale</b> della OSS determina l'esposizione a CRA e PLD — da gestire nei termini di licenza.</p>
+        <div class="normchips">
+          <span class="nc"><b>PLD</b> 2024/2853 · recep. 9 dic 2026 · OSS commerciale in scope</span>
+          <span class="nc"><b>CRA</b> 2024/2847 · 11 set 2026 → 11 dic 2027</span>
+          <span class="nc"><b>DORA</b> · fornitore ICT terzo</span>
+          <span class="nc"><b>NIS2</b> · i nostri clienti</span>
+          <span class="nc"><b>AI Liability Directive</b> · ritirata</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Q&A -->
+  <section aria-labelledby="s-qa">
+    <div class="shead">
+      <p class="lbl"><span class="n">07</span> Cheat-sheet</p>
+      <h3 id="s-qa">Domande probabili di Etel — risposte pronte</h3>
+    </div>
+    <div class="qa">
+      <details open>
+        <summary>Ma l'AI Act non è già in vigore?</summary>
+        <div class="ans">Le <b>pratiche vietate</b> e gli <b>obblighi GPAI</b> sì; l'<b>alto rischio</b> è stato <b>rinviato al 2 dic 2027</b> dal Digital Omnibus di giugno. Per noi è un vantaggio di go-to-market: arriviamo con gli strumenti mentre il mercato si prepara.</div>
+      </details>
+      <details>
+        <summary>Vi assumete responsabilità legali sui modelli?</summary>
+        <div class="ans"><b>No.</b> Siamo provider di modelli aperti + abilitatori. La conformità è del sistema e del deployer; noi forniamo la documentazione e l'audit che glielo rendono possibile. Il README lo dichiara già esplicitamente.</div>
+      </details>
+      <details>
+        <summary>Cosa avete già in produzione?</summary>
+        <div class="ans">Engine con <b>audit on-by-default</b> e <b>zero telemetria</b>, <b>anonimizzatore PII</b> in Forge, Hub con formato scheda e API. I modelli demo e le schede per-modello sono in sviluppo — è parte di ciò che finanziamo.</div>
+      </details>
+      <details>
+        <summary>Perché non basta un modello USA con un layer di compliance?</summary>
+        <div class="ans">Perché su cloud USA il <b>Capo V GDPR</b> e il rischio <b>Schrems III</b> non si tolgono con un layer. Noi togliamo l'egress alla radice (on-prem) e forniamo la documentazione AI Act nativa. Integrazione verticale EULLM ↔ RAG Enterprise.</div>
+      </details>
+      <details>
+        <summary>Qual è il vostro rischio regolatorio?</summary>
+        <div class="ans">Il <b>test dell'1/3-compute</b> (Forge potrebbe renderci provider GPAI del modello modificato): lo gestiamo documentando come se lo fossimo. E la <b>linea commerciale/non-commerciale OSS</b> per CRA/PLD, gestita nei termini di licenza.</div>
+      </details>
+    </div>
+  </section>
+
+  <footer>
+    <p class="disc">MATERIALE INTERNO DI PREPARAZIONE — NON COSTITUISCE CONSULENZA LEGALE.</p>
+    <p>Timeline post <em>Digital Omnibus on AI</em> (Parlamento 16 giu 2026, Consiglio 29 giu 2026): il testo definitivo in Gazzetta Ufficiale è l'autorità ultima. Linee guida GPAI, Code of Practice e template training-summary sono soft-law della Commissione. Il test dell'1/3-compute è indicativo. La «Data Omnibus» lato GDPR è solo una proposta. Fonti complete nel dossier <code>docs/compliance/ai-act-gdpr-briefing.md</code>.</p>
+  </footer>
+
+</div>
