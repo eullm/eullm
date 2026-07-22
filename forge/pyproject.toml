@@ -52,6 +52,10 @@ legal = [
 [tool.setuptools.packages.find]
 include = ["eullm_forge*"]
 
+[tool.setuptools.package-data]
+# Ship the eval-harness seed sets inside the wheel (non-editable installs).
+"eullm_forge.eval" = ["data/*.jsonl"]
+
 [project.scripts]
 eullm-forge = "eullm_forge.cli:main"
 

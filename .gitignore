@@ -61,6 +61,10 @@ vendor/
 *.arrow
 /data/
 /datasets/
+
+# Exception: eval-harness seed sets are small, curated, PII-free source assets
+# (not training corpora) — keep them tracked so CI and wheels include them.
+!forge/eullm_forge/eval/data/*.jsonl
 /corpus/
 /corpora/
 italgiure_corpus/
