@@ -16,6 +16,7 @@
 - **Docs:** Every public API documented
 - **No vendor lock-in:** Abstract external services behind interfaces
 - **Always check latest versions**: When adding or updating any dependency (Rust crates, Python packages, GitHub Actions), look up the current latest stable version online and use that. Never guess or copy version numbers from memory — they go stale quickly.
+- **`eullm run` / `eullm serve` CLI flag parity (MANDATORY)**: any CLI flag added to `Commands::Run` (model-loading/inference config: GPU layers, context size, KV cache type, batch size, flash attention, etc.) MUST be added to `Commands::Serve` in the same PR, wired as the server's launch-time baseline for whatever model it loads/swaps to. `serve` is a headless daemon driven by per-request `model` fields — it must never hardcode a config option that `run` exposes. Found and fixed as a real bug (not by design) in July 2026: `cache_type_k`/`cache_type_v`/`gpu_layers` and others existed only on `Run`, silently forcing every model `serve` loaded into fixed defaults with no override. Where a per-request override already exists for a field (e.g. `ctx_size`, `batch_size` via `override_*.unwrap_or(self.*)` in `api/mod.rs`), extend that same pattern to new fields rather than only adding a launch-time flag — validate/clamp any override that arrives in a request body.
 
 ## CI/CD Rules (MANDATORY — do not remove or simplify)
 
