@@ -657,22 +657,20 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            // Gemma 4's mixed SWA architecture (25 SWA layers at head_dim=256 + 5
-            // global layers at head_dim=512) is incompatible with quantized KV
-            // cache in stock llama.cpp: the SWA bypass to f16 has not yet been
-            // merged upstream. Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
-            let model_lower = model.to_lowercase();
-            let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
-            let needs_correction =
-                ctk != inference::KvCacheType::F16 || ctv != inference::KvCacheType::F16;
-            if is_gemma4 && needs_correction {
+            // Gemma 4 requires f16 KV cache (mixed SWA architecture) — see
+            // `inference::correct_kv_cache_for_model` for the rationale. The
+            // same correction also applies inside `swap_model` so it can't
+            // be bypassed by swapping models after startup.
+            let (corrected_k, corrected_v, corrected) =
+                inference::correct_kv_cache_for_model(&model, ctk, ctv);
+            if corrected {
                 eprintln!(
                     "[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v})."
                 );
                 eprintln!("[EULLM] Mixed SWA architecture (D=512/256) requires f16 KV cache.");
                 eprintln!("[EULLM] Auto-correcting to f16/f16.");
-                ctk = inference::KvCacheType::F16;
-                ctv = inference::KvCacheType::F16;
+                ctk = corrected_k;
+                ctv = corrected_v;
             }
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
