@@ -265,6 +265,33 @@ pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
     }
 }
 
+/// Gemma 4's mixed SWA architecture (25 SWA layers at head_dim=256 + 5
+/// global layers at head_dim=512) is incompatible with quantized KV cache in
+/// stock llama.cpp: the SWA bypass to f16 has not yet been merged upstream.
+/// Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
+///
+/// Applied to every model load path (CLI `run`, and `swap_model` for both
+/// `run`'s later swaps and any `serve` swap) so the correction can't be
+/// bypassed by the entry point — a request-driven swap on `serve` hits the
+/// same architecture constraint as a CLI launch.
+///
+/// Returns the (possibly corrected) cache types and whether a correction
+/// was applied, so callers can report it through their own log/print path.
+pub fn correct_kv_cache_for_model(
+    model_name: &str,
+    cache_type_k: KvCacheType,
+    cache_type_v: KvCacheType,
+) -> (KvCacheType, KvCacheType, bool) {
+    let model_lower = model_name.to_lowercase();
+    let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
+    let needs_correction = cache_type_k != KvCacheType::F16 || cache_type_v != KvCacheType::F16;
+    if is_gemma4 && needs_correction {
+        (KvCacheType::F16, KvCacheType::F16, true)
+    } else {
+        (cache_type_k, cache_type_v, false)
+    }
+}
+
 /// Approximate bytes per element for a KV cache type. Quantized types use the
 /// GGUF block byte ratio (e.g. Q4_0 packs 32 elements into 18 bytes, so 0.5625
 /// B/elem). Used by both the runtime KV-memory estimate and the `--fit` sizer.

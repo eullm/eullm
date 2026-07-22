@@ -275,6 +275,55 @@ enum Commands {
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
 
+        /// Number of GPU layers to offload (-1 = all, 0 = CPU only). Applied
+        /// to every model this server loads or swaps to. See `eullm run
+        /// --help` for the full rationale.
+        #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
+        gpu_layers: i32,
+
+        /// Context window size. Applied to every model this server loads or
+        /// swaps to (a request's `ctx_size` field overrides it for that
+        /// swap). See `eullm run --help` for the full rationale.
+        #[arg(short, long, default_value_t = 4096)]
+        ctx_size: u32,
+
+        /// Number of CPU threads (default: all available). Applied to every
+        /// model this server loads or swaps to.
+        #[arg(short, long)]
+        threads: Option<u32>,
+
+        /// Disable flash attention (enabled by default). Applied to every
+        /// model this server loads or swaps to.
+        #[arg(long)]
+        no_flash_attn: bool,
+
+        /// Prompt processing batch size (tokens per eval during prefill).
+        /// Applied to every model this server loads or swaps to.
+        #[arg(long, default_value_t = 2048)]
+        n_batch: u32,
+
+        /// KV cache type for keys. Options: f16, f32, q8_0, q4_0, q4_1,
+        /// q5_0, q5_1. Applied to every model this server loads or swaps
+        /// to. Default matches eullm serve's existing behavior (q8_0) —
+        /// note this differs from `eullm run`'s default (f16), kept as-is
+        /// to avoid changing default VRAM usage for existing serve users.
+        #[arg(long, default_value = "q8_0")]
+        cache_type_k: String,
+
+        /// KV cache type for values. Options: f16, f32, q8_0, q4_0, q4_1,
+        /// q5_0, q5_1. Applied to every model this server loads or swaps
+        /// to. Default matches eullm serve's existing behavior (q4_0) —
+        /// note this differs from `eullm run`'s default (f16), kept as-is
+        /// to avoid changing default VRAM usage for existing serve users.
+        #[arg(long, default_value = "q4_0")]
+        cache_type_v: String,
+
+        /// Enable transparent web browsing: URLs in user messages are
+        /// fetched and their content is injected into the prompt before
+        /// inference. Applied to every model this server loads or swaps to.
+        #[arg(long)]
+        web: bool,
+
         /// For MoE models: keep expert tensors on CPU RAM, attention +
         /// embeddings + KV cache on GPU. Applied to every model this server
         /// loads or swaps to. See `eullm run --help` for the full rationale.
@@ -608,22 +657,20 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            // Gemma 4's mixed SWA architecture (25 SWA layers at head_dim=256 + 5
-            // global layers at head_dim=512) is incompatible with quantized KV
-            // cache in stock llama.cpp: the SWA bypass to f16 has not yet been
-            // merged upstream. Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
-            let model_lower = model.to_lowercase();
-            let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
-            let needs_correction =
-                ctk != inference::KvCacheType::F16 || ctv != inference::KvCacheType::F16;
-            if is_gemma4 && needs_correction {
+            // Gemma 4 requires f16 KV cache (mixed SWA architecture) — see
+            // `inference::correct_kv_cache_for_model` for the rationale. The
+            // same correction also applies inside `swap_model` so it can't
+            // be bypassed by swapping models after startup.
+            let (corrected_k, corrected_v, corrected) =
+                inference::correct_kv_cache_for_model(&model, ctk, ctv);
+            if corrected {
                 eprintln!(
                     "[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v})."
                 );
                 eprintln!("[EULLM] Mixed SWA architecture (D=512/256) requires f16 KV cache.");
                 eprintln!("[EULLM] Auto-correcting to f16/f16.");
-                ctk = inference::KvCacheType::F16;
-                ctv = inference::KvCacheType::F16;
+                ctk = corrected_k;
+                ctv = corrected_v;
             }
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
@@ -670,6 +717,14 @@ async fn main() {
             port,
             replace,
             batch_size,
+            gpu_layers,
+            ctx_size,
+            threads,
+            no_flash_attn,
+            n_batch,
+            cache_type_k,
+            cache_type_v,
+            web,
             cpu_moe,
             n_cpu_moe,
             rs_seq,
@@ -688,12 +743,28 @@ async fn main() {
                 );
                 std::process::exit(1);
             }
+            let ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            });
+            let ctv = inference::parse_cache_type(&cache_type_v).unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            });
             let ui_port_opt = if ui { Some(ui_port) } else { None };
             cmd_serve(
                 port,
                 replace,
                 ui_port_opt,
                 batch_size,
+                gpu_layers,
+                ctx_size,
+                threads,
+                !no_flash_attn,
+                n_batch,
+                ctk,
+                ctv,
+                web,
                 cpu_moe,
                 n_cpu_moe,
                 rs_seq,
@@ -1907,6 +1978,14 @@ async fn cmd_serve(
     replace: bool,
     ui_port: Option<u16>,
     batch_size: usize,
+    gpu_layers: i32,
+    ctx_size: u32,
+    threads: Option<u32>,
+    flash_attn: bool,
+    n_batch: u32,
+    cache_type_k: inference::KvCacheType,
+    cache_type_v: inference::KvCacheType,
+    web: bool,
     cpu_moe: bool,
     n_cpu_moe: u32,
     rs_seq: u32,
@@ -1918,9 +1997,11 @@ async fn cmd_serve(
         ensure_port_available(p, replace).await;
     }
 
-    let threads = std::thread::available_parallelism()
-        .map(|n| n.get() as u32)
-        .unwrap_or(4);
+    let threads = threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(4)
+    });
 
     println!("eullm ready (no model loaded — send a request with a \"model\" field to load one).");
     println!("  API (EULLM):   http://localhost:{port}/api");
@@ -1937,20 +2018,20 @@ async fn cmd_serve(
         model_name: None,
         engine: None,
         scheduler: None,
-        gpu_layers: -1,
-        ctx_size: 4096,
+        gpu_layers,
+        ctx_size,
         threads,
-        flash_attn: true,
-        n_batch: 2048,
-        cache_type_k: inference::KvCacheType::Q8_0,
-        cache_type_v: inference::KvCacheType::Q4_0,
+        flash_attn,
+        n_batch,
+        cache_type_k,
+        cache_type_v,
         batch_size,
         cpu_moe,
         n_cpu_moe,
         rs_seq,
         ctx_checkpoints,
         checkpoint_min_step,
-        web_enabled: false,
+        web_enabled: web,
         store,
         ui_port,
     })
