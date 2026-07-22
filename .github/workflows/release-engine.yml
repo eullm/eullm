@@ -65,7 +65,6 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15
             artifact: eullm-macos-x64
-            features: metal
           - target: aarch64-apple-darwin
             os: macos-15
             artifact: eullm-macos-arm64
