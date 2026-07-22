@@ -393,6 +393,145 @@ def prepare_dataset(
 
 
 
+@main.command("eval")
+@click.option("--dataset", "-d", type=click.Path(), default=None,
+              help="Held-out JSONL eval set (default: bundled Italian-legal seed).")
+@click.option("--answers", type=click.Path(exists=True), default=None,
+              help="Precomputed answers JSONL, one {\"id\", \"answer\"} per line.")
+@click.option("--engine-url", default=None,
+              help="OpenAI-compatible base URL to generate answers "
+                   "(e.g. the EULLM Engine: http://localhost:11434/v1).")
+@click.option("--model", default=None, help="Model name to use with --engine-url.")
+@click.option("--domain", default=None, help="Filter items by domain.")
+@click.option("--lang", default=None, help="Filter items by language.")
+@click.option("--spotcheck", is_flag=True, help="Also export a human spot-check sheet.")
+@click.option("--output", "-o", default="./eval-out", help="Output directory for the report.")
+def eval_cmd(
+    dataset: str | None,
+    answers: str | None,
+    engine_url: str | None,
+    model: str | None,
+    domain: str | None,
+    lang: str | None,
+    spotcheck: bool,
+    output: str,
+) -> None:
+    """Evaluate a model on a held-out set (F0 harness).
+
+    Provide answers one of two ways:
+
+      --answers FILE     score precomputed answers (JSONL: {"id", "answer"})
+
+      --engine-url URL   generate answers via an OpenAI-compatible endpoint
+                         (the EULLM Engine or any compatible server)
+
+    Examples:
+
+        eullm-forge eval --answers answers.jsonl
+
+        eullm-forge eval --engine-url http://localhost:11434/v1 --model legal-it-7b
+    """
+    import json
+
+    from .eval import (
+        build_report,
+        collect_answers,
+        filter_items,
+        load_eval_set,
+        load_seed,
+        spotcheck_markdown,
+        to_markdown,
+    )
+
+    items = load_eval_set(dataset) if dataset else load_seed()
+    items = filter_items(items, domain=domain, lang=lang)
+    if not items:
+        console.print("[red]No items after filtering.[/red]")
+        raise SystemExit(1)
+
+    if answers:
+        answer_map: dict[str, str] = {}
+        for line in Path(answers).read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            rec = json.loads(line)
+            answer_map[rec["id"]] = rec.get("answer", "")
+        model_label = model or f"answers:{Path(answers).name}"
+    elif engine_url:
+        if not model:
+            console.print("[red]--model is required with --engine-url.[/red]")
+            raise SystemExit(1)
+        gen = _openai_generate_fn(engine_url, model)
+        console.print(f"Generating {len(items)} answers via {engine_url} ([cyan]{model}[/cyan])...")
+        answer_map = collect_answers(items, gen)
+        model_label = model
+    else:
+        console.print(
+            f"[yellow]Loaded {len(items)} items.[/yellow] "
+            "Provide --answers FILE or --engine-url URL to score a model."
+        )
+        return
+
+    report = build_report(items, answer_map, model_name=model_label)
+    out_dir = Path(output)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (out_dir / "report.md").write_text(to_markdown(report), encoding="utf-8")
+    if spotcheck:
+        (out_dir / "spotcheck.md").write_text(
+            spotcheck_markdown(items, answer_map), encoding="utf-8"
+        )
+
+    qa = report["qa"]
+    table = Table(title=f"Eval — {report['model']}")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Items", str(report["n_items"]))
+    table.add_row("Exact match", _fmt_pct(qa["exact_match"]))
+    table.add_row("Keyword coverage", _fmt_pct(qa["keyword_coverage"]))
+    console.print(table)
+    console.print(f"\n[green]Report written to[/green] {out_dir}/ (report.json, report.md)")
+    console.print(
+        "[dim]Note: exact-match/keyword coverage are coarse. Wire an LLM-as-judge "
+        "and a lawyer spot-check for real ranking (see forge-research-roadmap F0-B).[/dim]"
+    )
+
+
+def _openai_generate_fn(base_url: str, model: str):
+    """Return a ``generate_fn`` calling an OpenAI-compatible chat endpoint.
+
+    The seam is the interface, not the vendor: point ``base_url`` at the EULLM
+    Engine or any OpenAI-compatible server.
+    """
+    import requests  # lazy: only needed when generating via an endpoint
+
+    url = base_url.rstrip("/") + "/chat/completions"
+
+    def _gen(prompt: str) -> str:
+        resp = requests.post(
+            url,
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.0,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"]
+
+    return _gen
+
+
+def _fmt_pct(value: float | None) -> str:
+    if value is None or value != value:  # None or NaN
+        return "—"
+    return f"{value * 100:.1f}%"
+
+
 def _guess_params_from_name(model_name: str) -> float:
     """Guess parameter count from model name (e.g., 'Qwen3-14B' → 14.0)."""
     import re
