@@ -59,12 +59,29 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             artifact: eullm-linux-x64
+            # x86-64-v3 (Intel Haswell 2013+ / AMD Zen 2017+): baseline AVX2/FMA
+            # so llama-cpp-sys-2's build.rs (reads CARGO_CFG_TARGET_FEATURE)
+            # actually turns on GGML_AVX2 in llama.cpp's CPU backend. Without
+            # this, Rust's default x86_64 target features are SSE-only, so the
+            # published CPU-only binary silently runs llama.cpp's much slower,
+            # far-less-used no-AVX2 fallback kernels regardless of the actual
+            # CPU — confirmed via `rustc --print cfg`, and reproduced on real
+            # hardware in issue #140 (1.16 tok/s on a 12-core Haswell-class i9
+            # that fully supports AVX2). CPUs older than this floor get a hard
+            # SIGILL crash instead of a slow-but-working binary — see
+            # docs/x86-64-baseline.md for the compatibility trade-off writeup.
+            rustflags: "-C target-cpu=x86-64-v3"
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04
             artifact: eullm-linux-arm64
           - target: x86_64-apple-darwin
             os: macos-15
             artifact: eullm-macos-x64
+            # Same x86-64-v3 baseline as eullm-linux-x64 above — see that
+            # entry's comment. Metal was removed from this target separately
+            # (garbage output / hangs on Intel-Mac GPUs, issue #140); this is
+            # the CPU-side follow-up on the same issue.
+            rustflags: "-C target-cpu=x86-64-v3"
           - target: aarch64-apple-darwin
             os: macos-15
             artifact: eullm-macos-arm64
@@ -143,6 +160,11 @@ jobs:
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
 
       - name: Build engine
+        env:
+          # Set only on the x86_64 CPU-only matrix entries (see their
+          # `rustflags` comment above) — unset/empty for arm64, which
+          # doesn't need or use it. See docs/x86-64-baseline.md.
+          RUSTFLAGS: ${{ matrix.rustflags }}
         run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features && format('--features {0}', matrix.features) || '' }} -p eullm-engine
 
       - name: sccache stats (visibility into S3 hit/miss)
@@ -536,6 +558,10 @@ jobs:
           }
 
       - name: Build engine
+        env:
+          # Same x86-64-v3 baseline as eullm-linux-x64/eullm-macos-x64 — see
+          # docs/x86-64-baseline.md.
+          RUSTFLAGS: "-C target-cpu=x86-64-v3"
         run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
 
       - name: sccache stats (visibility into S3 hit/miss)
