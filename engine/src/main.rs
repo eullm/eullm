@@ -239,6 +239,16 @@ enum Commands {
         /// (web chat / `/api/chat` `images`); this flag is the CLI one-shot.
         #[arg(long, value_name = "PATH")]
         image: Option<PathBuf>,
+
+        /// Enable extra internal diagnostics for the Rust engine layer. Off
+        /// by default (zero added per-token cost, matches upstream
+        /// llama.cpp). Today this enables a NaN/Inf scan of every generated
+        /// token's logits before sampling — added to help diagnose garbage
+        /// output (issue #140) — at the cost of one extra linear scan over
+        /// the vocab per token. Not a general log-level flag; use RUST_LOG
+        /// for that.
+        #[arg(long)]
+        rust_debug: bool,
     },
     /// List locally available models
     List,
@@ -372,6 +382,13 @@ enum Commands {
         /// PID file path (used with --daemon)
         #[arg(long, default_value = DEFAULT_PIDFILE)]
         pidfile: String,
+
+        /// Enable extra internal diagnostics for the Rust engine layer.
+        /// Applied to every model this server loads or swaps to. Off by
+        /// default (zero added per-token cost, matches upstream llama.cpp).
+        /// See `eullm run --help` for the full rationale.
+        #[arg(long)]
+        rust_debug: bool,
     },
     /// Unload the currently loaded model from a running eullm server,
     /// freeing its VRAM — without restarting the server.
@@ -546,6 +563,7 @@ async fn main() {
                 daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
                 image: None,
+                rust_debug: false,
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
@@ -573,6 +591,7 @@ async fn main() {
                 daemon: false,
                 pidfile: DEFAULT_PIDFILE.into(),
                 image: None,
+                rust_debug: false,
             },
             Some(picker::Picked::Url(_url)) => {
                 eprintln!(
@@ -628,6 +647,7 @@ async fn main() {
             daemon,
             pidfile,
             image,
+            rust_debug,
         } => {
             // `eullm run` with no model → picker, dispatch back through the same Run.
             let model = match model {
@@ -707,6 +727,7 @@ async fn main() {
                 ui_port_opt,
                 open_chat,
                 image,
+                rust_debug,
             )
             .await;
         }
@@ -734,6 +755,7 @@ async fn main() {
             ui_port,
             daemon,
             pidfile,
+            rust_debug,
         } => {
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
@@ -770,6 +792,7 @@ async fn main() {
                 rs_seq,
                 ctx_checkpoints,
                 checkpoint_min_step,
+                rust_debug,
             )
             .await;
         }
@@ -1556,6 +1579,7 @@ async fn cmd_run(
     ui_port: Option<u16>,
     open_chat: bool,
     image: Option<PathBuf>,
+    rust_debug: bool,
 ) {
     // `--image` is a one-shot multimodal probe: load, send the bytes + prompt,
     // print the output, exit. Forces sequential mode (the scheduler does not
@@ -1731,6 +1755,7 @@ async fn cmd_run(
                 queue_capacity: batch_size * 8,
                 ctx_checkpoints,
                 checkpoint_min_step,
+                debug_logit_check: rust_debug,
             };
             let sched = BatchScheduler::new(config, sched_config);
             match sched.start() {
@@ -1797,6 +1822,9 @@ async fn cmd_run(
         };
         println!("  GPU backend:   {gpu_backend}");
         println!("  CPU features:  {}", inference::cpu_features_summary());
+        if rust_debug {
+            println!("  Rust debug:    enabled (NaN/Inf logit check active — extra per-token cost)");
+        }
         println!(
             "  GPU layers:    {}",
             if gpu_layers < 0 {
@@ -1930,6 +1958,7 @@ async fn cmd_run(
             rs_seq,
             ctx_checkpoints,
             checkpoint_min_step,
+            rust_debug,
             web_enabled: web,
             store: api_store,
             ui_port,
@@ -1992,6 +2021,7 @@ async fn cmd_serve(
     rs_seq: u32,
     ctx_checkpoints: usize,
     checkpoint_min_step: u32,
+    rust_debug: bool,
 ) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
@@ -2009,6 +2039,9 @@ async fn cmd_serve(
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     if let Some(p) = ui_port {
         println!("  Chat UI:       http://localhost:{p}/");
+    }
+    if rust_debug {
+        println!("  Rust debug:    enabled (NaN/Inf logit check active — extra per-token cost)");
     }
     println!("\nPress Ctrl+C to stop.\n");
 
@@ -2032,6 +2065,7 @@ async fn cmd_serve(
         rs_seq,
         ctx_checkpoints,
         checkpoint_min_step,
+        rust_debug,
         web_enabled: web,
         store,
         ui_port,

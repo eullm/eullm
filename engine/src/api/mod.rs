@@ -77,6 +77,10 @@ pub struct AppState {
     /// Min new tokens since the closest checkpoint before taking another
     /// one (see `SchedulerConfig::checkpoint_min_step`).
     pub checkpoint_min_step: u32,
+    /// Enable extra internal diagnostics for the Rust engine layer (see
+    /// `ServeConfig::rust_debug`). Applied to every model this server
+    /// loads or swaps to.
+    pub rust_debug: bool,
 
     /// Enable transparent web fetching: URLs in user messages are fetched
     /// and their content is injected into the prompt before inference.
@@ -218,6 +222,7 @@ impl AppState {
         let model_name = normalized.clone();
         let ctx_checkpoints_for_swap = self.ctx_checkpoints;
         let checkpoint_min_step_for_swap = self.checkpoint_min_step;
+        let rust_debug_for_swap = self.rust_debug;
 
         let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
             if batch_size > 0 {
@@ -226,6 +231,7 @@ impl AppState {
                     queue_capacity: batch_size * 8,
                     ctx_checkpoints: ctx_checkpoints_for_swap,
                     checkpoint_min_step: checkpoint_min_step_for_swap,
+                    debug_logit_check: rust_debug_for_swap,
                 };
                 let sched = BatchScheduler::new(config, sched_config);
                 match sched.start() {
@@ -407,6 +413,11 @@ pub struct ServeConfig {
     pub rs_seq: u32,
     pub ctx_checkpoints: usize,
     pub checkpoint_min_step: u32,
+    /// Enable extra internal diagnostics for the Rust engine layer (NaN/Inf
+    /// logit scan per token — see `SchedulerConfig::debug_logit_check`).
+    /// Applied to every model this server loads or swaps to. Off by
+    /// default: zero added per-token cost, matches upstream llama.cpp.
+    pub rust_debug: bool,
     pub web_enabled: bool,
     pub store: ModelStore,
     /// Optional embedded chat UI. When `Some(port)`, a second listener is
@@ -445,6 +456,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         rs_seq: cfg.rs_seq,
         ctx_checkpoints: cfg.ctx_checkpoints,
         checkpoint_min_step: cfg.checkpoint_min_step,
+        rust_debug: cfg.rust_debug,
         web_enabled: cfg.web_enabled,
         api_port: cfg.port,
         store: cfg.store,
