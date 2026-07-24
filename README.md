@@ -100,6 +100,17 @@ The remaining gap is **macOS Intel (x86_64)** — if you run local LLMs on a pre
 
 - **[@andreyluiz](https://github.com/andreyluiz)** — macOS (Apple M2 Pro, Metal) and Raspberry Pi 400 (Cortex-A72, ARM64), with full logs. His macOS run surfaced a real packaging bug: the published `eullm-macos-arm64` had been built without Metal and silently ran on CPU — the release now builds the macOS binaries with `--features metal`. Genuinely grateful for the time he's putting into validating hardware the maintainer can't reach.
 
+### Diagnosing garbage output or crashes (`--rust-debug`, new in v0.6.34)
+
+If you're helping test odd hardware and see garbage output (one token repeated over and over, gibberish) or an unexplained crash, add `--rust-debug` to `eullm run` / `eullm serve`. It turns on a NaN/Inf scan of the model's logits right before every sampled token and logs loudly (`tracing::error!`) if it finds corruption — the clearest signal available today for "is this a numerical bug in the compute path" versus something else further downstream.
+
+```bash
+eullm run ./model.gguf --rust-debug
+eullm serve --rust-debug
+```
+
+Off by default: the scan touches every value in the vocabulary (~100-150k floats) on every generated token, so it's real added cost most users shouldn't pay for. Turn it on only when actively chasing a bug like this.
+
 ### Drop-in for Ollama-compatible clients
 
 Same port (11434), same Ollama API, plus OpenAI-compatible API on the same binary. Existing tooling (Open WebUI, LangChain, n8n, any OpenAI client) works without code changes:
@@ -146,7 +157,7 @@ eullm serve --daemon --pidfile /var/run/eullm.pid    # custom PID file location
 - **Stop** with `kill $(cat /tmp/eullm.pid)` — the engine handles SIGTERM
   gracefully and finishes in-flight requests before exiting.
 - All other flags work unchanged (`--port`, `--ctx-size`, `--web`,
-  `--batch-size`, …).
+  `--batch-size`, `--rust-debug`, …).
 
 > **Running under Docker or systemd?** Don't pass `--daemon` there — the
 > supervisor *is* the daemonizer. Use `docker compose up -d` or a plain
@@ -612,6 +623,7 @@ eullm run ./model.gguf --web              # Transparent web browsing (URLs in me
 eullm run legal-it-7b                     # From EU registry (coming soon)
 eullm run big-moe-model.gguf --cpu-moe --fit  # MoE: all experts on CPU RAM, rest on GPU
 eullm run big-moe-model.gguf --n-cpu-moe 12   # MoE: only first 12 layers' experts on CPU RAM
+eullm run ./model.gguf --rust-debug           # Diagnostics: NaN/Inf logit check (see below), off by default
 
 # CLI
 eullm list                                # Show local and available models

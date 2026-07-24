@@ -55,6 +55,16 @@ pub struct SchedulerConfig {
     /// server's `--checkpoint-min-step` (default there: 8192). Only
     /// consulted when `ctx_checkpoints > 0`.
     pub checkpoint_min_step: u32,
+    /// Enable extra internal diagnostics for the Rust engine layer. Today
+    /// this gates exactly one check — `warn_if_logits_corrupt`, a NaN/Inf
+    /// scan of every generated token's logits before sampling — added for
+    /// issue #140's investigation into unexplained garbage output. `false`
+    /// (default) matches upstream llama.cpp behavior exactly: zero added
+    /// per-token cost. `true` adds one linear scan over the vocab
+    /// (~100-150k f32 values) per token, which is cheap relative to the
+    /// forward pass but not free — opt-in via `--rust-debug`, not something
+    /// every production request should pay for.
+    pub debug_logit_check: bool,
 }
 
 impl Default for SchedulerConfig {
@@ -64,6 +74,7 @@ impl Default for SchedulerConfig {
             queue_capacity: 64,
             ctx_checkpoints: 0,
             checkpoint_min_step: 8192,
+            debug_logit_check: false,
         }
     }
 }
@@ -1064,7 +1075,9 @@ fn run_scheduler_loop(
                             // Sample the first generated token directly from prefill logits.
                             // Use output index -1 (= last output). Only the final prompt
                             // token had logits enabled, so there is exactly one output entry.
-                            warn_if_logits_corrupt(&ctx, -1, seq.seq_id);
+                            if sched_config.debug_logit_check {
+                                warn_if_logits_corrupt(&ctx, -1, seq.seq_id);
+                            }
                             let token = seq.sampler.sample(&ctx, -1);
                             seq.sampler.accept(token);
 
@@ -1283,7 +1296,9 @@ fn run_scheduler_loop(
             // every EOG/stop/max-tokens completion reached via this loop.)
             seq.n_past += 1;
 
-            warn_if_logits_corrupt(&ctx, logit_idx, seq.seq_id);
+            if sched_config.debug_logit_check {
+                warn_if_logits_corrupt(&ctx, logit_idx, seq.seq_id);
+            }
             let token = seq.sampler.sample(&ctx, logit_idx);
             seq.sampler.accept(token);
             logit_idx += 1;
@@ -1748,11 +1763,26 @@ fn send_done(seq: &ActiveSequence) {
 ///
 /// Cheap relative to the forward pass that produced these logits (a linear
 /// scan over the vocab, typically ~100-150k f32 values, versus the
-/// billions of FLOPs in the matmuls that computed them) — left
-/// unconditional rather than gated behind a flag so every user's crash
-/// reports carry this signal, not just ones who knew to enable it.
+/// billions of FLOPs in the matmuls that computed them) — but not free,
+/// and it is pure overhead pure llama.cpp does not pay. Gated behind
+/// `SchedulerConfig::debug_logit_check` (`--rust-debug`), off by default:
+/// callers must opt in rather than every production request paying an
+/// extra per-token vocab scan for a diagnostic almost nobody needs.
 fn warn_if_logits_corrupt(ctx: &LlamaContext, idx: i32, seq_id: i32) {
-    let logits = ctx.get_logits_ith(idx);
+    // `get_logits_ith` asserts `idx` is a literal member of the context's
+    // internally-tracked `initialized_logits` set — which only ever holds
+    // real, positive offsets (populated from `LlamaBatch::initialized_logits`),
+    // never the literal sentinel `-1` meaning "last available logits" that
+    // `LlamaSampler::sample` accepts directly via the raw C API. Calling
+    // `get_logits_ith(-1)` therefore panics unconditionally, on every
+    // request, at the prefill-first-token call site below — `get_logits()`
+    // (no index, same raw-FFI path `sample(..., -1)` itself uses) is the
+    // correct equivalent for that case.
+    let logits = if idx == -1 {
+        ctx.get_logits()
+    } else {
+        ctx.get_logits_ith(idx)
+    };
     let mut nan_count = 0usize;
     let mut inf_count = 0usize;
     let mut first_bad: Option<(usize, f32)> = None;
