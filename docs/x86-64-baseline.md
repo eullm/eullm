@@ -107,9 +107,39 @@ include. There is no safe partial step here — it's `v3` or nothing.
 
 ## Verification status
 
-Confirmed via `rustc --print cfg` (above) and by reading `build.rs`'s
-feature-to-CMake-define mapping directly. **Not yet confirmed on real
-hardware against Peter's exact failing case** (issue #140, MacBook Pro
-2018 / Mac mini 2018) — that requires the next tagged release and a
-re-test, since this environment has no x86_64 Haswell/Coffee-Lake-class
-hardware to verify locally. Update this section once that comes back.
+**Confirmed the fix reached the actual published binary.** Beyond
+`rustc --print cfg` and reading `build.rs`'s logic (which only proves what
+*should* happen), the released `eullm-macos-x64` v0.6.32 asset was
+downloaded and disassembled directly (`llvm-objdump -d`): it contains
+thousands of AVX2-only integer-vector instructions (`vpaddd`, `vpermq`,
+`vpbroadcastd`, `vpmulld`, ...) and FMA instructions (`vfmadd*`), and zero
+AVX-512 — exactly the `x86-64-v3` profile, in the real shipped machine
+code, not just in a CI log or a local reproduction on different hardware.
+
+**Not confirmed to fix the reported symptom.** Real hardware in issue #140
+(MacBook Pro 2018, Intel i9-8950HK — fully AVX2-capable) showed no
+measurable speedup after this landed: ~1.16 tok/s on v0.6.31 (no AVX2) vs.
+~1.33 tok/s on v0.6.32 (AVX2 confirmed present) — within run-to-run noise,
+not the 5-10x a real AVX2 vs. scalar-fallback gap should produce. One
+`mac_mini_2018_intel` (Intel i7-8700B) shows unchanged `@@@@` garbage
+output across three different engine configurations (Metal / CPU no-AVX2 /
+CPU+AVX2) — the same deterministic symptom regardless of GPU backend or
+SIMD level strongly suggests a numerical correctness bug (e.g. NaN/Inf
+propagating through the compute path) independent of both, not something
+this fix addresses. **Conclusion: this was a real, worthwhile fix (removes
+a genuine, universal performance cliff on all x86_64 CPU-only binaries),
+but it was not the root cause of the issue #140 reports that motivated it.**
+See `warn_if_logits_corrupt` (`inference/scheduler.rs`) and
+`cpu_features_summary` (`inference/mod.rs`), added specifically to get a
+real answer next time instead of re-running this same investigation.
+
+**Operational lesson, hit while verifying this:** a local `cargo test`/
+`cargo check` run with no explicit `RUSTFLAGS` can still report AVX2 as
+present if an earlier build in the same `target/` directory populated the
+CMake cache with it — `llama-cpp-sys-2`'s `build.rs` does not declare
+`cargo:rerun-if-env-changed=RUSTFLAGS`, so a RUSTFLAGS change alone doesn't
+reliably force CMake to reconfigure once `CMakeCache.txt` already exists.
+This does not affect CI (every release build starts on a fresh runner with
+no prior `target/`), but it means **local before/after RUSTFLAGS
+comparisons must use a clean `target/` directory** (or a fresh clone) to
+be trustworthy — otherwise a stale cache can silently mask a real change.

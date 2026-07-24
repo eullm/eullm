@@ -37,6 +37,11 @@ chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 futures-util = "0.3"
 llama-cpp-2 = { path = "vendor/llama-cpp-rs/llama-cpp-2", version = "0.1.151", features = ["sampler"] }
+# Direct dependency (not just transitive via llama-cpp-2) so eullm can call
+# llama_print_system_info() directly — see inference::cpu_features_summary.
+# Same path as llama-cpp-2's own dependency, so Cargo unifies it into one
+# instance; no separate C build.
+llama-cpp-sys-2 = { path = "vendor/llama-cpp-rs/llama-cpp-sys-2", version = "0.1.151" }
 encoding_rs = "0.8"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"

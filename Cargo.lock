@@ -565,6 +565,7 @@ dependencies = [
  "ipnet",
  "libc",
  "llama-cpp-2",
+ "llama-cpp-sys-2",
  "parking_lot",
  "predicates",
  "reqwest",

@@ -1796,6 +1796,7 @@ async fn cmd_run(
             "none (CPU only!)"
         };
         println!("  GPU backend:   {gpu_backend}");
+        println!("  CPU features:  {}", inference::cpu_features_summary());
         println!(
             "  GPU layers:    {}",
             if gpu_layers < 0 {

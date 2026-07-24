@@ -1064,6 +1064,7 @@ fn run_scheduler_loop(
                             // Sample the first generated token directly from prefill logits.
                             // Use output index -1 (= last output). Only the final prompt
                             // token had logits enabled, so there is exactly one output entry.
+                            warn_if_logits_corrupt(&ctx, -1, seq.seq_id);
                             let token = seq.sampler.sample(&ctx, -1);
                             seq.sampler.accept(token);
 
@@ -1282,6 +1283,7 @@ fn run_scheduler_loop(
             // every EOG/stop/max-tokens completion reached via this loop.)
             seq.n_past += 1;
 
+            warn_if_logits_corrupt(&ctx, logit_idx, seq.seq_id);
             let token = seq.sampler.sample(&ctx, logit_idx);
             seq.sampler.accept(token);
             logit_idx += 1;
@@ -1732,6 +1734,47 @@ fn send_done(seq: &ActiveSequence) {
         tokens_prompt: seq.tokens_prompt,
         duration_ms,
     });
+}
+
+/// Scan a token's logits for NaN/Inf right before sampling from them, and
+/// log loudly if found. This is the only way today to positively confirm
+/// whether "garbage" output (e.g. one token repeated hundreds of times) is
+/// caused by NaN/Inf collapsing the sampler onto a fixed token, versus some
+/// other cause — no NaN/Inf check existed anywhere in the engine before
+/// this. Added after issue #140's investigation into unexplained garbage
+/// output on specific x86_64 hardware hit exactly this wall: no way to
+/// confirm or rule out numerical corruption from the outside, only from
+/// user-visible symptoms downstream of it.
+///
+/// Cheap relative to the forward pass that produced these logits (a linear
+/// scan over the vocab, typically ~100-150k f32 values, versus the
+/// billions of FLOPs in the matmuls that computed them) — left
+/// unconditional rather than gated behind a flag so every user's crash
+/// reports carry this signal, not just ones who knew to enable it.
+fn warn_if_logits_corrupt(ctx: &LlamaContext, idx: i32, seq_id: i32) {
+    let logits = ctx.get_logits_ith(idx);
+    let mut nan_count = 0usize;
+    let mut inf_count = 0usize;
+    let mut first_bad: Option<(usize, f32)> = None;
+    for (i, &v) in logits.iter().enumerate() {
+        if v.is_nan() {
+            nan_count += 1;
+            first_bad.get_or_insert((i, v));
+        } else if v.is_infinite() {
+            inf_count += 1;
+            first_bad.get_or_insert((i, v));
+        }
+    }
+    if nan_count > 0 || inf_count > 0 {
+        tracing::error!(
+            "Seq {seq_id}: corrupt logits before sampling — {nan_count} NaN, \
+             {inf_count} Inf out of {} values (first bad: index {:?}). \
+             This points at a numerical bug in the compute path (CPU SIMD \
+             kernel, quantization, or similar), not a config issue.",
+            logits.len(),
+            first_bad,
+        );
+    }
 }
 
 #[cfg(test)]

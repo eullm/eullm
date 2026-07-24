@@ -68,6 +68,30 @@ pub fn check_gpu_support(gpu_layers: i32) {
     }
 }
 
+/// Summary of the CPU SIMD features this binary was actually compiled
+/// with (AVX, AVX2, FMA, NEON, etc.), via llama.cpp's own
+/// `llama_print_system_info()`. A pure report of compile-time flags baked
+/// into this binary — it does not probe the running CPU's own
+/// capabilities, and does not require the backend or a model to be
+/// loaded first.
+///
+/// Printed once at startup (unconditionally, not gated behind
+/// `RUST_LOG=debug`) so a bug report never has to guess what instruction
+/// set a binary actually contains. Before this existed, confirming
+/// whether a release binary really had AVX2 compiled in required
+/// downloading and disassembling it by hand — see
+/// docs/x86-64-baseline.md for the investigation that hit exactly that
+/// wall.
+pub fn cpu_features_summary() -> String {
+    let ptr = unsafe { llama_cpp_sys_2::llama_print_system_info() };
+    if ptr.is_null() {
+        return "unknown (llama_print_system_info returned null)".to_string();
+    }
+    unsafe { std::ffi::CStr::from_ptr(ptr) }
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(
     config: &InferenceConfig,
@@ -1407,6 +1431,21 @@ mod tests {
         assert_ne!(
             a, b,
             "seed fallback must not collapse to the `fallback` argument"
+        );
+    }
+
+    // Real smoke test, not just "does it compile": llama_print_system_info()
+    // is a pure FFI call into ggml (no backend/model init needed), so this
+    // actually exercises the CStr conversion against the real linked
+    // llama.cpp and prints what it returns — verifying the mechanism this
+    // session's CI-verified-but-runtime-unconfirmed AVX2 build gap needed.
+    #[test]
+    fn cpu_features_summary_returns_real_content() {
+        let summary = cpu_features_summary();
+        println!("cpu_features_summary(): {summary}");
+        assert!(
+            !summary.is_empty() && summary != "unknown (llama_print_system_info returned null)",
+            "expected real content from llama_print_system_info, got: {summary:?}"
         );
     }
 }
