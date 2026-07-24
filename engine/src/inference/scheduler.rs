@@ -1752,7 +1752,20 @@ fn send_done(seq: &ActiveSequence) {
 /// unconditional rather than gated behind a flag so every user's crash
 /// reports carry this signal, not just ones who knew to enable it.
 fn warn_if_logits_corrupt(ctx: &LlamaContext, idx: i32, seq_id: i32) {
-    let logits = ctx.get_logits_ith(idx);
+    // `get_logits_ith` asserts `idx` is a literal member of the context's
+    // internally-tracked `initialized_logits` set — which only ever holds
+    // real, positive offsets (populated from `LlamaBatch::initialized_logits`),
+    // never the literal sentinel `-1` meaning "last available logits" that
+    // `LlamaSampler::sample` accepts directly via the raw C API. Calling
+    // `get_logits_ith(-1)` therefore panics unconditionally, on every
+    // request, at the prefill-first-token call site below — `get_logits()`
+    // (no index, same raw-FFI path `sample(..., -1)` itself uses) is the
+    // correct equivalent for that case.
+    let logits = if idx == -1 {
+        ctx.get_logits()
+    } else {
+        ctx.get_logits_ith(idx)
+    };
     let mut nan_count = 0usize;
     let mut inf_count = 0usize;
     let mut first_bad: Option<(usize, f32)> = None;
