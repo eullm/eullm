@@ -29,7 +29,7 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 ## Stato
 
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
-H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 34.
+H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
 Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
 `-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
@@ -69,6 +69,17 @@ hanno risposto ognuna alla propria domanda** (2→20 … 9→90), che è l'invar
 di H2-C sotto concorrenza reale. Il pull ha esercitato anche il download a range
 paralleli e la verifica SHA-256 contro il digest del catalogo. Due scostamenti trovati e registrati: H2-I (404 invece di 500) e H3-N (banner
 assente su `serve`), il secondo emerso scrivendo l'harness.
+
+**La stessa verifica su ARM64** (Radxa Orion O6, Ubuntu 6.14 aarch64, binario
+CIX-P1 CPU-only, `sha256 05611181…`): 19 PASS, 0 FAIL, 3 SKIP. Contano tre cose.
+Le otto richieste concorrenti hanno risposto ognuna alla propria domanda anche
+qui, quindi l'invariante di H2-C non dipendeva da un dettaglio di x86. Il banner
+conferma che il build CPU sfrutta l'ISA del CIX-P1
+(`NEON | ARM_FMA | FP16_VA | MATMUL_INT8 | SVE | DOTPROD | SVE_CNT = 16 | OPENMP | REPACK`),
+cioè che la porta ARM non sta girando in modalità scalare. E i tre SKIP sono
+tutti attesi e già tracciati: H2-I, H1-A (`user_id` sempre `null` perché non
+esiste ancora un'identità di richiesta) e l'assenza di GPU su un binario CPU.
+Un difetto nuovo è emerso da questo run e non era visibile su x86: H2-J.
 
 **Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
 troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
@@ -337,6 +348,32 @@ esterni non si fidano dei valori che leggono.
   mai riuscire. Distinguere "non trovato" (404) da un fallimento reale di
   caricamento — VRAM insufficiente, GGUF corrotto — che resta 500. Comporta far
   ritornare a `resolve_model` un errore tipizzato invece di una `String`.
+
+- [ ] **H2-J · Con `think: false` un `</think>` finisce nel testo visibile** *(P2)*
+  Emerso dallo smoke test su ARM (Radxa Orion O6, qwen3-0.6b, `think: false`,
+  `temperature: 0`): il contenuto ricostruito dallo stream NDJSON è
+  `"</think>\n\nCount: one two three"` — il tag di chiusura arriva al client come
+  testo dell'assistente. Lo stesso binario su x86 ha invece prodotto prosa di
+  reasoning: in entrambi i casi la soppressione non ha fatto quello che dichiara.
+  Due cause candidate, indipendenti, entrambe da verificare prima di toccare il
+  codice:
+  1. Il prefisso iniettato è `"<think>\n</think>\n\n"` (`chat_template.rs:89-94`),
+     mentre il template ufficiale di Qwen3 per `enable_thinking=false` emette
+     `<think>\n\n</think>\n\n` — una riga vuota fra i due tag. Una sequenza fuori
+     distribuzione di un solo newline è sufficiente a far riemettere al modello il
+     tag di chiusura. Il fix è di un carattere, ma tocca due test che asseriscono
+     la stringa attuale (`chat_template.rs:247` e `:264`) e — attenzione — anche
+     la ricostruzione della history in `main.rs:2927`, che deve restare
+     byte-identica al prefisso iniettato, altrimenti si rompe il riuso del prefix
+     KV (è il motivo per cui `think_suppression_prefix()` esiste come funzione
+     unica invece di due letterali).
+  2. Indipendentemente dalla causa, l'engine non ha nessuna guardia che tolga un
+     blocco `<think>…</think>` — o un tag di chiusura orfano — dal contenuto
+     visibile. `process_piece` ha già il buffer di hold-back per le stop sequence
+     (`inference/scheduler.rs`): è il posto dove filtrare, non a valle nel client.
+  Verificare con `--model qwen3-0.6b --no-inference` disattivato e
+  `temperature: 0` su entrambe le architetture: a temperatura zero il sintomo è
+  deterministico, quindi un before/after è misurabile senza ambiguità.
 
 ---
 

@@ -228,6 +228,49 @@ class Engine:
 # ── environment description ─────────────────────────────────────────────────
 
 
+# ELF e_machine → nome leggibile. Serve per dire "hai scaricato l'asset
+# sbagliato" invece di lasciare che execve fallisca con "Exec format error",
+# che è vero ma non dice cosa fare.
+_ELF_MACHINES = {0x03: "x86", 0x3E: "x86_64", 0x28: "arm", 0xB7: "aarch64",
+                 0xF3: "riscv64", 0x15: "ppc64"}
+# Come `platform.machine()` nomina le stesse architetture.
+_UNAME_ALIASES = {"x86_64": {"x86_64", "amd64"}, "aarch64": {"aarch64", "arm64"},
+                  "arm": {"armv7l", "armv6l", "arm"}, "x86": {"i386", "i686"}}
+
+
+def binary_arch(binary: Path) -> str | None:
+    """Architecture an ELF binary targets, or None if not an ELF."""
+    try:
+        with open(binary, "rb") as f:
+            head = f.read(20)
+    except OSError:
+        return None
+    if len(head) < 20 or head[:4] != b"\x7fELF":
+        return None
+    little = head[5] == 1
+    e_machine = int.from_bytes(head[18:20], "little" if little else "big")
+    return _ELF_MACHINES.get(e_machine, f"unknown(0x{e_machine:02x})")
+
+
+def check_arch_match(rep: Report, binary: Path) -> bool:
+    """False when the binary cannot possibly run here."""
+    arch = binary_arch(binary)
+    host = platform.machine()
+    if arch is None:
+        rep.add("binary is an ELF executable", None,
+                "not an ELF file — skipping the architecture check "
+                "(fine on macOS, where binaries are Mach-O)")
+        return True
+    ok = host in _UNAME_ALIASES.get(arch, {arch})
+    rep.add(
+        "binary architecture matches this host",
+        ok,
+        f"binary is {arch}, host is {host}" + ("" if ok else
+        " — you downloaded the wrong release asset for this machine"),
+    )
+    return ok
+
+
 def describe_env(binary: Path) -> dict:
     env = {
         "uname": " ".join(platform.uname()),
@@ -809,7 +852,19 @@ def main(argv: list[str] | None = None) -> int:
         if v:
             print(f"  {k}: {v}")
 
+    smi = rep.env.get("nvidia_smi", "")
+    if smi and ("version mismatch" in smi.lower() or "couldn't communicate" in smi.lower()):
+        rep.add(
+            "nvidia-smi usable",
+            None,
+            smi.splitlines()[0][:110] + " — a CUDA build will not find a GPU until "
+            "this is resolved (usually a reboot after a driver update)",
+        )
+
     print("\n── binary ──")
+    if not check_arch_match(rep, binary):
+        print("\nthe binary cannot execute on this host; stopping here.")
+        return finish(rep, args, work, keep=args.keep_workdir)
     version_out = check_binary(rep, binary, args.expect_version)
     rep.env["version_output"] = version_out
 
@@ -819,13 +874,17 @@ def main(argv: list[str] | None = None) -> int:
         on_disk = is_path or any((models_dir / model).glob("*.gguf"))
         if not on_disk and args.pull:
             print(f"\n── pulling {model} into {models_dir} ──")
-            r = subprocess.run(
-                [str(binary), "pull", model],
-                env={**os.environ, **env}, capture_output=True, text=True, timeout=7200,
-            )
-            tail = (r.stdout or r.stderr).strip().splitlines()
-            rep.add(f"pull {model}", r.returncode == 0, tail[-1][:120] if tail else "")
-            on_disk = r.returncode == 0
+            try:
+                r = subprocess.run(
+                    [str(binary), "pull", model],
+                    env={**os.environ, **env}, capture_output=True, text=True, timeout=7200,
+                )
+                tail = (r.stdout or r.stderr).strip().splitlines()
+                rep.add(f"pull {model}", r.returncode == 0, tail[-1][:120] if tail else "")
+                on_disk = r.returncode == 0
+            except (OSError, subprocess.SubprocessError) as e:
+                rep.add(f"pull {model}", False, f"could not run the binary: {e}")
+                on_disk = False
         elif not on_disk:
             rep.add(
                 f"model {model} available",
