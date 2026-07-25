@@ -81,6 +81,31 @@ tutti attesi e già tracciati: H2-I, H1-A (`user_id` sempre `null` perché non
 esiste ancora un'identità di richiesta) e l'assenza di GPU su un binario CPU.
 Un difetto nuovo è emerso da questo run e non era visibile su x86: H2-J.
 
+**E su Linux CUDA** (Ryzen 9 5950X, RTX 5070 Ti 16 GB, driver 595.84, binario
+`eullm-linux-x64-cuda-12.8`): 22 PASS, 0 FAIL, 2 SKIP — gli unici due sono H2-I
+e H1-A, cioè voci aperte e non regressioni. Il banner conferma il build Blackwell
+(`CUDA : ARCHS = 860,890,1200 | USE_GRAPHS = 1 | BLACKWELL_NATIVE_FP4 = 1`) e su
+GPU le 8 richieste concorrenti chiudono in 0,2 s contro 1,5 s su ARM, tutte
+corrette. Questo è anche l'unico dei tre run in cui il ramo di backpressure di
+H2-B è stato plausibilmente raggiunto (500 byte trasferiti integralmente a un
+client lento, contro i 12 eventi del run ARM che non arrivano alla capacità di
+256 del canale).
+
+**Quello che il controllo `--fit` non ha ancora dimostrato.** `--fit` con
+qwen3-4b ha risposto `model (2.33 GiB) fits fully in 14.65 GiB free VRAM`, e il
+modello ha poi servito una richiesta: il percorso funziona, ma **non discrimina
+H2-A**. L'errore di stima era per token e per layer, quindi diventa
+decision-changing solo quando la KV cache domina il budget, non quando i pesi
+sono il 16% della scheda: a `--ctx-size 32768` sia l'aritmetica corretta sia
+quella che sottostimava concludono "fits fully". Con 14,65 GiB liberi, `usable`
+≈ 13,6 GiB e 36 layer a `head_dim` 128, le due stime divergono in decisione
+sopra ~82k token di contesto, dove la corretta impone un offload parziale e la
+vecchia dichiarava un fit pieno che poi moriva in allocazione. Per questo
+`tools/smoke_test.py` ha ora `--fit-ctx` e dichiara esplicitamente nel report
+quando un "fits fully" non è una conferma. Il controllo va rifatto con
+`--fit-ctx 98304`; finché non è fatto, H2-A resta verificata solo dai test
+unitari, non su hardware.
+
 **Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
 troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
 era scrivibile, quindi una home in sola lettura diventava un'interruzione di
@@ -353,8 +378,10 @@ esterni non si fidano dei valori che leggono.
   Emerso dallo smoke test su ARM (Radxa Orion O6, qwen3-0.6b, `think: false`,
   `temperature: 0`): il contenuto ricostruito dallo stream NDJSON è
   `"</think>\n\nCount: one two three"` — il tag di chiusura arriva al client come
-  testo dell'assistente. Lo stesso binario su x86 ha invece prodotto prosa di
-  reasoning: in entrambi i casi la soppressione non ha fatto quello che dichiara.
+  testo dell'assistente. **Riprodotto byte per byte su x86 con backend CUDA**
+  (RTX 5070 Ti, stesso modello, stesso prompt): identico. Quindi non dipende
+  dall'architettura né dal backend, ed è deterministico a `temperature: 0` —
+  che esclude una spiegazione basata sul sampling e punta al prompt.
   Due cause candidate, indipendenti, entrambe da verificare prima di toccare il
   codice:
   1. Il prefisso iniettato è `"<think>\n</think>\n\n"` (`chat_template.rs:89-94`),
@@ -371,9 +398,8 @@ esterni non si fidano dei valori che leggono.
      blocco `<think>…</think>` — o un tag di chiusura orfano — dal contenuto
      visibile. `process_piece` ha già il buffer di hold-back per le stop sequence
      (`inference/scheduler.rs`): è il posto dove filtrare, non a valle nel client.
-  Verificare con `--model qwen3-0.6b --no-inference` disattivato e
-  `temperature: 0` su entrambe le architetture: a temperatura zero il sintomo è
-  deterministico, quindi un before/after è misurabile senza ambiguità.
+  Il sintomo è già riproducibile con `tools/smoke_test.py` su qualunque box: a
+  temperatura zero un before/after è misurabile senza ambiguità.
 
 ---
 
