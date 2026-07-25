@@ -447,14 +447,27 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     let audit = crate::audit::AuditLogger::new();
     match audit.check_writable() {
         Ok(()) => tracing::info!("Audit trail: {}", audit.log_path().display()),
-        Err(e) => {
+        // Explicitly configured destination that doesn't work → refuse to
+        // start. Someone who set EULLM_AUDIT_DIR (or mounted a volume at it)
+        // asked for the trail; serving without one silently is the failure
+        // this check exists to prevent.
+        Err(e) if crate::audit::AuditLogger::is_explicitly_configured() => {
             return Err(format!(
-                "audit trail is not writable: {e}\n  \
-                 Set EULLM_AUDIT_DIR to a writable, persistent path (in Docker, one \
-                 backed by a mounted volume)."
+                "EULLM_AUDIT_DIR is set but the audit trail is not writable: {e}\n  \
+                 Point it at a writable, persistent path (in Docker, one backed by a \
+                 mounted volume), or unset it to fall back to ~/.eullm/audit."
             )
             .into());
         }
+        // Nobody asked for a specific destination — warn loudly and serve.
+        // Refusing to start an inference server over a log file the operator
+        // never configured would turn a read-only home directory into an outage.
+        Err(e) => tracing::warn!(
+            "Audit trail disabled: {} is not writable ({e}). Inference will work, but \
+             no audit records will be kept. Set EULLM_AUDIT_DIR to a writable path to \
+             enable it.",
+            audit.log_path().display(),
+        ),
     }
 
     let state = Arc::new(AppState {

@@ -11,10 +11,23 @@
       "quantization": "Q4_K_M",
       "size_bytes": 500000000,
       "vram_gb": 2,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "edge"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "edge"
+      ],
       "hf_repo": "unsloth/Qwen3-0.6B-GGUF",
       "hf_filename": "Qwen3-0.6B-Q4_K_M.gguf",
       "digest": "sha256:ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a",
@@ -28,10 +41,23 @@
       "quantization": "Q4_K_M",
       "size_bytes": 1200000000,
       "vram_gb": 2,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "edge"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "edge"
+      ],
       "hf_repo": "unsloth/Qwen3-1.7B-GGUF",
       "hf_filename": "Qwen3-1.7B-Q4_K_M.gguf",
       "digest": "sha256:b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897",
@@ -45,10 +71,15 @@
       "quantization": "Q4_K_M",
       "size_bytes": 1100000000,
       "vram_gb": 2,
-      "languages": ["en"],
+      "languages": [
+        "en"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "edge"],
+      "tags": [
+        "instruct",
+        "edge"
+      ],
       "hf_repo": "unsloth/SmolLM2-1.7B-Instruct-GGUF",
       "hf_filename": "SmolLM2-1.7B-Instruct-Q4_K_M.gguf",
       "digest": "sha256:61b6f90dd515fd3bffbd0f6ba716e87555dde77d9b0573a562c2c5e62afc4909",
@@ -62,10 +93,16 @@
       "quantization": "Q4_K_M",
       "size_bytes": 2000000000,
       "vram_gb": 3,
-      "languages": ["en"],
+      "languages": [
+        "en"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "edge", "reasoning"],
+      "tags": [
+        "instruct",
+        "edge",
+        "reasoning"
+      ],
       "hf_repo": "unsloth/SmolLM3-3B-GGUF",
       "hf_filename": "SmolLM3-3B-Q4_K_M.gguf",
       "digest": "sha256:4de907d2d388a5508fb7cb443a06effe14cce3518b0a78d3bdd9e74d9edce989",
@@ -79,10 +116,22 @@
       "quantization": "Q4_K_M",
       "size_bytes": 2500000000,
       "vram_gb": 4,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual"],
+      "tags": [
+        "instruct",
+        "multilingual"
+      ],
       "hf_repo": "unsloth/Qwen3-4B-GGUF",
       "hf_filename": "Qwen3-4B-Q4_K_M.gguf",
       "digest": "sha256:f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
@@ -96,10 +145,26 @@
       "quantization": "Q4_K_M",
       "size_bytes": 4977169568,
       "vram_gb": 8,
-      "languages": ["en", "it", "de", "fr", "es", "pt", "nl", "zh", "ja", "ko"],
+      "languages": [
+        "en",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl",
+        "zh",
+        "ja",
+        "ko"
+      ],
       "domain": "general",
-      "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "multimodal", "vision"],
+      "license": "Gemma Terms of Use",
+      "tags": [
+        "instruct",
+        "multilingual",
+        "multimodal",
+        "vision"
+      ],
       "hf_repo": "unsloth/gemma-4-E4B-it-GGUF",
       "hf_filename": "gemma-4-E4B-it-Q4_K_M.gguf",
       "digest": "sha256:85a896a047553e842f25297ee5b031d64ff30147d9c4af17b1e4b394cd1fab87",
@@ -115,10 +180,15 @@
       "quantization": "Q4_K_M",
       "size_bytes": 2400000000,
       "vram_gb": 4,
-      "languages": ["en"],
+      "languages": [
+        "en"
+      ],
       "domain": "general",
       "license": "MIT",
-      "tags": ["instruct", "reasoning"],
+      "tags": [
+        "instruct",
+        "reasoning"
+      ],
       "hf_repo": "bartowski/Phi-3.5-mini-instruct-GGUF",
       "hf_filename": "Phi-3.5-mini-instruct-Q4_K_M.gguf",
       "digest": "sha256:e4165e3a71af97f1b4820da61079826d8752a2088e313af0c7d346796c38eff5",
@@ -132,10 +202,22 @@
       "quantization": "Q4_K_M",
       "size_bytes": 5000000000,
       "vram_gb": 8,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual"],
+      "tags": [
+        "instruct",
+        "multilingual"
+      ],
       "hf_repo": "unsloth/Qwen3-8B-GGUF",
       "hf_filename": "Qwen3-8B-Q4_K_M.gguf",
       "digest": "sha256:120307ba529eb2439d6c430d94104dabd578497bc7bfe7e322b5d9933b449bd4",
@@ -149,10 +231,15 @@
       "quantization": "Q4_K_M",
       "size_bytes": 5000000000,
       "vram_gb": 8,
-      "languages": ["en"],
+      "languages": [
+        "en"
+      ],
       "domain": "business",
       "license": "Apache-2.0",
-      "tags": ["instruct", "business"],
+      "tags": [
+        "instruct",
+        "business"
+      ],
       "hf_repo": "unsloth/granite-3.3-8b-instruct-GGUF",
       "hf_filename": "granite-3.3-8b-instruct-Q4_K_M.gguf",
       "digest": "sha256:7057b01e68af6819e5273c75cc2d948d48eeaa750962e5eebb4ecf916a910f33",
@@ -166,10 +253,19 @@
       "quantization": "Q4_K_M",
       "size_bytes": 4400000000,
       "vram_gb": 6,
-      "languages": ["en", "ar", "fr", "es", "de"],
+      "languages": [
+        "en",
+        "ar",
+        "fr",
+        "es",
+        "de"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual"],
+      "tags": [
+        "instruct",
+        "multilingual"
+      ],
       "hf_repo": "bartowski/Falcon3-7B-Instruct-GGUF",
       "hf_filename": "Falcon3-7B-Instruct-Q4_K_M.gguf",
       "digest": "sha256:f25718c3305af9a8b7b3298b6761c4fcc9eebabb5ac4fc3ddb07c8223b8204ea",
@@ -183,10 +279,16 @@
       "quantization": "Q4_K_M",
       "size_bytes": 5000000000,
       "vram_gb": 8,
-      "languages": ["en", "zh"],
+      "languages": [
+        "en",
+        "zh"
+      ],
       "domain": "reasoning",
       "license": "MIT",
-      "tags": ["instruct", "reasoning"],
+      "tags": [
+        "instruct",
+        "reasoning"
+      ],
       "hf_repo": "unsloth/DeepSeek-R1-0528-Qwen3-8B-GGUF",
       "hf_filename": "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf",
       "digest": "sha256:a86349a4180c4e6bb43f874c29c404fa2be3f90b15509bd6d86f697dba724ec1",
@@ -200,10 +302,26 @@
       "quantization": "Q4_K_M",
       "size_bytes": 7121860000,
       "vram_gb": 10,
-      "languages": ["en", "it", "de", "fr", "es", "pt", "nl", "zh", "ja", "ko"],
+      "languages": [
+        "en",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl",
+        "zh",
+        "ja",
+        "ko"
+      ],
       "domain": "general",
-      "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "multimodal", "vision"],
+      "license": "Gemma Terms of Use",
+      "tags": [
+        "instruct",
+        "multilingual",
+        "multimodal",
+        "vision"
+      ],
       "hf_repo": "unsloth/gemma-4-12b-it-GGUF",
       "hf_filename": "gemma-4-12b-it-Q4_K_M.gguf",
       "digest": "sha256:0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
@@ -219,10 +337,21 @@
       "quantization": "Q4_K_M",
       "size_bytes": 7500000000,
       "vram_gb": 10,
-      "languages": ["en", "fr", "de", "it", "es", "pt"],
+      "languages": [
+        "en",
+        "fr",
+        "de",
+        "it",
+        "es",
+        "pt"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "long-context"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "long-context"
+      ],
       "hf_repo": "bartowski/Mistral-Nemo-Instruct-2407-GGUF",
       "hf_filename": "Mistral-Nemo-Instruct-2407-Q4_K_M.gguf",
       "digest": "sha256:7c1a10d202d8788dbe5628dc962254d10654c853cae6aaeca0618f05490d4a46",
@@ -236,10 +365,22 @@
       "quantization": "Q4_K_M",
       "size_bytes": 9000000000,
       "vram_gb": 12,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual"],
+      "tags": [
+        "instruct",
+        "multilingual"
+      ],
       "hf_repo": "unsloth/Qwen3-14B-GGUF",
       "hf_filename": "Qwen3-14B-Q4_K_M.gguf",
       "digest": "sha256:5eaa0870bd81ed3b58a630a271234cfa604e43ffb3a19cd68e54a80dd9d52a66",
@@ -253,10 +394,16 @@
       "quantization": "Q4_K_M",
       "size_bytes": 9000000000,
       "vram_gb": 12,
-      "languages": ["en", "zh"],
+      "languages": [
+        "en",
+        "zh"
+      ],
       "domain": "reasoning",
       "license": "MIT",
-      "tags": ["instruct", "reasoning"],
+      "tags": [
+        "instruct",
+        "reasoning"
+      ],
       "hf_repo": "unsloth/DeepSeek-R1-Distill-Qwen-14B-GGUF",
       "hf_filename": "DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf",
       "digest": "sha256:67a7933cf2ad596a393c8e13b30bc4da2d50b283e250b78554aed18817eca31c",
@@ -270,10 +417,19 @@
       "quantization": "Q4_K_M",
       "size_bytes": 6200000000,
       "vram_gb": 10,
-      "languages": ["en", "ar", "fr", "es", "de"],
+      "languages": [
+        "en",
+        "ar",
+        "fr",
+        "es",
+        "de"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual"],
+      "tags": [
+        "instruct",
+        "multilingual"
+      ],
       "hf_repo": "bartowski/Falcon3-10B-Instruct-GGUF",
       "hf_filename": "Falcon3-10B-Instruct-Q4_K_M.gguf",
       "digest": "sha256:0a33327bd71e1788a8e9f17889824a17a65efd3f96a4b2a5e2bc6ff2f39b8241",
@@ -287,10 +443,17 @@
       "quantization": "Q4_K_M",
       "size_bytes": 10000000000,
       "vram_gb": 12,
-      "languages": ["en", "code"],
+      "languages": [
+        "en",
+        "code"
+      ],
       "domain": "code",
-      "license": "MIT",
-      "tags": ["instruct", "code", "moe"],
+      "license": "DeepSeek License Agreement",
+      "tags": [
+        "instruct",
+        "code",
+        "moe"
+      ],
       "hf_repo": "bartowski/DeepSeek-Coder-V2-Lite-Instruct-GGUF",
       "hf_filename": "DeepSeek-Coder-V2-Lite-Instruct-Q4_K_M.gguf",
       "digest": "sha256:603bd3f8a0281d16571da7c08bd661ee17ff0d1be6fcbd1b42242da257ef0bb8",
@@ -304,10 +467,22 @@
       "quantization": "Q4_K_M",
       "size_bytes": 14000000000,
       "vram_gb": 18,
-      "languages": ["en", "fr", "de", "it", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "fr",
+        "de",
+        "it",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "reasoning"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "reasoning"
+      ],
       "hf_repo": "unsloth/Mistral-Small-24B-Instruct-2501-GGUF",
       "hf_filename": "Mistral-Small-24B-Instruct-2501-Q4_K_M.gguf",
       "digest": "sha256:2f6d64ea75d659445a2d0a4824af6b124ddcd97bcc5e6045417b35b40ee28bf8",
@@ -321,10 +496,23 @@
       "quantization": "Q4_K_M",
       "size_bytes": 20000000000,
       "vram_gb": 24,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "workstation"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "workstation"
+      ],
       "hf_repo": "unsloth/Qwen3-32B-GGUF",
       "hf_filename": "Qwen3-32B-Q4_K_M.gguf",
       "digest": "sha256:8df67573b2c23484e02ec7af295e39bed7ee774f3771d5fda2978265b59370e7",
@@ -338,10 +526,17 @@
       "quantization": "Q4_K_M",
       "size_bytes": 20000000000,
       "vram_gb": 24,
-      "languages": ["en", "zh"],
+      "languages": [
+        "en",
+        "zh"
+      ],
       "domain": "reasoning",
       "license": "Apache-2.0",
-      "tags": ["instruct", "reasoning", "workstation"],
+      "tags": [
+        "instruct",
+        "reasoning",
+        "workstation"
+      ],
       "hf_repo": "unsloth/QwQ-32B-GGUF",
       "hf_filename": "QwQ-32B-Q4_K_M.gguf",
       "digest": "sha256:39dc40d34d44d66406e9ad94416585839daa5edc35425f6f6925c35e149aa5f5",
@@ -355,10 +550,24 @@
       "quantization": "Q4_K_M",
       "size_bytes": 17000000000,
       "vram_gb": 22,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "workstation", "flagship"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "workstation",
+        "flagship"
+      ],
       "hf_repo": "unsloth/Qwen3.6-27B-GGUF",
       "hf_filename": "Qwen3.6-27B-Q4_K_M.gguf",
       "digest": "sha256:5ed60d0af4650a854b1755bd392f9aef4872643dc25a254bc68043fa638392a0",
@@ -372,10 +581,24 @@
       "quantization": "Q4_K_M",
       "size_bytes": 21000000000,
       "vram_gb": 24,
-      "languages": ["en", "zh", "it", "de", "fr", "es", "pt", "nl"],
+      "languages": [
+        "en",
+        "zh",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl"
+      ],
       "domain": "general",
       "license": "Apache-2.0",
-      "tags": ["instruct", "multilingual", "workstation", "moe"],
+      "tags": [
+        "instruct",
+        "multilingual",
+        "workstation",
+        "moe"
+      ],
       "hf_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
       "hf_filename": "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf",
       "digest": "sha256:ac0e2c1189e055faa36eff361580e79c5bd6f8e76bffb4ce547f167d53e31a61",

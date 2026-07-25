@@ -274,10 +274,13 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
 pub fn read_gguf_info(path: &Path) -> Option<GgufInfo> {
     use std::io::Read;
 
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut buf = vec![0u8; 8 * 1024 * 1024];
-    let n = file.read(&mut buf).ok()?;
-    buf.truncate(n);
+    let file = std::fs::File::open(path).ok()?;
+    // `Read::read` is allowed to return fewer bytes than asked for even when
+    // more are available, so a single call could hand the parser a truncated
+    // header, fail, and silently fall back to `--gpu-layers` — non
+    // deterministically. `take(..).read_to_end(..)` reads until the limit or EOF.
+    let mut buf = Vec::with_capacity(8 * 1024 * 1024);
+    file.take(8 * 1024 * 1024).read_to_end(&mut buf).ok()?;
     parse_gguf_header(&buf)
 }
 
