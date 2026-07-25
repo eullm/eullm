@@ -54,6 +54,22 @@ costoso in cui sbagliare. È anche l'unica modifica di questo blocco che non è
 verificabile in locale: la logica di polling è stata simulata con uno stub di
 `gh` sui cinque esiti (verde, rosso, run assente, in corso→verde, timeout).
 
+**Verifica end-to-end sul binario pubblicato v0.6.35** (`eullm-linux-x64`,
+checksum confrontato con `checksums.txt` e con il digest dell'API):
+`eullm -V` riporta `0.6.35` — il version string non è rimasto indietro come in
+0.6.32; `EULLM_ALLOWED_IPS` dall'ambiente compare nel log di avvio con la
+sorgente corretta e il loopback conservato (H1-B); l'audit trail viene creato in
+`EULLM_AUDIT_DIR` e ha registrato 12 richieste reali (H0-B); i sette casi fuori
+intervallo di `batch_size`/`ctx_size` danno 400 con messaggio esplicito e i
+valori validi passano (H0-A); la chat UI serve `Content-Security-Policy`,
+`X-Content-Type-Options` e `Referrer-Policy` (H3-L). Inferenza reale con
+qwen3-0.6b: non-streaming, NDJSON su `/api/chat` e SSE su
+`/v1/chat/completions` tutti corretti, e **8 richieste concorrenti su 4 slot
+hanno risposto ognuna alla propria domanda** (2→20 … 9→90), che è l'invariante
+di H2-C sotto concorrenza reale. Il pull ha esercitato anche il download a range
+paralleli e la verifica SHA-256 contro il digest del catalogo. Due scostamenti trovati e registrati: H2-I (404 invece di 500) e H3-N (banner
+assente su `serve`), il secondo emerso scrivendo l'harness.
+
 **Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
 troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
 era scrivibile, quindi una home in sola lettura diventava un'interruzione di
@@ -311,6 +327,17 @@ esterni non si fidano dei valori che leggono.
   `n_ubatch=1024` (riga di log del loader, o `nvidia-smi`) su almeno due modelli e fissare
   il valore sul dato. Da fare insieme a `0.7-E`, che tocca lo stesso sizer.
 
+- [ ] **H2-I · Un modello inesistente deve dare 404, non 500** *(P2)*
+  Emerso testando il binario pubblicato di v0.6.35: una richiesta con
+  `{"model":"non-esiste"}` restituisce **500** con `Failed to load model ...`
+  (`api/routes.rs:171-180` — l'errore di `swap_model` è mappato su
+  `INTERNAL_SERVER_ERROR` indipendentemente dalla causa). Chiedere un modello che
+  non c'è è un errore del client, non del server: Ollama risponde 404, e un 5xx
+  induce i client con retry automatico a riprovare una richiesta che non potrà
+  mai riuscire. Distinguere "non trovato" (404) da un fallimento reale di
+  caricamento — VRAM insufficiente, GGUF corrotto — che resta 500. Comporta far
+  ritornare a `resolve_model` un errore tipizzato invece di una `String`.
+
 ---
 
 ## H3 — Igiene di processo e supply chain
@@ -453,6 +480,20 @@ diligenza manuale.
   quindi `default-src 'self'` è compatibile) più `X-Content-Type-Options: nosniff` sono una
   difesa in profondità a costo nullo che rende la proprietà "zero risorse esterne"
   verificabile dal browser invece che solo dichiarata.
+
+- [ ] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
+  Il banner con `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache`
+  e `Threads` è stampato solo da `cmd_run` (`main.rs:1823-1882`); `cmd_serve`
+  stampa sei righe e nessuna di queste. La riga `CPU features` è stata aggiunta
+  in 0.6.33 proprio per diagnosticare l'issue #140, ma chi testa attraverso
+  `serve` — cioè qualunque harness automatizzato, e chiunque usi l'engine come
+  backend — non la vede mai. Trovato scrivendo `tools/smoke_test.py`, che ha
+  dovuto avviare un secondo processo `run` solo per catturarla. È la stessa
+  classe di problema della regola obbligatoria di parità dei flag `run`/`serve`
+  nel `CLAUDE.md`, applicata all'output diagnostico invece che alla
+  configurazione: estrarre la stampa del banner in una funzione condivisa e
+  chiamarla da entrambi i comandi, emettendola dopo il primo caricamento del
+  modello nel caso di `serve` (che parte senza modello).
 
 ---
 
