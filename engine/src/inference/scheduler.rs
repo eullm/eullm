@@ -804,6 +804,10 @@ fn run_scheduler_loop(
     // Pre-allocate the decode batch once — reused every iteration to avoid
     // repeated malloc/free in the hot decode loop.
     let mut decode_batch = LlamaBatch::new(sched_config.max_batch_size.max(1), 1);
+    // (seq_id, output index in the current decode batch), rebuilt each
+    // iteration in step 3 and read back in step 5. Reused rather than
+    // reallocated for the same reason as the batch itself.
+    let mut logit_of_seq: Vec<(i32, i32)> = Vec::with_capacity(sched_config.max_batch_size);
 
     tracing::info!(
         "Scheduler running — max_batch_size={}, queue_capacity={}, total_ctx={}, per_seq_ctx={}",
@@ -1143,26 +1147,35 @@ fn run_scheduler_loop(
                                                         &sched_config,
                                                     );
                                                 } else {
-                                                    let disconnected = send_or_detect_disconnect(
-                                                        &seq.tx, out, seq.seq_id,
-                                                    );
-                                                    if disconnected {
-                                                        // Cache state is not confirmed-safe (mid
-                                                        // first-token piece): full wipe.
-                                                        let _ = ctx.clear_kv_cache_seq(
-                                                            Some(seq.seq_id as u32),
-                                                            None,
-                                                            None,
-                                                        );
-                                                        idle_slots.push(CachedSlot {
-                                                            seq_id: seq.seq_id,
-                                                            tokens: Vec::new(),
-                                                            text: String::new(),
-                                                            last_used: std::time::Instant::now(),
-                                                        });
-                                                    } else {
-                                                        seq.last_token = Some(token);
-                                                        active.push(seq);
+                                                    match try_send_piece(&seq.tx, out, seq.seq_id) {
+                                                        SendOutcome::Disconnected => {
+                                                            // Cache state is not confirmed-safe (mid
+                                                            // first-token piece): full wipe.
+                                                            let _ = ctx.clear_kv_cache_seq(
+                                                                Some(seq.seq_id as u32),
+                                                                None,
+                                                                None,
+                                                            );
+                                                            idle_slots.push(CachedSlot {
+                                                                seq_id: seq.seq_id,
+                                                                tokens: Vec::new(),
+                                                                text: String::new(),
+                                                                last_used: std::time::Instant::now(
+                                                                ),
+                                                            });
+                                                        }
+                                                        outcome => {
+                                                            // On backpressure the text goes back to
+                                                            // the front of the hold-back buffer so a
+                                                            // later iteration flushes it in order.
+                                                            if let SendOutcome::Backpressure(text) =
+                                                                outcome
+                                                            {
+                                                                seq.pending.insert_str(0, &text);
+                                                            }
+                                                            seq.last_token = Some(token);
+                                                            active.push(seq);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -1231,15 +1244,41 @@ fn run_scheduler_loop(
         }
 
         // ── 3. Build batch with one token per active sequence ───────────
+        //
+        // `logit_of_seq` records, per seq_id, which output index of THIS batch
+        // that sequence's logits will land at — assigned in insertion order,
+        // because that is the order llama.cpp produces outputs in.
+        //
+        // Deriving the index this way rather than by re-counting in step 5 is a
+        // correctness requirement, not tidiness. A failed `add` used to only log
+        // a warning: the sequence was absent from the batch, yet step 5 still
+        // handed it the next index and every sequence after it shifted by one,
+        // so each would sample from another conversation's distribution and emit
+        // plausible-looking text belonging to someone else. Silent, and
+        // impossible to distinguish from a model quality problem after the fact.
         decode_batch.clear();
+        logit_of_seq.clear();
 
         for seq in active.iter() {
-            if let Some(token) = seq.last_token
-                && decode_batch
-                    .add(token, seq.n_past, &[seq.seq_id], true)
-                    .is_err()
-            {
-                tracing::warn!("Failed to add token to batch for seq {}", seq.seq_id);
+            let Some(token) = seq.last_token else {
+                continue;
+            };
+            match decode_batch.add(token, seq.n_past, &[seq.seq_id], true) {
+                Ok(()) => {
+                    let idx = logit_of_seq.len() as i32;
+                    logit_of_seq.push((seq.seq_id, idx));
+                }
+                Err(e) => {
+                    // Should be unreachable: the batch is allocated with
+                    // max_batch_size capacity and `active` never exceeds it. If
+                    // it ever happens, this sequence has no logits to sample and
+                    // must be failed rather than fed someone else's.
+                    tracing::error!(
+                        "Seq {}: could not be added to the decode batch ({e}) — failing it \
+                         rather than sampling from another sequence's logits",
+                        seq.seq_id,
+                    );
+                }
             }
         }
 
@@ -1277,7 +1316,6 @@ fn run_scheduler_loop(
 
         // ── 5. Sample one token per sequence, send events ───────────────
         let mut to_remove: Vec<usize> = Vec::new();
-        let mut logit_idx: i32 = 0;
 
         for (i, seq) in active.iter_mut().enumerate() {
             if seq.last_token.is_none() {
@@ -1285,6 +1323,27 @@ fn run_scheduler_loop(
                 // We need to sample from the last position set during prefill.
                 continue;
             }
+
+            // Read this sequence's own output index from step 3 rather than
+            // assuming it matches iteration order (see the comment there).
+            let Some(logit_idx) = logit_of_seq
+                .iter()
+                .find(|(seq_id, _)| *seq_id == seq.seq_id)
+                .map(|(_, idx)| *idx)
+            else {
+                let _ = seq.tx.try_send(StreamEvent::Error(
+                    "Internal scheduler error: sequence was not decoded in this batch".into(),
+                ));
+                to_remove.push(i);
+                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                idle_slots.push(CachedSlot {
+                    seq_id: seq.seq_id,
+                    tokens: Vec::new(),
+                    text: String::new(),
+                    last_used: std::time::Instant::now(),
+                });
+                continue;
+            };
 
             // `seq.last_token` was just decoded by this iteration's batch
             // `ctx.decode()` call (step 4, above) and is now physically
@@ -1301,7 +1360,6 @@ fn run_scheduler_loop(
             }
             let token = seq.sampler.sample(&ctx, logit_idx);
             seq.sampler.accept(token);
-            logit_idx += 1;
 
             // End of generation?
             if model.is_eog_token(token) {
@@ -1346,19 +1404,28 @@ fn run_scheduler_loop(
                             continue;
                         }
                         PieceOutcome::Emit(out) => {
-                            let disconnected = send_or_detect_disconnect(&seq.tx, out, seq.seq_id);
-                            if disconnected {
-                                // Receiver dropped — client disconnected.
-                                // Cache state is not confirmed-safe: full wipe.
-                                to_remove.push(i);
-                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
-                                idle_slots.push(CachedSlot {
-                                    seq_id: seq.seq_id,
-                                    tokens: Vec::new(),
-                                    text: String::new(),
-                                    last_used: std::time::Instant::now(),
-                                });
-                                continue;
+                            match try_send_piece(&seq.tx, out, seq.seq_id) {
+                                SendOutcome::Disconnected => {
+                                    // Receiver dropped — client disconnected.
+                                    // Cache state is not confirmed-safe: full wipe.
+                                    to_remove.push(i);
+                                    let _ =
+                                        ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                    idle_slots.push(CachedSlot {
+                                        seq_id: seq.seq_id,
+                                        tokens: Vec::new(),
+                                        text: String::new(),
+                                        last_used: std::time::Instant::now(),
+                                    });
+                                    continue;
+                                }
+                                // Slow client: keep the text at the front of the
+                                // hold-back buffer instead of dropping it, and
+                                // carry on generating.
+                                SendOutcome::Backpressure(text) => {
+                                    seq.pending.insert_str(0, &text);
+                                }
+                                SendOutcome::Sent => {}
                             }
                         }
                     }
@@ -1715,29 +1782,52 @@ fn resident_text(seq: &ActiveSequence) -> String {
     text
 }
 
-/// Deliver a decoded chunk to the client and report whether it has actually
-/// disconnected.
+/// What happened when a decoded chunk was handed to the client's channel.
+enum SendOutcome {
+    /// Delivered (or there was nothing to deliver and the client is still there).
+    Sent,
+    /// The channel is full — a connected but slow-consuming client. The text
+    /// was NOT delivered and is returned so the caller can hold onto it.
+    Backpressure(String),
+    /// The receiver was dropped: the client is gone.
+    Disconnected,
+}
+
+/// Deliver a decoded chunk to the client's channel and report what happened.
 ///
-/// Checked regardless of whether `out` is empty (the piece may have been
-/// fully absorbed into the stop/filter holdback buffer in `process_piece`)
-/// — a disconnect must not depend on there being bytes to send. A `Full`
-/// channel (a slow-consuming but still-connected client) must NOT be treated
-/// as a disconnect: the token is best-effort dropped (logged), but the
-/// sequence and its KV cache stay alive. Only a `Closed` channel — the
-/// receiver was actually dropped — is a real disconnect.
-fn send_or_detect_disconnect(tx: &mpsc::Sender<StreamEvent>, out: String, seq_id: i32) -> bool {
+/// Checked regardless of whether `out` is empty (the piece may have been fully
+/// absorbed into the stop/filter holdback buffer in `process_piece`) — a
+/// disconnect must not depend on there being bytes to send.
+///
+/// A `Full` channel is not a disconnect and must not end the sequence, but it
+/// also must not lose the text: this used to log a warning and **drop the
+/// token**, so a client that read slowly received a reply with pieces silently
+/// missing from the middle and a final token count that didn't match what it
+/// had been given. The text now comes back to the caller, which returns it to
+/// the hold-back buffer to be flushed on a later iteration.
+fn try_send_piece(tx: &mpsc::Sender<StreamEvent>, out: String, seq_id: i32) -> SendOutcome {
     if out.is_empty() {
-        return tx.is_closed();
+        return if tx.is_closed() {
+            SendOutcome::Disconnected
+        } else {
+            SendOutcome::Sent
+        };
     }
     match tx.try_send(StreamEvent::Token(out)) {
-        Ok(()) => false,
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            tracing::warn!(
-                "Seq {seq_id}: event channel full, dropping a token (client consuming too slowly)",
+        Ok(()) => SendOutcome::Sent,
+        Err(mpsc::error::TrySendError::Full(StreamEvent::Token(text))) => {
+            tracing::debug!(
+                "Seq {seq_id}: event channel full, holding {} bytes for the next iteration \
+                 (client consuming slowly)",
+                text.len(),
             );
-            false
+            SendOutcome::Backpressure(text)
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => true,
+        // `try_send` gives back exactly the event that was passed in, so the
+        // other variants are unreachable; treat anything unexpected as a
+        // delivery we can't account for rather than silently losing it.
+        Err(mpsc::error::TrySendError::Full(_)) => SendOutcome::Sent,
+        Err(mpsc::error::TrySendError::Closed(_)) => SendOutcome::Disconnected,
     }
 }
 
@@ -1810,9 +1900,9 @@ fn warn_if_logits_corrupt(ctx: &LlamaContext, idx: i32, seq_id: i32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        CachedSlot, PieceOutcome, PromptCheckpoint, StreamEvent, best_checkpoint,
-        common_prefix_len, pick_slot, process_piece, send_or_detect_disconnect,
-        stop_prefix_holdback, text_prefix_match,
+        CachedSlot, PieceOutcome, PromptCheckpoint, SendOutcome, StreamEvent, best_checkpoint,
+        common_prefix_len, pick_slot, process_piece, stop_prefix_holdback, text_prefix_match,
+        try_send_piece,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
@@ -2229,28 +2319,30 @@ mod tests {
     }
 
     #[test]
-    fn full_channel_is_not_treated_as_a_disconnect() {
+    fn full_channel_is_not_a_disconnect_and_gives_the_text_back() {
         let (tx, _rx) = mpsc::channel::<StreamEvent>(1);
         // Fill the one buffered slot without ever draining it — a
         // slow-consuming but still-connected client, not a dropped one.
         tx.try_send(StreamEvent::Token("first".to_string()))
             .unwrap();
-        let disconnected = send_or_detect_disconnect(&tx, "second".to_string(), 0);
-        assert!(
-            !disconnected,
-            "a Full channel must not be treated as a disconnect"
-        );
+        match try_send_piece(&tx, "second".to_string(), 0) {
+            // The text must come back so the caller can re-buffer it. Dropping
+            // it here is what silently removed pieces from the middle of a slow
+            // client's reply while the token count kept counting them.
+            SendOutcome::Backpressure(text) => assert_eq!(text, "second"),
+            SendOutcome::Sent => panic!("a full channel must not report Sent"),
+            SendOutcome::Disconnected => panic!("a full channel is not a disconnect"),
+        }
     }
 
     #[test]
     fn closed_channel_is_detected_with_pending_output() {
         let (tx, rx) = mpsc::channel::<StreamEvent>(4);
         drop(rx);
-        let disconnected = send_or_detect_disconnect(&tx, "hello".to_string(), 0);
-        assert!(
-            disconnected,
-            "a Closed channel with bytes to send must be detected"
-        );
+        assert!(matches!(
+            try_send_piece(&tx, "hello".to_string(), 0),
+            SendOutcome::Disconnected
+        ));
     }
 
     #[test]
@@ -2259,17 +2351,58 @@ mod tests {
         drop(rx);
         // Empty `out` (piece fully absorbed into the stop/filter holdback
         // buffer) must not let a disconnect slip through undetected.
-        let disconnected = send_or_detect_disconnect(&tx, String::new(), 0);
-        assert!(
-            disconnected,
-            "a Closed channel must be detected even with nothing to send"
-        );
+        assert!(matches!(
+            try_send_piece(&tx, String::new(), 0),
+            SendOutcome::Disconnected
+        ));
     }
 
     #[test]
-    fn open_channel_with_empty_output_is_not_a_disconnect() {
+    fn open_channel_with_empty_output_is_a_no_op_send() {
         let (tx, _rx) = mpsc::channel::<StreamEvent>(4);
-        let disconnected = send_or_detect_disconnect(&tx, String::new(), 0);
-        assert!(!disconnected);
+        assert!(matches!(
+            try_send_piece(&tx, String::new(), 0),
+            SendOutcome::Sent
+        ));
+    }
+
+    #[test]
+    fn a_slow_client_eventually_receives_every_byte_in_order() {
+        // End-to-end on the two pieces that matter together: `process_piece`
+        // decides what is safe to emit, and backpressure returns it when the
+        // channel is full. Re-buffering at the FRONT of `pending` is what keeps
+        // the order intact once the client drains.
+        let (tx, mut rx) = mpsc::channel::<StreamEvent>(1);
+        let stops: Vec<String> = Vec::new();
+        let filters: Vec<String> = Vec::new();
+        let mut pending = String::new();
+        let mut delivered = String::new();
+
+        for piece in ["alpha", "beta", "gamma", "delta"] {
+            let out = match process_piece(&mut pending, &stops, &filters, piece) {
+                PieceOutcome::Emit(out) => out,
+                PieceOutcome::Stop(out) => out,
+            };
+            if let SendOutcome::Backpressure(text) = try_send_piece(&tx, out, 0) {
+                pending.insert_str(0, &text);
+            }
+            // Drain whatever the client managed to read this round.
+            while let Ok(StreamEvent::Token(t)) = rx.try_recv() {
+                delivered.push_str(&t);
+            }
+        }
+        // Flush the tail the same way the max-tokens path does.
+        let tail = std::mem::take(&mut pending);
+        if !tail.is_empty() {
+            tx.try_send(StreamEvent::Token(tail)).unwrap();
+        }
+        while let Ok(StreamEvent::Token(t)) = rx.try_recv() {
+            delivered.push_str(&t);
+        }
+
+        assert_eq!(
+            delivered, "alphabetagammadelta",
+            "no byte may be lost or reordered when the channel back-pressures"
+        );
     }
 }

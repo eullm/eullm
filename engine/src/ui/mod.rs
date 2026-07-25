@@ -55,11 +55,31 @@ async fn serve_logo_light() -> Response {
     binary_asset(LOGO_LIGHT_PNG, "image/png")
 }
 
+/// Content-Security-Policy for the chat UI.
+///
+/// The UI is built to load nothing from outside this binary — no CDN, no fonts,
+/// no analytics — so a restrictive policy costs nothing and turns that design
+/// property into something the browser enforces rather than something the
+/// README asserts. `'unsafe-inline'` covers the small inline `<style>`/handlers
+/// in `index.html`; `connect-src 'self'` keeps the page's fetches on the origin
+/// that served it.
+const CSP: &str = "default-src 'self'; \
+                   script-src 'self' 'unsafe-inline'; \
+                   style-src 'self' 'unsafe-inline'; \
+                   img-src 'self' data:; \
+                   connect-src 'self'; \
+                   frame-ancestors 'none'; \
+                   base-uri 'none'; \
+                   form-action 'none'";
+
 fn text_asset(body: &'static str, content_type: &'static str) -> Response {
     (
         [
             (header::CONTENT_TYPE, content_type),
             (header::CACHE_CONTROL, "public, max-age=300"),
+            (header::CONTENT_SECURITY_POLICY, CSP),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
         ],
         body,
     )
@@ -72,6 +92,7 @@ fn binary_asset(body: &'static [u8], content_type: &'static str) -> Response {
             (header::CONTENT_TYPE, content_type),
             // Logos change at most on a release tag, safe to cache longer
             (header::CACHE_CONTROL, "public, max-age=86400"),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
         body,
     )

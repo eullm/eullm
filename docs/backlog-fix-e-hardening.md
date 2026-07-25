@@ -28,7 +28,8 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 
 ## Stato
 
-**Chiuse:** tutte le H0, più H1-B, H1-D e H2-A.
+**Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
+H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 34.
 
 Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
 `-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
@@ -45,9 +46,27 @@ modifica in cambio di un'assicurazione contro un evento che non si è mai
 verificato. Il buco reale è un altro e si chiude senza run aggiuntivi — vedi
 H3-M.
 
-Prossimo blocco consigliato: **H3-M** (a costo zero), poi **H1-A**
-(autenticazione a token, che sblocca anche H1-E e `user_id` nell'audit), poi
-**H2-B**/**H2-C** (perdita silenziosa di token e invariante dei logit).
+H3-M è agganciata al solo job `release`, non ai sei job di build: compilare da
+un commit non verificato non costa nulla che conti (runner standard su repo
+pubblico), mentre *pubblicare* da lì è il danno. Tenere i build invariati
+mantiene la modifica leggibile nel workflow che storicamente è il posto più
+costoso in cui sbagliare. È anche l'unica modifica di questo blocco che non è
+verificabile in locale: la logica di polling è stata simulata con uno stub di
+`gh` sui cinque esiti (verde, rosso, run assente, in corso→verde, timeout).
+
+**Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
+troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
+era scrivibile, quindi una home in sola lettura diventava un'interruzione di
+servizio per un file di log che nessuno aveva chiesto. Ora l'errore è fatale
+**solo** se `EULLM_AUDIT_DIR` è impostata — chi la imposta, o monta un volume su
+di essa, ha dichiarato che il registro conta; altrimenti si avvisa e si serve.
+La postura severa è una scelta dell'operatore, non un default da imporre.
+
+Prossimo blocco consigliato: **H1-A** (autenticazione a token: sblocca anche
+H1-E e dà finalmente un soggetto a `user_id` nell'audit), poi **H2-F**
+(guardie sul patcher GGUF), poi **H3-C** (`cargo deny` e `pip-audit` in CI —
+tenuta deliberatamente fuori da questa release: può far fallire il build al
+primo advisory trovato, e non è il momento di scoprirlo mentre si taggia).
 
 ---
 
@@ -202,7 +221,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   compose mappa `3000:3000`, ma il binario ascolta su 8080 in assenza di `EULLM_HUB_PORT`
   (`hub/src/main.rs:61-64`) — il servizio così com'è non è raggiungibile.
 
-- [ ] **H1-G · Le card dell'Hub devono descrivere modelli esistenti** *(P1)*
+- [x] **H1-G · Le card dell'Hub devono descrivere modelli esistenti** *(P1)*
   `model_card` e `compliance_card` (`hub/src/main.rs:174-254`) non consultano il catalogo e
   restituiscono 200 con contenuto affermativo per **qualsiasi** nome, inclusi modelli che
   non esistono, con asserzioni come `"gdpr_compliant": true` e `"personal_data": "No
@@ -231,7 +250,7 @@ esterni non si fidano dei valori che leggono.
   Leggere le due chiavi nel parser (che è già bounds-checked e facile da estendere) e usarle
   quando presenti, con l'attuale formula come fallback.
 
-- [ ] **H2-B · Backpressure invece di scarto silenzioso dei token** *(P1)*
+- [x] **H2-B · Backpressure invece di scarto silenzioso dei token** *(P1)*
   `send_or_detect_disconnect` (`scheduler.rs:1734-1739`) tratta correttamente un canale
   pieno come "client lento, non disconnesso", ma **scarta il token** e prosegue: il client
   riceve testo con parti mancanti, senza alcun errore, e il conteggio finale non corrisponde
@@ -240,7 +259,7 @@ esterni non si fidano dei valori che leggono.
   (`scheduler.rs:236`), quindi la condizione richiede un consumatore molto lento — ma è una
   perdita di dati silenziosa, non una degradazione.
 
-- [ ] **H2-C · Trattare come errore il fallimento di `decode_batch.add`** *(P1)*
+- [x] **H2-C · Trattare come errore il fallimento di `decode_batch.add`** *(P1)*
   Alla fase 3 del loop un `add` fallito produce solo un `warn` e la sequenza non entra nel
   batch (`scheduler.rs:1236-1244`), ma la fase 5 le assegna comunque un `logit_idx`
   (`:1282-1304`): da quel punto i logit di tutte le sequenze successive sono disallineati e
@@ -278,7 +297,7 @@ esterni non si fidano dei valori che leggono.
   alle stesse guardie di `fit.rs` (che è il modello da seguire, nello stesso repository) e
   leggere `general.alignment`.
 
-- [ ] **H2-G · Leggere l'header GGUF con `read_exact`** *(P2)*
+- [x] **H2-G · Leggere l'header GGUF con `read_exact`** *(P2)*
   `read_gguf_info` (`fit.rs:230-234`) usa una singola `file.read()`, che non garantisce di
   riempire il buffer: su una lettura parziale il parse fallisce e `--fit` ricade
   silenziosamente su `--gpu-layers`, in modo non deterministico. Usare
@@ -340,7 +359,7 @@ diligenza manuale.
   sotto licenza NVIDIA e non è Apache-2.0 — non essendo redistribuito nel wheel il rischio è
   contenuto, ma la sua presenza merita una decisione esplicita e documentata.
 
-- [ ] **H3-D · Correggere i metadati di licenza del catalogo** *(P1)*
+- [x] **H3-D · Correggere i metadati di licenza del catalogo** *(P1)*
   In `catalog/v1/catalog.json`, `gemma-4-e4b` e `gemma-4-12b` sono dichiarati
   `Apache-2.0`: i pesi Gemma sono distribuiti sotto i *Gemma Terms of Use* di Google, che
   includono una politica d'uso vietato e obblighi sulle redistribuzioni, e non sono
@@ -405,7 +424,7 @@ diligenza manuale.
   (`:141-165`). Tenere un handle aperto con `fsync` periodico, impostare permessi
   restrittivi sulla directory, aggiungere rotazione e rendere `count` incrementale.
 
-- [ ] **H3-M · Un tag di release non deve poter partire da un `main` rosso** *(P1)*
+- [x] **H3-M · Un tag di release non deve poter partire da un `main` rosso** *(P1)*
   `release-engine.yml` si attiva su `push: tags: [engine-v*, EuLLM-v*]` e non ha
   alcuna dipendenza dallo stato di `ci.yml` (nessun `workflow_run`, nessun
   controllo di check suite). Un tag su un commit la cui CI è fallita — o non è
@@ -419,14 +438,14 @@ diligenza manuale.
   compilazione. Alternativa a costo zero e zero codice: non taggare mai prima di
   aver visto la spunta verde su `main`.
 
-- [ ] **H3-K · Completare `SECURITY.md`** *(P3)*
+- [x] **H3-K · Completare `SECURITY.md`** *(P3)*
   Il file è ancora il template GitHub non compilato: la tabella delle versioni supportate
   elenca `5.1.x` e `4.0.x`, che non esistono, e la sezione di segnalazione contiene le
   istruzioni segnaposto invece di un canale di contatto. Un progetto che pubblica binari e
   punta a un pubblico enterprise deve avere un canale di disclosure dichiarato e una policy
   sulle versioni supportate coerente con lo schema di release effettivo.
 
-- [ ] **H3-L · Header di sicurezza sulla chat UI** *(P3)*
+- [x] **H3-L · Header di sicurezza sulla chat UI** *(P3)*
   `ui/mod.rs:58-79` serve gli asset con `Content-Type` e `Cache-Control` e nulla più. La
   disciplina di escaping in `app.js` è corretta — `renderContent` neutralizza l'HTML prima
   delle trasformazioni Markdown, incluse le sezioni di reasoning — ma un

@@ -116,6 +116,20 @@ impl AuditLogger {
         }
     }
 
+    /// Whether the operator explicitly chose an audit destination via
+    /// `EULLM_AUDIT_DIR`.
+    ///
+    /// This is what decides how hard an unwritable destination fails at
+    /// startup. Someone who set the variable — or mounted a volume at it, as
+    /// `engine/Dockerfile` does — has stated that the trail matters, and
+    /// silently serving without one betrays that; whereas refusing to start an
+    /// inference server over a *log file* nobody asked for would turn a
+    /// read-only home directory into an outage. The strict posture is the
+    /// operator's to choose, not ours to impose by default.
+    pub fn is_explicitly_configured() -> bool {
+        std::env::var("EULLM_AUDIT_DIR").is_ok_and(|d| !d.trim().is_empty())
+    }
+
     /// Verify the audit log's directory is writable, creating it if needed.
     ///
     /// Called once at startup so a misconfigured audit destination surfaces

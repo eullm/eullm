@@ -48,6 +48,69 @@ env:
   SCCACHE_IDLE_TIMEOUT: "0"
 
 jobs:
+  # ── Gate: the tagged commit must have green CI before anything is published ──
+  #
+  # This workflow fires on a tag and, until now, had no relationship to ci.yml
+  # whatsoever: a tag placed on a commit whose CI had failed — or had not
+  # finished yet — still produced 13 published binaries. Normally a red `main`
+  # is corrected with another commit; here it becomes an artifact users
+  # download, which is the one point where noticing a problem after the merge
+  # rather than before actually costs something.
+  #
+  # Deliberately gates the `release` job ONLY, not the builds. Compiling from an
+  # unverified commit wastes nothing that matters (standard runners on a public
+  # repo are free) and keeping the six build jobs untouched keeps this change
+  # small in the workflow that has historically been the most expensive place
+  # to get something wrong. What must never happen is *publishing* from it.
+  #
+  # Waits rather than failing fast, because pushing a tag right after a merge is
+  # normal and CI takes ~7 minutes: a "not finished yet" is not a red build.
+  require_green_ci:
+    name: Require green CI on the tagged commit
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: read
+    steps:
+      - name: Wait for ci.yml on this commit and require success
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 900 ))   # 15 min: CI is ~7, leaves slack
+          while :; do
+            run=$(gh api \
+              "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=1" \
+              --jq '.workflow_runs[0] // empty | "\(.status) \(.conclusion // "pending") \(.html_url)"')
+
+            if [ -z "$run" ]; then
+              echo "::error::No ci.yml run found for $SHA. A release must be tagged on a commit that CI has actually validated (normally a commit on main). Push the commit to main, let CI finish, then re-tag."
+              exit 1
+            fi
+
+            status=$(echo "$run" | cut -d' ' -f1)
+            conclusion=$(echo "$run" | cut -d' ' -f2)
+            url=$(echo "$run" | cut -d' ' -f3)
+            echo "ci.yml for $SHA: status=$status conclusion=$conclusion"
+
+            if [ "$status" = "completed" ]; then
+              if [ "$conclusion" = "success" ]; then
+                echo "CI is green — release may proceed. $url"
+                exit 0
+              fi
+              echo "::error::CI on $SHA concluded '$conclusion'. Refusing to publish binaries from an unverified commit. $url"
+              exit 1
+            fi
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::CI on $SHA is still '$status' after 15 minutes. Not publishing on an unknown result. $url"
+              exit 1
+            fi
+            sleep 30
+          done
+
   build:
     # Manual dispatch is for testing build-arm-cix-p1 in isolation - skip
     # the rest of the matrix there.
@@ -749,6 +812,7 @@ jobs:
 
   release:
     needs:
+      - require_green_ci
       - build
       - build-cuda
       - build-cuda-arm64
@@ -760,7 +824,16 @@ jobs:
     # Also never run on a manual workflow_dispatch (that's only for testing
     # build-arm-cix-p1 in isolation, and there's no real tag to attach a
     # release to on that trigger).
-    if: ${{ !cancelled() && github.event_name == 'push' }}
+    #
+    # `require_green_ci` is the one upstream job that is NOT covered by that
+    # graceful degradation: `!cancelled()` deliberately lets this job run even
+    # when needs failed or were skipped, so without naming its result
+    # explicitly a failed gate would skip the builds and then publish a release
+    # with nothing but the source archives attached.
+    if: >-
+      ${{ !cancelled()
+          && github.event_name == 'push'
+          && needs.require_green_ci.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

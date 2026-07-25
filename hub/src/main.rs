@@ -58,10 +58,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .with_state(state);
 
+    // 3000 matches `EXPOSE 3000` in hub/Dockerfile and the `3000:3000` mapping
+    // in docker-compose.yml. It used to default to 8080 while the image
+    // advertised 3000, so `docker compose up hub` started a container nothing
+    // could reach.
     let port = std::env::var("EULLM_HUB_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
-        .unwrap_or(8080);
+        .unwrap_or(3000);
     let addr = format!("0.0.0.0:{port}");
     tracing::info!("EULLM Hub listening on {addr}");
 
@@ -171,8 +175,30 @@ async fn get_model(Path(name): Path<String>) -> Result<Json<Value>, StatusCode> 
         .ok_or(StatusCode::NOT_FOUND)
 }
 
-async fn model_card(Path(name): Path<String>) -> Json<Value> {
-    Json(json!({
+/// Reject a name that isn't in the catalog.
+///
+/// The card endpoints below used to answer 200 for *any* name, so
+/// `GET /v1/models/anything-at-all/compliance` returned a fully affirmative AI
+/// Act compliance card — `"gdpr_compliant": true`, "no personal data in
+/// training set" — for a model that does not exist and was never assessed. For
+/// a project whose value proposition is documented compliance, an attestation
+/// generated on demand for an arbitrary string is worse than no endpoint at
+/// all: it is the one output here that someone might reasonably rely on.
+fn require_known_model(name: &str) -> Result<Value, (StatusCode, Json<Value>)> {
+    find_in_catalog(name).ok_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!("model '{name}' is not in this Hub's catalog"),
+                "hint": "GET /v1/models lists the models this instance knows about"
+            })),
+        )
+    })
+}
+
+async fn model_card(Path(name): Path<String>) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_known_model(&name)?;
+    Ok(Json(json!({
         "model": format!("eullm/{name}"),
         "card_version": "1.0",
         "summary": {
@@ -181,7 +207,7 @@ async fn model_card(Path(name): Path<String>) -> Json<Value> {
             "out_of_scope": "Medical diagnosis, legal advice (informational use only)",
             "architecture": "Transformer (decoder-only)",
             "base_model": "Qwen3-14B (Apache 2.0)",
-            "compression_pipeline": "Structural pruning → Knowledge distillation → Quantization (Q4_K_M) → Identity LoRA",
+            "compression_pipeline": "Structural pruning → Knowledge distillation → Identity LoRA (merged) → GGUF Q4_K_M",
             "format": "GGUF",
         },
         "training": {
@@ -201,11 +227,14 @@ async fn model_card(Path(name): Path<String>) -> Json<Value> {
         },
         "license": "Apache-2.0",
         "contact": "dev@eullm.eu"
-    }))
+    })))
 }
 
-async fn compliance_card(Path(name): Path<String>) -> Json<Value> {
-    Json(json!({
+async fn compliance_card(
+    Path(name): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    require_known_model(&name)?;
+    Ok(Json(json!({
         "model": format!("eullm/{name}"),
         "regulation": "EU AI Act — Regulation (EU) 2024/1689",
         "card_version": "1.0",
@@ -250,7 +279,7 @@ async fn compliance_card(Path(name): Path<String>) -> Json<Value> {
             "email": "compliance@eullm.eu",
             "address": "Milan, Italy"
         }
-    }))
+    })))
 }
 
 /// Serve a GGUF model file for download.
@@ -440,5 +469,34 @@ mod tests {
         assert!(!is_valid_model_slug("-leading-dash"));
         assert!(!is_valid_model_slug("UPPER-case"));
         assert!(!is_valid_model_slug("has space"));
+    }
+}
+
+#[cfg(test)]
+mod card_scope_tests {
+    use super::*;
+
+    #[test]
+    fn cards_are_only_issued_for_catalogued_models() {
+        // Accepts the real catalog entries, with or without the eullm/ prefix.
+        assert!(require_known_model("legal-it-7b").is_ok());
+        assert!(require_known_model("eullm/legal-it-7b").is_ok());
+        assert!(require_known_model("medical-de-7b").is_ok());
+    }
+
+    #[test]
+    fn an_unknown_name_gets_404_not_an_affirmative_compliance_card() {
+        for name in [
+            "anything-at-all",
+            "not-a-model",
+            "legal-it-70b",
+            "",
+            "../etc/passwd",
+        ] {
+            let err = require_known_model(name)
+                .err()
+                .unwrap_or_else(|| panic!("{name:?} must not be issued a card"));
+            assert_eq!(err.0, StatusCode::NOT_FOUND, "for {name:?}");
+        }
     }
 }
