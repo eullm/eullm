@@ -30,6 +30,11 @@ Usage
     # under-size the KV cache and die out of VRAM)
     python3 tools/smoke_test.py --binary ./eullm --pull --fit-model qwen3-4b
 
+    # ...but a small model on a large card fits under *any* arithmetic, so that
+    # only proves the path runs. To make the check discriminating, raise the
+    # context until the KV cache — not the weights — is what fills the card:
+    python3 tools/smoke_test.py --binary ./eullm --fit-model qwen3-4b --fit-ctx 98304
+
     # Quick pass, no inference (config/validation checks only, seconds)
     python3 tools/smoke_test.py --binary ./eullm --no-inference
 
@@ -736,7 +741,9 @@ def check_backpressure(rep: Report, api: str, model: str) -> None:
     )
 
 
-def check_fit(rep: Report, binary: Path, model: str, env: dict, log_dir: Path) -> None:
+def check_fit(
+    rep: Report, binary: Path, model: str, env: dict, log_dir: Path, ctx: int
+) -> None:
     """`--fit` must size the offload without dying out of VRAM.
 
     CUDA-only by construction: on any other build VRAM cannot be probed, so the
@@ -745,11 +752,21 @@ def check_fit(rep: Report, binary: Path, model: str, env: dict, log_dir: Path) -
     under-estimates it on architectures that declare attention.key_length
     explicitly (qwen3-4b: 80 assumed vs 128 real), so --fit offloaded more layers
     than fit and the load died — the exact failure --fit exists to prevent.
+
+    Note on what a pass proves. When the weights alone are a small fraction of
+    free VRAM, both the correct and the under-estimating arithmetic conclude
+    "fits fully", so the check only proves the path runs — it does not
+    discriminate the fix. The under-estimate is a *per-token, per-layer* error,
+    so it only becomes decision-changing once the KV cache dominates the budget.
+    Raise ``--fit-ctx`` until the decision stops being "offloading all layers":
+    the first context that reports a partial offload is the one where the two
+    arithmetics disagree, and under the old one that same context would have
+    claimed a full fit and then died allocating it.
     """
     port = free_port()
     log = log_dir / "engine-fit.log"
     args = [
-        "run", model, "--fit", "--ctx-size", "32768",
+        "run", model, "--fit", "--ctx-size", str(ctx),
         "--port", str(port), "--no-ui", "--cli",
     ]
     with Engine(binary, args, env, log) as eng:
@@ -769,7 +786,22 @@ def check_fit(rep: Report, binary: Path, model: str, env: dict, log_dir: Path) -
         if "could not size the model" in decision:
             rep.add(f"--fit sizes {model}", None, decision + " (expected off CUDA)")
         else:
-            rep.add(f"--fit sizes {model}", True, decision)
+            # "offloading all layers" is the outcome both the correct and the old
+            # under-estimating arithmetic reach when the weights are small
+            # relative to the card — say so, rather than letting it read as
+            # confirmation of the fix.
+            full = "fits fully" in decision
+            rep.add(
+                f"--fit sizes {model}",
+                True,
+                decision + (
+                    f" — a full fit at ctx {ctx} is reached by the under-estimating "
+                    "arithmetic too, so this does not discriminate H2-A; raise "
+                    "--fit-ctx until a partial offload is reported" if full else
+                    f" — partial offload at ctx {ctx}: this is the regime where the "
+                    "KV sizing decides, and the old arithmetic claimed a full fit here"
+                ),
+            )
         code, body = post(
             f"http://127.0.0.1:{port}/api/chat",
             {
@@ -802,6 +834,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="run `eullm pull <model>` first if it is not on disk")
     ap.add_argument("--fit-model", default=None, metavar="ID",
                     help="additionally exercise --fit with this model (CUDA boxes: try qwen3-4b)")
+    ap.add_argument("--fit-ctx", type=int, default=32768, metavar="N",
+                    help="context size for the --fit check (default 32768). Raise it "
+                         "until --fit reports a partial offload instead of all layers: "
+                         "that is the regime where the KV sizing actually decides")
     ap.add_argument("--no-inference", action="store_true",
                     help="config/validation checks only — no model needed")
     ap.add_argument("--concurrency", type=int, default=8, help="parallel requests (default 8)")
@@ -948,7 +984,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.pull:
             subprocess.run([str(binary), "pull", args.fit_model],
                            env={**os.environ, **env}, capture_output=True, timeout=7200)
-        check_fit(rep, binary, args.fit_model, env, work)
+        check_fit(rep, binary, args.fit_model, env, work, args.fit_ctx)
 
     return finish(rep, args, work, keep=args.keep_workdir)
 
