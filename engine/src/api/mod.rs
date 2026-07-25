@@ -433,8 +433,12 @@ pub struct ServeConfig {
 /// in-flight requests before exiting. This is critical for Docker containers
 /// (which send SIGTERM on `docker stop`) and systemd services.
 pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let ip_allowlist = ip_allowlist::IpAllowlist::load_from_env_file(std::path::Path::new(".env"));
-    tracing::info!("Allowed source IPs/subnets: {}", ip_allowlist.describe());
+    let ip_allowlist = ip_allowlist::IpAllowlist::load(std::path::Path::new(".env"));
+    tracing::info!(
+        "Allowed source IPs/subnets: {}  [source: {}]",
+        ip_allowlist.describe(),
+        ip_allowlist.source(),
+    );
 
     // Fail loudly at startup if the audit destination is unusable, rather than
     // warning once per request after the fact. The trail exists to produce a

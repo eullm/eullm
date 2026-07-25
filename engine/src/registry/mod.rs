@@ -542,11 +542,25 @@ pub async fn list_hf_ggufs(
     let mut ggufs = Vec::new();
     if let Some(siblings) = body.get("siblings").and_then(|s| s.as_array()) {
         for sib in siblings {
-            if let Some(name) = sib.get("rfilename").and_then(|n| n.as_str())
-                && name.to_lowercase().ends_with(".gguf")
-            {
-                ggufs.push(name.to_string());
+            let Some(name) = sib.get("rfilename").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            if !name.to_lowercase().ends_with(".gguf") {
+                continue;
             }
+            // The suffix used to be the only check, and this value becomes a
+            // path component in `cmd_pull_hf` (`model_dir.join(&filename)`).
+            // A repo is free to declare whatever `rfilename` it likes, so
+            // anything that isn't a single safe filename is dropped here, at
+            // the boundary, rather than being validated at each use site.
+            if !crate::models::store::is_safe_filename(name) {
+                tracing::warn!(
+                    "Ignoring unsafe filename from the HuggingFace API for {repo}: {}",
+                    crate::audit::sanitize_for_log(name),
+                );
+                continue;
+            }
+            ggufs.push(name.to_string());
         }
     }
     Ok(ggufs)

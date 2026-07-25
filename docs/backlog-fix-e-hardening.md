@@ -28,18 +28,26 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 
 ## Stato
 
-**H0 chiusa.** Tutte e sei le voci bloccanti sono corrette, con test:
-`api::routes::tests` (6 nuovi test sui limiti degli override), `audit::tests`
-(3 sulla precedenza di `EULLM_AUDIT_DIR` e sulla verifica di scrivibilità),
-`tests/test_pipeline.py` (5 sull'ordine degli stadi e sul contratto GGUF),
-`tests/test_anonymize.py` (5 sui default e sul contratto del record).
-Engine: 100 test verdi, clippy pulito con `-D warnings`. Forge: 136 test verdi,
-ruff pulito su `eullm_forge/`.
+**Chiuse:** tutte le H0, più H1-B, H1-D e H2-A.
 
-Prossimo blocco consigliato: **H1-D** e **H1-B** (entrambe poche righe, e H1-D
-riusa una funzione che esiste già), poi **H2-A** (errore dimensionale che causa
-OOM su un modello del catalogo), poi **H3-A** (la CI non presidia una
-Definition of Done già scritta).
+Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
+`-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
+degli override da body (7), precedenza di `EULLM_AUDIT_DIR` e scrivibilità (3),
+precedenza ambiente/file per l'allowlist (5), sicurezza dei nomi file esterni
+(4), `attention.key_length` nel dimensionamento KV (5), ordine degli stadi
+della pipeline e contratto GGUF (5), default e contratto del record di
+anonimizzazione (5).
+
+**Non facciamo il trigger `pull_request` sulla CI** (era in H3-A). La CI gira
+solo su `push: [main]` e impiega ~7 minuti stabili su 30 run consecutivi, tutte
+verdi: aggiungere la validazione pre-merge raddoppierebbe i run per ogni
+modifica in cambio di un'assicurazione contro un evento che non si è mai
+verificato. Il buco reale è un altro e si chiude senza run aggiuntivi — vedi
+H3-M.
+
+Prossimo blocco consigliato: **H3-M** (a costo zero), poi **H1-A**
+(autenticazione a token, che sblocca anche H1-E e `user_id` nell'audit), poi
+**H2-B**/**H2-C** (perdita silenziosa di token e invariante dei logit).
 
 ---
 
@@ -144,7 +152,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   sopravvive alla traduzione degli indirizzi. Fornisce anche il soggetto che `user_id`
   (`audit/mod.rs:36`) oggi non ha mai. Precondizione di ogni deployment multi-tenant.
 
-- [ ] **H1-B · `EULLM_ALLOWED_IPS` anche dall'ambiente di processo** *(P1)*
+- [x] **H1-B · `EULLM_ALLOWED_IPS` anche dall'ambiente di processo** *(P1)*
   `IpAllowlist::load_from_env_file` è invocata con il percorso letterale `".env"` relativo
   alla working directory (`api/mod.rs:436`) e la variabile non è mai letta dall'ambiente.
   `docker run -e EULLM_ALLOWED_IPS=…` e un `Environment=` in un'unità systemd non hanno
@@ -163,7 +171,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   domini configurabile — che per il caso d'uso enterprise è la forma più difendibile della
   feature.
 
-- [ ] **H1-D · Validare i nomi file restituiti dall'API HuggingFace** *(P1)*
+- [x] **H1-D · Validare i nomi file restituiti dall'API HuggingFace** *(P1)*
   `list_hf_ggufs` raccoglie i `siblings[].rfilename` filtrandoli solo per il suffisso
   `.gguf` (`registry/mod.rs:543-551`), e `cmd_pull_hf` li usa direttamente come componente
   di percorso: `model_dir.join(&filename)` (`main.rs:920`). Un nome contenente separatori,
@@ -213,7 +221,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
 prodotto; i due percorsi di inferenza si comportano allo stesso modo; i parser di formati
 esterni non si fidano dei valori che leggono.
 
-- [ ] **H2-A · Dimensionare la KV cache con `attention.key_length`** *(P1)*
+- [x] **H2-A · Dimensionare la KV cache con `attention.key_length`** *(P1)*
   Sia il sizer di `--fit` (`fit.rs:58-64`) sia la stima runtime (`scheduler.rs:1657`)
   calcolano `head_dim = n_embd / n_head`, ignorando le chiavi GGUF
   `<arch>.attention.key_length` / `.value_length` che molte architetture dichiarano
@@ -292,7 +300,14 @@ esterni non si fidano dei valori che leggono.
 garantisce ciò che dichiara; le dipendenze sono controllate per costruzione e non per
 diligenza manuale.
 
-- [ ] **H3-A · La CI deve compilare tutte le feature** *(P1)*
+- [ ] **H3-A · La CI deve compilare le feature che può compilare a costo basso** *(P1)*
+  *Riformulata dopo aver misurato i costi reali: la CI gira solo su `push: [main]`,
+  in ~7 minuti, su runner standard di un repo pubblico — quindi gratuiti. Il
+  vincolo non sono i minuti ma il wall-clock, e le feature GPU richiedono il
+  toolkit CUDA che porterebbe quei 7 minuti a 25+ su ogni push. Ambito corretto:
+  `cargo check --features multimodal` a ogni push (nessun toolkit, costo
+  trascurabile), feature GPU su un job settimanale schedulato o lasciate al
+  workflow di release.*
   La Definition of Done di `roadmap-engine-0.7-1.0.md` richiede che ogni voce «non rompa i
   feature flag CUDA, Metal, ROCm, Vulkan, multimodal», ma la CI esegue `cargo build` e
   `cargo test` solo con le feature di default (`.github/workflows/ci.yml:64, 67`): nessun
@@ -389,6 +404,20 @@ diligenza manuale.
   con i permessi di default; `read_all` e `count` caricano l'intero file in memoria
   (`:141-165`). Tenere un handle aperto con `fsync` periodico, impostare permessi
   restrittivi sulla directory, aggiungere rotazione e rendere `count` incrementale.
+
+- [ ] **H3-M · Un tag di release non deve poter partire da un `main` rosso** *(P1)*
+  `release-engine.yml` si attiva su `push: tags: [engine-v*, EuLLM-v*]` e non ha
+  alcuna dipendenza dallo stato di `ci.yml` (nessun `workflow_run`, nessun
+  controllo di check suite). Un tag su un commit la cui CI è fallita — o non è
+  ancora finita — produce comunque 13 binari pubblicati sulla release page.
+  Questo è il solo punto in cui "scoprire un problema prima o dopo il merge"
+  cambia davvero qualcosa: normalmente un `main` rosso si corregge con un
+  commit, qui diventa un artefatto scaricabile. Aggiungere un job iniziale che
+  verifichi la conclusione della CI sul commit del tag e fermi il workflow se
+  non è `success`, oppure un `workflow_dispatch` con conferma esplicita per i
+  casi di emergenza. Costo: zero run aggiuntivi — è un controllo di API, non una
+  compilazione. Alternativa a costo zero e zero codice: non taggare mai prima di
+  aver visto la spunta verde su `main`.
 
 - [ ] **H3-K · Completare `SECURITY.md`** *(P3)*
   Il file è ancora il template GitHub non compilato: la tabella delle versioni supportate
