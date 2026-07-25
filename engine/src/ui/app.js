@@ -4,6 +4,35 @@
 (() => {
   "use strict";
 
+  // ── API key ────────────────────────────────────────────────────────────
+  // When the engine is started with EULLM_API_KEYS, every request to /api and
+  // /v1 needs a bearer token — including the ones this page makes. A browser
+  // cannot be handed a header before its first navigation, so the key arrives
+  // once as ?api_key=… , is kept in sessionStorage (cleared when the tab
+  // closes, unlike localStorage) and is then sent as a header on every fetch.
+  // The query string is stripped from the visible URL immediately so the key
+  // does not sit in the address bar, get bookmarked, or leak through Referer.
+  //
+  // With no keys configured the engine ignores the header entirely, so this
+  // costs nothing in the common local case.
+  const API_KEY_STORAGE = "eullm.apiKey";
+  const apiKey = (() => {
+    const fromUrl = new URLSearchParams(location.search).get("api_key");
+    if (fromUrl) {
+      try { sessionStorage.setItem(API_KEY_STORAGE, fromUrl); } catch {}
+      const clean = location.pathname + location.hash;
+      history.replaceState(null, "", clean);
+      return fromUrl;
+    }
+    try { return sessionStorage.getItem(API_KEY_STORAGE) || ""; } catch { return ""; }
+  })();
+
+  /** Merge the auth header into a fetch init, leaving everything else alone. */
+  const withAuth = (init = {}) => {
+    if (!apiKey) return init;
+    return { ...init, headers: { ...(init.headers || {}), "X-Api-Key": apiKey } };
+  };
+
   const $ = (id) => document.getElementById(id);
   const els = {
     modelSelect: $("model-select"),
@@ -547,7 +576,7 @@
   // ── API calls ─────────────────────────────────────────────────────────
   async function loadModels() {
     try {
-      const r = await fetch("/api/tags");
+      const r = await fetch("/api/tags", withAuth());
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
       const loaded = (data.models || []).filter((m) => m.size === 0 || m.size === undefined || /\.gguf$/i.test(m.name) || !m.digest);
@@ -594,7 +623,7 @@
 
   async function loadVersion() {
     try {
-      const r = await fetch("/api/version");
+      const r = await fetch("/api/version", withAuth());
       if (!r.ok) return null;
       return await r.json();
     } catch { return null; }
@@ -661,7 +690,7 @@
         const messagesToSend = settings.system
           ? [{ role: "system", content: settings.system }, userMsg]
           : [userMsg];
-        resp = await fetch("/api/chat", {
+        resp = await fetch("/api/chat", withAuth({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: abortController.signal,
@@ -672,12 +701,12 @@
             temperature: settings.temperature,
             max_tokens: settings.maxTokens,
           }),
-        });
+        }));
       } else {
         const messagesToSend = [];
         if (settings.system) messagesToSend.push({ role: "system", content: settings.system });
         messagesToSend.push(...history);
-        resp = await fetch("/v1/chat/completions", {
+        resp = await fetch("/v1/chat/completions", withAuth({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           signal: abortController.signal,
@@ -690,7 +719,7 @@
             // Pass-through field for Ollama-compatible backends that honour it.
             think: settings.think,
           }),
-        });
+        }));
       }
 
       if (!resp.ok) {

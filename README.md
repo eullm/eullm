@@ -190,15 +190,89 @@ host never locks out local access. A malformed entry is rejected and logged
 as a warning at startup; nothing beyond loopback takes effect until it's
 fixed, never the other way around.
 
-**What this does and doesn't cover:** this closes off the network-exposure
-risk of the default `0.0.0.0` bind — the actual vulnerability an internal
-audit flagged. It does not add authentication (a request from an allowed IP
-is trusted, not challenged) — a proper login for direct chat-UI access is
-planned separately, tied to per-user chat history. It also doesn't change
-CORS, which stays permissive for browser-based tools like Open WebUI; that's
-a different risk (a malicious page tricking your own browser into calling
-`localhost`) that an IP allowlist can't address, since that traffic
-genuinely originates from loopback.
+**What this does and doesn't cover:** this closes off the network-exposure risk
+of the default `0.0.0.0` bind. It does *not* authenticate anyone — a request
+from an allowed IP is trusted, not challenged — and it cannot express two cases
+at all: behind Docker's published ports every external client arrives as the
+bridge gateway address, and a request from your own browser genuinely comes
+from loopback. Those are what API keys and the origin policy below are for.
+
+### API keys and quotas (`EULLM_API_KEYS`, new in v0.6.36)
+
+Set a key and the API requires a bearer token; leave it unset and nothing
+changes, which keeps the local single-user case as simple as it was:
+
+```bash
+# id:secret, comma-separated. `rpm=N` caps requests per minute for that key.
+EULLM_API_KEYS=ci:8f3b1d9c2e7a4f60b5,rag-prod:1a2b3c4d5e6f7a8b9c:rpm=600
+```
+
+```bash
+curl -H "Authorization: Bearer 8f3b1d9c2e7a4f60b5" \
+     http://localhost:11434/api/tags
+# `X-Api-Key: <key>` works too.
+```
+
+For real deployments prefer a file — it can be `chmod 600`, whereas an
+environment variable is readable through `/proc/<pid>/environ`:
+
+```bash
+EULLM_API_KEYS_FILE=/etc/eullm/keys   # one id:secret[:rpm=N] per line
+```
+
+Three things worth knowing:
+
+- **The key id lands in every audit record** (`user_id`), so the AI Act trail
+  finally says *who* asked, not just what was asked. The id is not a secret.
+- **A valid key admits the request from any source address.** Enabling keys
+  replaces address-based admission with identity-based admission rather than
+  stacking on top of it — otherwise the Docker case stays unfixable, since the
+  bridge gateway is not in anyone's allowlist. Requests with no key or a wrong
+  key get a 401 whatever their origin, loopback included. Startup logs which
+  posture is in effect.
+- **A key that doesn't parse is fatal at startup.** If you asked for
+  authentication, serving without it because of a typo is worse than not
+  starting.
+
+Secrets go through the environment rather than CLI flags on purpose: a command
+line is visible in `ps` to every local user on the box.
+
+### Browser origins (`EULLM_ALLOWED_ORIGINS`, new in v0.6.36)
+
+CORS used to be fully permissive, which combined badly with the IP allowlist: a
+request from a page you happen to be visiting comes from loopback, so it was
+allowed *and* the page could read the reply. Now any loopback origin is allowed
+by default (the bundled chat UI, Open WebUI on localhost, a local frontend —
+all unaffected), a cross-origin request with side effects is refused with 403
+before it reaches a handler, and anything else is opt-in:
+
+```bash
+EULLM_ALLOWED_ORIGINS=https://chat.example.eu,http://192.168.7.10:8080
+# `*` restores the old permissive behaviour, explicitly.
+```
+
+Requests with no `Origin` header — curl, an Ollama SDK, a RAG pipeline — are
+untouched: CORS never applied to them, and breaking them would cost
+compatibility for no gain.
+
+### Web tool hardening (new in v0.6.36)
+
+With `--web`, a URL in a prompt is fetched by the server, so on any shared
+deployment the URL is attacker-controlled. The fetcher requires `https`,
+refuses hosts resolving to loopback, private, link-local, carrier-NAT or
+cloud-metadata addresses (including the IPv6 forms that wrap an IPv4 address),
+pins the connection to the address it validated, re-checks every redirect hop,
+caps the body at 4 MiB read in chunks, and accepts only textual content types.
+
+```bash
+EULLM_WEB_ALLOWED_DOMAINS=docs.example.eu,eur-lex.europa.eu  # allowlist sources
+EULLM_WEB_ALLOW_HTTP=1                                       # permit plain http
+EULLM_WEB_ALLOW_PRIVATE_HOSTS=1                              # intranet targets
+```
+
+The last one turns the address check off. With it set, `--web` hands whoever
+writes the prompt a GET primitive on your internal network — deliberate and
+logged at startup, but know what you are choosing.
 
 ### Free VRAM without restarting (new in v0.6.10)
 

@@ -31,6 +31,40 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
+**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E — 20 voci
+chiuse su 37. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
+deployment in container ha ora un controllo d'accesso funzionante *ed
+esprimibile*, e ogni input esterno che diventa un percorso o una richiesta di
+rete è validato. Resta **H1-F**, che è lo stesso gate applicato all'**Hub**: il
+suo listener è ancora `0.0.0.0` senza nessuno di questi controlli. Ora è
+sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuole
+l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
+due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
+mescolare un refactor di workspace con l'hardening dell'Engine.
+Engine 157 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+
+La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
+in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
+di perimetro e policy nelle variabili d'ambiente.** Non è una preferenza di stile.
+Un segreto su riga di comando è leggibile in `ps` da ogni utente locale; ogni
+deployment non interattivo configura l'ambiente e non argv; e un'impostazione di
+perimetro aggiunta come flag CLI andrebbe aggiunta a `run` *e* a `serve` e
+cablata in `ServeConfig`, che è esattamente il meccanismo che ha prodotto la
+divergenza `cache_type_k`/`gpu_layers` del luglio 2026. Una variabile letta
+dentro `api::serve` è letta una volta, da entrambi i comandi, e non può
+divergere.
+
+Lo smoke test ha una sezione **perimetro** che avvia un secondo engine con le
+chiavi configurate e verifica: ammissione decisa dal token (6 casi, incluso l'id
+della chiave usato come token, che sarebbe un bypass totale), la sfida
+`WWW-Authenticate`, il token da query string rifiutato sull'API, la quota per
+chiave con `Retry-After`, che la quota sia per chiave e non globale, il rifiuto
+cross-origin sui metodi con effetti collaterali (4 casi), l'assenza di oracolo
+sul filesystem, che nessun segreto compaia nei log, e un record di audit con
+`user_id` valorizzato. Il run principale lascia deliberatamente le chiavi
+*non* configurate, così la postura di default resta quella misurata da tutto il
+resto: 31 PASS, 0 FAIL, 3 SKIP in locale.
+
 Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
 `-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
 degli override da body (7), precedenza di `EULLM_AUDIT_DIR` e scrivibilità (3),
@@ -127,10 +161,10 @@ servizio per un file di log che nessuno aveva chiesto. Ora l'errore è fatale
 di essa, ha dichiarato che il registro conta; altrimenti si avvisa e si serve.
 La postura severa è una scelta dell'operatore, non un default da imporre.
 
-Prossimo blocco consigliato: **H1-A** (autenticazione a token: sblocca anche
-H1-E e dà finalmente un soggetto a `user_id` nell'audit), poi **H2-F**
-(guardie sul patcher GGUF), poi **H3-C** (`cargo deny` e `pip-audit` in CI —
-tenuta deliberatamente fuori da questa release: può far fallire il build al
+Prossimo blocco consigliato: **H2-F** (guardie sul patcher GGUF), poi **H2-D**
+(stop sequence e filtri unificati fra i due percorsi di inferenza, che è anche
+dove va la guardia di H2-J), poi **H3-C** (`cargo deny` e `pip-audit` in CI —
+tenuta deliberatamente fuori dalla 0.6.35 perché può far fallire il build al
 primo advisory trovato, e non è il momento di scoprirlo mentre si taggia).
 
 ---
@@ -223,7 +257,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
 **Gate di uscita:** un deployment in container ha un controllo d'accesso funzionante ed
 esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete è validato.
 
-- [ ] **H1-A · Autenticazione opzionale a token con quote per chiave** *(P1)*
+- [x] **H1-A · Autenticazione opzionale a token con quote per chiave** *(P1)*
   Oggi l'unico controllo è l'allowlist IP (`api/ip_allowlist.rs`, middleware più esterno in
   `api/mod.rs:604-607, 628-631`), che è la scelta giusta per l'uso locale ma non è
   esprimibile dietro il port publishing di Docker: con `ports: "11434:11434"`
@@ -235,6 +269,33 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   l'identificativo della chiave propagato in ogni riga di audit, è l'unico controllo che
   sopravvive alla traduzione degli indirizzi. Fornisce anche il soggetto che `user_id`
   (`audit/mod.rs:36`) oggi non ha mai. Precondizione di ogni deployment multi-tenant.
+  **Chiuso in `api/auth.rs`** (nuovo modulo, 20 test). Configurazione da
+  `EULLM_API_KEYS`, poi `EULLM_API_KEYS_FILE`, poi `.env` — mai da flag CLI, per
+  la regola scritta ora in `CLAUDE.md`: un segreto su riga di comando è leggibile
+  in `ps` da qualunque utente locale. Formato `id:secret[:rpm=N]`; il segreto è
+  tenuto solo come digest SHA-256 e confrontato a lunghezza fissa, così il
+  confronto è a tempo costante per costruzione e un core dump non consegna il
+  token. Tre decisioni da capire prima di modificarlo:
+  1. **Il middleware è più esterno dell'allowlist e una chiave valida la
+     scavalca.** È l'unico ordinamento che risolve il caso Docker: rifiutare una
+     chiave valida perché il pacchetto arriva dal gateway del bridge lascia
+     l'operatore dove era. Abilitare le chiavi quindi *sostituisce* l'ammissione
+     per indirizzo con quella per identità, non ci si somma. L'avvio lo scrive a
+     log in chiaro, perché è il punto in cui abilitare un controllo ne allenta un
+     altro.
+  2. **Una configurazione che non parsa è fatale all'avvio.** Chi imposta
+     `EULLM_API_KEYS` ha chiesto autenticazione; servire aperto per un errore di
+     battitura è l'unico esito che non deve essere possibile. Stessa logica di
+     H0-B su `EULLM_AUDIT_DIR`.
+  3. **Il token da query string è accettato solo sul listener della UI.** Un
+     browser non può impostare un header alla prima navigazione, quindi
+     `?api_key=…` fa il bootstrap e la pagina lo mette in `sessionStorage` e lo
+     manda come header (`ui/app.js`, `withAuth`); l'URL viene ripulito subito con
+     `history.replaceState`. Sull'API è rifiutato: un token in una URL finisce
+     nei log dei proxy, nella cronologia del browser e nell'header `Referer`.
+  Quota per chiave a finestra fissa di un minuto → 429 con `Retry-After`. E
+  `user_id` nell'audit ora è l'id della chiave: verificato su hardware, un record
+  con `user_id='ci'` invece di `null`.
 
 - [x] **H1-B · `EULLM_ALLOWED_IPS` anche dall'ambiente di processo** *(P1)*
   `IpAllowlist::load_from_env_file` è invocata con il percorso letterale `".env"` relativo
@@ -244,7 +305,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   container l'allowlist è sempre e solo loopback. Leggere la variabile dall'ambiente con
   precedenza sul file, e loggare all'avvio la sorgente effettiva della configurazione.
 
-- [ ] **H1-C · Hardening del web tool** *(P1)*
+- [x] **H1-C · Hardening del web tool** *(P1)*
   `tools::fetch_url` (`tools/mod.rs:77-96`) scarica la URL estratta dal messaggio utente
   senza validazione dell'host, senza limiti sul corpo della risposta
   (`resp.text()`, `:94`) e seguendo i redirect con la policy di default di reqwest.
@@ -254,6 +315,27 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   `text()`, schema `https` per default con opt-in esplicito per `http`, e una allowlist di
   domini configurabile — che per il caso d'uso enterprise è la forma più difendibile della
   feature.
+  **Chiuso in `tools/guard.rs`** (nuovo modulo, 14 test). `https` obbligatorio
+  salvo `EULLM_WEB_ALLOW_HTTP=1`; l'host è risolto e **tutti** gli indirizzi
+  risultanti devono essere pubblici, non solo il primo — un nome con un record
+  pubblico e uno su `10.0.0.5` sarebbe altrimenti un lancio di dado dipendente
+  dall'ordine, cioè il tipo di buco che non si trova mai; la connessione è poi
+  fissata all'indirizzo verificato con `ClientBuilder::resolve`, che chiude il DNS
+  rebinding fra controllo e connect; i redirect sono disabilitati nel client e
+  seguiti a mano rifacendo *tutti* i controlli su ogni hop (validare la URL e poi
+  lasciar seguire i redirect non valida nulla); corpo letto a chunk con cap a
+  4 MiB; solo content type testuali, e un `Content-Type` assente è rifiutato
+  invece di essere assunto testuale; `EULLM_WEB_ALLOWED_DOMAINS` limita alle
+  fonti dichiarate, con match sui confini di label — `evil-example.com` non
+  soddisfa `example.com`.
+  Due dettagli coperti dai test perché sono i bypass classici: le forme IPv6 che
+  incapsulano un IPv4 (`::ffff:169.254.169.254`, NAT64 `64:ff9b::/96`, 6to4
+  `2002::/16`) sono giudicate sull'indirizzo che trasportano, non sulla
+  rappresentazione; e `0.0.0.0/8` è fra i non pubblici, il che è corretto di per
+  sé (RFC 6890) *e* impedisce che `::1` — che vive dentro il range
+  IPv4-compatible `::/96` — venga scartato a `0.0.0.1` e giudicato pubblico.
+  Questo secondo caso era un bug reale nella mia prima stesura, trovato dai test
+  e non dalla lettura.
 
 - [x] **H1-D · Validare i nomi file restituiti dall'API HuggingFace** *(P1)*
   `list_hf_ggufs` raccoglie i `siblings[].rfilename` filtrandoli solo per il suffisso
@@ -265,7 +347,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   Applicare lo stesso controllo ai campi `gguf_file`/`mmproj_file` letti dal manifest
   (`models/store.rs:159, 193`).
 
-- [ ] **H1-E · Restringere l'origine CORS e i percorsi modello accettati** *(P1)*
+- [x] **H1-E · Restringere l'origine CORS e i percorsi modello accettati** *(P1)*
   Due voci che condividono la stessa causa — il perimetro assume un chiamante fidato.
   (a) CORS è `allow_origin(Any)` + `allow_methods(Any)` + `allow_headers(Any)`
   (`api/mod.rs:594-597, 617-620`): quando la richiesta parte dal browser dell'utente l'IP
@@ -277,6 +359,29 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   file locale, e i messaggi d'errore propagati al client (`routes.rs:91-96`) distinguono i
   casi. Consentire percorsi arbitrari solo dietro un flag di avvio esplicito e uniformare il
   messaggio d'errore.
+  **Chiuso.** (a) `api/origin.rs` (nuovo modulo, 9 test) con
+  `EULLM_ALLOWED_ORIGINS`; il default consente qualunque origine di loopback su
+  qualunque porta — così la chat UI e un frontend locale continuano a funzionare
+  — e rifiuta tutto il resto. Il punto non ovvio: **CORS da solo non è il
+  controllo.** CORS decide se il browser restituisce la *risposta* alla pagina; la
+  richiesta viene comunque eseguita, e un `POST` con `Content-Type: text/plain`
+  non fa nemmeno preflight. Quindi la policy è usata due volte: come predicato
+  allow-origin del `CorsLayer`, e come `enforce_origin` che **rifiuta con 403**
+  ogni metodo non sicuro con `Origin` non consentita, prima dell'handler. Le
+  richieste senza header `Origin` restano intoccate — sono tutti i client non
+  browser, e romperle costerebbe compatibilità senza guadagnare niente, dato che
+  un programma può mandare gli header che vuole.
+  (b) `resolve_model` accetta percorsi arbitrari solo con
+  `EULLM_ALLOW_MODEL_PATHS=1`; senza, risolve nel model store e nei mount
+  deliberati (`/models`, `/data/models`, e solo con un nome file sicuro joinato,
+  altrimenti `../` uscirebbe subito), più il modello di lancio per nome o per
+  percorso esatto — mai per stem o prefisso — perché `/api/tags` annuncia quel
+  nome e rifiutare la propria risposta romperebbe `eullm run ./model.gguf` al
+  primo swap di ritorno. L'oracolo sul filesystem è chiuso: verificato che
+  `/etc/hostname` (esiste) e `/etc/eullm-definitely-not-here` (non esiste)
+  producono ora un errore identico a meno del nome che il chiamante ha fornito
+  lui stesso, mentre con il flag attivo il primo arriva al loader e dà un errore
+  diverso. Lo smoke test fa esattamente questo diff a ogni release.
 
 - [ ] **H1-F · Allineare l'Hub al perimetro dell'Engine** *(P1)*
   `hub/src/main.rs:65-69` ascolta su `0.0.0.0` senza allowlist, autenticazione, CORS né rate

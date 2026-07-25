@@ -1600,6 +1600,10 @@ async fn cmd_run(
     }
 
     let model_name: String;
+    // The resolved GGUF path, kept for the API's launch-model allowance (see
+    // `api::AppState::launch_model`) because `gguf_path` itself is moved into
+    // the loader.
+    let launch_gguf_path: Option<PathBuf>;
     let mut engine: Option<Arc<InferenceEngine>> = None;
     let mut scheduler: Option<inference::SchedulerHandle> = None;
     let mut kv_k_mib: f64 = 0.0;
@@ -1676,6 +1680,7 @@ async fn cmd_run(
 
     if let Some(gguf_path) = gguf_path {
         model_name = canonical_name.clone();
+        launch_gguf_path = Some(gguf_path.clone());
 
         println!("Loading GGUF: {}", gguf_path.display());
 
@@ -1785,6 +1790,7 @@ async fn cmd_run(
         }
     } else {
         model_name = canonical_name.clone();
+        launch_gguf_path = None;
         eprintln!("Warning: no GGUF file available for this model.");
         eprintln!("  The model may not have been published yet.");
         eprintln!("  API will start but inference requests will return 503.");
@@ -1823,7 +1829,9 @@ async fn cmd_run(
         println!("  GPU backend:   {gpu_backend}");
         println!("  CPU features:  {}", inference::cpu_features_summary());
         if rust_debug {
-            println!("  Rust debug:    enabled (NaN/Inf logit check active — extra per-token cost)");
+            println!(
+                "  Rust debug:    enabled (NaN/Inf logit check active — extra per-token cost)"
+            );
         }
         println!(
             "  GPU layers:    {}",
@@ -1938,6 +1946,11 @@ async fn cmd_run(
 
     // Start the API server in the background.
     let api_model_name = model_name.clone();
+    // The name/path pair the API may always resolve, even with
+    // EULLM_ALLOW_MODEL_PATHS off: `/api/tags` advertises this name, so a
+    // client echoing it back must not be refused. See
+    // `api::AppState::launch_model`.
+    let api_launch_model = launch_gguf_path.map(|p| (model_name.clone(), p));
     let api_store = ModelStore::default_store().expect("model store");
     tokio::spawn(async move {
         if let Err(e) = api::serve(api::ServeConfig {
@@ -1962,6 +1975,7 @@ async fn cmd_run(
             web_enabled: web,
             store: api_store,
             ui_port,
+            launch_model: api_launch_model,
         })
         .await
         {
@@ -2069,6 +2083,9 @@ async fn cmd_serve(
         web_enabled: web,
         store,
         ui_port,
+        // Headless serve starts with an empty slot: there is no launch model to
+        // grandfather in, so every name goes through the normal resolution.
+        launch_model: None,
     })
     .await
     {
@@ -2614,6 +2631,13 @@ async fn interactive_chat(
     } else {
         ctx_size
     };
+    // Resolved once, outside the loop: the policy cannot change while the
+    // session runs, and reading the environment per fetch would make the log
+    // line below a claim about a different policy than the one enforced.
+    let web_policy = crate::tools::guard::WebPolicy::from_env();
+    if web_enabled {
+        eprintln!("[web] enabled — fetchable: {}", web_policy.describe());
+    }
     use std::io::{BufRead, Write};
 
     let short = model_name.strip_prefix("eullm/").unwrap_or(model_name);
@@ -2777,6 +2801,7 @@ async fn interactive_chat(
                         effective_ctx,
                         existing_chars,
                         &input,
+                        &web_policy,
                     )
                     .await
                     {

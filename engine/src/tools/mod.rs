@@ -11,6 +11,14 @@
 //! If the fetched text fits in the budget, the full text is injected.
 //! If it exceeds the budget, paragraphs are scored by keyword overlap
 //! with the user's query and the top-scoring ones are selected (BM25-lite).
+//!
+//! **The URL is untrusted input.** It comes out of a user message, so on any
+//! shared or containerised deployment it is attacker-controlled. Everything
+//! about *what may be fetched* — scheme, host, redirect handling, body size,
+//! content type — lives in [`guard`], which is where to look before changing
+//! anything on this path.
+
+pub mod guard;
 
 /// Tokens reserved for the model's response (never consumed by injected content).
 const RESPONSE_RESERVE: usize = 512;
@@ -74,24 +82,12 @@ pub fn extract_urls(text: &str) -> Vec<String> {
 // ── HTTP fetch ────────────────────────────────────────────────────────────────
 
 /// Fetch a URL and return plain text content, stripped of HTML.
-pub async fn fetch_url(url: &str) -> Result<String, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (compatible; EULLM/0.4; +https://eullm.eu)")
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
-
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Fetch error for {url}: {e}"))?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {} fetching {url}", resp.status()));
-    }
-
-    let body = resp.text().await.map_err(|e| format!("Read error: {e}"))?;
+///
+/// `policy` decides what may be fetched at all — see [`guard`]. Callers on the
+/// request path should pass the policy resolved once at startup rather than
+/// re-reading the environment per request.
+pub async fn fetch_url(url: &str, policy: &guard::WebPolicy) -> Result<String, String> {
+    let body = guard::fetch_text(url, policy).await?;
     Ok(html_to_text(&body))
 }
 
@@ -291,8 +287,9 @@ pub async fn fetch_for_context(
     ctx_size: u32,
     prompt_chars: usize,
     query: &str,
+    policy: &guard::WebPolicy,
 ) -> Result<(String, bool), String> {
-    let text = fetch_url(url).await?;
+    let text = fetch_url(url, policy).await?;
 
     let available_tokens =
         (ctx_size as usize).saturating_sub(prompt_chars / CHARS_PER_TOKEN + RESPONSE_RESERVE);

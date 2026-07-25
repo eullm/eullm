@@ -16,6 +16,39 @@
 - **Docs:** Every public API documented
 - **No vendor lock-in:** Abstract external services behind interfaces
 - **Always check latest versions**: When adding or updating any dependency (Rust crates, Python packages, GitHub Actions), look up the current latest stable version online and use that. Never guess or copy version numbers from memory — they go stale quickly.
+- **Where configuration lives (MANDATORY)**: two channels, and the choice is not
+  a matter of taste.
+  - **Model and inference configuration → CLI flags**, subject to the `run`/`serve`
+    parity rule below. GPU layers, context size, KV cache types, batch size,
+    flash attention, MoE offload, checkpoints.
+  - **Perimeter and policy configuration → environment variables** (`EULLM_*`),
+    read from the process environment first and the `.env` file second, with the
+    effective source logged at startup. `EULLM_API_KEYS`, `EULLM_API_KEYS_FILE`,
+    `EULLM_ALLOWED_IPS`, `EULLM_ALLOWED_ORIGINS`, `EULLM_WEB_ALLOWED_DOMAINS`,
+    `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`,
+    `EULLM_ALLOW_MODEL_PATHS`, `EULLM_AUDIT_DIR`, `EULLM_MODELS_DIR`.
+
+  Three reasons, in order of how expensive they are to get wrong: a secret on a
+  command line is visible in `ps` to every local user on the box; every
+  non-interactive deployment (`docker run -e`, a compose `environment:` block, a
+  systemd `Environment=`) configures the environment and not argv; and a
+  perimeter setting added as a CLI flag has to be added to *both* `run` and
+  `serve` and wired through `ServeConfig`, which is exactly the mechanism that
+  produced the `cache_type_k`/`gpu_layers` divergence described below. An
+  environment variable read inside `api::serve` is read once, by both commands,
+  and cannot diverge.
+
+  When adding a perimeter setting: put the resolution in a pure `resolve()`
+  function so precedence is testable **without mutating process environment
+  variables** (which race against every other test in the binary — see
+  `api::ip_allowlist::resolve`, `api::auth::ApiKeys::resolve`,
+  `api::origin::AllowedOrigins::resolve`, `tools::guard::WebPolicy::resolve`),
+  log the effective value *and its source* at startup, and decide explicitly
+  whether unusable configuration is fatal. It is fatal for `EULLM_API_KEYS` and
+  for an explicitly set `EULLM_AUDIT_DIR`: someone who configured a control and
+  gets it silently disabled is worse off than someone whose process refused to
+  start.
+
 - **`eullm run` / `eullm serve` CLI flag parity (MANDATORY)**: any CLI flag added to `Commands::Run` (model-loading/inference config: GPU layers, context size, KV cache type, batch size, flash attention, etc.) MUST be added to `Commands::Serve` in the same PR, wired as the server's launch-time baseline for whatever model it loads/swaps to. `serve` is a headless daemon driven by per-request `model` fields — it must never hardcode a config option that `run` exposes. Found and fixed as a real bug (not by design) in July 2026: `cache_type_k`/`cache_type_v`/`gpu_layers` and others existed only on `Run`, silently forcing every model `serve` loaded into fixed defaults with no override. Where a per-request override already exists for a field (e.g. `ctx_size`, `batch_size` via `override_*.unwrap_or(self.*)` in `api/mod.rs`), extend that same pattern to new fields rather than only adding a launch-time flag — validate/clamp any override that arrives in a request body.
 
 ## CI/CD Rules (MANDATORY — do not remove or simplify)
