@@ -67,8 +67,8 @@ qwen3-0.6b: non-streaming, NDJSON su `/api/chat` e SSE su
 `/v1/chat/completions` tutti corretti, e **8 richieste concorrenti su 4 slot
 hanno risposto ognuna alla propria domanda** (2→20 … 9→90), che è l'invariante
 di H2-C sotto concorrenza reale. Il pull ha esercitato anche il download a range
-paralleli e la verifica SHA-256 contro il digest del catalogo. Un solo scostamento
-trovato, registrato come H2-I.
+paralleli e la verifica SHA-256 contro il digest del catalogo. Due scostamenti trovati e registrati: H2-I (404 invece di 500) e H3-N (banner
+assente su `serve`), il secondo emerso scrivendo l'harness.
 
 **Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
 troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
@@ -480,6 +480,20 @@ diligenza manuale.
   quindi `default-src 'self'` è compatibile) più `X-Content-Type-Options: nosniff` sono una
   difesa in profondità a costo nullo che rende la proprietà "zero risorse esterne"
   verificabile dal browser invece che solo dichiarata.
+
+- [ ] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
+  Il banner con `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache`
+  e `Threads` è stampato solo da `cmd_run` (`main.rs:1823-1882`); `cmd_serve`
+  stampa sei righe e nessuna di queste. La riga `CPU features` è stata aggiunta
+  in 0.6.33 proprio per diagnosticare l'issue #140, ma chi testa attraverso
+  `serve` — cioè qualunque harness automatizzato, e chiunque usi l'engine come
+  backend — non la vede mai. Trovato scrivendo `tools/smoke_test.py`, che ha
+  dovuto avviare un secondo processo `run` solo per catturarla. È la stessa
+  classe di problema della regola obbligatoria di parità dei flag `run`/`serve`
+  nel `CLAUDE.md`, applicata all'output diagnostico invece che alla
+  configurazione: estrarre la stampa del banner in una funzione condivisa e
+  chiamarla da entrambi i comandi, emettendola dopo il primo caricamento del
+  modello nel caso di `serve` (che parte senza modello).
 
 ---
 
