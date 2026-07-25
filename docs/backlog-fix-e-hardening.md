@@ -91,20 +91,33 @@ H2-B è stato plausibilmente raggiunto (500 byte trasferiti integralmente a un
 client lento, contro i 12 eventi del run ARM che non arrivano alla capacità di
 256 del canale).
 
-**Quello che il controllo `--fit` non ha ancora dimostrato.** `--fit` con
-qwen3-4b ha risposto `model (2.33 GiB) fits fully in 14.65 GiB free VRAM`, e il
-modello ha poi servito una richiesta: il percorso funziona, ma **non discrimina
-H2-A**. L'errore di stima era per token e per layer, quindi diventa
-decision-changing solo quando la KV cache domina il budget, non quando i pesi
-sono il 16% della scheda: a `--ctx-size 32768` sia l'aritmetica corretta sia
-quella che sottostimava concludono "fits fully". Con 14,65 GiB liberi, `usable`
-≈ 13,6 GiB e 36 layer a `head_dim` 128, le due stime divergono in decisione
-sopra ~82k token di contesto, dove la corretta impone un offload parziale e la
-vecchia dichiarava un fit pieno che poi moriva in allocazione. Per questo
-`tools/smoke_test.py` ha ora `--fit-ctx` e dichiara esplicitamente nel report
-quando un "fits fully" non è una conferma. Il controllo va rifatto con
-`--fit-ctx 98304`; finché non è fatto, H2-A resta verificata solo dai test
-unitari, non su hardware.
+**H2-A verificata su hardware, non solo dai test unitari.** Il primo run CUDA
+non dimostrava niente sul dimensionamento della KV cache: a `--ctx-size 32768`
+`--fit` rispondeva `model (2.33 GiB) fits fully in 14.65 GiB free VRAM`, che è
+la conclusione a cui arriva *anche* l'aritmetica che sottostimava. L'errore era
+per token e per layer, quindi cambia la decisione solo quando la cache — non i
+pesi — è ciò che riempie la scheda. Rifatto con `--ctx-size 98304`:
+
+```
+[EULLM] --fit: model does not fit fully (14.67 GiB free VRAM, model 2.33 GiB).
+        Offloading 30/36 layers, rest in RAM
+```
+
+e il modello ha poi servito una richiesta (HTTP 200). I numeri tornano
+esattamente: `usable` = 14,67 × 0,97 − 640 MiB = 13,605 GiB; pesi per layer
+0,0647 GiB; KV per layer a `key_length` 128 = 98304 × 8 × 128 × 2 × 2 B =
+0,375 GiB → ⌊13,605 / 0,4397⌋ = **30 layer su 36**, che è ciò che l'engine ha
+stampato. Con la vecchia assunzione `n_embd / n_head` = 2560/32 = 80 la KV per
+layer sarebbe stata 0,234 GiB → ⌊13,605 / 0,2991⌋ = 45 ≥ 36 → **`FitsFully`**,
+cioè offload di tutti i 36 layer, che a `head_dim` 128 reale richiedono 15,83 GiB
+contro 14,67 liberi: OOM in allocazione. È esattamente il fallimento che `--fit`
+esiste per evitare, e questo run è la prova che ora non si verifica.
+
+Da qui una regola di metodo, perché il primo run CUDA era un falso verde:
+un controllo che passa sia con il bug sia senza non è una verifica. Per questo
+`tools/smoke_test.py` ha ora `--fit-ctx` e **dichiara nel report in quale regime
+è finito**, etichettando un `fits fully` come non discriminante invece di
+lasciarlo leggere come conferma.
 
 **Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
 troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
@@ -301,6 +314,9 @@ esterni non si fidano dei valori che leggono.
   quanti entrino e il caricamento fallisce per OOM — su un modello presente nel catalogo.
   Leggere le due chiavi nel parser (che è già bounds-checked e facile da estendere) e usarle
   quando presenti, con l'attuale formula come fallback.
+  **Verificata su RTX 5070 Ti** a `--ctx-size 98304`: 30/36 layer offloadati e
+  richiesta servita, dove la vecchia aritmetica avrebbe dichiarato un fit pieno
+  da 15,83 GiB su 14,67 liberi. Aritmetica completa nella sezione Stato.
 
 - [x] **H2-B · Backpressure invece di scarto silenzioso dei token** *(P1)*
   `send_or_detect_disconnect` (`scheduler.rs:1734-1739`) tratta correttamente un canale
