@@ -26,12 +26,29 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 
 ---
 
-## H0 — Bloccanti
+## Stato
+
+**H0 chiusa.** Tutte e sei le voci bloccanti sono corrette, con test:
+`api::routes::tests` (6 nuovi test sui limiti degli override), `audit::tests`
+(3 sulla precedenza di `EULLM_AUDIT_DIR` e sulla verifica di scrivibilità),
+`tests/test_pipeline.py` (5 sull'ordine degli stadi e sul contratto GGUF),
+`tests/test_anonymize.py` (5 sui default e sul contratto del record).
+Engine: 100 test verdi, clippy pulito con `-D warnings`. Forge: 136 test verdi,
+ruff pulito su `eullm_forge/`.
+
+Prossimo blocco consigliato: **H1-D** e **H1-B** (entrambe poche righe, e H1-D
+riusa una funzione che esiste già), poi **H2-A** (errore dimensionale che causa
+OOM su un modello del catalogo), poi **H3-A** (la CI non presidia una
+Definition of Done già scritta).
+
+---
+
+## H0 — Bloccanti  ·  ✅ chiuse
 
 **Gate di uscita:** nessun componente perde silenziosamente dati che dichiara di gestire;
 nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza limiti.
 
-- [ ] **H0-A · Limiti sugli override ricevuti nel body delle richieste** *(P0)*
+- [x] **H0-A · Limiti sugli override ricevuti nel body delle richieste** *(P0)*
   `batch_size` e `ctx_size` arrivano dal body a `swap_model` senza controllo di intervallo
   (`api/routes.rs:513-520, 656-663, 941-948` → `api/mod.rs:197, 220` →
   `inference/scheduler.rs:679, 793`). Valori fuori scala portano lo scheduler in uno stato
@@ -44,7 +61,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   Sinergia con `0.7-C` (backpressure e codici di errore), da cui questa voce è la
   specializzazione concreta sui due campi che oggi non hanno limiti.
 
-- [ ] **H0-B · L'audit trail deve rispettare `EULLM_AUDIT_DIR`** *(P0)*
+- [x] **H0-B · L'audit trail deve rispettare `EULLM_AUDIT_DIR`** *(P0)*
   `engine/Dockerfile:47` imposta `ENV EULLM_AUDIT_DIR=/data/audit` e `docker-compose.yml`
   monta un volume su quel percorso, ma **la variabile non è letta da nessuna parte nel
   codice**: `AuditLogger::default_path()` (`audit/mod.rs:88-96`) usa esclusivamente
@@ -54,7 +71,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   rifiutare l'avvio se la directory non è scrivibile. Una riga per il fix, più il controllo
   all'avvio.
 
-- [ ] **H0-C · L'adapter di identità deve arrivare nel GGUF finale** *(P0)*
+- [x] **H0-C · L'adapter di identità deve arrivare nel GGUF finale** *(P0)*
   In `forge/eullm_forge/pipeline.py:158-176` lo stadio 4 assegna `adapter_path` ma non
   aggiorna `current_model_path` né fonde l'adapter nei pesi; lo stadio 5 esporta quindi il
   modello **pre-LoRA**. `eullm forge --identity "…"` completa senza errori e produce un
@@ -65,7 +82,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   e aggiungere un test che verifichi che il path esportato discende dallo stadio 4 quando
   `skip_identity` è falso.
 
-- [ ] **H0-D · Riordinare la pipeline per il target GGUF** *(P0, insieme a H0-C)*
+- [x] **H0-D · Riordinare la pipeline per il target GGUF** *(P0, insieme a H0-C)*
   Lo stadio 3 di `pipeline.py` produce un checkpoint AWQ/GPTQ (`quantize.py:132-170`;
   `profiles/legal_it.yaml:24` specifica `method: awq`) e lo stadio 5 gli passa
   `convert_hf_to_gguf.py --outtype f16` (`export.py:204-212`), che legge tensori fp16/bf16 e
@@ -79,7 +96,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   pipeline, che oggi descrive l'ordine sbagliato. Da coordinare con la decisione sulla
   ricetta canonica già aperta in `forge-research-roadmap.md` §"To fix / reconcile".
 
-- [ ] **H0-E · NER attivo per default nell'anonimizzazione** *(P0)*
+- [x] **H0-E · NER attivo per default nell'anonimizzazione** *(P0)*
   `AnonymiserConfig.use_ner` è `False` (`datasets/anonymize.py:190`) e
   `scripts/anonymize_italgiure.py:122-125, 164` lo attiva solo con `--ner`. Nella
   configurazione predefinita l'unico livello che redige nomi di persona è
@@ -92,7 +109,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   Il principio vincolante "GDPR-safe dataset: anonymized corpus only" di
   `forge-research-roadmap.md` non è oggi garantito dal default.
 
-- [ ] **H0-F · Allineare il claim di anonimizzazione e rimuovere il riferimento alla fonte** *(P0)*
+- [x] **H0-F · Allineare il claim di anonimizzazione e rimuovere il riferimento alla fonte** *(P0)*
   Il docstring di `anonymize.py:33` afferma «the redaction is one-way: original text is not
   recoverable from the output». Non è così: `anonymize_record` (`:589-597`) sostituisce solo
   il campo `text`, mentre il record prodotto da `datasets/italgiure.py:190-208` conserva

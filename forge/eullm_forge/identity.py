@@ -352,3 +352,59 @@ def fine_tune_identity(config: IdentityConfig) -> str:
     logger.info("LoRA adapter saved to: %s", adapter_path)
 
     return adapter_path
+
+
+def merge_identity_adapter(
+    base_model_path: str,
+    adapter_path: str,
+    output_path: str | None = None,
+) -> str:
+    """Merge a LoRA adapter into its base weights and save a full checkpoint.
+
+    A LoRA adapter is a set of low-rank deltas, not a model: `export_gguf`
+    (and llama.cpp's converter behind it) reads a full set of base weights and
+    has no notion of an adapter directory. Merging is therefore what makes the
+    identity actually reach the exported GGUF — without this step the adapter
+    is written to disk and then ignored, which is exactly what
+    `run_pipeline` used to do.
+
+    Args:
+        base_model_path: The model the adapter was trained on.
+        adapter_path: Directory produced by `fine_tune_identity`.
+        output_path: Where to write the merged checkpoint. Defaults to a
+            sibling ``identity-merged`` directory next to the adapter.
+
+    Returns:
+        Path to the merged model directory, ready for `export_gguf`.
+    """
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    out = output_path or str(Path(adapter_path).parent / "identity-merged")
+
+    logger.info("Merging LoRA adapter into base weights")
+    logger.info("  Base:    %s", base_model_path)
+    logger.info("  Adapter: %s", adapter_path)
+    logger.info("  Output:  %s", out)
+
+    # `device_map=None` + default dtype keeps this a CPU-only operation: the
+    # merge is a weight-space addition, so it does not need the GPU and can run
+    # on the export box alongside the GGUF conversion.
+    base = AutoModelForCausalLM.from_pretrained(base_model_path)
+    merged = PeftModel.from_pretrained(base, adapter_path).merge_and_unload()
+
+    Path(out).mkdir(parents=True, exist_ok=True)
+    merged.save_pretrained(out)
+
+    # The tokenizer must travel with the merged weights — the converter reads
+    # it from the same directory. Prefer the adapter's copy (saved by
+    # `fine_tune_identity`, so it matches any tokens the identity added) and
+    # fall back to the base model's.
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(adapter_path)
+    except (OSError, ValueError):
+        tokenizer = AutoTokenizer.from_pretrained(base_model_path)
+    tokenizer.save_pretrained(out)
+
+    logger.info("Merged model saved to: %s", out)
+    return out

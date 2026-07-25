@@ -618,3 +618,51 @@ def test_idempotent_on_already_anonymised_text():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+# ── Defaults and record-level contract ──────────────────────────────────
+#
+# The default config used to have NER off, which meant Title-Case names were
+# matched by no layer at all while the caller believed the text was redacted.
+# And `anonymize_record` used to keep `url` — a direct link to the original
+# un-redacted PDF — making every redaction in the text recoverable with one
+# HTTP request.
+
+def test_ner_is_enabled_by_default():
+    # Only the all-caps heuristic matches uppercase runs; Title-Case names
+    # depend on the NER layer, so it must not be opt-in.
+    assert AnonymiserConfig().use_ner is True
+
+
+def test_default_config_drops_the_source_url():
+    assert AnonymiserConfig().drop_source_url is True
+
+
+def test_anonymize_record_drops_the_url_to_the_original_pdf():
+    rec = {
+        "text": "Il ricorrente ROSSI MARIO ha proposto ricorso.",
+        "url": "https://www.italgiure.giustizia.it/xway/.../snciv@s10@a2024@n01234.pdf",
+        "sentence_id": "civile/2024/1234",
+        "metadata": {"ecli": "ECLI:IT:CASS:2024:1234CIV"},
+    }
+    out = anonymize_record(rec)
+    assert "url" not in out, "the pointer to the un-redacted source must not survive"
+    # The original dict is never mutated.
+    assert "url" in rec
+    # Operational identifiers are deliberately kept (dedup, resume,
+    # provenance) — they are also re-identifying, which is why the module
+    # documents the output as pseudonymised rather than anonymous.
+    assert out["sentence_id"] == "civile/2024/1234"
+    assert out["metadata"]["ecli"] == "ECLI:IT:CASS:2024:1234CIV"
+    assert "anonymization" in out["metadata"]
+
+
+def test_url_retention_is_opt_in_for_corpus_building():
+    rec = {"text": "Testo.", "url": "https://example.invalid/x.pdf"}
+    out = anonymize_record(rec, config=AnonymiserConfig(drop_source_url=False))
+    assert out["url"] == "https://example.invalid/x.pdf"
+
+
+def test_records_without_text_pass_through_untouched():
+    rec = {"url": "https://example.invalid/x.pdf", "metadata": {}}
+    assert anonymize_record(rec) is rec

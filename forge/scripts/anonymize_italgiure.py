@@ -10,16 +10,19 @@ records have been processed per slice, so re-runs pick up where they left
 off. Output files are only truncated on the first write.
 
 Usage:
-    # Regex-only run (fast, no dependencies):
+    # Default run — regex layers + spaCy NER for person names. Needs the
+    # Italian model (pip install 'eullm-forge[legal]', or
+    # python -m spacy download it_core_news_lg); the script exits non-zero
+    # rather than proceeding without it.
     python forge/scripts/anonymize_italgiure.py ~/italgiure_corpus
-
-    # With spaCy NER (better person coverage, requires spaCy model):
-    python -m spacy download it_core_news_lg
-    python forge/scripts/anonymize_italgiure.py ~/italgiure_corpus --ner
 
     # Dry run on a sample:
     python forge/scripts/anonymize_italgiure.py ~/italgiure_corpus \\
         --sample 20 --dry-run
+
+    # Regex-only, no spaCy. Only fully-uppercase names get redacted —
+    # Title-Case names in the body of the reasoning remain in the output.
+    python forge/scripts/anonymize_italgiure.py ~/italgiure_corpus --no-ner
 """
 
 from __future__ import annotations
@@ -119,9 +122,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("corpus_dir", type=Path, help="Directory with italgiure_*.jsonl")
     parser.add_argument(
-        "--ner",
+        "--no-ner",
         action="store_true",
-        help="Enable spaCy NER layer for person names (slower, better coverage)",
+        help=(
+            "Disable the spaCy NER layer. NOT RECOMMENDED: without it only "
+            "fully-uppercase names are redacted, and Title-Case names in the "
+            "body of the reasoning pass through in clear text."
+        ),
     )
     parser.add_argument(
         "--ner-model",
@@ -161,19 +168,36 @@ def main(argv: list[str] | None = None) -> int:
     if not sources:
         parser.error(f"No italgiure_*.jsonl files under {corpus}")
 
+    use_ner = not args.no_ner
     config = AnonymiserConfig(
-        use_ner=args.ner,
+        use_ner=use_ner,
         redact_allcaps_names=not args.no_allcaps,
     )
 
     ner = None
-    if args.ner:
+    if use_ner:
         print(f"Loading spaCy NER model {args.ner_model}...", file=sys.stderr)
         try:
             ner = load_spacy_ner(args.ner_model)
         except RuntimeError as exc:
+            # Hard failure, never a silent downgrade: continuing without NER
+            # would emit a corpus the caller believes is redacted while
+            # Title-Case names pass through untouched.
             print(f"ERROR: {exc}", file=sys.stderr)
+            print(
+                "Install it with: pip install 'eullm-forge[legal]'\n"
+                "Or, if you accept that only fully-uppercase names will be "
+                "redacted, re-run with --no-ner.",
+                file=sys.stderr,
+            )
             return 2
+    else:
+        print(
+            "WARNING: --no-ner — only fully-uppercase names will be redacted. "
+            "Title-Case names in the body of the reasoning will remain in the "
+            "output. Do not treat this corpus as redacted for personal names.",
+            file=sys.stderr,
+        )
 
     progress_path = corpus / PROGRESS_FILE
     progress: dict[str, int] = {}

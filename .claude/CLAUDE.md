@@ -291,7 +291,7 @@ Apache 2.0. All code must be Apache 2.0 compatible. Never introduce dependencies
 
 ### 2. EULLM Forge
 - CLI + notebooks for **verticalizzazione** (domain specialization) and compression of LLMs
-- Full pipeline: base model → structural pruning → knowledge distillation → quantization → identity fine-tuning → GGUF export
+- Full pipeline: base model → structural pruning → knowledge distillation → identity fine-tuning (LoRA, merged) → GGUF export (F16 → Q4_K_M via llama-quantize)
 - Goal: take large models (14B–72B) and compress them to run on consumer GPUs (7B–8B, ~4-6GB GGUF)
 - Runs on HuggingFace Inference Endpoints or EU cloud GPU (Hetzner/OVH with A100/H100)
 - **Tech:** Python, PyTorch, NVIDIA TensorRT Model Optimizer, LLaMA-Factory, PEFT
@@ -312,11 +312,30 @@ The core value proposition: take a large generalist model and **verticalize** it
 Base model (14B–72B)
   → 1. Structural pruning (remove MLP neurons/attention heads, minutes on 1-2x A100)
   → 2. Knowledge distillation (teacher→student recovery, days on 2-8x A100)
-  → 3. Quantization (FP16→Q4_K_M, minutes, nearly free)
-  → 4. Identity fine-tuning (LoRA: domain corpus + branding, 1-2h on 1x A100)
-  → 5. GGUF export (minutes, CPU only)
+  → 3. Identity fine-tuning (LoRA: domain corpus + branding, 1-2h on 1x A100)
+       ...then MERGED into the weights — an adapter directory is not a model
+  → 4. HF-level quantization (AWQ/GPTQ) — SKIPPED for GGUF targets
+  → 5. GGUF export: convert to F16, then llama-quantize → Q4_K_M (minutes, CPU only)
 Output: 7B Q4 model (~4.5GB) that runs on any laptop with 8GB RAM
 ```
+
+**Two ordering rules, both found as real bugs in July 2026 and both easy to
+reintroduce:**
+
+1. **Identity comes before quantization, and its adapter must be merged.**
+   `fine_tune_identity` returns a LoRA *adapter* path, not a model.
+   `pipeline.py` used to assign it to a local variable, log it, and never wire
+   it into `current_model_path` — so stage 5 exported the pre-LoRA weights and
+   `eullm forge --identity "…"` produced a GGUF with no identity, after paying
+   for the training. Any change to `run_pipeline` must keep the exported path
+   descending from the identity stage; `test_pipeline.py` asserts exactly that.
+2. **AWQ/GPTQ is not on the GGUF path.** llama.cpp's `convert_hf_to_gguf.py`
+   reads fp16/bf16 safetensors and cannot process `qweight`/`qzeros`/`scales`
+   tensors, so "AWQ then GGUF" fails at the last stage after the whole
+   pipeline has run — and it is a redundant second quantization anyway, since
+   `llama-quantize` is what produces Q4_K_M. The shipped profiles set
+   `quantization.method: none`; `_validate_stage_combination` rejects the
+   contradictory combination up front rather than letting it fail late.
 
 ### Demo Models (Phase 1)
 
@@ -350,7 +369,7 @@ Llama (Meta) is excluded from the default catalog due to "Built with Llama" bran
 - **Python for Forge:** PyTorch ecosystem, Colab compatibility
 - **Not a fork of Ollama:** API compatibility, not code compatibility. Clean Rust implementation with native audit trail
 - **Streaming via mpsc channels:** inference engine sends tokens through `tokio::sync::mpsc`. Ollama endpoints (`/api/generate`, `/api/chat`) use **NDJSON** (newline-delimited JSON, `application/x-ndjson`) — one JSON object per line, no `data:` prefix. OpenAI endpoint (`/v1/chat/completions`) uses **SSE** (Server-Sent Events, `data:` prefix). This matches exactly what Ollama does, so any Ollama client works without modification.
-- **Compression strategy:** pruning (MLP-focused) → distillation → quantization → identity LoRA fine-tuning (validated by NVIDIA Minitron research)
+- **Compression strategy:** pruning (MLP-focused) → distillation → identity LoRA fine-tuning (merged into the weights) → GGUF quantization (validated by NVIDIA Minitron research). See the Pipeline section for why identity precedes quantization and why AWQ/GPTQ is not on the GGUF path.
 - **Iterative pruning for >50% compression:** compress 30%, distill, compress again (NVIDIA recommendation)
 - **Continuous batching scheduler:** dedicated OS thread runs a decode loop that processes multiple requests in parallel (up to `max_batch_size`). Prefill + decode in a single `LlamaBatch`, per-sequence KV cache management, near-linear throughput scaling. This is a key differentiator over basic mutex-guarded inference.
 - **Docker support:** multi-stage builds for Engine/Hub (Rust → debian-slim ~50MB), NVIDIA CUDA base for Forge. docker-compose.yml orchestrates all services with GPU profiles

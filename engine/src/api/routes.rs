@@ -31,6 +31,90 @@ use crate::tools;
 
 type S = Arc<AppState>;
 
+/// Upper bound accepted for a request's `batch_size` override.
+///
+/// The override reaches `SchedulerConfig::max_batch_size` (one KV-cache slot
+/// each) and `queue_capacity` (= `batch_size * 8`), so an unbounded value both
+/// asks for an absurd allocation and — because slot ids are `i32` — can wrap to
+/// zero usable slots while still reporting the model as loaded. 64 is far above
+/// any real concurrency for a single-GPU appliance.
+const MAX_BATCH_SIZE_OVERRIDE: usize = 64;
+
+/// Bounds accepted for a request's `ctx_size` override. The lower bound leaves
+/// room for a prompt plus at least one output token; the upper bound is the
+/// largest context any current architecture declares, and keeps the value from
+/// becoming a KV-cache allocation that fails *after* `swap_model` has already
+/// unloaded the previous model.
+const MIN_CTX_SIZE_OVERRIDE: u32 = 512;
+const MAX_CTX_SIZE_OVERRIDE: u32 = 1_048_576;
+
+/// Error shape returned by the JSON handlers: an HTTP status plus a JSON body.
+type ApiError = (StatusCode, Json<Value>);
+
+/// Validated `(batch_size, ctx_size)` slot overrides read from a request body.
+/// `None` in either position means "keep the launch-time value".
+type SlotOverrides = (Option<usize>, Option<u32>);
+
+/// Read the `batch_size` / `ctx_size` slot overrides from a request body,
+/// rejecting anything outside a serviceable range with HTTP 400.
+///
+/// Both fields are forwarded to `AppState::swap_model`, which rebuilds the
+/// scheduler and reallocates the KV cache. A value that is merely *parsed*
+/// rather than *validated* therefore turns a single request into a
+/// configuration change that can leave the server unable to serve anything
+/// until it is restarted — so an out-of-range value has to fail loudly here
+/// instead of being clamped silently (a client asking for 4096 slots has a bug
+/// worth surfacing, not an intent worth guessing).
+///
+/// An absent field yields `None` (keep the launch-time value). A field that is
+/// present but not a non-negative integer is an error, not an absence: silently
+/// ignoring `{"batch_size": -1}` would hide a client bug behind unchanged
+/// behaviour.
+fn parse_slot_overrides(body: &Value) -> Result<SlotOverrides, ApiError> {
+    let bad = |field: &str, detail: String| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("invalid `{field}`: {detail}") })),
+        )
+    };
+
+    let batch_size = match body.get("batch_size") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or_else(|| bad("batch_size", "expected a non-negative integer".into()))?;
+            if n == 0 || n > MAX_BATCH_SIZE_OVERRIDE as u64 {
+                return Err(bad(
+                    "batch_size",
+                    format!("must be between 1 and {MAX_BATCH_SIZE_OVERRIDE}, got {n}"),
+                ));
+            }
+            Some(n as usize)
+        }
+    };
+
+    let ctx_size = match body.get("ctx_size") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let n = v
+                .as_u64()
+                .ok_or_else(|| bad("ctx_size", "expected a non-negative integer".into()))?;
+            if n < MIN_CTX_SIZE_OVERRIDE as u64 || n > MAX_CTX_SIZE_OVERRIDE as u64 {
+                return Err(bad(
+                    "ctx_size",
+                    format!(
+                        "must be between {MIN_CTX_SIZE_OVERRIDE} and {MAX_CTX_SIZE_OVERRIDE}, got {n}"
+                    ),
+                ));
+            }
+            Some(n as u32)
+        }
+    };
+
+    Ok((batch_size, ctx_size))
+}
+
 /// EULLM native API routes (`/api/*`).
 pub fn api_routes() -> Router<S> {
     Router::new()
@@ -510,14 +594,7 @@ async fn generate(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let override_batch_size = body
-        .get("batch_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
-    let override_ctx_size = body
-        .get("ctx_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
+    let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
@@ -653,14 +730,7 @@ async fn chat(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let override_batch_size = body
-        .get("batch_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
-    let override_ctx_size = body
-        .get("ctx_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
+    let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
@@ -938,14 +1008,7 @@ async fn chat_completions(
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
     let requested = body.get("model").and_then(|v| v.as_str());
-    let override_batch_size = body
-        .get("batch_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
-    let override_ctx_size = body
-        .get("ctx_size")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as u32);
+    let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
 
@@ -1362,5 +1425,93 @@ mod tests {
 
         let sp = parse_generate_params(&json!({ "options": { "num_predict": 256 } }));
         assert_eq!(sp.max_tokens, 256);
+    }
+
+    // ── Slot override validation ────────────────────────────────────────
+    //
+    // These two fields are the only request-body values that reach a
+    // model-load decision (scheduler slot count, KV-cache size). Before
+    // validation existed, `{"batch_size": 4294967296}` truncated to zero
+    // usable slots — the model reported as loaded while no request could
+    // ever be served again — and an absurd `ctx_size` failed the context
+    // allocation *after* swap_model had already unloaded the previous
+    // model, leaving the slot empty.
+
+    fn overrides(body: Value) -> Result<SlotOverrides, StatusCode> {
+        parse_slot_overrides(&body).map_err(|(status, _)| status)
+    }
+
+    #[test]
+    fn absent_overrides_keep_the_launch_time_values() {
+        assert_eq!(overrides(json!({})), Ok((None, None)));
+        assert_eq!(
+            overrides(json!({ "batch_size": null, "ctx_size": null })),
+            Ok((None, None))
+        );
+    }
+
+    #[test]
+    fn in_range_overrides_are_accepted() {
+        assert_eq!(
+            overrides(json!({ "batch_size": 8, "ctx_size": 32768 })),
+            Ok((Some(8), Some(32768)))
+        );
+        // Exact bounds are inclusive.
+        assert_eq!(
+            overrides(json!({ "batch_size": MAX_BATCH_SIZE_OVERRIDE })),
+            Ok((Some(MAX_BATCH_SIZE_OVERRIDE), None))
+        );
+        assert_eq!(
+            overrides(json!({ "ctx_size": MIN_CTX_SIZE_OVERRIDE })),
+            Ok((None, Some(MIN_CTX_SIZE_OVERRIDE)))
+        );
+    }
+
+    #[test]
+    fn batch_size_beyond_i32_no_longer_wedges_the_scheduler() {
+        // The historical case: 2^32 truncated to 0 slots via `as i32`.
+        assert_eq!(
+            overrides(json!({ "batch_size": 4_294_967_296u64 })),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn out_of_range_overrides_are_rejected() {
+        assert_eq!(
+            overrides(json!({ "batch_size": 0 })),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            overrides(json!({ "batch_size": MAX_BATCH_SIZE_OVERRIDE + 1 })),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            overrides(json!({ "ctx_size": MIN_CTX_SIZE_OVERRIDE - 1 })),
+            Err(StatusCode::BAD_REQUEST)
+        );
+        assert_eq!(
+            overrides(json!({ "ctx_size": u32::MAX })),
+            Err(StatusCode::BAD_REQUEST)
+        );
+    }
+
+    #[test]
+    fn a_present_but_unparseable_override_is_an_error_not_an_absence() {
+        // Silently treating these as "not supplied" would hide a client bug
+        // behind unchanged server behaviour.
+        for body in [
+            json!({ "batch_size": -1 }),
+            json!({ "batch_size": "8" }),
+            json!({ "batch_size": 1.5 }),
+            json!({ "ctx_size": -4096 }),
+            json!({ "ctx_size": "32768" }),
+        ] {
+            assert_eq!(
+                overrides(body.clone()),
+                Err(StatusCode::BAD_REQUEST),
+                "expected 400 for {body}"
+            );
+        }
     }
 }
