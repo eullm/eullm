@@ -28,7 +28,7 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 
 ## Stato
 
-**Chiuse:** tutte le H0, più H1-B, H1-D e H2-A.
+**Chiuse:** tutte le H0, più H1-B, H1-D, H2-A, H2-B, H2-C e H3-M.
 
 Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
 `-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
@@ -45,9 +45,17 @@ modifica in cambio di un'assicurazione contro un evento che non si è mai
 verificato. Il buco reale è un altro e si chiude senza run aggiuntivi — vedi
 H3-M.
 
-Prossimo blocco consigliato: **H3-M** (a costo zero), poi **H1-A**
-(autenticazione a token, che sblocca anche H1-E e `user_id` nell'audit), poi
-**H2-B**/**H2-C** (perdita silenziosa di token e invariante dei logit).
+H3-M è agganciata al solo job `release`, non ai sei job di build: compilare da
+un commit non verificato non costa nulla che conti (runner standard su repo
+pubblico), mentre *pubblicare* da lì è il danno. Tenere i build invariati
+mantiene la modifica leggibile nel workflow che storicamente è il posto più
+costoso in cui sbagliare. È anche l'unica modifica di questo blocco che non è
+verificabile in locale: la logica di polling è stata simulata con uno stub di
+`gh` sui cinque esiti (verde, rosso, run assente, in corso→verde, timeout).
+
+Prossimo blocco consigliato: **H1-A** (autenticazione a token: sblocca anche
+H1-E e dà finalmente un soggetto a `user_id` nell'audit), poi **H2-F**
+(guardie sul patcher GGUF), poi **H3-C** (`cargo deny` e `pip-audit` in CI).
 
 ---
 
@@ -231,7 +239,7 @@ esterni non si fidano dei valori che leggono.
   Leggere le due chiavi nel parser (che è già bounds-checked e facile da estendere) e usarle
   quando presenti, con l'attuale formula come fallback.
 
-- [ ] **H2-B · Backpressure invece di scarto silenzioso dei token** *(P1)*
+- [x] **H2-B · Backpressure invece di scarto silenzioso dei token** *(P1)*
   `send_or_detect_disconnect` (`scheduler.rs:1734-1739`) tratta correttamente un canale
   pieno come "client lento, non disconnesso", ma **scarta il token** e prosegue: il client
   riceve testo con parti mancanti, senza alcun errore, e il conteggio finale non corrisponde
@@ -240,7 +248,7 @@ esterni non si fidano dei valori che leggono.
   (`scheduler.rs:236`), quindi la condizione richiede un consumatore molto lento — ma è una
   perdita di dati silenziosa, non una degradazione.
 
-- [ ] **H2-C · Trattare come errore il fallimento di `decode_batch.add`** *(P1)*
+- [x] **H2-C · Trattare come errore il fallimento di `decode_batch.add`** *(P1)*
   Alla fase 3 del loop un `add` fallito produce solo un `warn` e la sequenza non entra nel
   batch (`scheduler.rs:1236-1244`), ma la fase 5 le assegna comunque un `logit_idx`
   (`:1282-1304`): da quel punto i logit di tutte le sequenze successive sono disallineati e
@@ -405,7 +413,7 @@ diligenza manuale.
   (`:141-165`). Tenere un handle aperto con `fsync` periodico, impostare permessi
   restrittivi sulla directory, aggiungere rotazione e rendere `count` incrementale.
 
-- [ ] **H3-M · Un tag di release non deve poter partire da un `main` rosso** *(P1)*
+- [x] **H3-M · Un tag di release non deve poter partire da un `main` rosso** *(P1)*
   `release-engine.yml` si attiva su `push: tags: [engine-v*, EuLLM-v*]` e non ha
   alcuna dipendenza dallo stato di `ci.yml` (nessun `workflow_run`, nessun
   controllo di check suite). Un tag su un commit la cui CI è fallita — o non è
