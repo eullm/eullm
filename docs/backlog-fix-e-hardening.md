@@ -26,12 +26,37 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 
 ---
 
-## H0 — Bloccanti
+## Stato
+
+**Chiuse:** tutte le H0, più H1-B, H1-D e H2-A.
+
+Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
+`-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
+degli override da body (7), precedenza di `EULLM_AUDIT_DIR` e scrivibilità (3),
+precedenza ambiente/file per l'allowlist (5), sicurezza dei nomi file esterni
+(4), `attention.key_length` nel dimensionamento KV (5), ordine degli stadi
+della pipeline e contratto GGUF (5), default e contratto del record di
+anonimizzazione (5).
+
+**Non facciamo il trigger `pull_request` sulla CI** (era in H3-A). La CI gira
+solo su `push: [main]` e impiega ~7 minuti stabili su 30 run consecutivi, tutte
+verdi: aggiungere la validazione pre-merge raddoppierebbe i run per ogni
+modifica in cambio di un'assicurazione contro un evento che non si è mai
+verificato. Il buco reale è un altro e si chiude senza run aggiuntivi — vedi
+H3-M.
+
+Prossimo blocco consigliato: **H3-M** (a costo zero), poi **H1-A**
+(autenticazione a token, che sblocca anche H1-E e `user_id` nell'audit), poi
+**H2-B**/**H2-C** (perdita silenziosa di token e invariante dei logit).
+
+---
+
+## H0 — Bloccanti  ·  ✅ chiuse
 
 **Gate di uscita:** nessun componente perde silenziosamente dati che dichiara di gestire;
 nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza limiti.
 
-- [ ] **H0-A · Limiti sugli override ricevuti nel body delle richieste** *(P0)*
+- [x] **H0-A · Limiti sugli override ricevuti nel body delle richieste** *(P0)*
   `batch_size` e `ctx_size` arrivano dal body a `swap_model` senza controllo di intervallo
   (`api/routes.rs:513-520, 656-663, 941-948` → `api/mod.rs:197, 220` →
   `inference/scheduler.rs:679, 793`). Valori fuori scala portano lo scheduler in uno stato
@@ -44,7 +69,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   Sinergia con `0.7-C` (backpressure e codici di errore), da cui questa voce è la
   specializzazione concreta sui due campi che oggi non hanno limiti.
 
-- [ ] **H0-B · L'audit trail deve rispettare `EULLM_AUDIT_DIR`** *(P0)*
+- [x] **H0-B · L'audit trail deve rispettare `EULLM_AUDIT_DIR`** *(P0)*
   `engine/Dockerfile:47` imposta `ENV EULLM_AUDIT_DIR=/data/audit` e `docker-compose.yml`
   monta un volume su quel percorso, ma **la variabile non è letta da nessuna parte nel
   codice**: `AuditLogger::default_path()` (`audit/mod.rs:88-96`) usa esclusivamente
@@ -54,7 +79,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   rifiutare l'avvio se la directory non è scrivibile. Una riga per il fix, più il controllo
   all'avvio.
 
-- [ ] **H0-C · L'adapter di identità deve arrivare nel GGUF finale** *(P0)*
+- [x] **H0-C · L'adapter di identità deve arrivare nel GGUF finale** *(P0)*
   In `forge/eullm_forge/pipeline.py:158-176` lo stadio 4 assegna `adapter_path` ma non
   aggiorna `current_model_path` né fonde l'adapter nei pesi; lo stadio 5 esporta quindi il
   modello **pre-LoRA**. `eullm forge --identity "…"` completa senza errori e produce un
@@ -65,7 +90,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   e aggiungere un test che verifichi che il path esportato discende dallo stadio 4 quando
   `skip_identity` è falso.
 
-- [ ] **H0-D · Riordinare la pipeline per il target GGUF** *(P0, insieme a H0-C)*
+- [x] **H0-D · Riordinare la pipeline per il target GGUF** *(P0, insieme a H0-C)*
   Lo stadio 3 di `pipeline.py` produce un checkpoint AWQ/GPTQ (`quantize.py:132-170`;
   `profiles/legal_it.yaml:24` specifica `method: awq`) e lo stadio 5 gli passa
   `convert_hf_to_gguf.py --outtype f16` (`export.py:204-212`), che legge tensori fp16/bf16 e
@@ -79,7 +104,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   pipeline, che oggi descrive l'ordine sbagliato. Da coordinare con la decisione sulla
   ricetta canonica già aperta in `forge-research-roadmap.md` §"To fix / reconcile".
 
-- [ ] **H0-E · NER attivo per default nell'anonimizzazione** *(P0)*
+- [x] **H0-E · NER attivo per default nell'anonimizzazione** *(P0)*
   `AnonymiserConfig.use_ner` è `False` (`datasets/anonymize.py:190`) e
   `scripts/anonymize_italgiure.py:122-125, 164` lo attiva solo con `--ner`. Nella
   configurazione predefinita l'unico livello che redige nomi di persona è
@@ -92,7 +117,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
   Il principio vincolante "GDPR-safe dataset: anonymized corpus only" di
   `forge-research-roadmap.md` non è oggi garantito dal default.
 
-- [ ] **H0-F · Allineare il claim di anonimizzazione e rimuovere il riferimento alla fonte** *(P0)*
+- [x] **H0-F · Allineare il claim di anonimizzazione e rimuovere il riferimento alla fonte** *(P0)*
   Il docstring di `anonymize.py:33` afferma «the redaction is one-way: original text is not
   recoverable from the output». Non è così: `anonymize_record` (`:589-597`) sostituisce solo
   il campo `text`, mentre il record prodotto da `datasets/italgiure.py:190-208` conserva
@@ -127,7 +152,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   sopravvive alla traduzione degli indirizzi. Fornisce anche il soggetto che `user_id`
   (`audit/mod.rs:36`) oggi non ha mai. Precondizione di ogni deployment multi-tenant.
 
-- [ ] **H1-B · `EULLM_ALLOWED_IPS` anche dall'ambiente di processo** *(P1)*
+- [x] **H1-B · `EULLM_ALLOWED_IPS` anche dall'ambiente di processo** *(P1)*
   `IpAllowlist::load_from_env_file` è invocata con il percorso letterale `".env"` relativo
   alla working directory (`api/mod.rs:436`) e la variabile non è mai letta dall'ambiente.
   `docker run -e EULLM_ALLOWED_IPS=…` e un `Environment=` in un'unità systemd non hanno
@@ -146,7 +171,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   domini configurabile — che per il caso d'uso enterprise è la forma più difendibile della
   feature.
 
-- [ ] **H1-D · Validare i nomi file restituiti dall'API HuggingFace** *(P1)*
+- [x] **H1-D · Validare i nomi file restituiti dall'API HuggingFace** *(P1)*
   `list_hf_ggufs` raccoglie i `siblings[].rfilename` filtrandoli solo per il suffisso
   `.gguf` (`registry/mod.rs:543-551`), e `cmd_pull_hf` li usa direttamente come componente
   di percorso: `model_dir.join(&filename)` (`main.rs:920`). Un nome contenente separatori,
@@ -196,7 +221,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
 prodotto; i due percorsi di inferenza si comportano allo stesso modo; i parser di formati
 esterni non si fidano dei valori che leggono.
 
-- [ ] **H2-A · Dimensionare la KV cache con `attention.key_length`** *(P1)*
+- [x] **H2-A · Dimensionare la KV cache con `attention.key_length`** *(P1)*
   Sia il sizer di `--fit` (`fit.rs:58-64`) sia la stima runtime (`scheduler.rs:1657`)
   calcolano `head_dim = n_embd / n_head`, ignorando le chiavi GGUF
   `<arch>.attention.key_length` / `.value_length` che molte architetture dichiarano
@@ -275,7 +300,14 @@ esterni non si fidano dei valori che leggono.
 garantisce ciò che dichiara; le dipendenze sono controllate per costruzione e non per
 diligenza manuale.
 
-- [ ] **H3-A · La CI deve compilare tutte le feature** *(P1)*
+- [ ] **H3-A · La CI deve compilare le feature che può compilare a costo basso** *(P1)*
+  *Riformulata dopo aver misurato i costi reali: la CI gira solo su `push: [main]`,
+  in ~7 minuti, su runner standard di un repo pubblico — quindi gratuiti. Il
+  vincolo non sono i minuti ma il wall-clock, e le feature GPU richiedono il
+  toolkit CUDA che porterebbe quei 7 minuti a 25+ su ogni push. Ambito corretto:
+  `cargo check --features multimodal` a ogni push (nessun toolkit, costo
+  trascurabile), feature GPU su un job settimanale schedulato o lasciate al
+  workflow di release.*
   La Definition of Done di `roadmap-engine-0.7-1.0.md` richiede che ogni voce «non rompa i
   feature flag CUDA, Metal, ROCm, Vulkan, multimodal», ma la CI esegue `cargo build` e
   `cargo test` solo con le feature di default (`.github/workflows/ci.yml:64, 67`): nessun
@@ -372,6 +404,20 @@ diligenza manuale.
   con i permessi di default; `read_all` e `count` caricano l'intero file in memoria
   (`:141-165`). Tenere un handle aperto con `fsync` periodico, impostare permessi
   restrittivi sulla directory, aggiungere rotazione e rendere `count` incrementale.
+
+- [ ] **H3-M · Un tag di release non deve poter partire da un `main` rosso** *(P1)*
+  `release-engine.yml` si attiva su `push: tags: [engine-v*, EuLLM-v*]` e non ha
+  alcuna dipendenza dallo stato di `ci.yml` (nessun `workflow_run`, nessun
+  controllo di check suite). Un tag su un commit la cui CI è fallita — o non è
+  ancora finita — produce comunque 13 binari pubblicati sulla release page.
+  Questo è il solo punto in cui "scoprire un problema prima o dopo il merge"
+  cambia davvero qualcosa: normalmente un `main` rosso si corregge con un
+  commit, qui diventa un artefatto scaricabile. Aggiungere un job iniziale che
+  verifichi la conclusione della CI sul commit del tag e fermi il workflow se
+  non è `success`, oppure un `workflow_dispatch` con conferma esplicita per i
+  casi di emergenza. Costo: zero run aggiuntivi — è un controllo di API, non una
+  compilazione. Alternativa a costo zero e zero codice: non taggare mai prima di
+  aver visto la spunta verde su `main`.
 
 - [ ] **H3-K · Completare `SECURITY.md`** *(P3)*
   Il file è ancora il template GitHub non compilato: la tabella delle versioni supportate

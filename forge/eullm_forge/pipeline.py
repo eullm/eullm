@@ -1,6 +1,11 @@
 """Pipeline orchestrator — runs the full verticalizzazione pipeline.
 
-Coordinates: pruning → distillation → quantization → identity → export.
+Coordinates: pruning → distillation → identity (merged) → quantization → export.
+
+Identity runs before quantization and its adapter is merged into the weights:
+the merge is what makes the identity reach the exported GGUF. For GGUF targets
+the HuggingFace-level quantization stage is a no-op — llama-quantize inside
+`export_gguf` does that job (see `quantize.py`).
 """
 
 from __future__ import annotations
@@ -14,9 +19,9 @@ import yaml
 
 from .distill import DistillConfig, distill
 from .export import ExportConfig, export_gguf
-from .identity import IdentityConfig, fine_tune_identity
+from .identity import IdentityConfig, fine_tune_identity, merge_identity_adapter
 from .pruning import PruningConfig, prune
-from .quantize import QuantizeConfig, quantize
+from .quantize import METHOD_NONE, QuantizeConfig, quantize
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +127,8 @@ def run_pipeline(config: PipelineConfig) -> Path:
     output_dir = Path(config.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    _validate_stage_combination(config)
+
     current_model_path = config.base_model
     logger.info("Starting verticalizzazione pipeline")
     logger.info("  Base model: %s", config.base_model)
@@ -148,23 +155,43 @@ def run_pipeline(config: PipelineConfig) -> Path:
     else:
         logger.info("[2/5] Distillation skipped")
 
-    # Stage 3: Quantization
-    if not config.skip_quantization:
-        logger.info("[3/5] Quantization...")
-        current_model_path = quantize(current_model_path, config.quantization)
-        logger.info("  Quantized model saved to: %s", current_model_path)
-    else:
-        logger.info("[3/5] Quantization skipped")
-
-    # Stage 4: Identity fine-tuning
+    # Stage 3: Identity fine-tuning (LoRA), merged into the weights.
+    #
+    # This runs BEFORE quantization, and the adapter is merged rather than just
+    # written to disk. Both points are load-bearing:
+    #  - Merging is what makes the identity reach the exported artifact. The
+    #    adapter used to be trained, logged and then dropped, so the GGUF was
+    #    always the pre-LoRA model and `--identity` silently did nothing.
+    #  - Training LoRA before quantizing means the adapter is fitted on the
+    #    same weights it is merged into. Fine-tuning an already-4-bit
+    #    checkpoint and merging back is a different (and lossier) operation.
     if not config.skip_identity:
-        logger.info("[4/5] Identity fine-tuning (LoRA)...")
-        config.identity.model_path = current_model_path
+        logger.info("[3/5] Identity fine-tuning (LoRA)...")
+        base_for_identity = current_model_path
+        config.identity.model_path = base_for_identity
         config.identity.languages = config.languages
         adapter_path = fine_tune_identity(config.identity)
         logger.info("  LoRA adapter saved to: %s", adapter_path)
+        current_model_path = merge_identity_adapter(
+            base_for_identity,
+            adapter_path,
+            output_path=str(output_dir / "identity-merged"),
+        )
+        logger.info("  Merged identity model: %s", current_model_path)
     else:
-        logger.info("[4/5] Identity fine-tuning skipped")
+        logger.info("[3/5] Identity fine-tuning skipped")
+
+    # Stage 4: HuggingFace-level quantization (AWQ/GPTQ).
+    #
+    # A no-op for GGUF deliverables — `method: none` in the shipped profiles —
+    # because `export_gguf` quantizes via `llama-quantize`. Only meaningful when
+    # the target is a GPU runtime (vLLM/TensorRT); see `quantize.py`.
+    if not config.skip_quantization:
+        logger.info("[4/5] Quantization (%s)...", config.quantization.method)
+        current_model_path = quantize(current_model_path, config.quantization)
+        logger.info("  Quantized model saved to: %s", current_model_path)
+    else:
+        logger.info("[4/5] Quantization skipped")
 
     # Stage 5: GGUF export
     logger.info("[5/5] GGUF export...")
@@ -177,3 +204,27 @@ def run_pipeline(config: PipelineConfig) -> Path:
 
     logger.info("Pipeline complete! Model ready at: %s", gguf_path)
     return Path(gguf_path)
+
+
+def _validate_stage_combination(config: PipelineConfig) -> None:
+    """Reject stage combinations that cannot produce the requested artifact.
+
+    Checked up front, before hours of GPU time are spent: an AWQ/GPTQ
+    checkpoint cannot be converted to GGUF (see `quantize.py`), so a profile
+    asking for both used to run the whole pipeline and then fail inside
+    `convert_hf_to_gguf.py` at the very last stage.
+    """
+    wants_hf_quant = (
+        not config.skip_quantization and config.quantization.method != METHOD_NONE
+    )
+    if wants_hf_quant and config.export.format == "gguf":
+        raise ValueError(
+            f"quantization.method={config.quantization.method!r} cannot be exported "
+            f"to GGUF: llama.cpp's converter reads fp16/bf16 weights, not "
+            f"{config.quantization.method.upper()}-packed ones.\n"
+            f"  For a GGUF deliverable set `quantization.method: none` — "
+            f"`export.quantization` ({config.export.quantization}) is the "
+            f"quantization for this target, applied by llama-quantize.\n"
+            f"  For a vLLM/TensorRT deliverable keep the method and set "
+            f"`export.format` to something other than 'gguf'."
+        )

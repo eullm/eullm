@@ -129,7 +129,7 @@ curl http://localhost:8080/v1/models/legal-it-7b/card
     "out_of_scope": "...",
     "architecture": "Transformer (decoder-only)",
     "base_model": "Qwen3-14B (Apache 2.0)",
-    "compression_pipeline": "Structural pruning → Knowledge distillation → Quantization → Identity LoRA",
+    "compression_pipeline": "Structural pruning → Knowledge distillation → Identity LoRA (merged) → GGUF Q4_K_M",
     "format": "GGUF"
   },
   "training": {

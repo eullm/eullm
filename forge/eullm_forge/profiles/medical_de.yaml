@@ -23,7 +23,10 @@ distillation:
 quantization:
   bits: 4
   group_size: 128
-  method: awq
+  # 'none' for GGUF deliverables: llama-quantize in the export stage does
+  # the quantizing (export.quantization below). AWQ/GPTQ target GPU
+  # runtimes (vLLM/TensorRT) and cannot be converted to GGUF.
+  method: none
 
 identity:
   identity_name: "EULLM Medical DE"

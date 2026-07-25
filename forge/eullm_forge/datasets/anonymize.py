@@ -30,7 +30,33 @@ What is REDACTED:
     * Dates and places of birth.
     * Street addresses, phone numbers, email addresses.
 
-The redaction is one-way: original text is not recoverable from the output.
+This is PSEUDONYMISATION, not anonymisation — read this before making any
+compliance claim about the output
+------------------------------------------------------------------------
+The substitution itself is one-way: `[PERSONA_1]` carries no information about
+the name it replaced. But the *record* is not anonymous, for two reasons:
+
+1. `anonymize_record` rewrites the ``text`` field only. The source record
+   (see ``datasets/italgiure.py``) also carries ``sentence_id``,
+   ``article_num`` and ``metadata.ecli`` — each of which uniquely identifies
+   the ruling in a public archive. It used to carry ``url`` as well, a direct
+   link to the original un-redacted PDF; `anonymize_record` now drops it (see
+   ``AnonymiserConfig.drop_source_url``), because a record that ships the
+   pointer to its own plaintext cannot be described as irreversible under any
+   reading.
+2. Presidente and relatore names are deliberately KEPT in the metadata
+   (public officials in their official capacity). Combined with court,
+   section, number and year they re-identify the document even without the
+   other fields.
+
+Under GDPR Art. 4(5) and Recital 26 the output is therefore **pseudonymised
+personal data and remains fully within the scope of the Regulation** — a
+lawful basis, minimisation and data-subject rights all still apply. The
+technical benefit is real and is the point of this module: it removes the
+identifiers from the text that reaches the model weights, which is what
+mitigates memorisation attacks. What it does not do is take the corpus out of
+scope. Do not publish the corpus, or describe it as anonymised, on the
+strength of this module alone.
 """
 
 from __future__ import annotations
@@ -174,9 +200,21 @@ class RedactionStats:
 class AnonymiserConfig:
     """Tuning knobs for anonymisation.
 
-    Defaults are conservative: always-on regex layers plus all-caps name
-    heuristic (safe on italgiure OCR text). NER is off by default because
-    it requires spaCy and its Italian model.
+    Every layer is ON by default, including NER. That default matters: the
+    all-caps heuristic only matches fully-uppercase runs (see
+    ``RE_ALLCAPS_NAME``), which is the form party names take in the italgiure
+    OCR *header*. Names written in Title Case — the form they take in the body
+    of the reasoning, "l'avv. Giulia Bianchi" — are matched by **no other
+    layer**. With NER off, those names pass through untouched into the training
+    corpus while the caller believes the text is redacted, so "off by default"
+    was a silent-failure default rather than a conservative one.
+
+    The cost is that ``use_ner=True`` needs spaCy plus an Italian model, and
+    ``anonymize_text`` skips the NER layer when no ``ner`` callable is passed.
+    Callers that cannot load spaCy must therefore set ``use_ner=False``
+    *deliberately* and record that the output has no Title-Case name coverage —
+    see ``scripts/anonymize_italgiure.py``, which refuses to run rather than
+    degrade silently.
     """
 
     redact_cf: bool = True
@@ -187,7 +225,12 @@ class AnonymiserConfig:
     redact_birth: bool = True
     redact_address: bool = True
     redact_allcaps_names: bool = True
-    use_ner: bool = False
+    use_ner: bool = True
+    # Drop the ``url`` field (a direct link to the original un-redacted PDF)
+    # from the record `anonymize_record` returns. A record that ships the
+    # pointer to its own plaintext defeats the purpose of redacting the text.
+    # See the module docstring on what remains re-identifying even so.
+    drop_source_url: bool = True
 
 
 # Italian stopwords / particles that spaCy NER occasionally mis-tags as PER.
@@ -585,12 +628,23 @@ def anonymize_record(
     returned record has an ``anonymization`` sub-object inside metadata
     with per-category redaction counts — useful for audit and for spotting
     slices that need extra scrutiny.
+
+    Unless ``config.drop_source_url`` is False, the ``url`` field is removed:
+    it is a direct link to the original un-redacted PDF, and keeping it makes
+    every redaction in the text recoverable with one HTTP request. Note that
+    ``sentence_id`` / ``article_num`` / ``metadata.ecli`` are deliberately
+    KEPT — corpus dedup, resume and provenance need a stable identifier — and
+    they also re-identify the ruling in a public archive. The output is
+    pseudonymised, not anonymous; see the module docstring.
     """
     if "text" not in rec:
         return rec
-    new_text, stats = anonymize_text(rec["text"], config=config, ner=ner)
+    cfg = config or AnonymiserConfig()
+    new_text, stats = anonymize_text(rec["text"], config=cfg, ner=ner)
     out = dict(rec)
     out["text"] = new_text
+    if cfg.drop_source_url:
+        out.pop("url", None)
     meta = dict(rec.get("metadata") or {})
     meta["anonymization"] = stats.to_dict()
     out["metadata"] = meta

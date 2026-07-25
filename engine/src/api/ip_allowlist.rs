@@ -6,11 +6,24 @@
 //! boundary instead: every request's source IP is checked against an
 //! allowlist before it reaches any handler.
 //!
-//! With no `.env` file (or no `EULLM_ALLOWED_IPS` key in it), the allowlist
-//! defaults to loopback only (`127.0.0.1`, `::1`) — the same effective
-//! result as binding `127.0.0.1`, without needing a different bind address
-//! for the "nothing configured" case. Broader access (a specific RAG host,
-//! a LAN subnet) is opt-in via `.env`, never the unconfigured default.
+//! With nothing configured, the allowlist defaults to loopback only
+//! (`127.0.0.1`, `::1`) — the same effective result as binding `127.0.0.1`,
+//! without needing a different bind address for the "nothing configured"
+//! case. Broader access (a specific RAG host, a LAN subnet) is opt-in via
+//! `EULLM_ALLOWED_IPS`, read from the **process environment** first and from a
+//! `.env` file in the working directory second — never the unconfigured
+//! default.
+//!
+//! **Known limit, worth understanding before relying on this.** The check
+//! looks at the source IP of the TCP connection, which is only a meaningful
+//! identity when the client connects directly. Two cases where it isn't:
+//! behind Docker's published ports every external client is NAT-ed to the
+//! bridge gateway address, so allowing that address allows everyone who can
+//! reach the port; and a request originating in the user's own browser
+//! genuinely comes from loopback, so a page on any site can reach the API.
+//! An allowlist cannot express either case — closing them needs
+//! authentication (a token checked before this layer) and an `Origin` check.
+//! See `docs/backlog-fix-e-hardening.md`, H1-A and H1-E.
 
 use std::fs;
 use std::net::IpAddr;
@@ -22,6 +35,8 @@ use ipnet::IpNet;
 #[derive(Debug, Clone)]
 pub struct IpAllowlist {
     nets: Vec<IpNet>,
+    /// Human-readable origin of the non-loopback entries (see `source`).
+    source: String,
 }
 
 impl IpAllowlist {
@@ -29,23 +44,67 @@ impl IpAllowlist {
     fn loopback_only() -> Self {
         Self {
             nets: vec!["127.0.0.1/32".parse().unwrap(), "::1/128".parse().unwrap()],
+            source: "default (loopback only — nothing configured)".to_string(),
         }
     }
 
-    /// Load from a `.env` file at `path`. Loopback is always included —
-    /// local access shouldn't silently break just because a RAG host or LAN
-    /// subnet was added — and entries from `EULLM_ALLOWED_IPS` (when the
-    /// file exists, is readable, and the key is non-empty and well-formed)
-    /// are added on top of it. Any failure to deliberately configure a
-    /// broader list (missing file, missing key, malformed entry) means
-    /// "nothing was added," never "more than loopback."
-    pub fn load_from_env_file(path: &Path) -> Self {
+    /// Load the allowlist, reading `EULLM_ALLOWED_IPS` from the process
+    /// environment first and falling back to a `.env` file at `path`.
+    ///
+    /// The environment has to be a supported source, not just the file. Every
+    /// non-interactive way of running this engine configures it that way:
+    /// `docker run -e`, a compose `environment:` block, a systemd
+    /// `Environment=`. For several releases only the file was read, so all of
+    /// those silently had no effect — and since no image in this repository
+    /// ships a `.env`, every containerised deployment was pinned to
+    /// loopback-only with no way to widen it and no diagnostic saying so.
+    ///
+    /// Loopback is always included, so local access can't break by configuring
+    /// a remote host, and any failure to *deliberately* widen the list (no
+    /// variable, no file, malformed entry) means "nothing was added" — never
+    /// "more than loopback".
+    pub fn load(path: &Path) -> Self {
+        let env_spec = std::env::var("EULLM_ALLOWED_IPS").ok();
+        let file_contents = fs::read_to_string(path).ok();
+        Self::resolve(
+            env_spec.as_deref(),
+            file_contents.as_deref(),
+            &path.display().to_string(),
+        )
+    }
+
+    /// Pure resolution step behind [`load`], split out so the precedence rule
+    /// is testable without mutating process environment variables (which would
+    /// race against every other test in this binary).
+    ///
+    /// Returns the allowlist and, via [`Self::source`], where the entries came
+    /// from, so startup can report it.
+    fn resolve(env_spec: Option<&str>, file_contents: Option<&str>, file_label: &str) -> Self {
         let mut allowlist = Self::loopback_only();
 
-        let Ok(contents) = fs::read_to_string(path) else {
+        // The environment wins outright when set to something non-empty: an
+        // operator passing `-e EULLM_ALLOWED_IPS=...` is being more explicit
+        // than a file that may have been baked into an image.
+        if let Some(spec) = env_spec.map(str::trim).filter(|s| !s.is_empty()) {
+            match parse_allowlist(spec) {
+                Ok(nets) => {
+                    allowlist.nets.extend(nets);
+                    allowlist.source = "EULLM_ALLOWED_IPS (environment)".to_string();
+                    return allowlist;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "EULLM_ALLOWED_IPS in the environment is malformed ({e}) — ignoring it; \
+                         falling back to {file_label}"
+                    );
+                }
+            }
+        }
+
+        let Some(contents) = file_contents else {
             return allowlist;
         };
-        let vars = parse_env_file(&contents);
+        let vars = parse_env_file(contents);
         let Some(spec) = vars
             .get("EULLM_ALLOWED_IPS")
             .map(|s| s.trim())
@@ -54,13 +113,32 @@ impl IpAllowlist {
             return allowlist;
         };
         match parse_allowlist(spec) {
-            Ok(nets) => allowlist.nets.extend(nets),
+            Ok(nets) => {
+                allowlist.nets.extend(nets);
+                allowlist.source = format!("EULLM_ALLOWED_IPS ({file_label})");
+            }
             Err(e) => tracing::warn!(
-                "EULLM_ALLOWED_IPS in {} is malformed ({e}) — ignoring, loopback-only stays in effect",
-                path.display()
+                "EULLM_ALLOWED_IPS in {file_label} is malformed ({e}) — ignoring, \
+                 loopback-only stays in effect"
             ),
         }
         allowlist
+    }
+
+    /// File-only load, ignoring the process environment. Kept so the file
+    /// parsing path stays directly testable; production startup calls
+    /// [`load`].
+    #[cfg(test)]
+    pub fn load_from_env_file(path: &Path) -> Self {
+        let file_contents = fs::read_to_string(path).ok();
+        Self::resolve(None, file_contents.as_deref(), &path.display().to_string())
+    }
+
+    /// Where the non-loopback entries came from — for the startup log, so an
+    /// operator can tell at a glance whether their configuration was picked up
+    /// at all.
+    pub fn source(&self) -> &str {
+        &self.source
     }
 
     /// Whether `ip` is covered by this allowlist.
@@ -222,5 +300,70 @@ mod tests {
     fn parse_allowlist_accepts_ipv6() {
         let nets = parse_allowlist("::1,2001:db8::/32").unwrap();
         assert_eq!(nets.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod env_precedence_tests {
+    use super::*;
+
+    // Only the `.env` file used to be read. Every non-interactive deployment
+    // configures this through the environment instead (`docker run -e`, compose
+    // `environment:`, systemd `Environment=`), so those all silently had no
+    // effect — and no image here ships a `.env`, which pinned containers to
+    // loopback-only with no way to widen it.
+
+    #[test]
+    fn environment_alone_is_honoured() {
+        let a = IpAllowlist::resolve(Some("203.0.113.5,192.168.0.0/24"), None, ".env");
+        assert!(a.is_allowed("203.0.113.5".parse().unwrap()));
+        assert!(a.is_allowed("192.168.0.7".parse().unwrap()));
+        assert!(!a.is_allowed("198.51.100.1".parse().unwrap()));
+        // Loopback survives whatever is configured.
+        assert!(a.is_allowed("127.0.0.1".parse().unwrap()));
+        assert!(a.source().contains("environment"));
+    }
+
+    #[test]
+    fn environment_wins_over_the_file() {
+        let a = IpAllowlist::resolve(
+            Some("203.0.113.5"),
+            Some("EULLM_ALLOWED_IPS=198.51.100.9\n"),
+            ".env",
+        );
+        assert!(a.is_allowed("203.0.113.5".parse().unwrap()));
+        assert!(
+            !a.is_allowed("198.51.100.9".parse().unwrap()),
+            "an explicit environment value must not be merged with a baked-in file"
+        );
+        assert!(a.source().contains("environment"));
+    }
+
+    #[test]
+    fn file_is_used_when_the_environment_is_unset_or_blank() {
+        for env in [None, Some(""), Some("   ")] {
+            let a = IpAllowlist::resolve(env, Some("EULLM_ALLOWED_IPS=198.51.100.9\n"), ".env");
+            assert!(a.is_allowed("198.51.100.9".parse().unwrap()), "env={env:?}");
+            assert!(a.source().contains(".env"), "env={env:?}");
+        }
+    }
+
+    #[test]
+    fn a_malformed_environment_value_falls_back_to_the_file() {
+        let a = IpAllowlist::resolve(
+            Some("not-an-ip"),
+            Some("EULLM_ALLOWED_IPS=198.51.100.9\n"),
+            ".env",
+        );
+        assert!(a.is_allowed("198.51.100.9".parse().unwrap()));
+    }
+
+    #[test]
+    fn nothing_configured_anywhere_stays_loopback_only() {
+        let a = IpAllowlist::resolve(None, None, ".env");
+        assert!(a.is_allowed("127.0.0.1".parse().unwrap()));
+        assert!(a.is_allowed("::1".parse().unwrap()));
+        assert!(!a.is_allowed("203.0.113.5".parse().unwrap()));
+        assert!(a.source().contains("loopback only"));
     }
 }

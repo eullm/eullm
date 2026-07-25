@@ -1,8 +1,17 @@
 """Quantization module — compresses model weights from FP16 to INT4/FP4.
 
-Supports AWQ and GPTQ quantization methods. This step is fast (minutes)
-and nearly free computationally. Reduces model size by ~4x with minimal
-quality loss.
+Supports AWQ and GPTQ, which produce a HuggingFace checkpoint with 4-bit
+packed weights for **GPU runtimes** (vLLM, TensorRT-LLM, AutoAWQ). Fast
+(minutes) and nearly free computationally.
+
+**Not for the GGUF path.** llama.cpp's `convert_hf_to_gguf.py` reads fp16/bf16
+safetensors; an AWQ/GPTQ checkpoint stores `qweight`/`qzeros`/`scales` tensors
+it does not recognise, so converting one fails. For a GGUF target the
+quantization step is `llama-quantize` inside `export.export_gguf` (F16 → e.g.
+Q4_K_M) — running AWQ first is both unsupported and a second, redundant
+quantization. Use `METHOD_NONE` when the target is GGUF; `pipeline.run_pipeline`
+rejects the contradictory combination explicitly rather than letting it fail
+deep inside the converter.
 """
 
 from __future__ import annotations
@@ -15,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 METHOD_AWQ = "awq"
 METHOD_GPTQ = "gptq"
+#: No HuggingFace-level quantization — pass the weights through untouched.
+#: The correct setting when the deliverable is a GGUF, where `export_gguf`
+#: does the quantizing.
+METHOD_NONE = "none"
 
 
 @dataclass
@@ -24,13 +37,14 @@ class QuantizeConfig:
     Attributes:
         bits: Quantization bit width (4 = INT4, recommended).
         group_size: Group size for quantization (128 = good balance).
-        method: Quantization method — 'awq' (recommended) or 'gptq'.
+        method: Quantization method — 'none' (GGUF targets, see the module
+            docstring), 'awq' or 'gptq' (GPU-runtime targets).
         calibration_samples: Number of samples for quantization calibration.
     """
 
     bits: int = 4
     group_size: int = 128
-    method: str = METHOD_AWQ
+    method: str = METHOD_NONE
     calibration_samples: int = 128
 
 
@@ -159,12 +173,15 @@ def quantize(model_path: str, config: QuantizeConfig | None = None) -> str:
     logger.info("  Method: %s", config.method)
     logger.info("  Bits: %d, Group size: %d", config.bits, config.group_size)
 
-    if config.method == METHOD_AWQ:
+    if config.method == METHOD_NONE:
+        logger.info("  Method 'none' — leaving weights untouched")
+        return model_path
+    elif config.method == METHOD_AWQ:
         return _quantize_awq(model_path, config)
     elif config.method == METHOD_GPTQ:
         return _quantize_gptq(model_path, config)
     else:
         raise ValueError(
             f"Unknown quantization method: {config.method}. "
-            f"Supported: {METHOD_AWQ}, {METHOD_GPTQ}"
+            f"Supported: {METHOD_NONE}, {METHOD_AWQ}, {METHOD_GPTQ}"
         )

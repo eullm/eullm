@@ -84,15 +84,59 @@ impl AuditLogger {
         Self { log_path }
     }
 
-    /// Default audit log path: `~/.eullm/audit/audit.jsonl`.
+    /// Default audit log path: `$EULLM_AUDIT_DIR/audit.jsonl` when that
+    /// variable is set, otherwise `~/.eullm/audit/audit.jsonl`.
+    ///
+    /// Honouring the environment variable is what makes the audit trail
+    /// survive a container's lifetime. `engine/Dockerfile` sets
+    /// `EULLM_AUDIT_DIR=/data/audit` and `docker-compose.yml` mounts a volume
+    /// there, but for several releases nothing read it: every containerised
+    /// deployment wrote its "AI Act audit trail" into the ephemeral container
+    /// layer and lost it on the next `docker rm`, while the mounted volume
+    /// stayed empty. Mirrors how `EULLM_MODELS_DIR` is handled in
+    /// `models::store::ModelStore::default_store`.
     fn default_path() -> PathBuf {
+        let audit_dir = std::env::var("EULLM_AUDIT_DIR").ok();
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        PathBuf::from(home)
-            .join(".eullm")
-            .join("audit")
-            .join("audit.jsonl")
+        Self::resolve_path(audit_dir.as_deref(), &home)
+    }
+
+    /// Pure resolution step behind `default_path`, split out so the precedence
+    /// rule is testable without mutating process environment variables (which
+    /// would race against every other test in the binary).
+    fn resolve_path(audit_dir: Option<&str>, home: &str) -> PathBuf {
+        match audit_dir.map(str::trim).filter(|d| !d.is_empty()) {
+            Some(dir) => PathBuf::from(dir).join("audit.jsonl"),
+            None => PathBuf::from(home)
+                .join(".eullm")
+                .join("audit")
+                .join("audit.jsonl"),
+        }
+    }
+
+    /// Verify the audit log's directory is writable, creating it if needed.
+    ///
+    /// Called once at startup so a misconfigured audit destination surfaces
+    /// immediately instead of as a `warn!` on every request after the fact —
+    /// for a component whose purpose is producing a defensible record, silently
+    /// degrading to "no record" is the wrong failure mode.
+    pub fn check_writable(&self) -> Result<(), String> {
+        let parent = self.log_path.parent().ok_or_else(|| {
+            format!(
+                "audit path {} has no parent directory",
+                self.log_path.display()
+            )
+        })?;
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create audit directory {}: {e}", parent.display()))?;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .map(|_| ())
+            .map_err(|e| format!("cannot write audit log {}: {e}", self.log_path.display()))
     }
 
     /// Log an audit entry — writes to tracing AND persists to JSONL file.
@@ -188,6 +232,47 @@ mod tests {
         );
         assert_eq!(sanitize_for_log("qwen3-14b"), "qwen3-14b");
         assert_eq!(sanitize_for_log("a\rb\tc"), "abc");
+    }
+
+    /// `EULLM_AUDIT_DIR` is what makes the trail land on a mounted volume
+    /// instead of a container's ephemeral layer — the regression this guards
+    /// silently discarded every audit record in Docker deployments.
+    #[test]
+    fn audit_dir_env_var_takes_precedence_over_home() {
+        assert_eq!(
+            AuditLogger::resolve_path(Some("/data/audit"), "/home/eullm"),
+            PathBuf::from("/data/audit/audit.jsonl")
+        );
+    }
+
+    #[test]
+    fn audit_path_falls_back_to_home_when_unset_or_blank() {
+        let expected = PathBuf::from("/home/eullm/.eullm/audit/audit.jsonl");
+        assert_eq!(AuditLogger::resolve_path(None, "/home/eullm"), expected);
+        // An exported-but-empty variable means "unset", not "write to /".
+        assert_eq!(AuditLogger::resolve_path(Some(""), "/home/eullm"), expected);
+        assert_eq!(
+            AuditLogger::resolve_path(Some("   "), "/home/eullm"),
+            expected
+        );
+    }
+
+    #[test]
+    fn check_writable_reports_an_unusable_destination() {
+        let dir = std::env::temp_dir().join(format!("eullm-audit-ok-{}", uuid::Uuid::new_v4()));
+        let logger = AuditLogger::with_path(dir.join("audit.jsonl"));
+        assert!(
+            logger.check_writable().is_ok(),
+            "should create the directory"
+        );
+        let _ = fs::remove_dir_all(&dir);
+
+        // A path whose parent is an existing *file* cannot be a directory.
+        let file = std::env::temp_dir().join(format!("eullm-audit-bad-{}", uuid::Uuid::new_v4()));
+        fs::write(&file, b"x").unwrap();
+        let logger = AuditLogger::with_path(file.join("audit.jsonl"));
+        assert!(logger.check_writable().is_err());
+        let _ = fs::remove_file(&file);
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Local model storage — manages downloaded models on disk.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +35,36 @@ pub struct ModelManifest {
     /// models, and silently ignored by text-only engine builds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mmproj_file: Option<String>,
+}
+
+/// Whether `name` is safe to join onto a model directory as a single filename.
+///
+/// `Path::join` is not a string concatenation: a component containing `..`
+/// climbs out of the base directory, and an absolute component *replaces* the
+/// base entirely. So any externally-supplied filename has to be checked before
+/// it becomes a path, and two of ours are externally supplied — the
+/// `siblings[].rfilename` values from the HuggingFace model API (which were
+/// only ever filtered by their `.gguf` suffix), and the `gguf_file` /
+/// `mmproj_file` fields read back out of a `manifest.json` on disk.
+///
+/// Deliberately strict: one path component, no separators on either platform,
+/// no `..`, not absolute, no NUL, no leading dot (which would make the file
+/// hidden and is never a legitimate model filename). This mirrors what
+/// `hub::is_valid_model_slug` does for Hub download slugs, loosened only where
+/// real GGUF filenames need it — uppercase and spaces do occur in published
+/// quant names.
+pub fn is_safe_filename(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('.')
+        && !name.contains("..")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        // Reject a Windows drive-relative or UNC-ish prefix even when running
+        // on Unix: the manifest may have been written on another platform.
+        && !name.contains(':')
+        && Path::new(name).components().count() == 1
 }
 
 /// Manages the local model directory (`~/.eullm/models/`).
@@ -155,6 +185,7 @@ impl ModelStore {
             && let Ok(data) = fs::read_to_string(&manifest_path)
             && let Ok(manifest) = serde_json::from_str::<ModelManifest>(&data)
             && let Some(ref mmproj) = manifest.mmproj_file
+            && is_safe_filename(mmproj)
         {
             let path = model_dir.join(mmproj);
             if path.exists() {
@@ -189,6 +220,7 @@ impl ModelStore {
             && let Ok(data) = fs::read_to_string(&manifest_path)
             && let Ok(manifest) = serde_json::from_str::<ModelManifest>(&data)
             && let Some(ref gguf) = manifest.gguf_file
+            && is_safe_filename(gguf)
         {
             let path = model_dir.join(gguf);
             if path.exists() {
@@ -367,5 +399,64 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed[0].id, "my-model");
         fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
+mod safe_filename_tests {
+    use super::is_safe_filename;
+
+    #[test]
+    fn accepts_real_gguf_filenames() {
+        for name in [
+            "qwen3-8b-Q4_K_M.gguf",
+            "Qwen3-14B-Instruct-Q4_K_M.gguf",
+            "mmproj-F16.gguf",
+            "model.v2.gguf",
+            "gemma 4 12b q4.gguf", // published quants do contain spaces
+            "granite-3.3-8b-instruct-Q8_0.gguf",
+        ] {
+            assert!(is_safe_filename(name), "should accept {name:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_anything_that_escapes_the_model_directory() {
+        for name in [
+            "../../../../etc/cron.d/payload.gguf",
+            "../qwen3-8b/qwen3-8b.gguf",
+            "/etc/shadow.gguf",
+            "subdir/model.gguf",
+            "subdir\\model.gguf",
+            "C:\\Windows\\model.gguf",
+            "..",
+            ".",
+            "",
+            ".hidden.gguf",
+            "model\0.gguf",
+        ] {
+            assert!(!is_safe_filename(name), "should reject {name:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_an_absurdly_long_name() {
+        assert!(!is_safe_filename(&format!("{}.gguf", "a".repeat(300))));
+    }
+
+    /// The property that matters: for every accepted name, joining it onto a
+    /// base directory stays inside that directory.
+    #[test]
+    fn accepted_names_never_leave_the_base_directory() {
+        let base = std::path::Path::new("/models/qwen3-8b");
+        for name in ["a.gguf", "Q4_K_M.gguf", "model.v2.gguf", "with space.gguf"] {
+            assert!(is_safe_filename(name));
+            let joined = base.join(name);
+            assert!(
+                joined.starts_with(base),
+                "{name:?} joined to {joined:?} left the base directory"
+            );
+            assert_eq!(joined.parent(), Some(base));
+        }
     }
 }

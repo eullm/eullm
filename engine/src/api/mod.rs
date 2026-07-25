@@ -433,8 +433,29 @@ pub struct ServeConfig {
 /// in-flight requests before exiting. This is critical for Docker containers
 /// (which send SIGTERM on `docker stop`) and systemd services.
 pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let ip_allowlist = ip_allowlist::IpAllowlist::load_from_env_file(std::path::Path::new(".env"));
-    tracing::info!("Allowed source IPs/subnets: {}", ip_allowlist.describe());
+    let ip_allowlist = ip_allowlist::IpAllowlist::load(std::path::Path::new(".env"));
+    tracing::info!(
+        "Allowed source IPs/subnets: {}  [source: {}]",
+        ip_allowlist.describe(),
+        ip_allowlist.source(),
+    );
+
+    // Fail loudly at startup if the audit destination is unusable, rather than
+    // warning once per request after the fact. The trail exists to produce a
+    // defensible record; degrading silently to "no record" is the one failure
+    // mode it must not have.
+    let audit = crate::audit::AuditLogger::new();
+    match audit.check_writable() {
+        Ok(()) => tracing::info!("Audit trail: {}", audit.log_path().display()),
+        Err(e) => {
+            return Err(format!(
+                "audit trail is not writable: {e}\n  \
+                 Set EULLM_AUDIT_DIR to a writable, persistent path (in Docker, one \
+                 backed by a mounted volume)."
+            )
+            .into());
+        }
+    }
 
     let state = Arc::new(AppState {
         slot: tokio::sync::RwLock::new(ModelSlot {

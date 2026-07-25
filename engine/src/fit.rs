@@ -48,19 +48,58 @@ pub struct GgufInfo {
     /// Number of key/value heads (`<arch>.attention.head_count_kv`) — the GQA
     /// group count that actually sizes the KV cache. If present.
     pub n_head_kv: Option<u32>,
+    /// Explicit key head dimension (`<arch>.attention.key_length`), if the
+    /// exporter declared one. Authoritative when present — see
+    /// `kv_elems_per_token_per_layer`.
+    pub key_length: Option<u32>,
+    /// Explicit value head dimension (`<arch>.attention.value_length`).
+    pub value_length: Option<u32>,
 }
 
 impl GgufInfo {
-    /// KV elements per token per layer = `n_head_kv × head_dim`, where
-    /// `head_dim = n_embd / n_head`. This mirrors exactly the runtime estimate
-    /// in the scheduler. Returns `None` when any dimension is missing or zero,
-    /// so the sizer can fall back to a coarse reserve.
-    fn kv_elems_per_token_per_layer(&self) -> Option<f64> {
-        let n_embd = self.n_embd.filter(|&v| v > 0)? as f64;
-        let n_head = self.n_head.filter(|&v| v > 0)? as f64;
+    /// KV elements per token per layer, as `(key_elems, value_elems)`.
+    ///
+    /// Each is `n_head_kv × head_dim`. The head dimension comes from the
+    /// explicit `attention.key_length` / `attention.value_length` metadata
+    /// when the exporter declared it, and only falls back to `n_embd / n_head`
+    /// otherwise.
+    ///
+    /// That precedence is the whole point of this function. `n_embd / n_head`
+    /// is an *assumption* — that the attention heads exactly tile the
+    /// embedding — and a growing number of architectures break it by declaring
+    /// a head dimension independent of `n_embd`. Qwen3-4B is in our own
+    /// catalog: `n_embd` 2560 / `n_head` 32 = 80, while its real `head_dim` is
+    /// 128. Sizing the KV cache from 80 under-estimates it by 37%, so `--fit`
+    /// offloads more layers than actually fit and the load dies with an
+    /// out-of-VRAM error — the failure mode `--fit` exists to prevent.
+    ///
+    /// Returns `None` only when there is no way to derive a head dimension at
+    /// all, so the sizer can fall back to its coarse per-token reserve.
+    fn kv_elems_per_token_per_layer(&self) -> Option<(f64, f64)> {
         let n_head_kv = self.n_head_kv.filter(|&v| v > 0)? as f64;
-        let head_dim = n_embd / n_head;
-        Some(n_head_kv * head_dim)
+
+        // Fallback head dim, used per-side only when that side has no explicit
+        // length. Computed lazily so a model that declares key_length but not
+        // n_head still resolves.
+        let derived = || -> Option<f64> {
+            let n_embd = self.n_embd.filter(|&v| v > 0)? as f64;
+            let n_head = self.n_head.filter(|&v| v > 0)? as f64;
+            Some(n_embd / n_head)
+        };
+
+        let k_dim = match self.key_length.filter(|&v| v > 0) {
+            Some(v) => v as f64,
+            None => derived()?,
+        };
+        let v_dim = match self.value_length.filter(|&v| v > 0) {
+            Some(v) => v as f64,
+            // Virtually every architecture uses the same dimension for K and V,
+            // so reuse whatever K resolved to (explicit or derived) rather than
+            // reaching back to the n_embd assumption independently.
+            None => k_dim,
+        };
+
+        Some((n_head_kv * k_dim, n_head_kv * v_dim))
     }
 }
 
@@ -172,6 +211,8 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let mut n_embd: Option<u32> = None;
     let mut n_head: Option<u32> = None;
     let mut n_head_kv: Option<u32> = None;
+    let mut key_length: Option<u32> = None;
+    let mut value_length: Option<u32> = None;
 
     // The metadata keys we want, each an integer stored as u32 or u64 depending
     // on the exporter. The `_kv` head count is checked before the plain head
@@ -192,6 +233,10 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             Some(&mut n_head_kv)
         } else if key_bytes.ends_with(b".attention.head_count") {
             Some(&mut n_head)
+        } else if key_bytes.ends_with(b".attention.key_length") {
+            Some(&mut key_length)
+        } else if key_bytes.ends_with(b".attention.value_length") {
+            Some(&mut value_length)
         } else {
             None
         };
@@ -216,6 +261,8 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         n_embd,
         n_head,
         n_head_kv,
+        key_length,
+        value_length,
     })
 }
 
@@ -358,7 +405,9 @@ pub fn compute_fit(
     // dims are known (mirrors the scheduler's runtime estimate); coarse
     // fallback otherwise.
     let kv_per_layer = match info.kv_elems_per_token_per_layer() {
-        Some(elems) => (ctx_size as f64) * elems * (kv_bytes_per_elem_k + kv_bytes_per_elem_v),
+        Some((k_elems, v_elems)) => {
+            (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
+        }
         None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
     };
 
@@ -578,6 +627,8 @@ mod tests {
             n_embd: None,
             n_head: None,
             n_head_kv: None,
+            key_length: None,
+            value_length: None,
         }
     }
 
@@ -636,6 +687,8 @@ mod tests {
             n_embd: Some(5120),
             n_head: Some(40),
             n_head_kv: Some(8),
+            key_length: None,
+            value_length: None,
         };
         let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
         let file = 18_500_000_000;
@@ -685,7 +738,134 @@ mod tests {
         assert_eq!(info.n_embd, Some(5120));
         assert_eq!(info.n_head, Some(40));
         assert_eq!(info.n_head_kv, Some(8));
-        // head_dim = 5120/40 = 128 → 8 × 128 = 1024 elems/token/layer.
-        assert_eq!(info.kv_elems_per_token_per_layer(), Some(1024.0));
+        // head_dim = 5120/40 = 128 → 8 × 128 = 1024 elems/token/layer, K and V alike.
+        assert_eq!(info.kv_elems_per_token_per_layer(), Some((1024.0, 1024.0)));
+    }
+}
+
+#[cfg(test)]
+mod key_length_tests {
+    use super::*;
+
+    /// Append `key`/`value` as a u32 metadata entry.
+    fn put_u32(key: &[u8], val: u32, buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        buf.extend_from_slice(key);
+        buf.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+        buf.extend_from_slice(&val.to_le_bytes());
+    }
+
+    fn header(entries: &[(&[u8], u32)]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        b.extend_from_slice(&(entries.len() as u64).to_le_bytes());
+        for (k, v) in entries {
+            put_u32(k, *v, &mut b);
+        }
+        b
+    }
+
+    /// Qwen3-4B — in our own catalog — declares a head dimension that is NOT
+    /// `n_embd / n_head`: 2560/32 would give 80, the real value is 128. This is
+    /// the regression that made `--fit` under-size the KV cache by 37% and
+    /// offload more layers than fit, turning `--fit` into the cause of the
+    /// out-of-VRAM error it exists to prevent.
+    #[test]
+    fn explicit_key_length_overrides_the_n_embd_over_n_head_assumption() {
+        let data = header(&[
+            (b"qwen3.block_count", 36),
+            (b"qwen3.embedding_length", 2560),
+            (b"qwen3.attention.head_count", 32),
+            (b"qwen3.attention.head_count_kv", 8),
+            (b"qwen3.attention.key_length", 128),
+            (b"qwen3.attention.value_length", 128),
+        ]);
+        let info = parse_gguf_header(&data).expect("header parses");
+        assert_eq!(info.key_length, Some(128));
+        assert_eq!(info.value_length, Some(128));
+        // 8 KV heads × 128 = 1024, not 8 × 80 = 640.
+        assert_eq!(info.kv_elems_per_token_per_layer(), Some((1024.0, 1024.0)));
+    }
+
+    #[test]
+    fn without_explicit_lengths_the_derived_head_dim_is_still_used() {
+        let data = header(&[
+            (b"qwen3.block_count", 64),
+            (b"qwen3.embedding_length", 5120),
+            (b"qwen3.attention.head_count", 40),
+            (b"qwen3.attention.head_count_kv", 8),
+        ]);
+        let info = parse_gguf_header(&data).expect("header parses");
+        assert_eq!(info.kv_elems_per_token_per_layer(), Some((1024.0, 1024.0)));
+    }
+
+    /// A declared key_length also covers V when only K is declared — closer to
+    /// the truth than falling back to the n_embd assumption for that side.
+    #[test]
+    fn key_length_alone_covers_both_sides() {
+        let data = header(&[
+            (b"arch.block_count", 32),
+            (b"arch.embedding_length", 2560),
+            (b"arch.attention.head_count", 32),
+            (b"arch.attention.head_count_kv", 8),
+            (b"arch.attention.key_length", 128),
+        ]);
+        let info = parse_gguf_header(&data).expect("header parses");
+        assert_eq!(info.kv_elems_per_token_per_layer(), Some((1024.0, 1024.0)));
+    }
+
+    /// Differing K and V dimensions are charged separately rather than being
+    /// collapsed onto one figure.
+    #[test]
+    fn asymmetric_key_and_value_lengths_are_charged_separately() {
+        let data = header(&[
+            (b"arch.block_count", 30),
+            (b"arch.attention.head_count_kv", 4),
+            (b"arch.attention.key_length", 256),
+            (b"arch.attention.value_length", 128),
+        ]);
+        let info = parse_gguf_header(&data).expect("header parses");
+        assert_eq!(info.kv_elems_per_token_per_layer(), Some((1024.0, 512.0)));
+    }
+
+    /// The whole point: with the real head dimension the sizer charges more
+    /// per layer, so it offloads fewer layers — and the load succeeds instead
+    /// of running out of VRAM.
+    #[test]
+    fn real_head_dim_offloads_no_more_layers_than_the_assumption_did() {
+        let with_explicit = GgufInfo {
+            n_layers: 36,
+            n_embd: Some(2560),
+            n_head: Some(32),
+            n_head_kv: Some(8),
+            key_length: Some(128),
+            value_length: Some(128),
+        };
+        let assumed = GgufInfo {
+            key_length: None,
+            value_length: None,
+            ..with_explicit.clone()
+        };
+        // A tight-but-not-hopeless fit, so both variants land in `Partial` and
+        // the layer counts are actually comparable (with ample VRAM both would
+        // report `FitsFully` and the comparison would be vacuous).
+        let free = 4 * 1024 * 1024 * 1024;
+        let file = 2_500_000_000;
+        let ctx = 32768;
+
+        let layers = |i: &GgufInfo| match compute_fit(Some(free), Some(i), file, ctx, 2.0, 2.0) {
+            FitDecision::Partial { layers, .. } => layers,
+            FitDecision::FitsFully => i32::MAX,
+            FitDecision::Unknown { .. } => -1,
+        };
+        assert!(
+            layers(&with_explicit) < layers(&assumed),
+            "the real head_dim must be charged as more expensive than the \
+             n_embd/n_head under-estimate: explicit={} assumed={}",
+            layers(&with_explicit),
+            layers(&assumed),
+        );
     }
 }
