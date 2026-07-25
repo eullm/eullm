@@ -15,6 +15,17 @@ on:
 permissions:
   contents: write
 
+# Deleting a tag and re-pushing it is the normal way to retry a release, and
+# without this that fires a SECOND workflow run while the first is still
+# building — up to ~50 min for Windows CUDA cold — leaving two runs racing to
+# attach assets to the same release. Same tag means same intent, so the newer
+# run wins and the stale one is cancelled. `release` already refuses to run on a
+# cancelled workflow (its `if:` starts with `!cancelled()`), so the abandoned
+# run cannot publish on its way out.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   # Force any JS-based action still pinned to Node 20 to run on Node 24.
