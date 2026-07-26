@@ -27,7 +27,12 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tokio::sync::mpsc;
 
-use super::{GenerateRequest, InferenceConfig, StreamEvent, random_seed_fallback};
+use super::{GenerateRequest, InferenceConfig, StopReason, StreamEvent, random_seed_fallback};
+
+/// Below this many tokens per slot, a reasoning model routinely runs out of
+/// room mid-answer. Not a hard limit — just the threshold at which staying
+/// quiet about the division stops being defensible.
+const MIN_COMFORTABLE_SEQ_CTX: u32 = 2048;
 
 /// Configuration for the batch scheduler.
 #[derive(Debug, Clone)]
@@ -692,6 +697,24 @@ fn run_scheduler_loop(
         config.flash_attn,
         config.n_batch,
     );
+    // `--ctx-size` is the *total* KV budget and every slot gets an equal share,
+    // so raising `--batch-size` silently shrinks what each request can hold.
+    // With the `serve` defaults (8 slots, 4096 total) that is 512 tokens per
+    // request, which a reasoning model spends before it finishes thinking — and
+    // the answer then stops mid-sentence. Say so, with the two numbers that fix
+    // it, rather than letting it be discovered from truncated output.
+    if per_seq_ctx < MIN_COMFORTABLE_SEQ_CTX && sched_config.max_batch_size > 1 {
+        tracing::warn!(
+            "Each of the {} slots gets only {} tokens of context ({} total ÷ {} slots). \
+             Answers longer than that will be cut off and reported with \
+             done_reason=\"length\". Either raise --ctx-size to {} or lower --batch-size.",
+            sched_config.max_batch_size,
+            per_seq_ctx,
+            total_ctx,
+            sched_config.max_batch_size,
+            MIN_COMFORTABLE_SEQ_CTX * sched_config.max_batch_size as u32,
+        );
+    }
     let ctx_size = NonZeroU32::new(total_ctx).unwrap_or(NonZeroU32::new(4096).unwrap());
 
     let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
@@ -1093,7 +1116,7 @@ fn run_scheduler_loop(
                             seq.sampler.accept(token);
 
                             if model.is_eog_token(token) {
-                                send_done(&seq);
+                                send_done(&seq, StopReason::Stop);
                                 // Clean completion — the KV cache holds exactly
                                 // the prompt (this EOG token was never decoded),
                                 // so it's safe to keep and offer for reuse.
@@ -1124,7 +1147,7 @@ fn run_scheduler_loop(
                                                     let _ =
                                                         seq.tx.try_send(StreamEvent::Token(out));
                                                 }
-                                                send_done(&seq);
+                                                send_done(&seq, StopReason::Stop);
                                                 // Clean completion.
                                                 finish_sequence_clean(
                                                     &ctx,
@@ -1144,7 +1167,7 @@ fn run_scheduler_loop(
                                                             StreamEvent::Token(final_out),
                                                         );
                                                     }
-                                                    send_done(&seq);
+                                                    send_done(&seq, StopReason::Length);
                                                     // Clean completion.
                                                     finish_sequence_clean(
                                                         &ctx,
@@ -1189,7 +1212,9 @@ fn run_scheduler_loop(
                                         }
                                     }
                                     Err(_) => {
-                                        send_done(&seq);
+                                        let _ = seq.tx.try_send(StreamEvent::Error(
+                                            "decode failed mid-generation — the answer is incomplete".to_string(),
+                                        ));
                                         // Decode error — cache state suspect: full wipe.
                                         let _ = ctx.clear_kv_cache_seq(
                                             Some(seq.seq_id as u32),
@@ -1370,7 +1395,7 @@ fn run_scheduler_loop(
 
             // End of generation?
             if model.is_eog_token(token) {
-                send_done(seq);
+                send_done(seq, StopReason::Stop);
                 to_remove.push(i);
                 // Clean completion — the KV cache holds exactly seq.n_past
                 // resident tokens (this EOG token was never decoded), so
@@ -1398,7 +1423,7 @@ fn run_scheduler_loop(
                             if !out.is_empty() {
                                 let _ = seq.tx.try_send(StreamEvent::Token(out));
                             }
-                            send_done(seq);
+                            send_done(seq, StopReason::Stop);
                             to_remove.push(i);
                             // Clean completion.
                             finish_sequence_clean(
@@ -1438,7 +1463,9 @@ fn run_scheduler_loop(
                     }
                 }
                 Err(_) => {
-                    send_done(seq);
+                    let _ = seq.tx.try_send(StreamEvent::Error(
+                        "decode failed mid-generation — the answer is incomplete".to_string(),
+                    ));
                     to_remove.push(i);
                     // Decode error — cache state suspect: full wipe.
                     let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
@@ -1459,7 +1486,7 @@ fn run_scheduler_loop(
                 if !tail.is_empty() {
                     let _ = seq.tx.try_send(StreamEvent::Token(tail));
                 }
-                send_done(seq);
+                send_done(seq, StopReason::Length);
                 to_remove.push(i);
                 // Clean completion.
                 finish_sequence_clean(&ctx, seq, &mut idle_slots, &mut checkpoints, &sched_config);
@@ -1839,12 +1866,20 @@ fn try_send_piece(tx: &mpsc::Sender<StreamEvent>, out: String, seq_id: i32) -> S
 }
 
 /// Send a `StreamEvent::Done` to the sequence's channel.
-fn send_done(seq: &ActiveSequence) {
+/// Tell the client generation ended, and why.
+///
+/// The reason is passed in rather than inferred here: the call sites know
+/// whether they got an end-of-generation token, matched a stop sequence, or
+/// simply ran out of budget, and inferring it after the fact from
+/// `tokens_generated >= max_tokens` would misreport an EOS that happens to
+/// land exactly on the last allowed token.
+fn send_done(seq: &ActiveSequence, stop_reason: StopReason) {
     let duration_ms = seq.start.elapsed().as_millis() as u64;
     let _ = seq.tx.try_send(StreamEvent::Done {
         tokens_generated: seq.tokens_generated,
         tokens_prompt: seq.tokens_prompt,
         duration_ms,
+        stop_reason,
     });
 }
 

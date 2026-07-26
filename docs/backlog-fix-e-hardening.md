@@ -32,7 +32,8 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
 **Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
-**Chiusa dopo la 0.6.36:** H2-M (default dei thread) — 23 su 40. Le ultime due non vengono da una revisione del
+**Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
+e H2-O (`done_reason`) — 25 su 42. Le ultime due non vengono da una revisione del
 codice ma dai report di un tester esterno sull'issue #140: vale la pena
 notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
 prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
@@ -44,7 +45,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 171 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 173 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -644,6 +645,67 @@ esterni non si fidano dei valori che leggono.
   dell'implementazione di riferimento è comunque la scelta conservativa, ed è
   anche ciò che rende sensato un confronto like-for-like con `llama-cli`.
   Prossimo sospetto sul gap con llama-cli, una volta chiuso questo.
+
+- [x] **H2-N · `serve` di default dà 512 token di contesto a richiesta** *(P1)*
+  `--ctx-size` è il budget KV **totale** e viene diviso equamente fra gli slot
+  (`scheduler.rs:685-686`), mentre `serve` ha `--batch-size 8` di default contro
+  l'1 di `run`. Risultato: `eullm serve` senza argomenti dà a ogni richiesta
+  **4096 / 8 = 512 token**, `eullm run` gliene dà 4096. È la stessa classe di
+  divergenza `run`/`serve` di H2-K, applicata al contesto invece che alla KV
+  cache, e per un modello che ragiona è mutilante: Qwen3 spende più di 512 token
+  solo nel `<think>`.
+  Misurato con la stessa domanda su tre configurazioni:
+
+  | configurazione | token generati | ctx per slot |
+  |---|---|---|
+  | `serve` default (8 slot) | **477, tagliata** | 512 |
+  | `--batch-size 4` | 978, tagliata | 1024 |
+  | `--batch-size 1` (come `run`) | 1055, completa | 4096 |
+
+  Spiega direttamente i numeri nei report di Peter: `eval_count` 1001, 1014,
+  1024 con `--batch-size 4` non sono coincidenze, sono il soffitto dello slot.
+  Chiuso **non** cambiando il default alla cieca — sarebbe l'errore di H2-L
+  un'altra volta — ma rendendo la divisione impossibile da non vedere: warning
+  all'avvio con i due numeri che la risolvono («raise --ctx-size to 16384 or
+  lower --batch-size»), soglia `MIN_COMFORTABLE_SEQ_CTX` a 2048. **La scelta dei
+  default resta aperta** e va fatta con una misura di VRAM, non a intuito: il
+  motivo per cui il contesto è totale e non per-sequenza è che la versione
+  per-sequenza moltiplicava e andava in OOM (vedi il commento a
+  `scheduler.rs:681-685`).
+
+- [x] **H2-O · `done_reason` diceva sempre `"stop"`, anche quando mentiva** *(P1)*
+  `done_reason` e `finish_reason` erano la stringa letterale `"stop"` in **undici
+  punti** di `routes.rs`, e `StreamEvent::Done` non trasportava affatto il
+  motivo: l'informazione non usciva nemmeno dallo scheduler. Una risposta tagliata
+  perché lo slot ha esaurito il contesto era quindi **indistinguibile** da una che
+  il modello ha deciso di terminare. È il difetto che ha reso invisibile H2-N per
+  mesi, e che ha fatto leggere a un tester esterno delle troncature come «il
+  modello si comporta male».
+  Peggio: due dei siti erano il ramo `Err(_)` di un decode fallito. Un errore di
+  decodifica a metà generazione veniva riportato al client come completamento
+  regolare.
+  Chiuso con `StopReason { Stop, Length }` propagato dallo scheduler *e* dal
+  motore sequenziale fino a `done_reason`/`finish_reason`, con i due siti di
+  errore convertiti in `StreamEvent::Error` (che entrambi i percorsi di streaming
+  già sapevano rendere). Il default in `collect_stream` è `Length`, non `Stop`:
+  se lo stream finisce senza un evento `Done` la risposta è incompleta, e l'ipotesi
+  onesta è quella. La CLI interattiva stampa `truncated — out of context`.
+  Verificato end-to-end: `num_predict: 8` → `done_reason='length'`, risposta che
+  finisce da sola → `'stop'`, e il default di `serve` → `'length'` a 477 token.
+  Due test unitari più due controlli nello smoke test.
+
+### Verificato e **non** indotto da noi
+
+Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
+perché ognuna di queste era un sospetto plausibile:
+
+| sospetto | verdetto |
+|---|---|
+| Politica flash attention | **Corretta.** Passiamo AUTO (-1), non ENABLED, quindi llama.cpp fa la sua verifica di compatibilità (`inference/mod.rs:134-149`). Che poi AUTO non intercetti le chiavi a 4 bit è un limite a monte, non una nostra forzatura. |
+| BOS aggiunto due volte | **No.** `AddBos::Always` è `add_special=true`, e `llama_tokenize` lo applica solo se il vocabolario dichiara `add_bos_token` — che Qwen3 mette a false. |
+| Divisione del contesto = bug | **No, è il comportamento anche di `llama-server`.** Il difetto è il *default* (H2-N), non la semantica. |
+| Overhead dello scheduler su singola richiesta | **Nessuno di misurabile**: 42,7 tok/s con `--batch-size 4` contro 39,6 sequenziale, stessa macchina. |
+| Default di sampling diversi da llama.cpp | **Diversi ma deliberati**: seguiamo Ollama (temp 0.8, top_k 40, top_p 0.9, repeat_penalty 1.1) mentre llama.cpp usa top_p 0.95, `min_p 0.05`, repeat_penalty 1.0. L'unico che vale la pena riconsiderare è `min_p`: a 0.0 non filtriamo la coda della distribuzione, e su una macchina dai numeri marginali è meno protettivo. Da valutare, non un bug. |
 
 ---
 

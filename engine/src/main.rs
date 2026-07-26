@@ -2910,6 +2910,7 @@ async fn interactive_chat(
                     tokens_generated,
                     tokens_prompt,
                     duration_ms,
+                    stop_reason,
                 } => {
                     // Strip any trailing stop sequence that was printed as part of the stream.
                     // Use trim_end() before matching: some models append \n after the
@@ -2936,9 +2937,16 @@ async fn interactive_chat(
                     } else {
                         0.0
                     };
+                    // Say it in the terminal too: an answer that stops because
+                    // the slot ran out of context looks exactly like a finished
+                    // one otherwise.
+                    let truncated = match stop_reason {
+                        inference::StopReason::Length => ", truncated — out of context",
+                        inference::StopReason::Stop => "",
+                    };
                     stats_line = format!(
-                        "\n\n[{short}: {tokens_generated} tokens, {tokens_prompt} prompt, {:.1} tok/s]\n",
-                        tps
+                        "\n\n[{short}: {tokens_generated} tokens, {tokens_prompt} prompt, {:.1} tok/s{}]\n",
+                        tps, truncated
                     );
                     break;
                 }

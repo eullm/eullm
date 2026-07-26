@@ -25,7 +25,9 @@ use tokio::sync::mpsc;
 
 use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
-use crate::inference::{GenerateRequest, InferenceEngine, JSON_GBNF, SchedulerHandle, StreamEvent};
+use crate::inference::{
+    GenerateRequest, InferenceEngine, JSON_GBNF, SchedulerHandle, StopReason, StreamEvent,
+};
 use crate::models::EU_CATALOG;
 use crate::tools;
 
@@ -351,13 +353,14 @@ fn format_chat_prompt(messages: &[Value], think: bool, model_name: &str) -> Stri
 }
 
 /// Collect all tokens from a receiver into a final result.
-async fn collect_stream(
-    mut rx: mpsc::Receiver<StreamEvent>,
-) -> Result<(String, u32, u32, u64), String> {
+async fn collect_stream(mut rx: mpsc::Receiver<StreamEvent>) -> Result<Collected, String> {
     let mut text = String::new();
     let mut tokens_generated = 0u32;
     let mut tokens_prompt = 0u32;
     let mut duration_ms = 0u64;
+    // If the stream ends without a Done event the answer is incomplete, so
+    // Length is the honest default rather than Stop.
+    let mut stop_reason = StopReason::Length;
 
     while let Some(event) = rx.recv().await {
         match event {
@@ -366,17 +369,34 @@ async fn collect_stream(
                 tokens_generated: tg,
                 tokens_prompt: tp,
                 duration_ms: d,
+                stop_reason: sr,
             } => {
                 tokens_generated = tg;
                 tokens_prompt = tp;
                 duration_ms = d;
+                stop_reason = sr;
                 break;
             }
             StreamEvent::Error(e) => return Err(e),
         }
     }
 
-    Ok((text, tokens_generated, tokens_prompt, duration_ms))
+    Ok(Collected {
+        text,
+        tokens_generated,
+        tokens_prompt,
+        duration_ms,
+        stop_reason,
+    })
+}
+
+/// What a non-streaming request produced, including *why* it stopped.
+struct Collected {
+    text: String,
+    tokens_generated: u32,
+    tokens_prompt: u32,
+    duration_ms: u64,
+    stop_reason: StopReason,
 }
 
 // ── Web content injection ────────────────────────────────────────────────────
@@ -653,13 +673,18 @@ async fn generate(
                 user_id,
             ))
         } else {
-            let (text, tokens_generated, tokens_prompt, duration_ms) =
-                collect_stream(rx).await.map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": e })),
-                    )
-                })?;
+            let Collected {
+                text,
+                tokens_generated,
+                tokens_prompt,
+                duration_ms,
+                stop_reason,
+            } = collect_stream(rx).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e })),
+                )
+            })?;
 
             let mut audit = AuditEntry::new(model.clone(), "generate".to_string());
             audit.input_tokens = tokens_prompt;
@@ -673,7 +698,7 @@ async fn generate(
                 "created_at": chrono::Utc::now().to_rfc3339(),
                 "response": text,
                 "done": true,
-                "done_reason": "stop",
+                "done_reason": stop_reason.as_api_str(),
                 "total_duration": duration_ms * 1_000_000,
                 "load_duration": 0,
                 "prompt_eval_count": tokens_prompt,
@@ -726,7 +751,7 @@ async fn generate(
                 "created_at": chrono::Utc::now().to_rfc3339(),
                 "response": result.text,
                 "done": true,
-                "done_reason": "stop",
+                "done_reason": result.stop_reason.as_api_str(),
                 "total_duration": result.duration_ms * 1_000_000,
                 "load_duration": 0,
                 "prompt_eval_count": result.tokens_prompt,
@@ -837,7 +862,7 @@ async fn chat(
             "created_at": chrono::Utc::now().to_rfc3339(),
             "message": { "role": "assistant", "content": text },
             "done": true,
-            "done_reason": "stop",
+            "done_reason": reason,
             "total_duration": duration_ms * 1_000_000,
             "load_duration": 0,
             "prompt_eval_count": tokens_prompt,
@@ -889,13 +914,18 @@ async fn chat(
                 user_id,
             ))
         } else {
-            let (text, tokens_generated, tokens_prompt, duration_ms) =
-                collect_stream(rx).await.map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": e })),
-                    )
-                })?;
+            let Collected {
+                text,
+                tokens_generated,
+                tokens_prompt,
+                duration_ms,
+                stop_reason,
+            } = collect_stream(rx).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e })),
+                )
+            })?;
 
             let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
             audit.input_tokens = tokens_prompt;
@@ -912,7 +942,7 @@ async fn chat(
                     "content": text
                 },
                 "done": true,
-                "done_reason": "stop",
+                "done_reason": stop_reason.as_api_str(),
                 "total_duration": duration_ms * 1_000_000,
                 "load_duration": 0,
                 "prompt_eval_count": tokens_prompt,
@@ -967,7 +997,7 @@ async fn chat(
                     "content": result.text
                 },
                 "done": true,
-                "done_reason": "stop",
+                "done_reason": result.stop_reason.as_api_str(),
                 "total_duration": result.duration_ms * 1_000_000,
                 "load_duration": 0,
                 "prompt_eval_count": result.tokens_prompt,
@@ -1105,13 +1135,18 @@ async fn chat_completions(
             let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI, user_id);
             Ok(Sse::new(stream).into_response())
         } else {
-            let (text, tokens_generated, tokens_prompt, duration_ms) =
-                collect_stream(rx).await.map_err(|e| {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": e })),
-                    )
-                })?;
+            let Collected {
+                text,
+                tokens_generated,
+                tokens_prompt,
+                duration_ms,
+                stop_reason,
+            } = collect_stream(rx).await.map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e })),
+                )
+            })?;
 
             let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
             audit.input_tokens = tokens_prompt;
@@ -1131,7 +1166,7 @@ async fn chat_completions(
                         "role": "assistant",
                         "content": text
                     },
-                    "finish_reason": "stop"
+                    "finish_reason": stop_reason.as_api_str()
                 }],
                 "usage": {
                     "prompt_tokens": tokens_prompt,
@@ -1185,7 +1220,7 @@ async fn chat_completions(
                         "role": "assistant",
                         "content": result.text
                     },
-                    "finish_reason": "stop"
+                    "finish_reason": result.stop_reason.as_api_str()
                 }],
                 "usage": {
                     "prompt_tokens": result.tokens_prompt,
@@ -1225,7 +1260,7 @@ fn stream_from_channel_sse(
                     let data = format_token_event(&piece, &model, &completion_id, format);
                     yield Ok(Event::default().data(data.to_string()));
                 }
-                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
+                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason } => {
                     // Audit log
                     let mut audit = AuditEntry::new(model.clone(), match format {
                         StreamFormat::OllamaGenerate => "generate",
@@ -1240,7 +1275,7 @@ fn stream_from_channel_sse(
 
                     let data = format_done_event(
                         &model, &completion_id, format,
-                        tokens_generated, tokens_prompt, duration_ms,
+                        tokens_generated, tokens_prompt, duration_ms, stop_reason,
                     );
                     yield Ok(Event::default().data(data.to_string()));
 
@@ -1283,7 +1318,7 @@ fn ndjson_stream_response(
                     line.push('\n');
                     yield Ok::<_, std::convert::Infallible>(line);
                 }
-                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms } => {
+                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason } => {
                     let mut audit = AuditEntry::new(model.clone(), match format {
                         StreamFormat::OllamaGenerate => "generate",
                         StreamFormat::OllamaChat => "chat",
@@ -1297,7 +1332,7 @@ fn ndjson_stream_response(
 
                     let data = format_done_event(
                         &model, &completion_id, format,
-                        tokens_generated, tokens_prompt, duration_ms,
+                        tokens_generated, tokens_prompt, duration_ms, stop_reason,
                     );
                     let mut line = data.to_string();
                     line.push('\n');
@@ -1379,14 +1414,16 @@ fn format_done_event(
     tokens_generated: u32,
     tokens_prompt: u32,
     duration_ms: u64,
+    stop_reason: StopReason,
 ) -> Value {
+    let reason = stop_reason.as_api_str();
     match format {
         StreamFormat::OllamaGenerate => json!({
             "model": model,
             "created_at": chrono::Utc::now().to_rfc3339(),
             "response": "",
             "done": true,
-            "done_reason": "stop",
+            "done_reason": reason,
             "total_duration": duration_ms * 1_000_000,
             "load_duration": 0,
             "prompt_eval_count": tokens_prompt,
@@ -1402,7 +1439,7 @@ fn format_done_event(
                 "content": "",
             },
             "done": true,
-            "done_reason": "stop",
+            "done_reason": reason,
             "total_duration": duration_ms * 1_000_000,
             "load_duration": 0,
             "prompt_eval_count": tokens_prompt,
@@ -1418,7 +1455,7 @@ fn format_done_event(
             "choices": [{
                 "index": 0,
                 "delta": {},
-                "finish_reason": "stop",
+                "finish_reason": reason,
             }],
             "usage": {
                 "prompt_tokens": tokens_prompt,

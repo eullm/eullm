@@ -691,6 +691,40 @@ pub struct GenerateResult {
     pub tokens_generated: u32,
     pub tokens_prompt: u32,
     pub duration_ms: u64,
+    /// Why generation ended — see [`StopReason`]. Carried here for the same
+    /// reason it is carried on the streaming event: without it the API cannot
+    /// tell a finished answer from a truncated one.
+    pub stop_reason: StopReason,
+}
+
+/// Why generation stopped.
+///
+/// This exists because the API used to report `"stop"` unconditionally, in
+/// eleven separate hardcoded places, and the scheduler never told it anything
+/// else. An answer cut off because the sequence ran out of context was
+/// therefore indistinguishable from one the model chose to end — which is
+/// exactly how a truncated answer gets read as the model being broken. Ollama
+/// reports `"length"` for this and OpenAI reports `finish_reason: "length"`;
+/// we now do too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// The model emitted an end-of-generation token, or a configured stop
+    /// sequence matched. The answer is complete.
+    Stop,
+    /// The token budget ran out: either the caller's `num_predict`/`max_tokens`
+    /// or, more often, the context left for this sequence. The answer is
+    /// **truncated**.
+    Length,
+}
+
+impl StopReason {
+    /// The string Ollama and OpenAI clients expect.
+    pub fn as_api_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+        }
+    }
 }
 
 /// A single token event emitted during streaming generation.
@@ -703,6 +737,8 @@ pub enum StreamEvent {
         tokens_generated: u32,
         tokens_prompt: u32,
         duration_ms: u64,
+        /// Why generation ended — see [`StopReason`].
+        stop_reason: StopReason,
     },
     /// An error occurred during generation.
     Error(String),
@@ -1029,6 +1065,10 @@ impl InferenceEngine {
         let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
+        // Assume truncation and prove otherwise: the loop can end by exhausting
+        // its token budget, and that is the case the API used to misreport as a
+        // clean stop.
+        let mut stop_reason = StopReason::Length;
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             // Sample from the last output (-1). After prompt decode there is
@@ -1039,6 +1079,7 @@ impl InferenceEngine {
 
             // End of generation?
             if self.model.is_eog_token(token) {
+                stop_reason = StopReason::Stop;
                 break;
             }
 
@@ -1082,6 +1123,7 @@ impl InferenceEngine {
             tokens_generated,
             tokens_prompt,
             duration_ms,
+            stop_reason,
         })
     }
 
@@ -1248,12 +1290,17 @@ impl InferenceEngine {
         let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
+        // Assume truncation and prove otherwise: the loop can end by exhausting
+        // its token budget, and that is the case the API used to misreport as a
+        // clean stop.
+        let mut stop_reason = StopReason::Length;
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
 
             if self.model.is_eog_token(token) {
+                stop_reason = StopReason::Stop;
                 break;
             }
 
@@ -1286,6 +1333,7 @@ impl InferenceEngine {
                     }
 
                     if stopped {
+                        stop_reason = StopReason::Stop;
                         break;
                     }
 
@@ -1318,6 +1366,7 @@ impl InferenceEngine {
             tokens_generated,
             tokens_prompt,
             duration_ms,
+            stop_reason,
         });
     }
 
@@ -1559,11 +1608,16 @@ impl InferenceEngine {
         let mut n_cur = new_n_past;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
+        // Assume truncation and prove otherwise: the loop can end by exhausting
+        // its token budget, and that is the case the API used to misreport as a
+        // clean stop.
+        let mut stop_reason = StopReason::Length;
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
             if self.model.is_eog_token(token) {
+                stop_reason = StopReason::Stop;
                 break;
             }
 
@@ -1590,6 +1644,7 @@ impl InferenceEngine {
                         }
                     }
                     if stopped {
+                        stop_reason = StopReason::Stop;
                         break;
                     }
                     if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
@@ -1618,6 +1673,7 @@ impl InferenceEngine {
             tokens_generated,
             tokens_prompt,
             duration_ms,
+            stop_reason,
         });
     }
 }
@@ -1828,5 +1884,33 @@ core id\t\t: 0
             "physical cores ({t}) cannot exceed logical ({})",
             logical_core_count()
         );
+    }
+}
+
+#[cfg(test)]
+mod stop_reason_tests {
+    use super::*;
+
+    #[test]
+    fn the_api_strings_are_what_ollama_and_openai_expect() {
+        // These land verbatim in `done_reason` and `finish_reason`, and clients
+        // branch on them — "length" is how a caller learns to ask for more.
+        assert_eq!(StopReason::Stop.as_api_str(), "stop");
+        assert_eq!(StopReason::Length.as_api_str(), "length");
+    }
+
+    #[test]
+    fn a_generate_result_carries_its_reason() {
+        // Guards the field being dropped in a refactor: the whole point is that
+        // the non-streaming path can distinguish the two, which it could not
+        // before because the API hardcoded "stop" in eleven places.
+        let r = GenerateResult {
+            text: "x".into(),
+            tokens_generated: 1,
+            tokens_prompt: 1,
+            duration_ms: 1,
+            stop_reason: StopReason::Length,
+        };
+        assert_eq!(r.stop_reason.as_api_str(), "length");
     }
 }
