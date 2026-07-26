@@ -844,13 +844,18 @@ async fn chat(
             ));
         }
         let rx = multimodal_to_channel(engine, mm_request, media);
-        let (text, tokens_generated, tokens_prompt, duration_ms) =
-            collect_stream(rx).await.map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": e })),
-                )
-            })?;
+        let Collected {
+            text,
+            tokens_generated,
+            tokens_prompt,
+            duration_ms,
+            stop_reason,
+        } = collect_stream(rx).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e })),
+            )
+        })?;
         let mut audit = AuditEntry::new(model.clone(), "chat".to_string());
         audit.input_tokens = tokens_prompt;
         audit.output_tokens = tokens_generated;
@@ -862,7 +867,7 @@ async fn chat(
             "created_at": chrono::Utc::now().to_rfc3339(),
             "message": { "role": "assistant", "content": text },
             "done": true,
-            "done_reason": reason,
+            "done_reason": stop_reason.as_api_str(),
             "total_duration": duration_ms * 1_000_000,
             "load_duration": 0,
             "prompt_eval_count": tokens_prompt,

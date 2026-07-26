@@ -73,6 +73,20 @@ jobs:
         # RUSTC_WORKSPACE_WRAPPER would run clippy on their build scripts and
         # `-D warnings` would fail on upstream's pedantic/missing-docs findings.
         run: cargo clippy --no-deps -- -D warnings -A dead-code -A unused-imports
+      - name: Check the multimodal feature compiles
+        working-directory: engine
+        # The release CUDA jobs build with `--features "cuda,multimodal"`, and
+        # code behind `#[cfg(feature = "multimodal")]` is invisible to every
+        # step above. A refactor that changed a shared type therefore compiled
+        # clean here, went green on main, and then broke all three CUDA jobs at
+        # tag time — three long builds and a pulled release, for an error a
+        # `cargo check` would have caught in a minute.
+        #
+        # `check`, not `build`: type errors are the failure mode this guards,
+        # and the C++/CUDA side is not what changes underneath us. `cuda` is
+        # deliberately not checked here — it needs the CUDA toolkit, which is a
+        # multi-minute install on every push, and it shares this same Rust code.
+        run: cargo check --features multimodal
 
   # ── Hub ──────────────────────────────────────────────────────────────
   hub:
