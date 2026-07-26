@@ -312,20 +312,27 @@ enum Commands {
         #[arg(long, default_value_t = 2048)]
         n_batch: u32,
 
-        /// KV cache type for keys. Options: f16, f32, q8_0, q4_0, q4_1,
-        /// q5_0, q5_1. Applied to every model this server loads or swaps
-        /// to. Default matches eullm serve's existing behavior (q8_0) —
-        /// note this differs from `eullm run`'s default (f16), kept as-is
-        /// to avoid changing default VRAM usage for existing serve users.
-        #[arg(long, default_value = "q8_0")]
+        /// KV cache type for keys. Options: f16 (default, best quality and
+        /// GPU compat), f32, q8_0, q4_0, q4_1, q5_0, q5_1. Applied to every
+        /// model this server loads or swaps to.
+        ///
+        /// Changed to f16 in v0.6.36. `serve` used to default to q8_0 keys
+        /// and q4_0 values while `run` defaulted to f16/f16 — so the same
+        /// model gave different output quality depending on which command
+        /// started it, silently, and nothing in the output said so. A
+        /// four-bit value cache is aggressive for Qwen3 in particular, and
+        /// external testing on issue #140 saw degraded generations with
+        /// exactly that setting. Quantizing the KV cache is a real and useful
+        /// trade at long context, but it has to be a choice the operator
+        /// makes, not one a command name makes for them.
+        #[arg(long, default_value = "f16")]
         cache_type_k: String,
 
-        /// KV cache type for values. Options: f16, f32, q8_0, q4_0, q4_1,
-        /// q5_0, q5_1. Applied to every model this server loads or swaps
-        /// to. Default matches eullm serve's existing behavior (q4_0) —
-        /// note this differs from `eullm run`'s default (f16), kept as-is
-        /// to avoid changing default VRAM usage for existing serve users.
-        #[arg(long, default_value = "q4_0")]
+        /// KV cache type for values. Options: f16 (default, best quality and
+        /// GPU compat), f32, q8_0, q4_0, q4_1, q5_0, q5_1. Applied to every
+        /// model this server loads or swaps to. See `--cache-type-k` for why
+        /// this defaults to f16 since v0.6.36.
+        #[arg(long, default_value = "f16")]
         cache_type_v: String,
 
         /// Enable transparent web browsing: URLs in user messages are
@@ -3200,4 +3207,89 @@ async fn run_multimodal_oneshot(engine: Arc<InferenceEngine>, image_path: PathBu
         }
     }
     let _ = join.await;
+}
+
+#[cfg(test)]
+mod cli_default_parity_tests {
+    use super::*;
+    use clap::Parser;
+
+    /// The KV cache defaults of `run` and `serve`.
+    fn kv_defaults(argv: &[&str]) -> (String, String) {
+        match Cli::parse_from(argv).command.expect("subcommand") {
+            Commands::Run {
+                cache_type_k,
+                cache_type_v,
+                ..
+            }
+            | Commands::Serve {
+                cache_type_k,
+                cache_type_v,
+                ..
+            } => (cache_type_k, cache_type_v),
+            other => panic!(
+                "unexpected subcommand: {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn run_and_serve_default_to_the_same_kv_cache_types() {
+        // Until v0.6.36 `serve` defaulted to q8_0 keys and q4_0 values while
+        // `run` defaulted to f16/f16. The same model therefore produced
+        // different output quality depending on which command started it, with
+        // nothing in the output saying so — and a four-bit value cache is
+        // aggressive enough for Qwen3 that external testing saw degraded
+        // generations from it (issue #140).
+        //
+        // Quantizing the KV cache stays a supported and genuinely useful trade
+        // at long context. It just has to be the operator's choice rather than
+        // a side effect of the command name.
+        let run = kv_defaults(&["eullm", "run", "some-model"]);
+        let serve = kv_defaults(&["eullm", "serve"]);
+        assert_eq!(
+            run, serve,
+            "run and serve must agree on the default KV cache types"
+        );
+        assert_eq!(run, ("f16".to_string(), "f16".to_string()));
+    }
+
+    #[test]
+    fn an_explicit_kv_cache_type_still_overrides_the_default() {
+        // The point of the change above is the *default*, not the capability.
+        let serve = kv_defaults(&[
+            "eullm",
+            "serve",
+            "--cache-type-k",
+            "q8_0",
+            "--cache-type-v",
+            "q4_0",
+        ]);
+        assert_eq!(serve, ("q8_0".to_string(), "q4_0".to_string()));
+    }
+
+    #[test]
+    fn run_and_serve_agree_on_context_size_too() {
+        // Same class of divergence, checked while we are here: a default that
+        // differs between the two commands is invisible to whoever hits it.
+        let run = match Cli::parse_from(["eullm", "run", "some-model"])
+            .command
+            .expect("subcommand")
+        {
+            Commands::Run { ctx_size, .. } => ctx_size,
+            _ => unreachable!(),
+        };
+        let serve = match Cli::parse_from(["eullm", "serve"])
+            .command
+            .expect("subcommand")
+        {
+            Commands::Serve { ctx_size, .. } => ctx_size,
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            run, serve,
+            "run and serve must agree on the default context"
+        );
+    }
 }

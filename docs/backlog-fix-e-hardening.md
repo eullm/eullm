@@ -31,8 +31,8 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
-**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E — 20 voci
-chiuse su 37. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
+**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E e H2-K —
+21 voci chiuse su 38. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
 deployment in container ha ora un controllo d'accesso funzionante *ed
 esprimibile*, e ogni input esterno che diventa un percorso o una richiesta di
 rete è validato. Resta **H1-F**, che è lo stesso gate applicato all'**Hub**: il
@@ -41,7 +41,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 157 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 160 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -521,6 +521,28 @@ esterni non si fidano dei valori che leggono.
      (`inference/scheduler.rs`): è il posto dove filtrare, non a valle nel client.
   Il sintomo è già riproducibile con `tools/smoke_test.py` su qualunque box: a
   temperatura zero un before/after è misurabile senza ambiguità.
+
+- [x] **H2-K · `run` e `serve` non devono partire con KV cache diverse** *(P1)*
+  Emerso dai test di Peter sull'issue #140, non da una revisione del codice.
+  `Commands::Run` aveva `cache_type_k`/`cache_type_v` a `f16`/`f16`,
+  `Commands::Serve` a `q8_0`/`q4_0` (`main.rs:195-201` contro `main.rs:315-329`).
+  Lo stesso modello dava quindi qualità di output diversa a seconda del comando
+  che l'aveva avviato, in silenzio: niente nell'output lo diceva, e la V-cache a
+  4 bit è aggressiva su Qwen3 al punto che un tester esterno ha visto
+  degradazione con esattamente quella configurazione. Il commento nel codice
+  giustificava la divergenza con «kept as-is to avoid changing default VRAM usage
+  for existing serve users» — un ragionamento che protegge il consumo di memoria
+  e sacrifica la correttezza dell'output, che è l'ordine sbagliato.
+  Chiuso portando `serve` a `f16`/`f16`. Quantizzare la KV cache resta un trade
+  supportato e utile a contesto lungo: deve essere una scelta dell'operatore, non
+  un effetto collaterale del nome del comando. Tre test in
+  `cli_default_parity_tests` bloccano la regressione, incluso uno che verifica
+  che i default di `ctx_size` coincidano — stessa classe di divergenza, invisibile
+  a chi ci sbatte contro.
+  **Conseguenza operativa**: chiunque usi `eullm serve` con la configurazione di
+  default vedrà ora più consumo di VRAM per la KV cache (circa 2× su K, 4× su V)
+  e output migliore. Chi ha bisogno del comportamento vecchio lo ottiene con
+  `--cache-type-k q8_0 --cache-type-v q4_0`, e ora sa di averlo chiesto.
 
 ---
 
