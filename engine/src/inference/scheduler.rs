@@ -28,7 +28,7 @@ use llama_cpp_2::token::LlamaToken;
 use tokio::sync::mpsc;
 
 use super::output::{PieceOutcome, process_piece};
-use super::{GenerateRequest, InferenceConfig, StopReason, StreamEvent, random_seed_fallback};
+use super::{GenerateRequest, InferenceConfig, StopReason, StreamEvent};
 
 /// Below this many tokens per slot, a reasoning model routinely runs out of
 /// room mid-answer. Not a hard limit — just the threshold at which staying
@@ -961,47 +961,10 @@ fn run_scheduler_loop(
                     };
 
                     let req = &scheduled.request;
-                    let seed = req
-                        .seed
-                        .unwrap_or_else(|| random_seed_fallback(seq_id as u32));
-                    let sampler = {
-                        let mut chain: Vec<LlamaSampler> = Vec::new();
-                        // Grammar (if any) must be first in the chain
-                        if let Some(ref grammar_str) = req.grammar {
-                            match LlamaSampler::grammar(&model, grammar_str, "root") {
-                                Ok(gs) => chain.push(gs),
-                                Err(e) => tracing::warn!(
-                                    "Grammar sampler init failed ({e:?}), falling back to unconstrained"
-                                ),
-                            }
-                        }
-                        // Repeat penalty (Ollama default: 1.1, last 64 tokens)
-                        if req.repeat_penalty != 1.0 {
-                            chain.push(LlamaSampler::penalties(
-                                req.repeat_last_n,
-                                req.repeat_penalty,
-                                0.0,
-                                0.0,
-                            ));
-                        }
-                        // Top-K (Ollama default: 40)
-                        if req.top_k > 0 {
-                            chain.push(LlamaSampler::top_k(req.top_k));
-                        }
-                        // Top-P (Ollama default: 0.9)
-                        if req.top_p < 1.0 {
-                            chain.push(LlamaSampler::top_p(req.top_p, 1));
-                        }
-                        // Min-P (Ollama default: 0.0)
-                        if req.min_p > 0.0 {
-                            chain.push(LlamaSampler::min_p(req.min_p, 1));
-                        }
-                        // Temperature
-                        chain.push(LlamaSampler::temp(req.temperature));
-                        // Sampling distribution
-                        chain.push(LlamaSampler::dist(seed));
-                        LlamaSampler::chain_simple(chain)
-                    };
+                    // Slot id as the seed fallback: distinct per slot, so two
+                    // concurrent unseeded requests cannot collapse onto the
+                    // same sequence even in the clock-unusable case.
+                    let sampler = super::sampling::build_sampler(&model, req, seq_id as u32);
 
                     let seq = ActiveSequence {
                         seq_id,

@@ -515,12 +515,43 @@ esterni non si fidano dei valori che leggono.
   della singola richiesta quando `think` è falso. È una decisione lato
   chiamante, non lato `process_piece`, e merita il suo cambio.
 
-- [ ] **H2-E · Estrarre la costruzione della catena di sampling** *(P2)*
+- [x] **H2-E · Estrarre la costruzione della catena di sampling** *(P2)*
   La catena è duplicata in quattro punti (`scheduler.rs:929-966`;
   `inference/mod.rs:781-812, 1000-1031, 1313-1341`) e la divergenza è già iniziata: il
   fallback del seed differisce (`seq_id` contro `1234` hardcoded) e i filtri sono assenti in
   tre copie su quattro. Ogni nuovo sampler andrà aggiunto quattro volte. Estrarre
   `fn build_sampler(&LlamaModel, &GenerateRequest, seed) -> LlamaSampler`.
+
+  **Chiusa.** `inference/sampling.rs` contiene `build_sampler`, e le quattro
+  copie sono sparite. Le due divergenze previste dalla voce c'erano entrambe,
+  ed erano di gravità diversa:
+  - il **fallback del seed**: `seq_id` nello scheduler, `1234` fisso nei tre
+    percorsi sequenziali. Conta solo se l'orologio di sistema precede l'epoca
+    Unix, quindi niente di visibile — sono due risposte a una domanda sola, che
+    è il modo in cui cominciano le divergenze che poi contano. Ora il chiamante
+    passa il proprio, e lo scheduler passa lo slot: due richieste concorrenti
+    senza seed non possono collassare sulla stessa sequenza nemmeno in quel caso.
+  - la **copia multimodale ingoiava gli errori di grammatica**: `if let Ok(gs)`
+    senza `else`, mentre le altre tre loggano «Grammar sampler init failed».
+    Una richiesta con `format: "json"` la cui grammatica non compilava tornava
+    testo libero **senza una riga da nessuna parte**. Questo è un difetto vero,
+    non solo duplicazione.
+
+  L'ordine della catena è ora documentato come contratto e non come stile:
+  grammatica → penalties → top-k → top-p → min-p → temperatura → dist. La
+  grammatica deve vedere la distribuzione intera prima che qualcuno la tronchi,
+  e `dist` deve restare ultimo perché è ciò che estrae davvero il token.
+
+  Verifica sul binario, non solo unit test: **stesso seed due volte → risposta
+  identica**, **senza seed → risposte diverse** a temperatura 1.4. È il
+  controllo discriminante per una modifica al sampling, perché passa solo se il
+  seed viene davvero usato e davvero variato. Più smoke test 32 pass / 0 fail,
+  186 test, clippy, fmt, `--all-targets` con e senza `multimodal`.
+
+  Nota di metodo, seconda volta oggi: `cmd | tail; echo $?` legge lo stato di
+  `tail`, non di `cmd`. Mi ha nascosto un fallimento di clippy
+  (`field_reassign_with_default` in un test nuovo) che avevo già dichiarato
+  verde. Con le pipe serve `PIPESTATUS` o `set -o pipefail`.
 
 - [ ] **H2-F · Irrobustire il patcher GGUF** *(P2)*
   A differenza del parser di `fit.rs`, che è bounds-checked con rigore,
