@@ -183,6 +183,50 @@ hit 2m34s/2m47s with ~130 CUDA hits each, `Cache location: s3`.
 
 [gha-cache-docs]: https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching
 
+### The Windows CUDA long pole is the toolkit INSTALL, not the compile
+
+Measured on v0.6.38, job `build-windows-cuda`, 15m55s total:
+
+| step | time |
+|---|---:|
+| **Install CUDA toolkit 12.8** | **7m 34s** |
+| **Build engine (CUDA + mtmd)** | **5m 46s** |
+| everything else (checkout, LLVM, Ninja, MSVC, package, upload) | 2m 35s |
+
+Two things follow, and both contradict what the workflow used to assume.
+
+**Caching cannot help.** Inside that 7m34s, only 22s was fetching the installer
+— the log shows it coming from `C:\hostedtoolcache\...`, already cached. The
+other **7m12s is NVIDIA's installer executing**. The only lever is installing
+less. Do not reach for a cache layer here; it is already warm.
+
+**sccache is fine.** Same run: 519 hits, 221 C/C++, 139 CUDA. The Ninja fix from
+v0.5.14 works. Do not go looking for a compile-caching problem that isn't there.
+
+The fix is `sub-packages` on `Jimver/cuda-toolkit` — ~700 MB of components
+instead of the full ~3 GB. **An earlier attempt was reverted with a wrong
+diagnosis** ("Windows needs `cudart_12.8`, Linux uses `cudart`"), and that wrong
+note kept the idea buried for months. The action appends the version itself
+(`src/installer.ts`: `` `${subPackage}_${version.major}.${version.minor}` ``).
+What differs between platforms is the **base** names: Linux network packages are
+`cuda-nvcc` / `libcublas-dev`, Windows installer components are `nvcc` /
+`cublas_dev`. The README's "network method only" caveat is Linux-only, and our
+Linux CUDA jobs use a devel container without this action.
+
+Derive the component list from what the code includes, never from a template:
+`ggml-cuda` includes `cuda.h`, `cuda_runtime.h`, `cuda_fp16/bf16/fp4/fp8.h`,
+`cooperative_groups.h`, `mma.h`, `cub/cub.cuh`, `cublas_v2.h`, and CMake links
+`CUDA::cudart` / `CUDA::cublas` / `CUDA::cuda_driver`. No nvml, nvrtc, nvtx or
+cupti. The release ships exactly three DLLs (`cudart64`, `cublas64`,
+`cublasLt64`), so cutting the rest changes nothing users receive. Component
+sizes are authoritative in NVIDIA's own
+`developer.download.nvidia.com/compute/cuda/redist/redistrib_<version>.json`.
+
+`try-windows-ninja.yml` carries the same `method` and `sub-packages` as the
+release job specifically so a `workflow_dispatch` validates a change to the list
+without spending a release. Keep the two in step. A missing component fails at
+compile or link time — loud, never a subtly wrong binary.
+
 ### Windows CUDA: Ninja generator + S3 sccache (working as of v0.5.14)
 
 For years before v0.5.14, Windows CUDA was the long-pole of every release

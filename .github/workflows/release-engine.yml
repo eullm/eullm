@@ -718,11 +718,48 @@ jobs:
           # sccache stays on S3 and is untouched; only this ~3 GB installer
           # shares the 10 GB GitHub cache with the Swatinem rust-cache.
           method: local
-          # Sub-package filtering is deliberately omitted: NVIDIA's Windows
-          # installer uses component names like "cudart_12.8" which differ
-          # from Linux ("cudart"). Providing a Linux-style allowlist makes
-          # the installer exit with code 3772776473. Letting Jimver install
-          # the default set is the most reliable path on Windows.
+          # Install ~700 MB of components instead of the full ~3 GB toolkit.
+          # This step was the single most expensive thing in the whole release:
+          # 7m34s on v0.6.38, of which 22s was fetching the (already cached)
+          # installer and 7m12s was the installer itself running. Caching
+          # cannot touch that 7m12s — the only lever is installing less.
+          #
+          # An earlier attempt at this was reverted with the note that Windows
+          # needs "cudart_12.8" where Linux uses "cudart". That diagnosis was
+          # wrong, which is why the idea stayed buried: this action appends the
+          # version itself — src/installer.ts does
+          #   `${subPackage}_${version.major}.${version.minor}`
+          # — so "cudart" here becomes "cudart_12.8" on the command line, which
+          # is exactly the form NVIDIA documents for the Windows silent
+          # installer. What actually differs between platforms is the BASE
+          # names: Linux network packages are "cuda-nvcc" / "libcublas-dev",
+          # Windows components are "nvcc" / "cublas_dev". The names below are
+          # the Windows ones, from NVIDIA's installation guide. (The README's
+          # "only works with the network method" caveat is Linux-only; our
+          # Linux CUDA jobs use a devel container and never run this action.)
+          #
+          # The list is derived from what the code actually includes, not from
+          # guesswork: ggml-cuda includes cuda.h, cuda_runtime.h,
+          # cuda_fp16/bf16/fp4/fp8.h, cooperative_groups.h, mma.h (cudart),
+          # cub/cub.cuh (thrust), cublas_v2.h (cublas_dev), and CMake links
+          # CUDA::cudart / CUDA::cublas / CUDA::cuda_driver. No nvml, nvrtc,
+          # nvtx or cupti anywhere in the backend. The packaging step below
+          # ships exactly three DLLs — cudart64, cublas64, cublasLt64 — all of
+          # which come from cudart + cublas, so nothing shipped changes.
+          #
+          # Skipped, and never referenced by anything we build: Nsight Systems
+          # (368 MB), Nsight Compute (328 MB), nvrtc (291 MB), cuSPARSE
+          # (272 MB), nvJitLink (245 MB), cuSOLVER (235 MB), NPP (196 MB),
+          # cuFFT (182 MB), nvvp (115 MB), cuRAND, CUPTI, sanitizer, docs,
+          # OpenCL, demo suite — 2.3 GB in total, per NVIDIA's own
+          # redistrib_12.8.0.json manifest.
+          #
+          # Failure mode if a component is missing: the build stops at compile
+          # or link time with a missing header or unresolved symbol. Loud and
+          # immediate — it cannot produce a subtly wrong binary. Validate a
+          # change to this list by dispatching try-windows-ninja.yml, which
+          # carries the same list, rather than by spending a release.
+          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up

@@ -64,7 +64,14 @@ jobs:
         id: cuda-toolkit
         with:
           cuda: "12.8.0"
-          method: network
+          # Mirrors release-engine.yml exactly (method AND sub-packages), so a
+          # dispatch of this workflow is a real test of that job's install
+          # step. See the long comment there for why this list and not another.
+          # Read two numbers from a run: the duration of this step (was 7m34s
+          # with the full toolkit on v0.6.38) and whether the build below still
+          # links. A missing component fails the build outright.
+          method: local
+          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
