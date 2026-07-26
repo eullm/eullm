@@ -536,6 +536,42 @@ esterni non si fidano dei valori che leggono.
   Il sintomo è già riproducibile con `tools/smoke_test.py` su qualunque box: a
   temperatura zero un before/after è misurabile senza ambiguità.
 
+  **Causa 1 confermata, non per ipotesi: letta dal template dentro il GGUF.**
+  `tokenizer.chat_template` di `Qwen3-0.6B-Q4_K_M.gguf` — lo stesso file su cui
+  girano i test di Peter — contiene esattamente:
+
+      {%- if enable_thinking is defined and enable_thinking is false %}
+          {{- '<think>\n\n</think>\n\n' }}
+      {%- endif %}
+
+  Riga vuota fra i due tag, come sospettato. `think_suppression_prefix()` ora
+  restituisce quella sequenza, e i byte esatti sono documentati sul posto con la
+  citazione del template, così non si possono riperdere in un riordino.
+  `main.rs:2975` chiama la funzione invece di ripetere il letterale, quindi la
+  ricostruzione della history è rimasta allineata da sola.
+
+  **Verifica before/after sulla stessa macchina, `temperature: 0`, stesso
+  prompt dello smoke test** (`Count: one two three`, `num_predict 400`) — il
+  before è stato ricompilato col prefisso vecchio proprio per non avere un
+  controllo che passa in entrambi i casi:
+
+  | prefisso | contenuto visibile | `</think>` al client |
+  |---|---|---|
+  | `<think>\n</think>\n\n` (vecchio) | 882 caratteri di ragionamento, poi il tag, poi la risposta | **sì** |
+  | `<think>\n\n</think>\n\n` (nuovo) | `Count: one two three` | no |
+
+  Il difetto era peggio di come l'avevamo scritto: non era «un tag che sfugge»,
+  era che **la soppressione del thinking non funzionava affatto**. Con un solo
+  newline il modello ragionava per intero nel canale visibile e chiudeva col tag;
+  chi chiedeva `think: false` pagava i token del ragionamento e se lo vedeva in
+  faccia. Verificato su tutti e tre i percorsi: NDJSON in streaming, non
+  streaming, e motore sequenziale (`--batch-size 0`).
+
+  **Resta aperto il punto 2**, la guardia sul tag orfano. Va nel `process_piece`
+  condiviso di H2-D e non prima: metterla adesso significherebbe scriverla nello
+  scheduler e lasciare scoperti gli altri due loop di decode — esattamente la
+  duplicazione che H2-D esiste per togliere.
+
 - [x] **H2-K · `run` e `serve` non devono partire con KV cache diverse** *(P1)*
   Emerso dai test di Peter sull'issue #140, non da una revisione del codice.
   `Commands::Run` aveva `cache_type_k`/`cache_type_v` a `f16`/`f16`,
