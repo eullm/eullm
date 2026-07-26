@@ -123,13 +123,9 @@ jobs:
           done
 
   build:
-    # Manual dispatch is for testing a single build in isolation - skip the
-    # rest of the matrix there. Two targets are dispatchable:
-    # build-arm-cix-p1 (its own job, see its `if:` below) and macOS x64,
-    # which is the one target whose runner choice needs iterating on without
-    # paying for a whole release matrix (Windows CUDA alone is ~50 min cold).
-    # The `release` job stays tag-only, so a dispatch can never publish.
-    if: ${{ github.event_name == 'push' || matrix.target == 'x86_64-apple-darwin' }}
+    # Manual dispatch is for testing build-arm-cix-p1 in isolation - skip
+    # the rest of the matrix there.
+    if: ${{ github.event_name == 'push' }}
     strategy:
       fail-fast: false
       matrix:
