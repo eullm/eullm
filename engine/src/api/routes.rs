@@ -391,6 +391,7 @@ async fn inject_web_content(
     web_enabled: bool,
     ctx_size: u32,
     batch_size: usize,
+    web_policy: &crate::tools::guard::WebPolicy,
 ) -> Vec<Value> {
     if !web_enabled {
         return messages;
@@ -436,7 +437,9 @@ async fn inject_web_content(
 
     let mut injections: Vec<String> = Vec::new();
     for url in &urls {
-        match tools::fetch_for_context(url, effective_ctx, existing_chars, &user_text).await {
+        match tools::fetch_for_context(url, effective_ctx, existing_chars, &user_text, web_policy)
+            .await
+        {
             Ok((content, truncated)) => {
                 let note = if truncated {
                     " [content truncated to fit context]"
@@ -446,14 +449,17 @@ async fn inject_web_content(
                 injections.push(format!("[Web content from {url}{note}]\n\n{content}"));
                 tracing::info!(
                     "Web: fetched {} ({} chars{})",
-                    url,
+                    crate::audit::sanitize_for_log(url),
                     content.len(),
                     if truncated { ", truncated" } else { "" }
                 );
             }
             Err(e) => {
                 injections.push(format!("[Failed to fetch {url}: {e}]"));
-                tracing::warn!("Web: fetch failed for {url}: {e}");
+                tracing::warn!(
+                    "Web: fetch failed for {}: {e}",
+                    crate::audit::sanitize_for_log(url)
+                );
             }
         }
     }
@@ -591,8 +597,12 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
 
 async fn generate(
     State(state): State<S>,
+    // Present on every request: the auth middleware inserts an anonymous
+    // identity when no keys are configured, so this never fails to extract.
+    axum::Extension(identity): axum::Extension<super::Identity>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    let user_id = identity.key_id().map(str::to_string);
     let requested = body.get("model").and_then(|v| v.as_str());
     let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
@@ -640,6 +650,7 @@ async fn generate(
                 rx,
                 model,
                 StreamFormat::OllamaGenerate,
+                user_id,
             ))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
@@ -654,6 +665,7 @@ async fn generate(
             audit.input_tokens = tokens_prompt;
             audit.output_tokens = tokens_generated;
             audit.duration_ms = duration_ms;
+            audit.user_id = user_id.clone();
             AuditLogger::new().log(&audit);
 
             Ok(Json(json!({
@@ -681,6 +693,7 @@ async fn generate(
                 rx,
                 model,
                 StreamFormat::OllamaGenerate,
+                user_id,
             ))
         } else {
             let result = tokio::task::spawn_blocking({
@@ -705,6 +718,7 @@ async fn generate(
             audit.input_tokens = result.tokens_prompt;
             audit.output_tokens = result.tokens_generated;
             audit.duration_ms = result.duration_ms;
+            audit.user_id = user_id.clone();
             AuditLogger::new().log(&audit);
 
             Ok(Json(json!({
@@ -727,8 +741,12 @@ async fn generate(
 
 async fn chat(
     State(state): State<S>,
+    // Present on every request: the auth middleware inserts an anonymous
+    // identity when no keys are configured, so this never fails to extract.
+    axum::Extension(identity): axum::Extension<super::Identity>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    let user_id = identity.key_id().map(str::to_string);
     let requested = body.get("model").and_then(|v| v.as_str());
     let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
@@ -745,6 +763,7 @@ async fn chat(
         state.web_enabled,
         state.ctx_size,
         state.batch_size,
+        &state.web_policy,
     )
     .await;
 
@@ -792,7 +811,12 @@ async fn chat(
         };
         if is_streaming(&body) {
             let rx = multimodal_to_channel(engine, mm_request, media);
-            return Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat));
+            return Ok(ndjson_stream_response(
+                rx,
+                model,
+                StreamFormat::OllamaChat,
+                user_id,
+            ));
         }
         let rx = multimodal_to_channel(engine, mm_request, media);
         let (text, tokens_generated, tokens_prompt, duration_ms) =
@@ -806,6 +830,7 @@ async fn chat(
         audit.input_tokens = tokens_prompt;
         audit.output_tokens = tokens_generated;
         audit.duration_ms = duration_ms;
+        audit.user_id = user_id.clone();
         AuditLogger::new().log(&audit);
         return Ok(Json(json!({
             "model": model,
@@ -857,7 +882,12 @@ async fn chat(
         let rx = sched.submit(request);
 
         if is_streaming(&body) {
-            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat))
+            Ok(ndjson_stream_response(
+                rx,
+                model,
+                StreamFormat::OllamaChat,
+                user_id,
+            ))
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
                 collect_stream(rx).await.map_err(|e| {
@@ -871,6 +901,7 @@ async fn chat(
             audit.input_tokens = tokens_prompt;
             audit.output_tokens = tokens_generated;
             audit.duration_ms = duration_ms;
+            audit.user_id = user_id.clone();
             AuditLogger::new().log(&audit);
 
             Ok(Json(json!({
@@ -896,7 +927,12 @@ async fn chat(
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
-            Ok(ndjson_stream_response(rx, model, StreamFormat::OllamaChat))
+            Ok(ndjson_stream_response(
+                rx,
+                model,
+                StreamFormat::OllamaChat,
+                user_id,
+            ))
         } else {
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
@@ -920,6 +956,7 @@ async fn chat(
             audit.input_tokens = result.tokens_prompt;
             audit.output_tokens = result.tokens_generated;
             audit.duration_ms = result.duration_ms;
+            audit.user_id = user_id.clone();
             AuditLogger::new().log(&audit);
 
             Ok(Json(json!({
@@ -1005,8 +1042,12 @@ async fn list_models_openai() -> Json<Value> {
 
 async fn chat_completions(
     State(state): State<S>,
+    // Present on every request: the auth middleware inserts an anonymous
+    // identity when no keys are configured, so this never fails to extract.
+    axum::Extension(identity): axum::Extension<super::Identity>,
     Json(body): Json<Value>,
 ) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    let user_id = identity.key_id().map(str::to_string);
     let requested = body.get("model").and_then(|v| v.as_str());
     let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
@@ -1023,6 +1064,7 @@ async fn chat_completions(
         state.web_enabled,
         state.ctx_size,
         state.batch_size,
+        &state.web_policy,
     )
     .await;
 
@@ -1060,7 +1102,7 @@ async fn chat_completions(
         let rx = sched.submit(request);
 
         if is_streaming(&body) {
-            let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI);
+            let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI, user_id);
             Ok(Sse::new(stream).into_response())
         } else {
             let (text, tokens_generated, tokens_prompt, duration_ms) =
@@ -1075,6 +1117,7 @@ async fn chat_completions(
             audit.input_tokens = tokens_prompt;
             audit.output_tokens = tokens_generated;
             audit.duration_ms = duration_ms;
+            audit.user_id = user_id.clone();
             AuditLogger::new().log(&audit);
 
             Ok(Json(json!({
@@ -1103,7 +1146,7 @@ async fn chat_completions(
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
-            let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI);
+            let stream = stream_from_channel_sse(rx, model, StreamFormat::OpenAI, user_id);
             Ok(Sse::new(stream).into_response())
         } else {
             let result = tokio::task::spawn_blocking({
@@ -1128,6 +1171,7 @@ async fn chat_completions(
             audit.input_tokens = result.tokens_prompt;
             audit.output_tokens = result.tokens_generated;
             audit.duration_ms = result.duration_ms;
+            audit.user_id = user_id.clone();
             AuditLogger::new().log(&audit);
 
             Ok(Json(json!({
@@ -1170,6 +1214,7 @@ fn stream_from_channel_sse(
     mut rx: mpsc::Receiver<StreamEvent>,
     model: String,
     format: StreamFormat,
+    user_id: Option<String>,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     async_stream::stream! {
         let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -1190,6 +1235,7 @@ fn stream_from_channel_sse(
                     audit.input_tokens = tokens_prompt;
                     audit.output_tokens = tokens_generated;
                     audit.duration_ms = duration_ms;
+                    audit.user_id = user_id.clone();
                     AuditLogger::new().log(&audit);
 
                     let data = format_done_event(
@@ -1224,6 +1270,7 @@ fn ndjson_stream_response(
     mut rx: mpsc::Receiver<StreamEvent>,
     model: String,
     format: StreamFormat,
+    user_id: Option<String>,
 ) -> axum::response::Response {
     let stream = async_stream::stream! {
         let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
@@ -1245,6 +1292,7 @@ fn ndjson_stream_response(
                     audit.input_tokens = tokens_prompt;
                     audit.output_tokens = tokens_generated;
                     audit.duration_ms = duration_ms;
+                    audit.user_id = user_id.clone();
                     AuditLogger::new().log(&audit);
 
                     let data = format_done_event(

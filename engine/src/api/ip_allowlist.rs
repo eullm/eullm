@@ -21,9 +21,14 @@
 //! bridge gateway address, so allowing that address allows everyone who can
 //! reach the port; and a request originating in the user's own browser
 //! genuinely comes from loopback, so a page on any site can reach the API.
-//! An allowlist cannot express either case — closing them needs
-//! authentication (a token checked before this layer) and an `Origin` check.
-//! See `docs/backlog-fix-e-hardening.md`, H1-A and H1-E.
+//! An allowlist cannot express either case.
+//!
+//! Both are now covered by the layers around this one: [`super::auth`] checks a
+//! bearer token *before* this check runs (and an authenticated request bypasses
+//! it, because an address is not the identity that matters once a token is
+//! present), and [`super::origin`] refuses cross-origin requests with side
+//! effects. Read those two modules before treating this one as the boundary —
+//! on an untrusted network it is not, and it was never able to be.
 
 use std::fs;
 use std::net::IpAddr;
@@ -183,6 +188,17 @@ fn parse_env_file(contents: &str) -> std::collections::HashMap<String, String> {
         vars.insert(key, value.to_string());
     }
     vars
+}
+
+/// Read one variable out of `.env` file contents, trimmed, `None` when absent
+/// or blank. Shared with [`super::auth`] so both perimeter settings come from
+/// the same file with the same parsing rules instead of two near-identical
+/// readers drifting apart.
+pub(super) fn env_file_var(contents: &str, key: &str) -> Option<String> {
+    parse_env_file(contents)
+        .get(key)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 /// Parse a comma-separated list of bare IPs and/or CIDR subnets, e.g.

@@ -11,8 +11,12 @@
 //! model name, the server automatically unloads the current model and loads
 //! the new one.  In-flight requests on the old model complete normally.
 
+mod auth;
 mod ip_allowlist;
+mod origin;
 mod routes;
+
+pub use auth::Identity;
 
 use axum::Router;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, State};
@@ -20,7 +24,7 @@ use axum::response::IntoResponse;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
 use crate::inference::{
     BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig, SchedulerHandle,
@@ -98,6 +102,31 @@ pub struct AppState {
     /// once at startup; not affected by later edits to `.env` without a
     /// restart.
     pub ip_allowlist: ip_allowlist::IpAllowlist,
+
+    /// Optional bearer-token authentication with per-key quotas — see `auth`.
+    /// When enabled it runs *outside* the IP allowlist and a valid key admits
+    /// the request regardless of source address, which is the only ordering
+    /// that works behind Docker's address translation.
+    pub api_keys: Arc<auth::ApiKeys>,
+
+    /// Which browser origins may call the API — see `origin`.
+    pub allowed_origins: origin::AllowedOrigins,
+
+    /// What the web tool is allowed to fetch — see `tools::guard`. Resolved
+    /// once at startup so a request cannot pay for re-reading the environment,
+    /// and so the posture is logged before the first fetch rather than after.
+    pub web_policy: crate::tools::guard::WebPolicy,
+
+    /// Whether a request's `model` field may name an arbitrary filesystem
+    /// path. Off by default — see `resolve_model`.
+    pub allow_model_paths: bool,
+
+    /// The `(name, path)` this process was launched with, if any. Always
+    /// resolvable even when `allow_model_paths` is off: `/api/tags` advertises
+    /// this name, clients echo back what they were told, and refusing our own
+    /// answer would break `eullm run ./model.gguf` on the first model swap
+    /// back to it.
+    pub launch_model: Option<(String, PathBuf)>,
 }
 
 impl AppState {
@@ -317,37 +346,74 @@ impl AppState {
     /// Resolve a model name to a GGUF file path.
     ///
     /// Search order:
-    /// 1. Direct GGUF file path (absolute or relative, e.g. `/models/qwen3-14b.gguf`)
-    /// 2. Directory containing a single .gguf file (e.g. `/models/qwen3-14b/`)
-    /// 3. Path without extension — try appending `.gguf`
-    /// 4. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
-    /// 5. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
+    /// 1. Direct GGUF file path — **only** when `allow_model_paths` is set, or
+    ///    when it is the path this process was launched with
+    /// 2. Directory containing a single .gguf file — same condition
+    /// 3. Path without extension — try appending `.gguf`, same condition
+    /// 4. Well-known container mount points (`/models`, `/data/models`)
+    /// 5. Exact name in model store (`~/.eullm/models/{name}/*.gguf`)
+    /// 6. Normalized name (Ollama tags: `qwen3:14b` → `qwen3-14b`)
+    ///
+    /// # Why steps 1–3 are gated
+    ///
+    /// The `model` field of an API request used to be handed straight to
+    /// `PathBuf::from` and accepted if `is_file()`. Combined with an
+    /// unauthenticated API that made every readable file on the host a valid
+    /// model name. A caller could not read the file's contents back, but the
+    /// error messages distinguished "not found" from "found but failed to
+    /// load", which is a working oracle for probing the filesystem — and
+    /// pointing the loader at, say, a 40 GB file is a denial of service on its
+    /// own. Names that resolve inside the model store or a deliberate mount
+    /// point cover every documented workflow; arbitrary paths are opt-in via
+    /// `EULLM_ALLOW_MODEL_PATHS=1`.
+    ///
+    /// The launch path is always accepted regardless: `/api/tags` reports it as
+    /// the loaded model's name, clients echo back what they were told, and
+    /// refusing our own answer would break `eullm run ./model.gguf`.
     fn resolve_model(&self, name: &str) -> Result<PathBuf, String> {
         let path = PathBuf::from(name);
 
-        // 1. Direct GGUF file path?
-        if path.is_file() {
-            return Ok(path);
-        }
-
-        // 2. Directory containing .gguf files? Pick the first one.
-        if path.is_dir()
-            && let Some(gguf) = find_gguf_in_dir(&path)
+        // 0. The model this process was launched with, by the name the API
+        //    advertises for it or by its literal path. Exact match on either —
+        //    never a stem or prefix comparison, which would turn this
+        //    allowance into a way to reach any similarly named file.
+        if let Some((launch_name, launch_path)) = &self.launch_model
+            && (name == launch_name.as_str() || &path == launch_path)
+            && launch_path.is_file()
         {
-            return Ok(gguf);
+            return Ok(launch_path.clone());
         }
 
-        // 3. Try appending .gguf extension.
-        let with_ext = path.with_extension("gguf");
-        if with_ext.is_file() {
-            return Ok(with_ext);
+        if self.allow_model_paths {
+            // 1. Direct GGUF file path?
+            if path.is_file() {
+                return Ok(path);
+            }
+
+            // 2. Directory containing .gguf files? Pick the first one.
+            if path.is_dir()
+                && let Some(gguf) = find_gguf_in_dir(&path)
+            {
+                return Ok(gguf);
+            }
+
+            // 3. Try appending .gguf extension.
+            let with_ext = path.with_extension("gguf");
+            if with_ext.is_file() {
+                return Ok(with_ext);
+            }
         }
 
-        // 4. Try common model directories (Docker volumes, etc.).
-        for dir in &["/models", "/data/models"] {
-            let candidate = PathBuf::from(dir).join(format!("{name}.gguf"));
-            if candidate.is_file() {
-                return Ok(candidate);
+        // 4. Try common model directories (Docker volumes, etc.). These are
+        //    deliberate mount points, not arbitrary paths, so they stay
+        //    available without the opt-in — but only a plain file name may be
+        //    joined onto them, or `../` would walk straight back out.
+        if crate::models::store::is_safe_filename(&format!("{name}.gguf")) {
+            for dir in &["/models", "/data/models"] {
+                let candidate = PathBuf::from(dir).join(format!("{name}.gguf"));
+                if candidate.is_file() {
+                    return Ok(candidate);
+                }
             }
         }
 
@@ -425,6 +491,10 @@ pub struct ServeConfig {
     /// same port for same-origin fetches). When `None`, only the API
     /// listener on `cfg.port` is started — pure API surface, nothing on `/`.
     pub ui_port: Option<u16>,
+    /// The `(advertised name, GGUF path)` this process was launched with, when
+    /// it was launched with a model (`eullm run`). `None` for headless `serve`,
+    /// which starts with an empty slot. See `AppState::launch_model`.
+    pub launch_model: Option<(String, PathBuf)>,
 }
 
 /// Start the API server on the given port with graceful shutdown support.
@@ -433,12 +503,71 @@ pub struct ServeConfig {
 /// in-flight requests before exiting. This is critical for Docker containers
 /// (which send SIGTERM on `docker stop`) and systemd services.
 pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let ip_allowlist = ip_allowlist::IpAllowlist::load(std::path::Path::new(".env"));
+    let env_file = std::path::Path::new(".env");
+    let ip_allowlist = ip_allowlist::IpAllowlist::load(env_file);
+
+    // Authentication first: configuration that is present but unusable is fatal
+    // here. An operator who set EULLM_API_KEYS asked for authentication, and
+    // starting an open API because of a typo in it is the one outcome that must
+    // not be possible.
+    let api_keys = Arc::new(auth::ApiKeys::load(env_file).map_err(|e| {
+        format!(
+            "{e}\n  Expected id:secret[:rpm=N] entries, comma-separated. \
+             Refusing to start: serving without the authentication you configured \
+             would be worse than not starting."
+        )
+    })?);
+    let allowed_origins = origin::AllowedOrigins::load(env_file);
+    let web_policy = crate::tools::guard::WebPolicy::from_env();
+    let allow_model_paths = matches!(
+        std::env::var("EULLM_ALLOW_MODEL_PATHS")
+            .ok()
+            .map(|v| v.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "yes" | "on")
+    );
+
+    if api_keys.is_enabled() {
+        tracing::info!(
+            "API authentication: enabled — keys: {}  [source: {}]",
+            api_keys.describe(),
+            api_keys.source(),
+        );
+        // State this explicitly. It is the one place where enabling a control
+        // relaxes another, and an operator discovering it from behaviour rather
+        // than from a log line is how a deployment ends up unintentionally open.
+        tracing::info!(
+            "A valid API key admits a request from any source address; the IP allowlist \
+             below then applies only to requests without a key (which are refused with 401)."
+        );
+    } else {
+        tracing::info!(
+            "API authentication: disabled ({}). Set EULLM_API_KEYS=id:secret to require \
+             a bearer token — necessary behind Docker's published ports, where every \
+             external client arrives as the bridge gateway address.",
+            api_keys.source()
+        );
+    }
     tracing::info!(
         "Allowed source IPs/subnets: {}  [source: {}]",
         ip_allowlist.describe(),
         ip_allowlist.source(),
     );
+    tracing::info!(
+        "Allowed browser origins: {}  [source: {}]",
+        allowed_origins.describe(),
+        allowed_origins.source(),
+    );
+    if cfg.web_enabled {
+        tracing::info!("Web tool: enabled — fetchable: {}", web_policy.describe());
+    }
+    if allow_model_paths {
+        tracing::warn!(
+            "EULLM_ALLOW_MODEL_PATHS is set: a request's `model` field may name any \
+             GGUF path readable by this process. Intended for local use; do not \
+             combine it with an API reachable by untrusted callers."
+        );
+    }
 
     // Fail loudly at startup if the audit destination is unusable, rather than
     // warning once per request after the fact. The trail exists to produce a
@@ -495,6 +624,11 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         api_port: cfg.port,
         store: cfg.store,
         ip_allowlist,
+        api_keys,
+        allowed_origins,
+        web_policy,
+        allow_model_paths,
+        launch_model: cfg.launch_model,
     });
     let api_port = cfg.port;
     let ui_port_opt = cfg.ui_port;
@@ -596,17 +730,27 @@ async fn shutdown_signal() {
 const MAX_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// Reject any request whose source IP isn't in `state.ip_allowlist`, before
-/// it reaches CORS, body parsing, or any handler. Applied as the outermost
-/// layer on both the API and UI routers — see `ip_allowlist` for why the
-/// socket always binds `0.0.0.0` regardless and this check is the real
+/// it reaches CORS, body parsing, or any handler. See `ip_allowlist` for why
+/// the socket always binds `0.0.0.0` regardless and this check is the real
 /// boundary.
+///
+/// Runs *inside* [`enforce_auth`], so by the time it executes an [`Identity`]
+/// is always present. A request that presented a valid key is admitted whatever
+/// its source address: behind Docker's published ports every external client
+/// arrives as the bridge gateway, so refusing an authenticated caller on
+/// address grounds would leave the operator with no working configuration at
+/// all. See the `auth` module docs for the full reasoning.
 async fn enforce_ip_allowlist(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    if state.ip_allowlist.is_allowed(addr.ip()) {
+    let authenticated = req
+        .extensions()
+        .get::<Identity>()
+        .is_some_and(Identity::is_authenticated);
+    if authenticated || state.ip_allowlist.is_allowed(addr.ip()) {
         next.run(req).await
     } else {
         tracing::warn!("Rejected request from disallowed IP {}", addr.ip());
@@ -618,6 +762,170 @@ async fn enforce_ip_allowlist(
     }
 }
 
+/// Verify the bearer token, attach an [`Identity`] to the request, and charge
+/// the key's quota. Outermost layer on both routers.
+///
+/// When no keys are configured this attaches an anonymous identity and gets out
+/// of the way — the IP allowlist is then the only control, which is the right
+/// default for the single-user local case the engine is most often used for.
+///
+/// `allow_query_token` is true only on the UI listener. The embedded chat runs
+/// in a browser, which cannot be handed a header before its first navigation,
+/// so `?api_key=…` bootstraps it (the page then stores the key and sends it as
+/// a header on every subsequent fetch). It is deliberately **not** accepted on
+/// the API listener: a token in a URL ends up in proxy logs, browser history
+/// and `Referer` headers, and no programmatic client needs it.
+async fn enforce_auth(
+    State((state, allow_query_token)): State<(Arc<AppState>, bool)>,
+    mut req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let presented = extract_token(&req, allow_query_token);
+    match state.api_keys.authenticate(presented.as_deref()) {
+        Ok(identity) => {
+            req.extensions_mut().insert(identity);
+            next.run(req).await
+        }
+        Err(auth::AuthError::Missing) => unauthorized(
+            "missing API key — send it as `Authorization: Bearer <key>` or `X-Api-Key: <key>`",
+        ),
+        Err(auth::AuthError::Invalid) => {
+            // No key id to name: logging the presented token would write a
+            // credential into the log file, and it may be a valid key for a
+            // *different* deployment.
+            tracing::warn!("Rejected request with an invalid API key");
+            unauthorized("invalid API key")
+        }
+        Err(auth::AuthError::RateLimited {
+            key_id,
+            retry_after_s,
+        }) => {
+            tracing::warn!("Key '{key_id}' is over its per-minute quota");
+            (
+                axum::http::StatusCode::TOO_MANY_REQUESTS,
+                [(axum::http::header::RETRY_AFTER, retry_after_s.to_string())],
+                axum::Json(serde_json::json!({
+                    "error": format!(
+                        "rate limit exceeded for key '{key_id}' — retry in {retry_after_s}s"
+                    )
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// 401 with the `WWW-Authenticate` challenge, so a client library can tell an
+/// authentication failure from a generic refusal.
+fn unauthorized(message: &str) -> axum::response::Response {
+    (
+        axum::http::StatusCode::UNAUTHORIZED,
+        [(
+            axum::http::header::WWW_AUTHENTICATE,
+            "Bearer realm=\"eullm\"",
+        )],
+        axum::Json(serde_json::json!({ "error": message })),
+    )
+        .into_response()
+}
+
+/// Pull the token out of `Authorization: Bearer`, `X-Api-Key`, or — on the UI
+/// listener only — an `api_key` query parameter.
+fn extract_token(req: &axum::extract::Request, allow_query_token: bool) -> Option<String> {
+    let headers = req.headers();
+    if let Some(v) = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+    {
+        // Case-insensitive scheme, per RFC 7235.
+        let v = v.trim();
+        if let Some(rest) = v
+            .split_once(' ')
+            .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("bearer"))
+            .map(|(_, rest)| rest)
+        {
+            return Some(rest.trim().to_string());
+        }
+    }
+    if let Some(v) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
+        return Some(v.trim().to_string());
+    }
+    if allow_query_token {
+        return req.uri().query().and_then(|q| {
+            q.split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .find(|(k, _)| *k == "api_key")
+                .map(|(_, v)| v.to_string())
+        });
+    }
+    None
+}
+
+/// Refuse a cross-origin request that has side effects, before it reaches a
+/// handler.
+///
+/// CORS is not this check. CORS decides whether a browser hands the *response*
+/// back to the calling page; the request itself is still executed. For `GET` on
+/// a read-only endpoint that distinction is academic, but `POST /api/unload` or
+/// a model swap take effect regardless of whether the attacker can read the
+/// reply — and a simple `POST` with `Content-Type: text/plain` needs no
+/// preflight, so the CORS layer never gets a chance to object.
+///
+/// Requests with no `Origin` header are left alone: that is every non-browser
+/// client, and an origin policy has never applied to them.
+async fn enforce_origin(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    let is_safe = matches!(
+        method,
+        axum::http::Method::GET | axum::http::Method::HEAD | axum::http::Method::OPTIONS
+    );
+    if !is_safe
+        && let Some(origin) = req
+            .headers()
+            .get(axum::http::header::ORIGIN)
+            .and_then(|v| v.to_str().ok())
+        && !state.allowed_origins.is_allowed(origin)
+    {
+        tracing::warn!(
+            "Rejected {} from disallowed origin {}",
+            method,
+            crate::audit::sanitize_for_log(origin)
+        );
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({
+                "error": "request origin is not allowed — set EULLM_ALLOWED_ORIGINS \
+                          if this frontend should be permitted"
+            })),
+        )
+            .into_response();
+    }
+    next.run(req).await
+}
+
+/// CORS layer honouring `state.allowed_origins`.
+///
+/// `allow_headers(Any)` and `allow_methods(Any)` stay permissive on purpose:
+/// once the *origin* is constrained, restricting which headers that trusted
+/// origin may send buys nothing and breaks frontends that send their own
+/// (Open WebUI sends several).
+fn cors_layer(state: &Arc<AppState>) -> CorsLayer {
+    let origins = state.allowed_origins.clone();
+    CorsLayer::new()
+        .allow_origin(AllowOrigin::predicate(move |origin, _req| {
+            origin
+                .to_str()
+                .map(|o| origins.is_allowed(o))
+                .unwrap_or(false)
+        }))
+        .allow_methods(Any)
+        .allow_headers(Any)
+}
+
 /// Build the EULLM API router (Ollama + OpenAI compat) with CORS enabled
 /// for Open WebUI and other frontends.
 ///
@@ -625,11 +933,11 @@ async fn enforce_ip_allowlist(
 /// only `/api/*` and `/v1/*`, so RAG systems and OpenAI-compatible tooling
 /// see a pure API surface with no HTML on `/`.
 fn api_router(state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = cors_layer(&state);
 
+    // Layers run outermost-last: `enforce_auth` is added last, so it sees the
+    // request first. The order is load-bearing — see `enforce_ip_allowlist` for
+    // why authentication must precede the address check rather than follow it.
     Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
@@ -637,7 +945,15 @@ fn api_router(state: Arc<AppState>) -> Router {
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            enforce_origin,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             enforce_ip_allowlist,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            (state.clone(), false),
+            enforce_auth,
         ))
         .with_state(state)
 }
@@ -648,11 +964,12 @@ fn api_router(state: Arc<AppState>) -> Router {
 /// Always served on a separate port from the API so the two surfaces are
 /// independently togglable and never collide.
 fn ui_router(state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = cors_layer(&state);
 
+    // The UI listener nests the same API routes, so it must enforce the same
+    // controls — exempting it would simply move the open door to another port.
+    // It differs in one respect: a token may arrive as `?api_key=…`, because a
+    // browser cannot set a header on its first navigation. See `enforce_auth`.
     Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
@@ -661,7 +978,15 @@ fn ui_router(state: Arc<AppState>) -> Router {
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
+            enforce_origin,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
             enforce_ip_allowlist,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            (state.clone(), true),
+            enforce_auth,
         ))
         .with_state(state)
 }

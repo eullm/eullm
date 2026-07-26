@@ -95,11 +95,14 @@ class Report:
 # ── HTTP helpers (stdlib only) ──────────────────────────────────────────────
 
 
-def post(url: str, payload: dict, timeout: float = 300.0):
+def post(url: str, payload: dict, timeout: float = 300.0, headers: dict | None = None):
     """POST JSON. Returns (status_code, parsed_or_text). Never raises on 4xx/5xx."""
     body = json.dumps(payload).encode()
     req = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}, method="POST"
+        url,
+        data=body,
+        headers={"Content-Type": "application/json", **(headers or {})},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -118,18 +121,19 @@ def post(url: str, payload: dict, timeout: float = 300.0):
         return 0, str(e)
 
 
-def get(url: str, timeout: float = 30.0):
+def get(url: str, timeout: float = 30.0, headers: dict | None = None):
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as r:
+        req = urllib.request.Request(url, headers=headers or {})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8", "replace")
             try:
-                return r.status, json.loads(raw), dict(r.headers)
+                return r.status, json.loads(raw), Headers(r.headers)
             except json.JSONDecodeError:
-                return r.status, raw, dict(r.headers)
+                return r.status, raw, Headers(r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "replace"), dict(e.headers)
+        return e.code, e.read().decode("utf-8", "replace"), Headers(e.headers)
     except Exception as e:
-        return 0, str(e), {}
+        return 0, str(e), Headers()
 
 
 def stream_lines(url: str, payload: dict, timeout: float = 300.0, read_delay: float = 0.0):
@@ -157,6 +161,26 @@ def stream_lines(url: str, payload: dict, timeout: float = 300.0, read_delay: fl
                 time.sleep(read_delay)
         if buf.strip():
             yield buf.decode("utf-8", "replace")
+
+
+class Headers(dict):
+    """Response headers with case-insensitive lookup.
+
+    HTTP header names are case-insensitive, and axum emits them lowercased, so a
+    plain dict lookup for ``WWW-Authenticate`` silently misses a header that is
+    actually present. That cost two spurious failures the first time this
+    harness checked for one.
+    """
+
+    def get(self, key, default=None):  # type: ignore[override]
+        target = key.lower()
+        for k, v in self.items():
+            if k.lower() == target:
+                return v
+        return default
+
+    def __contains__(self, key) -> bool:  # type: ignore[override]
+        return self.get(key) is not None
 
 
 def free_port() -> int:
@@ -449,12 +473,14 @@ def check_audit(rep: Report, log: str, audit_dir: Path, expect_records: bool) ->
         return
     rep.add("audit records written", len(parsed) > 0, f"{len(parsed)} record(s)")
     if parsed:
-        # Known gap, tracked as H1-A: nothing populates user_id, so no record is
-        # attributable. Reported as a skip so it stays visible without failing.
+        # With no API keys configured there is no identity to record, and a null
+        # user_id is correct rather than a gap — the attributable case is
+        # exercised separately in check_perimeter, with keys enabled.
         rep.add(
             "audit records carry a user_id",
             None if all(p.get("user_id") is None for p in parsed) else True,
-            "always null — no request identity exists yet (backlog H1-A)",
+            "all null — expected here: no API keys configured, so no request "
+            "identity exists (see the perimeter section for the attributed case)",
         )
 
 
@@ -741,6 +767,220 @@ def check_backpressure(rep: Report, api: str, model: str) -> None:
     )
 
 
+# ── perimeter: authentication, quotas, origin, model paths ──────────────────
+
+# Deliberately >= the engine's 16-character minimum, and obviously fake.
+SMOKE_KEY = "smoke-key-0123456789"
+SMOKE_KEY_LIMITED = "smoke-limited-0123456789"
+
+
+def check_perimeter(
+    rep: Report, binary: Path, model: str, base_env: dict, work: Path
+) -> None:
+    """Start a second engine with API keys configured and probe the perimeter.
+
+    A separate process is the point: these controls only exist when
+    ``EULLM_API_KEYS`` is set, and the main run deliberately leaves it unset so
+    that the *default* posture is what gets exercised everywhere else. Checking
+    both in one process is not possible, and checking only one of them is how a
+    regression in the other ships.
+    """
+    port = free_port()
+    audit_dir = work / "audit-perimeter"
+    audit_dir.mkdir(parents=True, exist_ok=True)
+    env = {
+        **base_env,
+        "EULLM_AUDIT_DIR": str(audit_dir),
+        "EULLM_API_KEYS": f"smoke:{SMOKE_KEY},limited:{SMOKE_KEY_LIMITED}:rpm=2",
+    }
+    args = ["serve", "--port", str(port), "--batch-size", "1"]
+    api = f"http://127.0.0.1:{port}/api"
+    auth = {"Authorization": f"Bearer {SMOKE_KEY}"}
+
+    with Engine(binary, args, env, work / "engine-perimeter.log") as eng:
+        # wait_ready polls /api/version without a key, which is now a 401, so
+        # poll with one instead of waiting for a 200 that will never come.
+        deadline = time.time() + 90
+        ready = False
+        while time.time() < deadline:
+            if eng.proc and eng.proc.poll() is not None:
+                break
+            if get(f"{api}/version", timeout=2, headers=auth)[0] == 200:
+                ready = True
+                break
+            time.sleep(0.3)
+        if not ready:
+            rep.add(
+                "perimeter: server starts with API keys configured",
+                False,
+                "never became ready — see engine-perimeter.log",
+            )
+            return
+        rep.add("perimeter: server starts with API keys configured", True, f"port {port}")
+
+        log = eng.output
+        rep.add(
+            "perimeter: startup log reports the keys and the posture",
+            "API authentication: enabled" in log and "admits a request" in log,
+            "keys listed by id with their quota, and the allowlist interaction stated",
+        )
+        rep.add(
+            "perimeter: no secret appears in the log",
+            SMOKE_KEY not in log and SMOKE_KEY_LIMITED not in log,
+            "startup and request logs mention key ids only",
+        )
+
+        # ── the token itself ────────────────────────────────────────────────
+        cases = [
+            ("no key at all", None, 401),
+            ("wrong key", {"Authorization": "Bearer definitely-not-a-real-key"}, 401),
+            # The id is public — it goes into every audit record — so accepting
+            # it as the token would be a complete bypass.
+            ("the key id used as the token", {"X-Api-Key": "smoke"}, 401),
+            ("valid key as bearer", auth, 200),
+            ("valid key, lowercase scheme", {"authorization": f"bearer {SMOKE_KEY}"}, 200),
+            ("valid key as X-Api-Key", {"X-Api-Key": SMOKE_KEY}, 200),
+        ]
+        wrong = [
+            f"{label}: got {code}, expected {want}"
+            for label, hdrs, want in cases
+            for code in [get(f"{api}/version", timeout=15, headers=hdrs)[0]]
+            if code != want
+        ]
+        rep.add(
+            "perimeter: the token decides admission",
+            not wrong,
+            "; ".join(wrong) if wrong else f"all {len(cases)} cases",
+        )
+
+        code, _, headers = get(f"{api}/version", timeout=15)
+        rep.add(
+            "perimeter: 401 carries a WWW-Authenticate challenge",
+            code == 401
+            and "bearer" in str(headers.get("WWW-Authenticate", "")).lower(),
+            str(headers.get("WWW-Authenticate", "absent")),
+        )
+
+        # A token in a URL lands in proxy logs, browser history and Referer
+        # headers. It is accepted on the UI listener (a browser cannot set a
+        # header on its first navigation) and must not be on the API one.
+        code, _, _ = get(f"{api}/version?api_key={SMOKE_KEY}", timeout=15)
+        rep.add(
+            "perimeter: a query-string token is refused on the API port",
+            code == 401,
+            f"http={code}",
+        )
+
+        # ── per-key quota ───────────────────────────────────────────────────
+        limited = {"X-Api-Key": SMOKE_KEY_LIMITED}
+        codes = [get(f"{api}/version", timeout=15, headers=limited)[0] for _ in range(4)]
+        code, body, headers = get(f"{api}/version", timeout=15, headers=limited)
+        rep.add(
+            "perimeter: the per-key quota refuses with 429",
+            codes[:2] == [200, 200] and codes[2:] == [429, 429],
+            f"rpm=2 → {codes}",
+        )
+        rep.add(
+            "perimeter: 429 carries Retry-After",
+            str(headers.get("Retry-After", "")).isdigit(),
+            f"Retry-After: {headers.get('Retry-After', 'absent')}",
+        )
+        # A quota that is really global would have taken the other key down too.
+        rep.add(
+            "perimeter: the quota is per key, not global",
+            get(f"{api}/version", timeout=15, headers=auth)[0] == 200,
+            "the unlimited key still answers while the limited one is throttled",
+        )
+
+        # ── Origin ──────────────────────────────────────────────────────────
+        origin_cases = [
+            ("no Origin (every non-browser client)", None, 200),
+            ("loopback Origin", "http://localhost:3000", 200),
+            ("foreign Origin", "https://evil.example", 403),
+            # The failure mode of a suffix check rather than an equality one.
+            ("Origin merely containing localhost", "http://localhost.evil.example", 403),
+        ]
+        wrong = []
+        for label, origin, want in origin_cases:
+            hdrs = dict(auth)
+            if origin:
+                hdrs["Origin"] = origin
+            code, _ = post(f"{api}/unload", {}, timeout=60, headers=hdrs)
+            if code != want:
+                wrong.append(f"{label}: got {code}, expected {want}")
+        rep.add(
+            "perimeter: a cross-origin request with side effects is refused",
+            not wrong,
+            "; ".join(wrong) if wrong else f"all {len(origin_cases)} cases",
+        )
+
+        # ── model paths ─────────────────────────────────────────────────────
+        # With the gate off, an existing file and a missing one must be
+        # indistinguishable. Anything else is a filesystem oracle: a caller can
+        # map what exists on the host by diffing the error text.
+        probes = {}
+        for label, name in (
+            ("existing non-model file", "/etc/hostname"),
+            ("missing file", "/etc/eullm-definitely-not-here"),
+        ):
+            _, body = post(
+                f"{api}/chat",
+                {"model": name, "messages": [{"role": "user", "content": "x"}]},
+                timeout=120,
+                headers=auth,
+            )
+            text = body.get("error", str(body)) if isinstance(body, dict) else str(body)
+            # Strip the echoed name — the caller supplied it, so it tells them
+            # nothing. What must not differ is everything else.
+            probes[label] = text.replace(name, "<name>")
+        same = probes["existing non-model file"] == probes["missing file"]
+        rep.add(
+            "perimeter: an arbitrary path is not a filesystem oracle",
+            same,
+            "identical error for an existing and a missing file"
+            if same
+            else f"errors differ: {list(probes.values())}",
+        )
+
+        # ── the audit trail can finally name a caller ───────────────────────
+        code, _ = post(
+            f"{api}/chat",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "hi"}],
+                "think": False,
+                "options": {"num_predict": 4, "temperature": 0},
+            },
+            timeout=600,
+            headers=auth,
+        )
+        if code != 200:
+            rep.add(
+                "perimeter: audit records name the key that made the request",
+                None,
+                f"inference returned {code} — cannot check attribution",
+            )
+        else:
+            time.sleep(0.5)
+            try:
+                records = [
+                    json.loads(l)
+                    for l in (audit_dir / "audit.jsonl").read_text().splitlines()
+                    if l.strip()
+                ]
+            except Exception as e:
+                records = []
+                rep.add("perimeter: audit file readable", False, str(e))
+            attributed = [r for r in records if r.get("user_id") == "smoke"]
+            rep.add(
+                "perimeter: audit records name the key that made the request",
+                bool(attributed),
+                f"{len(attributed)}/{len(records)} record(s) with user_id='smoke'"
+                if records
+                else "no records written",
+            )
+
+
 def check_fit(
     rep: Report, binary: Path, model: str, env: dict, log_dir: Path, ctx: int
 ) -> None:
@@ -840,6 +1080,9 @@ def main(argv: list[str] | None = None) -> int:
                          "that is the regime where the KV sizing actually decides")
     ap.add_argument("--no-inference", action="store_true",
                     help="config/validation checks only — no model needed")
+    ap.add_argument("--no-perimeter", action="store_true",
+                    help="skip the perimeter section (auth, quotas, Origin, model paths), "
+                         "which starts a second engine with API keys configured")
     ap.add_argument("--concurrency", type=int, default=8, help="parallel requests (default 8)")
     ap.add_argument("--batch-size", type=int, default=4, help="scheduler slots (default 4)")
     ap.add_argument("--expect-version", default=None, metavar="X.Y.Z",
@@ -973,6 +1216,13 @@ def main(argv: list[str] | None = None) -> int:
 
         rep.env["timings"] = timings
         rep.engine_log = eng.output
+
+    if not args.no_perimeter:
+        # Separate process: these controls exist only with EULLM_API_KEYS set,
+        # and the run above deliberately leaves it unset so the default posture
+        # is what everything else is measured against.
+        print("\n── perimeter (second engine, API keys configured) ──")
+        check_perimeter(rep, binary, model if not args.no_inference else "", env, work)
 
     if not args.no_inference:
         # Separate `run` process: the banner is not on the `serve` path at all.

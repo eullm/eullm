@@ -31,6 +31,43 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
+**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E, H2-K e
+H2-L — 22 voci chiuse su 39. Le ultime due non vengono da una revisione del
+codice ma dai report di un tester esterno sull'issue #140: vale la pena
+notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
+prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
+deployment in container ha ora un controllo d'accesso funzionante *ed
+esprimibile*, e ogni input esterno che diventa un percorso o una richiesta di
+rete è validato. Resta **H1-F**, che è lo stesso gate applicato all'**Hub**: il
+suo listener è ancora `0.0.0.0` senza nessuno di questi controlli. Ora è
+sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuole
+l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
+due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
+mescolare un refactor di workspace con l'hardening dell'Engine.
+Engine 162 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+
+La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
+in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
+di perimetro e policy nelle variabili d'ambiente.** Non è una preferenza di stile.
+Un segreto su riga di comando è leggibile in `ps` da ogni utente locale; ogni
+deployment non interattivo configura l'ambiente e non argv; e un'impostazione di
+perimetro aggiunta come flag CLI andrebbe aggiunta a `run` *e* a `serve` e
+cablata in `ServeConfig`, che è esattamente il meccanismo che ha prodotto la
+divergenza `cache_type_k`/`gpu_layers` del luglio 2026. Una variabile letta
+dentro `api::serve` è letta una volta, da entrambi i comandi, e non può
+divergere.
+
+Lo smoke test ha una sezione **perimetro** che avvia un secondo engine con le
+chiavi configurate e verifica: ammissione decisa dal token (6 casi, incluso l'id
+della chiave usato come token, che sarebbe un bypass totale), la sfida
+`WWW-Authenticate`, il token da query string rifiutato sull'API, la quota per
+chiave con `Retry-After`, che la quota sia per chiave e non globale, il rifiuto
+cross-origin sui metodi con effetti collaterali (4 casi), l'assenza di oracolo
+sul filesystem, che nessun segreto compaia nei log, e un record di audit con
+`user_id` valorizzato. Il run principale lascia deliberatamente le chiavi
+*non* configurate, così la postura di default resta quella misurata da tutto il
+resto: 31 PASS, 0 FAIL, 3 SKIP in locale.
+
 Engine 114 test, Hub 3, Forge 136 — tutti verdi; clippy pulito con
 `-D warnings`; ruff pulito su `eullm_forge/`. I nuovi test coprono: limiti
 degli override da body (7), precedenza di `EULLM_AUDIT_DIR` e scrivibilità (3),
@@ -91,20 +128,33 @@ H2-B è stato plausibilmente raggiunto (500 byte trasferiti integralmente a un
 client lento, contro i 12 eventi del run ARM che non arrivano alla capacità di
 256 del canale).
 
-**Quello che il controllo `--fit` non ha ancora dimostrato.** `--fit` con
-qwen3-4b ha risposto `model (2.33 GiB) fits fully in 14.65 GiB free VRAM`, e il
-modello ha poi servito una richiesta: il percorso funziona, ma **non discrimina
-H2-A**. L'errore di stima era per token e per layer, quindi diventa
-decision-changing solo quando la KV cache domina il budget, non quando i pesi
-sono il 16% della scheda: a `--ctx-size 32768` sia l'aritmetica corretta sia
-quella che sottostimava concludono "fits fully". Con 14,65 GiB liberi, `usable`
-≈ 13,6 GiB e 36 layer a `head_dim` 128, le due stime divergono in decisione
-sopra ~82k token di contesto, dove la corretta impone un offload parziale e la
-vecchia dichiarava un fit pieno che poi moriva in allocazione. Per questo
-`tools/smoke_test.py` ha ora `--fit-ctx` e dichiara esplicitamente nel report
-quando un "fits fully" non è una conferma. Il controllo va rifatto con
-`--fit-ctx 98304`; finché non è fatto, H2-A resta verificata solo dai test
-unitari, non su hardware.
+**H2-A verificata su hardware, non solo dai test unitari.** Il primo run CUDA
+non dimostrava niente sul dimensionamento della KV cache: a `--ctx-size 32768`
+`--fit` rispondeva `model (2.33 GiB) fits fully in 14.65 GiB free VRAM`, che è
+la conclusione a cui arriva *anche* l'aritmetica che sottostimava. L'errore era
+per token e per layer, quindi cambia la decisione solo quando la cache — non i
+pesi — è ciò che riempie la scheda. Rifatto con `--ctx-size 98304`:
+
+```
+[EULLM] --fit: model does not fit fully (14.67 GiB free VRAM, model 2.33 GiB).
+        Offloading 30/36 layers, rest in RAM
+```
+
+e il modello ha poi servito una richiesta (HTTP 200). I numeri tornano
+esattamente: `usable` = 14,67 × 0,97 − 640 MiB = 13,605 GiB; pesi per layer
+0,0647 GiB; KV per layer a `key_length` 128 = 98304 × 8 × 128 × 2 × 2 B =
+0,375 GiB → ⌊13,605 / 0,4397⌋ = **30 layer su 36**, che è ciò che l'engine ha
+stampato. Con la vecchia assunzione `n_embd / n_head` = 2560/32 = 80 la KV per
+layer sarebbe stata 0,234 GiB → ⌊13,605 / 0,2991⌋ = 45 ≥ 36 → **`FitsFully`**,
+cioè offload di tutti i 36 layer, che a `head_dim` 128 reale richiedono 15,83 GiB
+contro 14,67 liberi: OOM in allocazione. È esattamente il fallimento che `--fit`
+esiste per evitare, e questo run è la prova che ora non si verifica.
+
+Da qui una regola di metodo, perché il primo run CUDA era un falso verde:
+un controllo che passa sia con il bug sia senza non è una verifica. Per questo
+`tools/smoke_test.py` ha ora `--fit-ctx` e **dichiara nel report in quale regime
+è finito**, etichettando un `fits fully` come non discriminante invece di
+lasciarlo leggere come conferma.
 
 **Correzione a H0-B fatta prima della release.** Il controllo all'avvio era
 troppo aggressivo: rifiutava di partire ogni volta che la directory di audit non
@@ -114,10 +164,10 @@ servizio per un file di log che nessuno aveva chiesto. Ora l'errore è fatale
 di essa, ha dichiarato che il registro conta; altrimenti si avvisa e si serve.
 La postura severa è una scelta dell'operatore, non un default da imporre.
 
-Prossimo blocco consigliato: **H1-A** (autenticazione a token: sblocca anche
-H1-E e dà finalmente un soggetto a `user_id` nell'audit), poi **H2-F**
-(guardie sul patcher GGUF), poi **H3-C** (`cargo deny` e `pip-audit` in CI —
-tenuta deliberatamente fuori da questa release: può far fallire il build al
+Prossimo blocco consigliato: **H2-F** (guardie sul patcher GGUF), poi **H2-D**
+(stop sequence e filtri unificati fra i due percorsi di inferenza, che è anche
+dove va la guardia di H2-J), poi **H3-C** (`cargo deny` e `pip-audit` in CI —
+tenuta deliberatamente fuori dalla 0.6.35 perché può far fallire il build al
 primo advisory trovato, e non è il momento di scoprirlo mentre si taggia).
 
 ---
@@ -210,7 +260,7 @@ nessun campo ricevuto dalla rete raggiunge una decisione di allocazione senza li
 **Gate di uscita:** un deployment in container ha un controllo d'accesso funzionante ed
 esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete è validato.
 
-- [ ] **H1-A · Autenticazione opzionale a token con quote per chiave** *(P1)*
+- [x] **H1-A · Autenticazione opzionale a token con quote per chiave** *(P1)*
   Oggi l'unico controllo è l'allowlist IP (`api/ip_allowlist.rs`, middleware più esterno in
   `api/mod.rs:604-607, 628-631`), che è la scelta giusta per l'uso locale ma non è
   esprimibile dietro il port publishing di Docker: con `ports: "11434:11434"`
@@ -222,6 +272,33 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   l'identificativo della chiave propagato in ogni riga di audit, è l'unico controllo che
   sopravvive alla traduzione degli indirizzi. Fornisce anche il soggetto che `user_id`
   (`audit/mod.rs:36`) oggi non ha mai. Precondizione di ogni deployment multi-tenant.
+  **Chiuso in `api/auth.rs`** (nuovo modulo, 20 test). Configurazione da
+  `EULLM_API_KEYS`, poi `EULLM_API_KEYS_FILE`, poi `.env` — mai da flag CLI, per
+  la regola scritta ora in `CLAUDE.md`: un segreto su riga di comando è leggibile
+  in `ps` da qualunque utente locale. Formato `id:secret[:rpm=N]`; il segreto è
+  tenuto solo come digest SHA-256 e confrontato a lunghezza fissa, così il
+  confronto è a tempo costante per costruzione e un core dump non consegna il
+  token. Tre decisioni da capire prima di modificarlo:
+  1. **Il middleware è più esterno dell'allowlist e una chiave valida la
+     scavalca.** È l'unico ordinamento che risolve il caso Docker: rifiutare una
+     chiave valida perché il pacchetto arriva dal gateway del bridge lascia
+     l'operatore dove era. Abilitare le chiavi quindi *sostituisce* l'ammissione
+     per indirizzo con quella per identità, non ci si somma. L'avvio lo scrive a
+     log in chiaro, perché è il punto in cui abilitare un controllo ne allenta un
+     altro.
+  2. **Una configurazione che non parsa è fatale all'avvio.** Chi imposta
+     `EULLM_API_KEYS` ha chiesto autenticazione; servire aperto per un errore di
+     battitura è l'unico esito che non deve essere possibile. Stessa logica di
+     H0-B su `EULLM_AUDIT_DIR`.
+  3. **Il token da query string è accettato solo sul listener della UI.** Un
+     browser non può impostare un header alla prima navigazione, quindi
+     `?api_key=…` fa il bootstrap e la pagina lo mette in `sessionStorage` e lo
+     manda come header (`ui/app.js`, `withAuth`); l'URL viene ripulito subito con
+     `history.replaceState`. Sull'API è rifiutato: un token in una URL finisce
+     nei log dei proxy, nella cronologia del browser e nell'header `Referer`.
+  Quota per chiave a finestra fissa di un minuto → 429 con `Retry-After`. E
+  `user_id` nell'audit ora è l'id della chiave: verificato su hardware, un record
+  con `user_id='ci'` invece di `null`.
 
 - [x] **H1-B · `EULLM_ALLOWED_IPS` anche dall'ambiente di processo** *(P1)*
   `IpAllowlist::load_from_env_file` è invocata con il percorso letterale `".env"` relativo
@@ -231,7 +308,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   container l'allowlist è sempre e solo loopback. Leggere la variabile dall'ambiente con
   precedenza sul file, e loggare all'avvio la sorgente effettiva della configurazione.
 
-- [ ] **H1-C · Hardening del web tool** *(P1)*
+- [x] **H1-C · Hardening del web tool** *(P1)*
   `tools::fetch_url` (`tools/mod.rs:77-96`) scarica la URL estratta dal messaggio utente
   senza validazione dell'host, senza limiti sul corpo della risposta
   (`resp.text()`, `:94`) e seguendo i redirect con la policy di default di reqwest.
@@ -241,6 +318,27 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   `text()`, schema `https` per default con opt-in esplicito per `http`, e una allowlist di
   domini configurabile — che per il caso d'uso enterprise è la forma più difendibile della
   feature.
+  **Chiuso in `tools/guard.rs`** (nuovo modulo, 14 test). `https` obbligatorio
+  salvo `EULLM_WEB_ALLOW_HTTP=1`; l'host è risolto e **tutti** gli indirizzi
+  risultanti devono essere pubblici, non solo il primo — un nome con un record
+  pubblico e uno su `10.0.0.5` sarebbe altrimenti un lancio di dado dipendente
+  dall'ordine, cioè il tipo di buco che non si trova mai; la connessione è poi
+  fissata all'indirizzo verificato con `ClientBuilder::resolve`, che chiude il DNS
+  rebinding fra controllo e connect; i redirect sono disabilitati nel client e
+  seguiti a mano rifacendo *tutti* i controlli su ogni hop (validare la URL e poi
+  lasciar seguire i redirect non valida nulla); corpo letto a chunk con cap a
+  4 MiB; solo content type testuali, e un `Content-Type` assente è rifiutato
+  invece di essere assunto testuale; `EULLM_WEB_ALLOWED_DOMAINS` limita alle
+  fonti dichiarate, con match sui confini di label — `evil-example.com` non
+  soddisfa `example.com`.
+  Due dettagli coperti dai test perché sono i bypass classici: le forme IPv6 che
+  incapsulano un IPv4 (`::ffff:169.254.169.254`, NAT64 `64:ff9b::/96`, 6to4
+  `2002::/16`) sono giudicate sull'indirizzo che trasportano, non sulla
+  rappresentazione; e `0.0.0.0/8` è fra i non pubblici, il che è corretto di per
+  sé (RFC 6890) *e* impedisce che `::1` — che vive dentro il range
+  IPv4-compatible `::/96` — venga scartato a `0.0.0.1` e giudicato pubblico.
+  Questo secondo caso era un bug reale nella mia prima stesura, trovato dai test
+  e non dalla lettura.
 
 - [x] **H1-D · Validare i nomi file restituiti dall'API HuggingFace** *(P1)*
   `list_hf_ggufs` raccoglie i `siblings[].rfilename` filtrandoli solo per il suffisso
@@ -252,7 +350,7 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   Applicare lo stesso controllo ai campi `gguf_file`/`mmproj_file` letti dal manifest
   (`models/store.rs:159, 193`).
 
-- [ ] **H1-E · Restringere l'origine CORS e i percorsi modello accettati** *(P1)*
+- [x] **H1-E · Restringere l'origine CORS e i percorsi modello accettati** *(P1)*
   Due voci che condividono la stessa causa — il perimetro assume un chiamante fidato.
   (a) CORS è `allow_origin(Any)` + `allow_methods(Any)` + `allow_headers(Any)`
   (`api/mod.rs:594-597, 617-620`): quando la richiesta parte dal browser dell'utente l'IP
@@ -264,6 +362,29 @@ esprimibile; ogni input esterno che diventa un percorso o una richiesta di rete 
   file locale, e i messaggi d'errore propagati al client (`routes.rs:91-96`) distinguono i
   casi. Consentire percorsi arbitrari solo dietro un flag di avvio esplicito e uniformare il
   messaggio d'errore.
+  **Chiuso.** (a) `api/origin.rs` (nuovo modulo, 9 test) con
+  `EULLM_ALLOWED_ORIGINS`; il default consente qualunque origine di loopback su
+  qualunque porta — così la chat UI e un frontend locale continuano a funzionare
+  — e rifiuta tutto il resto. Il punto non ovvio: **CORS da solo non è il
+  controllo.** CORS decide se il browser restituisce la *risposta* alla pagina; la
+  richiesta viene comunque eseguita, e un `POST` con `Content-Type: text/plain`
+  non fa nemmeno preflight. Quindi la policy è usata due volte: come predicato
+  allow-origin del `CorsLayer`, e come `enforce_origin` che **rifiuta con 403**
+  ogni metodo non sicuro con `Origin` non consentita, prima dell'handler. Le
+  richieste senza header `Origin` restano intoccate — sono tutti i client non
+  browser, e romperle costerebbe compatibilità senza guadagnare niente, dato che
+  un programma può mandare gli header che vuole.
+  (b) `resolve_model` accetta percorsi arbitrari solo con
+  `EULLM_ALLOW_MODEL_PATHS=1`; senza, risolve nel model store e nei mount
+  deliberati (`/models`, `/data/models`, e solo con un nome file sicuro joinato,
+  altrimenti `../` uscirebbe subito), più il modello di lancio per nome o per
+  percorso esatto — mai per stem o prefisso — perché `/api/tags` annuncia quel
+  nome e rifiutare la propria risposta romperebbe `eullm run ./model.gguf` al
+  primo swap di ritorno. L'oracolo sul filesystem è chiuso: verificato che
+  `/etc/hostname` (esiste) e `/etc/eullm-definitely-not-here` (non esiste)
+  producono ora un errore identico a meno del nome che il chiamante ha fornito
+  lui stesso, mentre con il flag attivo il primo arriva al loader e dà un errore
+  diverso. Lo smoke test fa esattamente questo diff a ogni release.
 
 - [ ] **H1-F · Allineare l'Hub al perimetro dell'Engine** *(P1)*
   `hub/src/main.rs:65-69` ascolta su `0.0.0.0` senza allowlist, autenticazione, CORS né rate
@@ -301,6 +422,9 @@ esterni non si fidano dei valori che leggono.
   quanti entrino e il caricamento fallisce per OOM — su un modello presente nel catalogo.
   Leggere le due chiavi nel parser (che è già bounds-checked e facile da estendere) e usarle
   quando presenti, con l'attuale formula come fallback.
+  **Verificata su RTX 5070 Ti** a `--ctx-size 98304`: 30/36 layer offloadati e
+  richiesta servita, dove la vecchia aritmetica avrebbe dichiarato un fit pieno
+  da 15,83 GiB su 14,67 liberi. Aritmetica completa nella sezione Stato.
 
 - [x] **H2-B · Backpressure invece di scarto silenzioso dei token** *(P1)*
   `send_or_detect_disconnect` (`scheduler.rs:1734-1739`) tratta correttamente un canale
@@ -400,6 +524,52 @@ esterni non si fidano dei valori che leggono.
      (`inference/scheduler.rs`): è il posto dove filtrare, non a valle nel client.
   Il sintomo è già riproducibile con `tools/smoke_test.py` su qualunque box: a
   temperatura zero un before/after è misurabile senza ambiguità.
+
+- [x] **H2-K · `run` e `serve` non devono partire con KV cache diverse** *(P1)*
+  Emerso dai test di Peter sull'issue #140, non da una revisione del codice.
+  `Commands::Run` aveva `cache_type_k`/`cache_type_v` a `f16`/`f16`,
+  `Commands::Serve` a `q8_0`/`q4_0` (`main.rs:195-201` contro `main.rs:315-329`).
+  Lo stesso modello dava quindi qualità di output diversa a seconda del comando
+  che l'aveva avviato, in silenzio: niente nell'output lo diceva, e la V-cache a
+  4 bit è aggressiva su Qwen3 al punto che un tester esterno ha visto
+  degradazione con esattamente quella configurazione. Il commento nel codice
+  giustificava la divergenza con «kept as-is to avoid changing default VRAM usage
+  for existing serve users» — un ragionamento che protegge il consumo di memoria
+  e sacrifica la correttezza dell'output, che è l'ordine sbagliato.
+  Chiuso portando `serve` a `f16`/`f16`. Quantizzare la KV cache resta un trade
+  supportato e utile a contesto lungo: deve essere una scelta dell'operatore, non
+  un effetto collaterale del nome del comando. Tre test in
+  `cli_default_parity_tests` bloccano la regressione, incluso uno che verifica
+  che i default di `ctx_size` coincidano — stessa classe di divergenza, invisibile
+  a chi ci sbatte contro.
+  **Conseguenza operativa**: chiunque usi `eullm serve` con la configurazione di
+  default vedrà ora più consumo di VRAM per la KV cache (circa 2× su K, 4× su V)
+  e output migliore. Chi ha bisogno del comportamento vecchio lo ottiene con
+  `--cache-type-k q8_0 --cache-type-v q4_0`, e ora sa di averlo chiesto.
+
+- [x] **H2-L · Una key cache a 4 bit non va consigliata: distrugge l'output** *(P1)*
+  Sempre dai report dell'issue #140, e questa è la scoperta più netta di tutta
+  la serie. Con `--cache-type-k q4_0 --cache-type-v q4_0` l'output diventa
+  incoerente **su ogni piattaforma provata** — Metal su M4 Pro, CPU x86 su mac
+  mini 2018, CPU ARM su Raspberry Pi 5 — mentre le stesse macchine, con lo
+  stesso binario e lo stesso GGUF, rispondono correttamente con `q8_0` sulle
+  chiavi. Non è quindi un problema di backend né di hardware: è la
+  quantizzazione a 4 bit della **key** cache. I valori tollerano 4 bit, le
+  chiavi no, e la guida di llama.cpp si ferma infatti a q8_0 per le chiavi.
+  Il punto imbarazzante: `scheduler.rs:387-391` suggeriva **esattamente quella
+  combinazione** nel messaggio d'errore che compare quando la KV cache non entra
+  in VRAM, e il README la usava come esempio in quattro punti. Stavamo indicando
+  come rimedio una configurazione che rompe l'output, a chi era già in
+  difficoltà.
+  Chiuso: il suggerimento diventa `q8_0`/`q4_0` con una riga esplicita sul
+  perché non q4_0 sulle chiavi; `inference::warn_on_lossy_kv` avvisa all'avvio
+  se le chiavi sono a 4 bit (`run` e `serve`, dopo la correzione Gemma così
+  descrive ciò che verrà davvero usato); README allineato. Non è un errore
+  fatale: chi ha davvero bisogno di quel contesto su quella scheda può
+  chiederlo, ma non può più ottenerlo senza saperlo. Aggiunto anche
+  `cache_type_name`, inverso di `parse_cache_type`, perché i messaggi stampavano
+  `Q4_0` in Debug — una stringa che il parser non accetta così com'è, cioè un
+  suggerimento non copiabile.
 
 ---
 

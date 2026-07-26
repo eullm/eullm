@@ -384,8 +384,15 @@ fn ctx_oom_hint(requested_tokens: u32) -> String {
         .collect::<Vec<_>>()
         .join("  or  ");
 
+    // Deliberately q8_0 for keys, not q4_0. A four-bit *key* cache reliably
+    // destroys output — reproduced on Metal, on x86 CPU and on ARM CPU during
+    // issue #140, where `--cache-type-k q4_0 --cache-type-v q4_0` turned
+    // coherent answers into word salad on every machine it was tried on, while
+    // the same machines were fine with q8_0 keys. This message used to suggest
+    // exactly that combination.
     let kv_tip = if requested_tokens >= 8192 {
-        "\n  Or quantize the KV cache: --cache-type-k q4_0 --cache-type-v q4_0 (cuts KV-cache VRAM by ~4×)."
+        "\n  Or quantize the KV cache: --cache-type-k q8_0 --cache-type-v q4_0 (cuts KV-cache VRAM by ~2.5×).\
+         \n  Avoid q4_0 for keys: it saves little more and degrades output badly."
     } else {
         ""
     };

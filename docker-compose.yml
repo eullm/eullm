@@ -21,6 +21,23 @@ services:
       - models:/models
       - audit:/data/audit
     restart: unless-stopped
+    environment:
+      # With published ports, every external client reaches the process as the
+      # bridge gateway address — so the IP allowlist cannot tell them apart, and
+      # widening it to the bridge subnet allows anyone who can reach the port. A
+      # bearer token is the control that survives address translation, and its id
+      # is what makes each audit record attributable. Uncomment and set a real
+      # secret (at least 16 characters); an entry that does not parse is fatal at
+      # startup, deliberately.
+      #
+      # EULLM_API_KEYS: "rag-prod:CHANGE-ME-a-long-random-secret:rpm=600"
+      #
+      # Better: mount a chmod-600 file and point at it, so the secret is neither
+      # in this file nor in `docker inspect` output.
+      # EULLM_API_KEYS_FILE: /run/secrets/eullm-keys
+      #
+      # EULLM_ALLOWED_ORIGINS: "https://chat.example.eu"
+      EULLM_AUDIT_DIR: /data/audit
 
   # ── Engine (NVIDIA GPU) ────────────────────────────────────
   engine-gpu:
