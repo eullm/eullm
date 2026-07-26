@@ -1632,11 +1632,7 @@ async fn cmd_run(
     let mut kv_k_mib: f64 = 0.0;
     let mut kv_v_mib: f64 = 0.0;
 
-    let resolved_threads = threads.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(4)
-    });
+    let resolved_threads = threads.unwrap_or_else(inference::default_thread_count);
 
     // Canonical, addressable name shown in the banner and the API model slot —
     // the same string the user types into `eullm run` and sees in `eullm list`
@@ -2065,11 +2061,7 @@ async fn cmd_serve(
         ensure_port_available(p, replace).await;
     }
 
-    let threads = threads.unwrap_or_else(|| {
-        std::thread::available_parallelism()
-            .map(|n| n.get() as u32)
-            .unwrap_or(4)
-    });
+    let threads = threads.unwrap_or_else(inference::default_thread_count);
 
     println!("eullm ready (no model loaded — send a request with a \"model\" field to load one).");
     println!("  API (EULLM):   http://localhost:{port}/api");

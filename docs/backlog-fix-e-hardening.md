@@ -31,7 +31,8 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
-**Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39. Le ultime due non vengono da una revisione del
+**Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
+**Chiusa dopo la 0.6.36:** H2-M (default dei thread) — 23 su 40. Le ultime due non vengono da una revisione del
 codice ma dai report di un tester esterno sull'issue #140: vale la pena
 notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
 prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
@@ -43,7 +44,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 166 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 171 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -595,6 +596,54 @@ esterni non si fidano dei valori che leggono.
   test guardava la qualità dell'output fuori dai default, quindi la combinazione
   che raccomandavamo attivamente non è mai stata eseguita da nessuno prima di un
   tester esterno, quindici giorni dopo.
+
+- [x] **H2-M · Il default dei thread conta le CPU logiche, non i core** *(P1)*
+  Emerso da una domanda sul report del MacBook Pro: quella macchina genera a
+  **0,8 tok/s**, contro 11,7 del mac mini 2018 (stessa generazione di CPU, stesso
+  binario) e 26,5 di un Raspberry Pi 5. Avevo liquidato i suoi timeout come
+  «aritmetici, è solo lenta»: sbagliato. Un i9-8950HK 34 volte più lento di un
+  Pi 5 non è una macchina lenta, è una macchina in una condizione anomala — e
+  parte di quella condizione la creiamo noi.
+
+  `threads.unwrap_or_else(available_parallelism)` chiedeva **tutte le CPU
+  logiche**. `llama-cli` usa `common_cpu_get_num_math` →
+  `common_cpu_get_num_physical_cores`, che su macOS legge
+  `hw.perflevel0.physicalcpu`, cioè i core fisici *performance*. Sull'i9-8950HK
+  fa 12 contro 6; sull'M1 fa 8 (4P+4E) contro 4.
+
+  Misurato qui su una VM a 4 core senza SMT, dove la sovrasottoscrizione è
+  l'unica variabile in gioco:
+
+  | `--threads` | throughput |
+  |---|---|
+  | 1 | 16,4 tok/s |
+  | 2 | 25,4 tok/s |
+  | **4** | **41,9 tok/s** |
+  | 8 | 16,9 tok/s |
+  | 12 | 14,6 tok/s |
+
+  Chiedere più thread di quanti core li possano eseguire costa il **60%** del
+  throughput. Su Apple Silicon il meccanismo è anche peggiore: ggml divide il
+  grafo equamente fra i thread, quindi ogni passo aspetta il più lento, e quattro
+  core performance più quattro efficiency vanno **più piano** di quattro
+  performance da soli. Su un portatile termicamente limitato poi si somma: più
+  thread AVX-heavy significa più potenza assorbita, quindi clock sostenuto più
+  basso — che è esattamente il difetto noto del MacBook Pro 15" 2018.
+
+  Chiuso con `inference::default_thread_count`, che replica l'euristica di
+  llama.cpp: core fisici performance su macOS via `sysctlbyname`, coppie
+  `(physical id, core id)` distinte da `/proc/cpuinfo` su Linux, e il conteggio
+  logico come ultima risorsa quando la piattaforma non sa rispondere — mai zero.
+  Cinque test, incluso il caso ARM in cui il kernel omette `core id` del tutto.
+
+  **Onestà su cosa è verificato**: la misura sopra è su una macchina senza SMT,
+  quindi prova che la sovrasottoscrizione fa danno, non che il *nostro* nuovo
+  default sia migliore su hardware ibrido — lì i due valori coincidono e il
+  cambiamento è un no-op. La verifica vera arriva dai box di Peter con
+  `--threads 6` sull'i9 e `--threads 4` sull'M1. Allineare l'euristica a quella
+  dell'implementazione di riferimento è comunque la scelta conservativa, ed è
+  anche ciò che rende sensato un confronto like-for-like con `llama-cli`.
+  Prossimo sospetto sul gap con llama-cli, una volta chiuso questo.
 
 ---
 
