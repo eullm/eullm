@@ -699,9 +699,14 @@ async fn main() {
                 ctk = corrected_k;
                 ctv = corrected_v;
             }
-            // After the Gemma correction, so the warning describes what will
-            // actually be used rather than what was typed.
-            inference::warn_on_lossy_kv(ctk, ctv);
+            // After the Gemma correction, so this sees what will actually be
+            // used rather than what was typed.
+            let (fa_k, fa_corrected) =
+                inference::correct_kv_cache_for_flash_attn(ctk, !no_flash_attn);
+            if fa_corrected {
+                inference::report_flash_attn_kv_correction(ctk);
+                ctk = fa_k;
+            }
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
                 eprintln!(
@@ -783,7 +788,14 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            inference::warn_on_lossy_kv(ctk, ctv);
+            let (ctk, _) = {
+                let (k, corrected) =
+                    inference::correct_kv_cache_for_flash_attn(ctk, !no_flash_attn);
+                if corrected {
+                    inference::report_flash_attn_kv_correction(ctk);
+                }
+                (k, corrected)
+            };
             let ui_port_opt = if ui { Some(ui_port) } else { None };
             cmd_serve(
                 port,

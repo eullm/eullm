@@ -301,23 +301,65 @@ pub fn is_four_bit(t: KvCacheType) -> bool {
     matches!(t, KvCacheType::Q4_0 | KvCacheType::Q4_1)
 }
 
-/// Warn once at startup when the key cache is quantized to four bits.
+/// A four-bit key cache combined with flash attention produces garbage output.
+/// Raise the key cache to q8_0 when both are asked for, and say so.
 ///
-/// Not an error: someone squeezing a long context onto a small card may
-/// genuinely want it, and refusing would be us overriding a deliberate choice.
-/// But it must not be a silent one — the failure mode is degraded text, which
-/// looks like a model problem rather than a configuration problem, and that is
-/// exactly how it cost an external tester several days.
-pub fn warn_on_lossy_kv(cache_type_k: KvCacheType, cache_type_v: KvCacheType) {
-    if is_four_bit(cache_type_k) {
-        eprintln!(
-            "[EULLM] Warning: --cache-type-k {} is a 4-bit key cache. This degrades \
-             output quality badly on most models — often into incoherent text — for \
-             little memory saved over q8_0. Prefer --cache-type-k q8_0 --cache-type-v {}.",
-            cache_type_name(cache_type_k),
-            cache_type_name(cache_type_v),
-        );
+/// # What was actually measured
+///
+/// Bisected on x86 CPU with qwen3-0.6b at temperature 0, one variable at a
+/// time. `--cache-type-k q4_0` with flash attention on turns "The capital of
+/// France is Paris" into word salad, occasionally in the wrong script. The
+/// same binary, model and prompt with `--no-flash-attn` answers correctly. It
+/// reproduces identically with the batching scheduler and with the sequential
+/// engine, so it is not a scheduler problem, and `--cache-type-v q4_0` with
+/// f16 keys is fine, so it is the *key* cache specifically. External testing on
+/// issue #140 saw the same thing on Metal and on ARM CPU, which rules out one
+/// backend's kernels.
+///
+/// So this is not the gradual quality loss that quantizing a cache normally
+/// buys you. It is a flash-attention path that does not handle four-bit keys
+/// and produces nonsense rather than refusing.
+///
+/// # Why correct rather than warn
+///
+/// A warning still leaves the process generating garbage, and the person who
+/// most needs the warning is the one running headless with the output going
+/// into a pipeline. Raising K to q8_0 keeps flash attention — and its
+/// throughput — while still saving most of the memory the operator was after;
+/// silently turning flash attention off instead would halve their speed
+/// invisibly, which is a worse surprise than using slightly more VRAM. Anyone
+/// who genuinely wants four-bit keys can have them by also passing
+/// `--no-flash-attn`, which is the configuration that actually works.
+///
+/// Mirrors `correct_kv_cache_for_model`, which does the same for Gemma 4.
+///
+/// Returns `(effective_k, corrected)`.
+pub fn correct_kv_cache_for_flash_attn(
+    cache_type_k: KvCacheType,
+    flash_attn: bool,
+) -> (KvCacheType, bool) {
+    if flash_attn && is_four_bit(cache_type_k) {
+        (KvCacheType::Q8_0, true)
+    } else {
+        (cache_type_k, false)
     }
+}
+
+/// Print the explanation for a correction made by
+/// [`correct_kv_cache_for_flash_attn`].
+pub fn report_flash_attn_kv_correction(requested_k: KvCacheType) {
+    eprintln!(
+        "[EULLM] --cache-type-k {} requested with flash attention enabled.",
+        cache_type_name(requested_k)
+    );
+    eprintln!(
+        "[EULLM] That combination produces incoherent output (measured on CPU and Metal), \
+         so the key cache is being raised to q8_0."
+    );
+    eprintln!(
+        "[EULLM] Pass --no-flash-attn as well if you really need 4-bit keys — that path \
+         works, at a throughput cost."
+    );
 }
 
 /// The CLI spelling of a cache type — the inverse of [`parse_cache_type`].
@@ -1545,5 +1587,59 @@ mod kv_cache_naming_tests {
         ] {
             assert!(!is_four_bit(t), "{t:?} is not a 4-bit type");
         }
+    }
+}
+
+#[cfg(test)]
+mod flash_attn_kv_correction_tests {
+    use super::*;
+
+    #[test]
+    fn four_bit_keys_are_raised_when_flash_attention_is_on() {
+        for k in [KvCacheType::Q4_0, KvCacheType::Q4_1] {
+            let (out, corrected) = correct_kv_cache_for_flash_attn(k, true);
+            assert!(corrected, "{k:?} with flash attention must be corrected");
+            assert_eq!(out, KvCacheType::Q8_0);
+        }
+    }
+
+    #[test]
+    fn four_bit_keys_are_left_alone_without_flash_attention() {
+        // That combination is the one that actually works — measured, not
+        // assumed — so overriding it would be taking away the only way to get
+        // a four-bit key cache at all.
+        for k in [KvCacheType::Q4_0, KvCacheType::Q4_1] {
+            let (out, corrected) = correct_kv_cache_for_flash_attn(k, false);
+            assert!(!corrected);
+            assert_eq!(out, k);
+        }
+    }
+
+    #[test]
+    fn everything_else_passes_through_untouched() {
+        for k in [
+            KvCacheType::F16,
+            KvCacheType::F32,
+            KvCacheType::Q8_0,
+            KvCacheType::Q5_0,
+            KvCacheType::Q5_1,
+        ] {
+            for fa in [true, false] {
+                let (out, corrected) = correct_kv_cache_for_flash_attn(k, fa);
+                assert!(!corrected, "{k:?} (flash_attn={fa}) must not be corrected");
+                assert_eq!(out, k);
+            }
+        }
+    }
+
+    #[test]
+    fn the_correction_is_idempotent() {
+        // Applying it to its own output must not keep changing things — the
+        // startup path runs it after the Gemma correction, and a correction
+        // that moves on every pass is a bug waiting for a second caller.
+        let (once, _) = correct_kv_cache_for_flash_attn(KvCacheType::Q4_0, true);
+        let (twice, corrected) = correct_kv_cache_for_flash_attn(once, true);
+        assert!(!corrected);
+        assert_eq!(once, twice);
     }
 }
