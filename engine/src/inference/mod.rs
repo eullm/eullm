@@ -25,13 +25,39 @@ use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
-/// Check if the binary was compiled with GPU support and warn if GPU was
-/// requested but is not available.  Returns true when a GPU backend is present.
-pub fn check_gpu_support(gpu_layers: i32) {
-    let has_gpu = cfg!(feature = "cuda")
+/// Whether this binary was compiled with any GPU backend at all.
+pub const fn has_gpu_backend() -> bool {
+    cfg!(feature = "cuda")
         || cfg!(feature = "rocm")
         || cfg!(feature = "vulkan")
-        || cfg!(feature = "metal");
+        || cfg!(feature = "metal")
+}
+
+/// Report the binary's GPU capability and return the layer count that may
+/// actually be handed to llama.cpp.
+///
+/// **This return value is not advisory.** A binary compiled without any GPU
+/// backend must ask for zero offloaded layers, and until v0.6.39 it did not:
+/// it printed "All inference will run on CPU" and then passed
+/// `n_gpu_layers = 1000`. On Linux and Windows that was harmless, because
+/// without a GPU feature there is no backend for llama.cpp to offload *to*.
+/// On macOS it was not harmless — ggml compiles the Metal backend by default
+/// on every Apple target, independent of our cargo features, so llama.cpp
+/// dutifully offloaded all 29 layers onto whatever Metal device it found.
+///
+/// Confirmed in the field on two Intel Macs in issue #140, on a build we had
+/// been describing as CPU-only since v0.6.30: a Mac mini offloading to an
+/// Intel UHD 630 and a MacBook Pro offloading to an AMD Radeon Pro 560X.
+/// Metal on non-Apple GPUs is a documented source of wrong results upstream
+/// (ggml-org/llama.cpp#19563, #4004), and that machine produced NaN logits on
+/// every single request. The build-side half of the fix is in
+/// `llama-cpp-sys-2`'s build.rs, which now honours the `metal` feature
+/// instead of always enabling the backend on Apple; this half makes the
+/// runtime request match what the binary claims to support, on every platform
+/// and regardless of how it was built.
+#[must_use]
+pub fn check_gpu_support(gpu_layers: i32) -> i32 {
+    let has_gpu = has_gpu_backend();
 
     if gpu_layers != 0 && !has_gpu {
         eprintln!();
@@ -51,10 +77,13 @@ pub fn check_gpu_support(gpu_layers: i32) {
         eprintln!("╚══════════════════════════════════════════════════════════════╝");
         eprintln!();
         tracing::warn!(
-            "No GPU backend compiled (gpu_layers={gpu_layers}). \
+            "No GPU backend compiled: requested gpu_layers={gpu_layers}, forcing 0. \
              Rebuild with --features cuda/rocm/vulkan/metal for GPU acceleration."
         );
-    } else if has_gpu {
+        return 0;
+    }
+
+    if has_gpu {
         let backend_name = if cfg!(feature = "cuda") {
             "CUDA"
         } else if cfg!(feature = "rocm") {
@@ -66,6 +95,8 @@ pub fn check_gpu_support(gpu_layers: i32) {
         };
         tracing::info!("GPU backend: {backend_name}");
     }
+
+    gpu_layers
 }
 
 /// Summary of the CPU SIMD features this binary was actually compiled
@@ -803,7 +834,10 @@ impl InferenceEngine {
             return Err(format!("Model file not found: {}", config.model_path.display()).into());
         }
 
-        check_gpu_support(config.gpu_layers);
+        // Use the RETURNED value, never `config.gpu_layers` — on a binary with
+        // no GPU backend this is 0, and asking for more offloads onto a
+        // backend we do not support. See `check_gpu_support`.
+        let gpu_layers = check_gpu_support(config.gpu_layers);
 
         tracing::info!("Initializing llama.cpp backend...");
         let mut backend = LlamaBackend::init()?;
@@ -812,8 +846,8 @@ impl InferenceEngine {
         // EULLM uses tracing for its own structured logging.
         backend.void_logs();
 
-        let model_params = if config.gpu_layers >= 0 {
-            LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers as u32)
+        let model_params = if gpu_layers >= 0 {
+            LlamaModelParams::default().with_n_gpu_layers(gpu_layers as u32)
         } else {
             // -1 = offload all layers
             LlamaModelParams::default().with_n_gpu_layers(1000)
@@ -891,7 +925,9 @@ impl InferenceEngine {
         // text model itself is being offloaded. Threads count carries over
         // for the CPU-side image preprocessing inside mtmd.
         let mut params = MtmdContextParams::default();
-        params.use_gpu = config.gpu_layers != 0;
+        // Same rule as the text side: a binary with no GPU backend must not
+        // ask for one, whatever the config says (see `check_gpu_support`).
+        params.use_gpu = config.gpu_layers != 0 && has_gpu_backend();
         params.print_timings = false;
         params.n_threads = config.threads as i32;
 
@@ -1751,6 +1787,25 @@ fn num_cpus() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // A binary with no GPU backend used to print "All inference will run on
+    // CPU" and then hand llama.cpp n_gpu_layers=1000 anyway. Harmless where
+    // there is no backend to offload to; on macOS ggml compiles Metal by
+    // default regardless of our features, so it offloaded the whole model
+    // onto Intel and AMD GPUs that produce wrong results (issue #140).
+    // The warning and the request must agree.
+    #[test]
+    fn gpu_layers_are_forced_to_zero_when_no_backend_is_compiled() {
+        if has_gpu_backend() {
+            assert_eq!(check_gpu_support(-1), -1, "offload-all must survive");
+            assert_eq!(check_gpu_support(35), 35, "explicit count must survive");
+        } else {
+            assert_eq!(check_gpu_support(-1), 0, "offload-all must be refused");
+            assert_eq!(check_gpu_support(35), 0, "explicit count must be refused");
+        }
+        // Asking for nothing is honoured either way.
+        assert_eq!(check_gpu_support(0), 0);
+    }
 
     // The old default (a fixed seq_id, or a hardcoded 1234 on the
     // sequential-fallback path) made every unseeded request through a given

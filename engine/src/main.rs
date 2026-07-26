@@ -1854,7 +1854,15 @@ async fn cmd_run(
         }
         println!(
             "  GPU layers:    {}",
-            if gpu_layers < 0 {
+            // Report what will actually be requested, not what was asked for.
+            // A binary with no GPU backend offloads nothing (see
+            // inference::check_gpu_support), and printing "all" here was the
+            // same species of untruth as the warning box that said "all
+            // inference will run on CPU" while 29 layers went to a Metal
+            // device — issue #140.
+            if !inference::has_gpu_backend() {
+                "0 (no GPU backend compiled into this binary)".to_string()
+            } else if gpu_layers < 0 {
                 "all".to_string()
             } else {
                 gpu_layers.to_string()

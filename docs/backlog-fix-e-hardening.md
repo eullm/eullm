@@ -35,6 +35,11 @@ H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 H2-S, aperta: il runner di build di `eullm-macos-x64` (vedi H2-S per cosa la
 ricerca a monte ha escluso e cosa no).
 
+**In v0.6.39:** H2-T (Metal acceso su un binario che dichiarava di non averlo —
+la voce più importante del documento) e H2-J (`think: false` non sopprimeva
+niente). Entrambe trovate su segnalazioni di Peter, nessuna delle due da una
+revisione a tavolino.
+
 **In v0.6.38:** solo il cambio di runner di H2-S. Nessuna riga di codice del
 motore: il binario `eullm-macos-x64` è lo stesso sorgente della 0.6.37
 compilato su hardware Intel nativo invece che cross-compilato. È proprio questo
@@ -536,6 +541,42 @@ esterni non si fidano dei valori che leggono.
   Il sintomo è già riproducibile con `tools/smoke_test.py` su qualunque box: a
   temperatura zero un before/after è misurabile senza ambiguità.
 
+  **Causa 1 confermata, non per ipotesi: letta dal template dentro il GGUF.**
+  `tokenizer.chat_template` di `Qwen3-0.6B-Q4_K_M.gguf` — lo stesso file su cui
+  girano i test di Peter — contiene esattamente:
+
+      {%- if enable_thinking is defined and enable_thinking is false %}
+          {{- '<think>\n\n</think>\n\n' }}
+      {%- endif %}
+
+  Riga vuota fra i due tag, come sospettato. `think_suppression_prefix()` ora
+  restituisce quella sequenza, e i byte esatti sono documentati sul posto con la
+  citazione del template, così non si possono riperdere in un riordino.
+  `main.rs:2975` chiama la funzione invece di ripetere il letterale, quindi la
+  ricostruzione della history è rimasta allineata da sola.
+
+  **Verifica before/after sulla stessa macchina, `temperature: 0`, stesso
+  prompt dello smoke test** (`Count: one two three`, `num_predict 400`) — il
+  before è stato ricompilato col prefisso vecchio proprio per non avere un
+  controllo che passa in entrambi i casi:
+
+  | prefisso | contenuto visibile | `</think>` al client |
+  |---|---|---|
+  | `<think>\n</think>\n\n` (vecchio) | 882 caratteri di ragionamento, poi il tag, poi la risposta | **sì** |
+  | `<think>\n\n</think>\n\n` (nuovo) | `Count: one two three` | no |
+
+  Il difetto era peggio di come l'avevamo scritto: non era «un tag che sfugge»,
+  era che **la soppressione del thinking non funzionava affatto**. Con un solo
+  newline il modello ragionava per intero nel canale visibile e chiudeva col tag;
+  chi chiedeva `think: false` pagava i token del ragionamento e se lo vedeva in
+  faccia. Verificato su tutti e tre i percorsi: NDJSON in streaming, non
+  streaming, e motore sequenziale (`--batch-size 0`).
+
+  **Resta aperto il punto 2**, la guardia sul tag orfano. Va nel `process_piece`
+  condiviso di H2-D e non prima: metterla adesso significherebbe scriverla nello
+  scheduler e lasciare scoperti gli altri due loop di decode — esattamente la
+  duplicazione che H2-D esiste per togliere.
+
 - [x] **H2-K · `run` e `serve` non devono partire con KV cache diverse** *(P1)*
   Emerso dai test di Peter sull'issue #140, non da una revisione del codice.
   `Commands::Run` aveva `cache_type_k`/`cache_type_v` a `f16`/`f16`,
@@ -828,6 +869,72 @@ esterni non si fidano dei valori che leggono.
     segnalazione a monte di logit tutti NaN su un build CPU-only x86. L'assenza
     conta: rende meno probabile «llama.cpp è rotto su quella CPU» e più
     probabile qualcosa di specifico del nostro binario o di quelle due macchine.
+
+- [x] **H2-T · Il binario macOS x64 non è mai stato CPU-only, e lo dicevamo a
+  tutti** *(P0)*
+  La voce più costosa di tutto il documento, perché per un mese l'abbiamo
+  affermata al contrario — a noi stessi, nel codice, nella tabella della
+  release e nell'issue #140 a un tester esterno.
+
+  Il log `--rust-debug` della 0.6.38 dal MacBook Pro 2018 mostra, a distanza di
+  quindici righe:
+
+      ║  WARNING: GPU requested but this binary has no GPU support  ║
+      ║  All inference will run on CPU (very slow for large prompts) ║
+      WARN eullm::inference: No GPU backend compiled (gpu_layers=-1).
+      ggml_metal_device_init: GPU name:   MTL0 (AMD Radeon Pro 560X)
+      load_tensors: offloaded 29/29 layers to GPU
+      llama_kv_cache: MTL0_Private KV buffer size = 448.00 MiB
+
+  E sul mac mini 2018, identico, su `Intel(R) UHD Graphics 630`.
+
+  **Due difetti indipendenti, entrambi nostri, che si sono sommati:**
+  1. `cfg!(feature = "metal")` non ha mai controllato il backend. Il CMake di
+     ggml mette `GGML_METAL=ON` di default su *ogni* target Apple, e il
+     `build.rs` di `llama-cpp-sys-2` lo spegneva solo per watchOS. Togliere la
+     feature dal target x64 in v0.6.30 non ha quindi tolto niente: il backend
+     Metal continuava a essere compilato e il dispositivo enumerato.
+  2. `check_gpu_support` stampava l'avviso e **non cambiava niente**. Con
+     `gpu_layers = -1` (il default) il ramo `else` passava
+     `with_n_gpu_layers(1000)` comunque. Su Linux e Windows senza feature GPU
+     è innocuo, perché non c'è nessun backend su cui scaricare. Su macOS no.
+
+  Quindi da v0.6.30 in poi le due macchine Intel di Peter hanno girato tutto il
+  modello su Metal, su una UHD 630 e su una Radeon Pro 560X. È esattamente la
+  configurazione che a monte è documentata come produttrice di risultati
+  sbagliati (`ggml-org/llama.cpp#19563` su Radeon Pro, `#4004` su Intel Mac in
+  generale), e llama.cpp costruisce la propria release macOS x64 con
+  `-DGGML_METAL=OFF` proprio per questo. Il log lo conferma anche a livello di
+  capacità del dispositivo: `simdgroup matrix mul. = false` su entrambe.
+
+  Chiuso su tutti e due i fronti, perché uno solo non basta:
+  - **build**: `build.rs` ora rispetta la feature `metal` su tutti i target
+    Apple, non solo watchOS. Senza feature il backend non viene proprio
+    compilato. La catena `eullm/metal → llama-cpp-2/metal →
+    llama-cpp-sys-2/metal` inoltra correttamente, quindi il target arm64
+    (che la feature ce l'ha) non cambia.
+  - **runtime**: `check_gpu_support` restituisce il numero di layer che si
+    possono davvero chiedere — 0 se nessun backend è compilato — ed è
+    `#[must_use]`. I due punti di caricamento (motore sequenziale e
+    scheduler) usano quel valore invece di `config.gpu_layers`, e la stessa
+    regola vale per `use_gpu` del percorso multimodale. Vale su ogni
+    piattaforma e indipendentemente da come il binario è stato costruito, che
+    è ciò che serve: il difetto 1 era invisibile proprio perché ci fidavamo
+    di una feature al posto di un controllo.
+
+  **Nota di metodo, la parte scomoda.** Il 22 luglio ho scritto
+  «eullm-macos-x64 è costruito senza Metal, quindi non tocca mai la GPU» e su
+  quella frase è stata costruita una settimana di indagine nella direzione
+  sbagliata — inclusa la caccia alla cross-compilazione di H2-S, che resta
+  corretta come igiene ma non era questo. Non avevo mai letto un log di avvio
+  di quel binario su una macchina Apple: se l'avessi fatto, `ggml_metal_init`
+  era lì dalla prima riga. La lezione non è «Metal è insidioso», è che una
+  feature di compilazione non è una prova di cosa fa il binario, e il log di
+  avvio del binario vero sì.
+
+  Resta da verificare sul campo che con Metal spento davvero le due macchine
+  producano risposte valide. Finché non arriva quel dato, i NaN sono
+  **spiegati in modo plausibile, non dimostrati**.
 
 ### Verificato e **non** indotto da noi
 

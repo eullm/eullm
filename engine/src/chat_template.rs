@@ -86,9 +86,26 @@ impl ChatTemplate {
     /// only — empty for templates that don't support a `think` toggle).
     /// See `build_prompt`'s doc comment for why storing history correctly
     /// requires re-applying this, not just omitting it.
+    ///
+    /// The exact bytes matter and are not a style choice. Qwen3's own chat
+    /// template, embedded in every Qwen3 GGUF under
+    /// `tokenizer.chat_template`, emits this for `enable_thinking=false`:
+    ///
+    /// ```text
+    /// {%- if enable_thinking is defined and enable_thinking is false %}
+    ///     {{- '<think>\n\n</think>\n\n' }}
+    /// {%- endif %}
+    /// ```
+    ///
+    /// Note the blank line between the two tags. We used to inject a single
+    /// newline, and that one missing byte was enough to put the prompt off
+    /// distribution: the model answered by re-emitting the closing tag, so a
+    /// `think: false` request streamed a literal `</think>` to the client as
+    /// assistant text. Deterministic at `temperature: 0`, reproduced
+    /// identically on ARM CPU and on x86 CUDA.
     pub fn think_suppression_prefix(&self) -> &'static str {
         match self {
-            Self::ChatML => "<think>\n</think>\n\n",
+            Self::ChatML => "<think>\n\n</think>\n\n",
             Self::Gemma | Self::Llama2 => "",
         }
     }
@@ -244,7 +261,11 @@ mod tests {
     fn test_chatml_no_think() {
         let msgs = vec![("user", "hello")];
         let prompt = ChatTemplate::ChatML.build_prompt(&msgs, false);
-        assert!(prompt.contains("<think>\n</think>"));
+        // Byte-for-byte what Qwen3's own template emits for
+        // enable_thinking=false, blank line included. A single \n here made
+        // the model echo `</think>` back as visible assistant text.
+        assert!(prompt.contains("<think>\n\n</think>\n\n"));
+        assert!(prompt.ends_with("<think>\n\n</think>\n\n"));
     }
 
     #[test]

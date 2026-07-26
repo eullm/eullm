@@ -164,9 +164,16 @@ jobs:
             os: macos-15-intel
             artifact: eullm-macos-x64
             # Same x86-64-v3 baseline as eullm-linux-x64 above — see that
-            # entry's comment. Metal was removed from this target separately
-            # (garbage output / hangs on Intel-Mac GPUs, issue #140); this is
-            # the CPU-side follow-up on the same issue.
+            # entry's comment.
+            #
+            # This target carries no `features:` entry, and from v0.6.39 that
+            # genuinely means no Metal. Between v0.6.30 and v0.6.38 it did
+            # not: ggml's CMake enables the Metal backend on every Apple
+            # target regardless of cargo features, so dropping the feature
+            # changed nothing and this binary kept offloading whole models
+            # onto Intel-Mac GPUs (issue #140). llama-cpp-sys-2's build.rs now
+            # passes -DGGML_METAL=OFF when the feature is absent, matching how
+            # llama.cpp builds its own macOS x64 release.
             rustflags: "-C target-cpu=x86-64-v3"
           - target: aarch64-apple-darwin
             os: macos-15
