@@ -31,6 +31,8 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
+**Chiusa in v0.6.37:** H2-R (guardia sui logit NaN) — 28 su 45.
+
 **Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
 **Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
 H2-O (`done_reason`), H2-P (`--daemon`) e H2-Q (audit concorrente) — 27 su 44. Le ultime due non vengono da una revisione del
@@ -733,6 +735,43 @@ esterni non si fidano dei valori che leggono.
   esecuzioni consecutive dello smoke test danno 33 PASS / 0 FAIL.
   Da notare per il metodo: questo non lo avremmo mai trovato leggendo il codice
   o testando a mano. L'ha trovato un harness che manda 8 richieste insieme.
+
+- [x] **H2-R · Con logit NaN generavamo spazzatura e la chiamavamo risposta** *(P1)*
+  Il log di `--rust-debug` dal mac mini 2018 dell'issue #140 ha finalmente detto
+  cos'erano gli `@@@`: **tutti e 151.936 i logit sono NaN**, in 5.020 casi su
+  5.021, dal primo token della prima richiesta. Con una distribuzione interamente
+  NaN i confronti del sampler degenerano sempre sullo stesso token — quello è
+  `@`. Su quella macchina non è mai uscita una risposta sensata: 4 risposte di
+  soli `@`, 2 errori `Decode Error -3` (che è `GGML_STATUS_FAILED` da
+  `graph_compute`), zero altro.
+  Il difetto **nostro** non è il NaN: è che lo sapevamo e consegnavamo comunque
+  1014 token di `@` con `done_reason: "stop"`. Il rilevatore aggiunto in 0.6.33
+  scansiona tutti i logit e per questo sta dietro `--rust-debug`; senza quel flag
+  — cioè per tutti — non c'era nessun controllo.
+  Chiuso con una guardia **O(1) sempre attiva**: dopo il sampling si guarda il
+  logit del token appena scelto. Se è NaN o Inf, la distribuzione da cui è stato
+  scelto era priva di senso, e la richiesta fallisce con un errore esplicito
+  invece di generare spazzatura. Un valore, non 150k: costo nullo per token.
+  Inserita in tutti e cinque i punti di sampling — i due dello scheduler
+  (prefill e decode loop) e i tre del motore sequenziale, altrimenti
+  `--batch-size 0` restava scoperto. La KV cache della sequenza viene azzerata,
+  non offerta al riuso di prefisso: qualunque cosa abbia prodotto NaN è dentro.
+  **Non è una riparazione, ed è importante non spacciarla per tale.** Il NaN
+  resta. Serve a non mentire, esattamente come `done_reason`, e a impedire che
+  una risposta corrotta entri in una pipeline dove nessuno la guarda — che è il
+  caso che conta se il fenomeno è intermittente invece che totale come su quella
+  macchina. La riparazione vera dipende da quale dei tre rami è, e nessuno dei
+  tre è ancora escluso: hardware di quella macchina, kernel di llama.cpp
+  (AVX2 o flash attention su quella CPU), o come guidiamo noi llama.cpp. Tre run
+  da un flag ciascuno lo dicono: `--no-flash-attn`, `--batch-size 0`,
+  e `llama-cli` sullo stesso GGUF.
+  Nota sulla sicurezza dell'implementazione: `get_logits_ith` ha un `assert!`
+  interno sull'indice, e ora gira a ogni token invece che sotto un flag di debug.
+  L'invariante che lo rende sicuro è documentata sul posto — l'indice è quello
+  registrato da `decode_batch.add(..., true)`, ed è lo stesso che
+  `LlamaSampler::sample` ha appena usato una riga sopra. Verificato con 8
+  sequenze concorrenti nello smoke test, che è il percorso multi-sequenza dove
+  un indice sbagliato si vedrebbe.
 
 ### Verificato e **non** indotto da noi
 

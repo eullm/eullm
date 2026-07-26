@@ -1113,6 +1113,33 @@ fn run_scheduler_loop(
                                 warn_if_logits_corrupt(&ctx, -1, seq.seq_id);
                             }
                             let token = seq.sampler.sample(&ctx, -1);
+
+                            // Always-on O(1) guard, before the token is
+                            // accepted into the sampler's history: a NaN here
+                            // means the whole forward pass produced nothing
+                            // usable, and continuing would stream garbage that
+                            // reads as a real answer.
+                            if sampled_token_is_corrupt(&ctx, -1, token) {
+                                tracing::error!(
+                                    "Seq {}: sampled token {} has a NaN/Inf logit — \
+                                     aborting generation instead of emitting garbage. \
+                                     Run with --rust-debug for the full logit scan.",
+                                    seq.seq_id,
+                                    token.0,
+                                );
+                                let _ = seq.tx.try_send(StreamEvent::Error(corrupt_logits_error()));
+                                // The KV cache for this sequence is suspect —
+                                // whatever produced NaN is in it. Wipe rather
+                                // than offer it for prefix reuse.
+                                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                                idle_slots.push(CachedSlot {
+                                    seq_id: seq.seq_id,
+                                    text: String::new(),
+                                    tokens: Vec::new(),
+                                    last_used: std::time::Instant::now(),
+                                });
+                                continue;
+                            }
                             seq.sampler.accept(token);
 
                             if model.is_eog_token(token) {
@@ -1391,6 +1418,28 @@ fn run_scheduler_loop(
                 warn_if_logits_corrupt(&ctx, logit_idx, seq.seq_id);
             }
             let token = seq.sampler.sample(&ctx, logit_idx);
+
+            // Always-on O(1) guard — see `sampled_token_is_corrupt`.
+            if sampled_token_is_corrupt(&ctx, logit_idx, token) {
+                tracing::error!(
+                    "Seq {}: sampled token {} has a NaN/Inf logit after {} tokens — \
+                     aborting generation instead of emitting garbage. \
+                     Run with --rust-debug for the full logit scan.",
+                    seq.seq_id,
+                    token.0,
+                    seq.tokens_generated,
+                );
+                let _ = seq.tx.try_send(StreamEvent::Error(corrupt_logits_error()));
+                to_remove.push(i);
+                let _ = ctx.clear_kv_cache_seq(Some(seq.seq_id as u32), None, None);
+                idle_slots.push(CachedSlot {
+                    seq_id: seq.seq_id,
+                    text: String::new(),
+                    tokens: Vec::new(),
+                    last_used: std::time::Instant::now(),
+                });
+                continue;
+            }
             seq.sampler.accept(token);
 
             // End of generation?
@@ -1900,6 +1949,66 @@ fn send_done(seq: &ActiveSequence, stop_reason: StopReason) {
 /// `SchedulerConfig::debug_logit_check` (`--rust-debug`), off by default:
 /// callers must opt in rather than every production request paying an
 /// extra per-token vocab scan for a diagnostic almost nobody needs.
+/// Whether the token just sampled came out of a broken distribution.
+///
+/// This is the always-on counterpart to [`warn_if_logits_corrupt`], which scans
+/// all ~150k logits and is therefore behind `--rust-debug`. Here we look at a
+/// single value: the logit of the token the sampler actually chose. That is
+/// O(1), costs nothing per token, and is exactly the right question — if the
+/// chosen token's own logit is NaN then the comparison that chose it was
+/// meaningless, whatever the rest of the tensor looks like.
+///
+/// # Why this needs to exist
+///
+/// On a 2018 Intel Mac in issue #140, every one of the 151,936 logits comes
+/// back NaN, from the first token of the first request. The sampler then picks
+/// the same token every time — the comparisons all degenerate the same way —
+/// and the engine cheerfully streamed a thousand tokens of `@` to the client
+/// and reported `done_reason: "stop"`. Three weeks of reports read that as the
+/// model misbehaving.
+///
+/// This does not repair the NaN; nothing here can. It stops us handing the
+/// caller something that looks like an answer when we already know the
+/// computation failed. The same reasoning as reporting `length` instead of
+/// `stop`: the value is in not lying, and on a machine where the corruption is
+/// intermittent rather than total, it is the only thing standing between a
+/// corrupt answer and a RAG index.
+fn sampled_token_is_corrupt(ctx: &LlamaContext, idx: i32, token: LlamaToken) -> bool {
+    // `get_logits_ith` panics when `idx` is not in the context's
+    // initialized-logits set, and unlike `warn_if_logits_corrupt` this runs on
+    // every token of every request rather than behind `--rust-debug`. Two
+    // reasons that is safe here, both worth stating because a panic on this
+    // path would kill the scheduler thread for every concurrent request:
+    //
+    // 1. `idx` is the output index recorded when this token's slot was added
+    //    with `decode_batch.add(..., true)` — the very call that registers the
+    //    index in `LlamaBatch::initialized_logits`, which `decode()` then
+    //    transfers to the context. It is in the set by construction.
+    // 2. `LlamaSampler::sample(&ctx, idx)`, one line above, has already read
+    //    that same row through the raw C API. If the index were wrong we would
+    //    be sampling from the wrong sequence's logits regardless, so the
+    //    assertion could only ever surface a bug that had already bitten.
+    //
+    // The `-1` sentinel used on the prefill path is *not* a member of that set
+    // — see `warn_if_logits_corrupt` — so it goes through `get_logits()`.
+    let logits = if idx == -1 {
+        ctx.get_logits()
+    } else {
+        ctx.get_logits_ith(idx)
+    };
+    logits
+        .get(token.0 as usize)
+        .is_some_and(|v| v.is_nan() || v.is_infinite())
+}
+
+/// The message handed to the client when [`sampled_token_is_corrupt`] fires.
+fn corrupt_logits_error() -> String {
+    "the model produced a numerically invalid result (NaN/Inf logits) and \
+     generation was stopped — this is a compute failure, not a bad prompt. \
+     Try --no-flash-attn, and --rust-debug for the full diagnostic."
+        .to_string()
+}
+
 fn warn_if_logits_corrupt(ctx: &LlamaContext, idx: i32, seq_id: i32) {
     // `get_logits_ith` asserts `idx` is a literal member of the context's
     // internally-tracked `initialized_logits` set — which only ever holds
