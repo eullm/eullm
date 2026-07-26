@@ -44,7 +44,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 162 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 166 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -547,29 +547,55 @@ esterni non si fidano dei valori che leggono.
   e output migliore. Chi ha bisogno del comportamento vecchio lo ottiene con
   `--cache-type-k q8_0 --cache-type-v q4_0`, e ora sa di averlo chiesto.
 
-- [x] **H2-L · Una key cache a 4 bit non va consigliata: distrugge l'output** *(P1)*
-  Sempre dai report dell'issue #140, e questa è la scoperta più netta di tutta
-  la serie. Con `--cache-type-k q4_0 --cache-type-v q4_0` l'output diventa
-  incoerente **su ogni piattaforma provata** — Metal su M4 Pro, CPU x86 su mac
-  mini 2018, CPU ARM su Raspberry Pi 5 — mentre le stesse macchine, con lo
-  stesso binario e lo stesso GGUF, rispondono correttamente con `q8_0` sulle
-  chiavi. Non è quindi un problema di backend né di hardware: è la
-  quantizzazione a 4 bit della **key** cache. I valori tollerano 4 bit, le
-  chiavi no, e la guida di llama.cpp si ferma infatti a q8_0 per le chiavi.
-  Il punto imbarazzante: `scheduler.rs:387-391` suggeriva **esattamente quella
-  combinazione** nel messaggio d'errore che compare quando la KV cache non entra
-  in VRAM, e il README la usava come esempio in quattro punti. Stavamo indicando
-  come rimedio una configurazione che rompe l'output, a chi era già in
-  difficoltà.
-  Chiuso: il suggerimento diventa `q8_0`/`q4_0` con una riga esplicita sul
-  perché non q4_0 sulle chiavi; `inference::warn_on_lossy_kv` avvisa all'avvio
-  se le chiavi sono a 4 bit (`run` e `serve`, dopo la correzione Gemma così
-  descrive ciò che verrà davvero usato); README allineato. Non è un errore
-  fatale: chi ha davvero bisogno di quel contesto su quella scheda può
-  chiederlo, ma non può più ottenerlo senza saperlo. Aggiunto anche
-  `cache_type_name`, inverso di `parse_cache_type`, perché i messaggi stampavano
-  `Q4_0` in Debug — una stringa che il parser non accetta così com'è, cioè un
-  suggerimento non copiabile.
+- [x] **H2-L · Flash attention + key cache a 4 bit produce output incoerente** *(P1)*
+  Partito dai report dell'issue #140 come «q4_0 degrada la qualità», che era la
+  spiegazione sbagliata. Bisezionato in locale su CPU x86 con qwen3-0.6b a
+  `temperature: 0`, una variabile alla volta:
+
+  | configurazione | output |
+  |---|---|
+  | `f16`/`f16` | corretto |
+  | `q8_0`/`q4_0` | corretto |
+  | `f16`/`q4_0` | corretto |
+  | **`q4_0`/`q4_0`** | **insalata di parole** |
+  | **`q4_0`/`f16`** | **insalata di parole** |
+  | `q4_0`/`q4_0` con `--no-flash-attn` | **corretto** |
+  | `q4_0`/`q4_0` con `--batch-size 0` | insalata di parole |
+
+  Quindi: non è la quantizzazione dei *valori* (f16/q4_0 va bene), non è lo
+  scheduler (si riproduce identico in sequenziale), non è un backend (i report
+  esterni lo mostrano su Metal e su CPU ARM). È **flash attention che non gestisce
+  una key cache a 4 bit** e produce testo senza senso invece di rifiutare. Con
+  `--no-flash-attn` la stessa configurazione risponde correttamente, incluse
+  domande banali dove la differenza è inequivocabile («The capital of France is
+  **Paris**» contro caratteri arabi casuali).
+
+  **Perché è arrivato fin qui.** Il suggerimento `--cache-type-k q4_0
+  --cache-type-v q4_0` nel messaggio d'errore di VRAM insufficiente
+  (`scheduler.rs:387`) è stato introdotto in `6ea592b` del 10 luglio — **lo stesso
+  commit che ha reso flash attention attiva di default**. La combinazione
+  consigliata non ha quindi mai funzionato con la configurazione predefinita: è
+  nata rotta. Non è un caso di «testato e poi regredito»: non è mai stata provata
+  con FA attiva, perché FA attiva è arrivata nello stesso momento. E nessun test
+  copriva la *qualità* dell'output sotto impostazioni KV non di default — lo smoke
+  test verifica la correttezza solo ai default.
+
+  Chiuso con una correzione automatica, non con un avviso:
+  `correct_kv_cache_for_flash_attn` alza le chiavi a `q8_0` quando FA è attiva,
+  spiegando a video cosa è successo e come ottenere davvero i 4 bit
+  (`--no-flash-attn`). Un avviso avrebbe lasciato il processo a generare
+  spazzatura, e chi ne ha più bisogno è proprio chi gira headless con l'output che
+  finisce in una pipeline. Alzare K a q8_0 conserva flash attention e quindi il
+  throughput, mentre disattivare FA di nascosto dimezzerebbe la velocità in
+  silenzio — sorpresa peggiore di qualche centinaio di MB di VRAM. Stesso schema di
+  `correct_kv_cache_for_model` per Gemma 4. Quattro test, incluso quello di
+  idempotenza. Suggerimento e README allineati a `q8_0`/`q4_0`.
+
+  **Lezione di metodo, la stessa del falso verde su H2-A:** un default e un
+  suggerimento introdotti nello stesso commit non si verificano a vicenda. Nessun
+  test guardava la qualità dell'output fuori dai default, quindi la combinazione
+  che raccomandavamo attivamente non è mai stata eseguita da nessuno prima di un
+  tester esterno, quindici giorni dopo.
 
 ---
 
