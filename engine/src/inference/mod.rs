@@ -9,6 +9,7 @@
 //!   workloads with many parallel requests.
 
 pub(crate) mod output;
+pub(crate) mod sampling;
 pub mod scheduler;
 
 use std::num::NonZeroU32;
@@ -22,7 +23,6 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
-use llama_cpp_2::sampling::LlamaSampler;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -1091,38 +1091,7 @@ impl InferenceEngine {
         // Sample tokens — use a small batch (capacity 1) for the decode loop.
         // When a grammar is requested (e.g. format:"json"), we prepend a
         // grammar sampler that constrains the output to valid syntax.
-        let mut sampler = {
-            let seed = request.seed.unwrap_or_else(|| random_seed_fallback(1234));
-            let mut chain: Vec<LlamaSampler> = Vec::new();
-            if let Some(ref grammar_str) = request.grammar {
-                match LlamaSampler::grammar(&self.model, grammar_str, "root") {
-                    Ok(gs) => chain.push(gs),
-                    Err(e) => tracing::warn!(
-                        "Grammar sampler init failed ({e:?}), falling back to unconstrained"
-                    ),
-                }
-            }
-            if request.repeat_penalty != 1.0 {
-                chain.push(LlamaSampler::penalties(
-                    request.repeat_last_n,
-                    request.repeat_penalty,
-                    0.0,
-                    0.0,
-                ));
-            }
-            if request.top_k > 0 {
-                chain.push(LlamaSampler::top_k(request.top_k));
-            }
-            if request.top_p < 1.0 {
-                chain.push(LlamaSampler::top_p(request.top_p, 1));
-            }
-            if request.min_p > 0.0 {
-                chain.push(LlamaSampler::min_p(request.min_p, 1));
-            }
-            chain.push(LlamaSampler::temp(request.temperature));
-            chain.push(LlamaSampler::dist(seed));
-            LlamaSampler::chain_simple(chain)
-        };
+        let mut sampler = sampling::build_sampler(&self.model, request, 1234);
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
@@ -1338,38 +1307,7 @@ impl InferenceEngine {
             }
         }
 
-        let mut sampler = {
-            let seed = request.seed.unwrap_or_else(|| random_seed_fallback(1234));
-            let mut chain: Vec<LlamaSampler> = Vec::new();
-            if let Some(ref grammar_str) = request.grammar {
-                match LlamaSampler::grammar(&self.model, grammar_str, "root") {
-                    Ok(gs) => chain.push(gs),
-                    Err(e) => tracing::warn!(
-                        "Grammar sampler init failed ({e:?}), falling back to unconstrained"
-                    ),
-                }
-            }
-            if request.repeat_penalty != 1.0 {
-                chain.push(LlamaSampler::penalties(
-                    request.repeat_last_n,
-                    request.repeat_penalty,
-                    0.0,
-                    0.0,
-                ));
-            }
-            if request.top_k > 0 {
-                chain.push(LlamaSampler::top_k(request.top_k));
-            }
-            if request.top_p < 1.0 {
-                chain.push(LlamaSampler::top_p(request.top_p, 1));
-            }
-            if request.min_p > 0.0 {
-                chain.push(LlamaSampler::min_p(request.min_p, 1));
-            }
-            chain.push(LlamaSampler::temp(request.temperature));
-            chain.push(LlamaSampler::dist(seed));
-            LlamaSampler::chain_simple(chain)
-        };
+        let mut sampler = sampling::build_sampler(&self.model, request, 1234);
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut full_output = String::new();
@@ -1677,35 +1615,7 @@ impl InferenceEngine {
         );
 
         // ── 6. Sampler (identical to generate_streaming) ────────────────
-        let mut sampler = {
-            let seed = request.seed.unwrap_or_else(|| random_seed_fallback(1234));
-            let mut chain: Vec<LlamaSampler> = Vec::new();
-            if let Some(ref grammar_str) = request.grammar {
-                if let Ok(gs) = LlamaSampler::grammar(&self.model, grammar_str, "root") {
-                    chain.push(gs);
-                }
-            }
-            if request.repeat_penalty != 1.0 {
-                chain.push(LlamaSampler::penalties(
-                    request.repeat_last_n,
-                    request.repeat_penalty,
-                    0.0,
-                    0.0,
-                ));
-            }
-            if request.top_k > 0 {
-                chain.push(LlamaSampler::top_k(request.top_k));
-            }
-            if request.top_p < 1.0 {
-                chain.push(LlamaSampler::top_p(request.top_p, 1));
-            }
-            if request.min_p > 0.0 {
-                chain.push(LlamaSampler::min_p(request.min_p, 1));
-            }
-            chain.push(LlamaSampler::temp(request.temperature));
-            chain.push(LlamaSampler::dist(seed));
-            LlamaSampler::chain_simple(chain)
-        };
+        let mut sampler = sampling::build_sampler(&self.model, request, 1234);
 
         // ── 7. Decode loop (identical pattern to generate_streaming) ────
         let mut decoder = encoding_rs::UTF_8.new_decoder();
