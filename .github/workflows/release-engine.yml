@@ -1019,3 +1019,83 @@ jobs:
             ```bash
             sha256sum -c checksums.txt
             ```
+
+  # ── Housekeeping: drop the caches this tag created ──────────────────────
+  #
+  # Every release leaves behind ~4.5 GB of Actions cache that NOTHING will ever
+  # read again. Caches are ref-scoped: a run can restore entries saved on its
+  # own ref or on the default branch, and tag→tag is blocked outright (cache
+  # poisoning protection). So `target-cuda-*`, `cargo-registry-*` and the
+  # `v0-rust-*` entries saved under refs/tags/EuLLM-vX.Y.Z are dead the moment
+  # that release finishes: v0.6.40 cannot see v0.6.39's, and neither can CI on
+  # main. Measured after v0.6.39: 4.6 GB of 8.91 GB used were exactly this.
+  #
+  # It is not merely untidy. Eviction is LRU against a 10 GB per-repo cap, and
+  # these corpses were touched more recently than the small, live main-scoped
+  # caches — so as the repo approaches the cap, GitHub can evict something
+  # useful while keeping something unreadable.
+  #
+  # WHY IT ONLY RUNS ON A FULLY GREEN RELEASE: deleting a tag and re-pushing it
+  # is the documented way to retry a release, and a retry runs on the SAME ref,
+  # so it *can* read these caches. Pruning after a partial run would make every
+  # retry cold — the opposite of the point. A job with `needs:` and an `if:`
+  # that calls no status function keeps the implicit `success()`, so this runs
+  # only when every build and the release itself succeeded. Nothing to retry,
+  # nothing worth keeping.
+  #
+  # Deletes strictly by ref, and re-checks each entry's ref before removing it
+  # rather than trusting the query filter. Main-scoped caches (the engine and
+  # hub CI entries, pip-forge, the ninja experiment) are never candidates.
+  prune_tag_caches:
+    name: Drop this tag's Actions caches
+    needs:
+      - build
+      - build-cuda
+      - build-cuda-arm64
+      - build-arm-cix-p1
+      - build-windows
+      - build-windows-cuda
+      - release
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-22.04
+    permissions:
+      actions: write
+    steps:
+      - name: Delete caches scoped to this tag
+        # Housekeeping must never turn a published release red.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          echo "Pruning Actions caches scoped to $REF"
+
+          entries=$(gh api --paginate \
+            "repos/$REPO/actions/caches?ref=$REF&per_page=100" \
+            --jq '.actions_caches[] | [.id, .ref, .size_in_bytes, .key] | @tsv')
+
+          if [ -z "$entries" ]; then
+            echo "Nothing to prune."
+            exit 0
+          fi
+
+          total=0
+          count=0
+          while IFS=$'\t' read -r id ref size key; do
+            [ -n "$id" ] || continue
+            # Belt and braces: the query already filters by ref, but this is a
+            # destructive call on shared infrastructure, so verify rather than
+            # trust. Anything not saved under this exact tag is left alone.
+            if [ "$ref" != "$REF" ]; then
+              echo "::warning::skipping $key — ref is $ref, not $REF"
+              continue
+            fi
+            printf 'deleting %10s bytes  %s\n' "$size" "$key"
+            gh api -X DELETE "repos/$REPO/actions/caches/$id" --silent
+            total=$(( total + size ))
+            count=$(( count + 1 ))
+          done <<< "$entries"
+
+          echo "Deleted $count cache entr(ies), freeing $(( total / 1024 / 1024 )) MiB."
