@@ -407,6 +407,33 @@ fn physical_core_count() -> Option<u32> {
     None
 }
 
+/// Whether the token just sampled came out of a numerically broken
+/// distribution — the always-on O(1) guard.
+///
+/// The sequential engine needs the same protection as the scheduler: without
+/// it, `--batch-size 0` still streams garbage. See
+/// `scheduler::sampled_token_is_corrupt` for the full reasoning and the case
+/// that motivated it.
+pub(crate) fn sampled_token_is_corrupt(
+    ctx: &llama_cpp_2::context::LlamaContext,
+    token: llama_cpp_2::token::LlamaToken,
+) -> bool {
+    // These call sites all sample with the `-1` sentinel, which is not a member
+    // of the initialized-logits set, so `get_logits()` is the right accessor.
+    ctx.get_logits()
+        .get(token.0 as usize)
+        .is_some_and(|v| v.is_nan() || v.is_infinite())
+}
+
+/// The message handed to the caller when the guard fires. Identical wording in
+/// both engines so an operator searching for it finds one thing.
+pub(crate) fn corrupt_logits_message() -> String {
+    "the model produced a numerically invalid result (NaN/Inf logits) and \
+     generation was stopped — this is a compute failure, not a bad prompt. \
+     Try --no-flash-attn, and --rust-debug for the full diagnostic."
+        .to_string()
+}
+
 /// Whether a KV cache type is a four-bit quantization.
 ///
 /// Split out because keys and values are not equally tolerant of it. A 4-bit
@@ -1075,6 +1102,19 @@ impl InferenceEngine {
             // exactly one output (the final prompt token with logits=true);
             // after single-token decode steps there is also exactly one output.
             let token = sampler.sample(&ctx, -1);
+
+            // Always-on O(1) guard — see `sampled_token_is_corrupt`. A NaN on
+            // the chosen token means the forward pass produced nothing usable,
+            // and continuing would return garbage that reads as an answer.
+            if sampled_token_is_corrupt(&ctx, token) {
+                tracing::error!(
+                    "sampled token {} has a NaN/Inf logit after {} tokens — aborting \
+                     generation. Run with --rust-debug for the full logit scan.",
+                    token.0,
+                    tokens_generated,
+                );
+                return Err(corrupt_logits_message().into());
+            }
             sampler.accept(token);
 
             // End of generation?
@@ -1297,6 +1337,18 @@ impl InferenceEngine {
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
+
+            // Always-on O(1) guard — see `sampled_token_is_corrupt`.
+            if sampled_token_is_corrupt(&ctx, token) {
+                tracing::error!(
+                    "sampled token {} has a NaN/Inf logit after {} tokens — aborting \
+                     generation. Run with --rust-debug for the full logit scan.",
+                    token.0,
+                    tokens_generated,
+                );
+                let _ = tx.blocking_send(StreamEvent::Error(corrupt_logits_message()));
+                return;
+            }
             sampler.accept(token);
 
             if self.model.is_eog_token(token) {
@@ -1615,6 +1667,18 @@ impl InferenceEngine {
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
+
+            // Always-on O(1) guard — see `sampled_token_is_corrupt`.
+            if sampled_token_is_corrupt(&ctx, token) {
+                tracing::error!(
+                    "sampled token {} has a NaN/Inf logit after {} tokens — aborting \
+                     generation. Run with --rust-debug for the full logit scan.",
+                    token.0,
+                    tokens_generated,
+                );
+                let _ = tx.blocking_send(StreamEvent::Error(corrupt_logits_message()));
+                return;
+            }
             sampler.accept(token);
             if self.model.is_eog_token(token) {
                 stop_reason = StopReason::Stop;
