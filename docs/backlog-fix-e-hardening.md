@@ -33,7 +33,7 @@ H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
 **Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
 **Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
-e H2-O (`done_reason`) — 25 su 42. Le ultime due non vengono da una revisione del
+H2-O (`done_reason`) e H2-P (`--daemon`) — 26 su 43. Le ultime due non vengono da una revisione del
 codice ma dai report di un tester esterno sull'issue #140: vale la pena
 notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
 prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
@@ -693,6 +693,26 @@ esterni non si fidano dei valori che leggono.
   Verificato end-to-end: `num_predict: 8` → `done_reason='length'`, risposta che
   finisce da sola → `'stop'`, e il default di `serve` → `'length'` a 477 token.
   Due test unitari più due controlli nello smoke test.
+
+- [x] **H2-P · `--daemon` dichiarava avviato un processo già morto** *(P1)*
+  `daemonize` stampava «eullm daemon started (PID N)» nell'istante in cui
+  `spawn()` ritornava, senza controllare nulla (`main.rs:3050-3062`). Se il figlio
+  moriva subito — porta occupata è il caso comune — l'operatore riceveva comunque
+  un messaggio di successo, un pidfile che punta a un processo inesistente e
+  **exit code 0**. Lo script di chi testa prova allora a uccidere un PID che non
+  c'è più, mentre il server *precedente* continua a rispondere: le richieste
+  successive finiscono su un server avviato con flag diversi, senza che niente lo
+  segnali.
+  Non è teoria: è successo nei report dell'issue #140 su cinque macchine, ed è il
+  motivo per cui non sappiamo con certezza quale server abbia risposto a quali
+  query nei blocchi con `--cache-type-k q4_0`. Ha invalidato in silenzio parte di
+  una raccolta dati fatta da qualcun altro con il suo tempo.
+  Chiuso: dopo lo spawn si attende `DAEMON_STARTUP_GRACE` (1200 ms) controllando
+  `try_wait()`. Se il figlio è già uscito si stampano il suo codice e le ultime
+  dieci righe del suo log — che è dove sono finite le sue diagnostiche — non si
+  scrive alcun pidfile (uno stantio è peggio di nessuno, perché uno script di stop
+  ci crede) e si esce con 1. Verificato: avvio pulito → PID vivo ed exit 0; stessa
+  porta due volte → errore del figlio riportato, nessun pidfile, exit 1.
 
 ### Verificato e **non** indotto da noi
 

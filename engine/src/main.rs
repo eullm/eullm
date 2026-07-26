@@ -2988,6 +2988,14 @@ async fn interactive_chat(
 /// threads — threads don't survive fork, causing an immediate segfault.
 /// Instead, we re-exec the same binary with `--daemon` stripped from args
 /// and the child's stdout/stderr redirected to a log file.
+/// How long to wait before declaring a spawned daemon healthy.
+///
+/// Long enough for the failures that happen at startup — a bound port, an
+/// unreadable model, malformed `EULLM_API_KEYS` — to have already killed the
+/// child, short enough not to be felt when everything is fine. Model loading
+/// continues well past this; we are only ruling out an immediate death.
+const DAEMON_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(1200);
+
 fn daemonize(pidfile: &str) {
     use std::io::Write;
 
@@ -3049,8 +3057,47 @@ fn daemonize(pidfile: &str) {
         .spawn();
 
     match child {
-        Ok(child) => {
+        Ok(mut child) => {
             let pid = child.id();
+
+            // Do not claim success until the child has survived long enough to
+            // have failed. It used to print "daemon started (PID N)" the instant
+            // spawn() returned, so a child that died immediately — the port
+            // already in use is the common one — still produced a success
+            // message, a PID file pointing at a dead process, and an exit code
+            // of 0. A caller's teardown then tried to kill a PID that no longer
+            // existed while the *previous* server kept answering, so subsequent
+            // requests silently went to a server started with different flags.
+            // That happened in the wild and quietly invalidated a tester's
+            // results across five machines.
+            let deadline = std::time::Instant::now() + DAEMON_STARTUP_GRACE;
+            while std::time::Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        eprintln!("Error: the daemon exited immediately ({status}).");
+                        // The child's own diagnostics went to the log file, so
+                        // show them rather than making the operator go and look.
+                        if let Ok(log) = std::fs::read_to_string(&log_path) {
+                            let tail: Vec<&str> = log.lines().rev().take(10).collect();
+                            for line in tail.into_iter().rev() {
+                                eprintln!("  {line}");
+                            }
+                        }
+                        eprintln!("  Full log: {log_path}");
+                        // No PID file: a stale one is worse than none, because a
+                        // stop script will believe it.
+                        let _ = std::fs::remove_file(pidfile);
+                        std::process::exit(1);
+                    }
+                    // Still running — good, that is what we want.
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                    Err(e) => {
+                        eprintln!("Error: cannot check on the daemon process: {e}");
+                        std::process::exit(1);
+                    }
+                }
+            }
+
             // Write PID file.
             if let Ok(mut f) = std::fs::File::create(pidfile) {
                 let _ = write!(f, "{pid}");
