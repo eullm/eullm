@@ -461,7 +461,7 @@ esterni non si fidano dei valori che leggono.
   produce output plausibile. Contare esplicitamente le sequenze effettivamente aggiunte e
   derivare `logit_idx` da quel conteggio, oppure abortire l'iterazione.
 
-- [ ] **H2-D · Unificare stop sequence e filtri tra i due percorsi di inferenza** *(P1)*
+- [x] **H2-D · Unificare stop sequence e filtri tra i due percorsi di inferenza** *(P1)*
   L'hold-back buffer e i `filter_sequences` esistono solo nello scheduler
   (`process_piece`, `scheduler.rs:1588-1628`). Il percorso sequenziale e quello multimodale
   (`inference/mod.rs:1047-1085, 1357-1387`) confrontano `full_output.ends_with(s)` per
@@ -470,6 +470,50 @@ esterni non si fidano dei valori che leggono.
   filtri esistono per rimuovere restano visibili all'utente in modalità multimodale.
   Estrarre `process_piece` in un helper condiviso e usarlo in tutti e tre i loop di decode.
   Sinergia con H2-E: entrambe le voci sono conseguenze della stessa duplicazione.
+
+  **Chiusa.** `inference/output.rs` contiene ora l'unica implementazione, che è
+  quella dello scheduler spostata **senza modifiche di comportamento** — il
+  codice già collaudato in produzione, non una riscrittura. I tre loop la
+  chiamano: scheduler, motore sequenziale (non streaming e streaming) e
+  multimodale.
+
+  Scrivendo i test è emerso che i difetti erano tre e non uno, e il terzo era
+  peggiore di come l'avevamo descritto:
+  1. **Una stop sequence che non finisce il pezzo veniva ignorata.** Un pezzo
+     `"<|im_end|>\n"` lascia l'output accumulato che finisce con `"\n"`, quindi
+     `ends_with` non vedeva niente e la generazione proseguiva oltre il turno.
+  2. **A cavallo di due token trapelava la prima metà.** I percorsi in streaming
+     ritagliavano il marcatore dal pezzo *corrente*, ma il pezzo precedente coi
+     primi byte era già partito verso il client e non si richiama indietro.
+  3. **Quel ritaglio era un indice di byte su una stringa UTF-8**
+     (`&piece[..piece.len() - s.len()]`): con un carattere multibyte a cavallo
+     del taglio non sbagliava, **andava in panic**. Non c'era nel testo della
+     voce; è saltato fuori scrivendo il test sui multibyte.
+
+  Più il difetto già noto: `filter_sequences` non era applicato fuori dallo
+  scheduler, quindi in multimodale gli artefatti `<|channel|>` andavano
+  all'utente così com'erano.
+
+  Aggiunto anche `flush()`, che rende esplicita una distinzione che prima era
+  implicita e sbagliata negli altri due loop: su **EOG** la coda trattenuta è un
+  delimitatore di turno parziale e si butta; a **budget esaurito** è testo vero
+  e buttarla tronca la risposta. Lo scheduler la emetteva già; gli altri due la
+  perdevano in silenzio.
+
+  Verifica: 9 test nuovi che coprono i tre difetti uno per uno (184 totali),
+  `--all-targets` con e senza `multimodal`, e smoke test sul binario in release
+  su entrambi i percorsi, scheduler e `--batch-size 0`, 32 pass e 0 fail.
+  Nota di metodo: `cargo check` da solo **non compila i test** e mi ha lasciato
+  passare un import rotto nel modulo di test dello scheduler. Va usato
+  `cargo check --all-targets`.
+
+  **Quello che non è dentro**, per non farlo sembrare più completo di quanto è:
+  H2-E (la catena di sampling, ancora duplicata in quattro punti) e il punto 2
+  di H2-J (la guardia sul tag `</think>` orfano). Quest'ultimo ora avrebbe un
+  posto solo dove stare, ma non è un filtro incondizionato: `</think>` è
+  legittimo quando `think: true`, quindi va aggiunto ai `filter_sequences`
+  della singola richiesta quando `think` è falso. È una decisione lato
+  chiamante, non lato `process_piece`, e merita il suo cambio.
 
 - [ ] **H2-E · Estrarre la costruzione della catena di sampling** *(P2)*
   La catena è duplicata in quattro punti (`scheduler.rs:929-966`;

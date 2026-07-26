@@ -8,6 +8,7 @@
 //!   decoded in parallel on a single context. Good for API server / RAG
 //!   workloads with many parallel requests.
 
+pub(crate) mod output;
 pub mod scheduler;
 
 use std::num::NonZeroU32;
@@ -1125,6 +1126,10 @@ impl InferenceEngine {
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
+        // Trailing text that could still grow into a stop or filter sequence.
+        // Dropped on EOG (it is a partial turn delimiter), flushed into
+        // `output` when the token budget ends the loop (it is real text).
+        let mut pending = String::new();
         let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
@@ -1159,25 +1164,24 @@ impl InferenceEngine {
                 break;
             }
 
-            // Decode token to text
+            // Decode token to text. Stop sequences and filters go through the
+            // shared hold-back logic in `output`, the same code the scheduler
+            // runs — see that module for the three ways the old per-loop
+            // `output.ends_with(stop)` check was wrong.
             match self.model.token_to_piece(token, &mut decoder, true, None) {
-                Ok(piece) => {
-                    output.push_str(&piece);
-
-                    // Check stop sequences
-                    let should_stop = request.stop_sequences.iter().any(|s| output.ends_with(s));
-                    if should_stop {
-                        // Remove the stop sequence from output
-                        for s in &request.stop_sequences {
-                            if output.ends_with(s) {
-                                let new_len = output.len() - s.len();
-                                output.truncate(new_len);
-                                break;
-                            }
-                        }
+                Ok(piece) => match output::process_piece(
+                    &mut pending,
+                    &request.stop_sequences,
+                    &request.filter_sequences,
+                    &piece,
+                ) {
+                    output::PieceOutcome::Emit(text) => output.push_str(&text),
+                    output::PieceOutcome::Stop(text) => {
+                        output.push_str(&text);
+                        stop_reason = StopReason::Stop;
                         break;
                     }
-                }
+                },
                 Err(_) => break,
             }
 
@@ -1190,6 +1194,12 @@ impl InferenceEngine {
 
             n_cur += 1;
             tokens_generated += 1;
+        }
+
+        // The loop ran out of budget rather than hitting a marker: whatever is
+        // held back is ordinary text, and dropping it would truncate the answer.
+        if matches!(stop_reason, StopReason::Length) {
+            output.push_str(&output::flush(&mut pending));
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -1363,6 +1373,9 @@ impl InferenceEngine {
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut full_output = String::new();
+        // See the non-streaming path: held-back tail, dropped on EOG, flushed
+        // to the client when the token budget is what ended the loop.
+        let mut pending = String::new();
         let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
@@ -1392,42 +1405,37 @@ impl InferenceEngine {
                 break;
             }
 
+            // Streaming cannot retract what it has already sent, so stop and
+            // filter sequences run through the shared hold-back buffer rather
+            // than being cut out of the current piece after the fact. The old
+            // code sliced `&piece[..piece.len() - s.len()]`, which sent the
+            // first half of a marker split across two tokens and panicked
+            // outright when the byte index landed inside a character.
             match self.model.token_to_piece(token, &mut decoder, true, None) {
                 Ok(piece) => {
                     full_output.push_str(&piece);
-
-                    // Check stop sequences
-                    let mut stopped = false;
-                    for s in &request.stop_sequences {
-                        if full_output.ends_with(s) {
-                            // Don't send the stop sequence token
-                            let piece_without_stop = if piece.len() >= s.len() {
-                                &piece[..piece.len() - s.len()]
-                            } else {
-                                ""
-                            };
-                            if !piece_without_stop.is_empty()
-                                && tx
-                                    .blocking_send(StreamEvent::Token(
-                                        piece_without_stop.to_string(),
-                                    ))
-                                    .is_err()
+                    match output::process_piece(
+                        &mut pending,
+                        &request.stop_sequences,
+                        &request.filter_sequences,
+                        &piece,
+                    ) {
+                        output::PieceOutcome::Stop(text) => {
+                            if !text.is_empty()
+                                && tx.blocking_send(StreamEvent::Token(text)).is_err()
                             {
                                 return;
                             }
-                            stopped = true;
+                            stop_reason = StopReason::Stop;
                             break;
                         }
-                    }
-
-                    if stopped {
-                        stop_reason = StopReason::Stop;
-                        break;
-                    }
-
-                    // Send the token piece
-                    if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
-                        return; // receiver dropped
+                        output::PieceOutcome::Emit(text) => {
+                            if !text.is_empty()
+                                && tx.blocking_send(StreamEvent::Token(text)).is_err()
+                            {
+                                return; // receiver dropped
+                            }
+                        }
                     }
                 }
                 Err(_) => break,
@@ -1447,6 +1455,15 @@ impl InferenceEngine {
 
             n_cur += 1;
             tokens_generated += 1;
+        }
+
+        // Budget-exhausted end: the held-back tail is real text the client is
+        // still owed. On EOG or a stop it is a partial marker and is dropped.
+        if matches!(stop_reason, StopReason::Length) {
+            let tail = output::flush(&mut pending);
+            if !tail.is_empty() && tx.blocking_send(StreamEvent::Token(tail)).is_err() {
+                return;
+            }
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;
@@ -1693,6 +1710,9 @@ impl InferenceEngine {
         // ── 7. Decode loop (identical pattern to generate_streaming) ────
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut full_output = String::new();
+        // See the non-streaming path: held-back tail, dropped on EOG, flushed
+        // to the client when the token budget is what ended the loop.
+        let mut pending = String::new();
         let mut n_cur = new_n_past;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
@@ -1724,31 +1744,33 @@ impl InferenceEngine {
             match self.model.token_to_piece(token, &mut decoder, true, None) {
                 Ok(piece) => {
                     full_output.push_str(&piece);
-                    let mut stopped = false;
-                    for s in &request.stop_sequences {
-                        if full_output.ends_with(s) {
-                            let trimmed = if piece.len() >= s.len() {
-                                &piece[..piece.len() - s.len()]
-                            } else {
-                                ""
-                            };
-                            if !trimmed.is_empty()
-                                && tx
-                                    .blocking_send(StreamEvent::Token(trimmed.to_string()))
-                                    .is_err()
+                    // Same shared path as the two text loops. This one also
+                    // gains `filter_sequences`, which it never applied at all:
+                    // DEFAULT_HARMONY_FILTERS exists to strip `<|channel|>`
+                    // scaffolding, and on the multimodal path that scaffolding
+                    // was going straight to the user.
+                    match output::process_piece(
+                        &mut pending,
+                        &request.stop_sequences,
+                        &request.filter_sequences,
+                        &piece,
+                    ) {
+                        output::PieceOutcome::Stop(text) => {
+                            if !text.is_empty()
+                                && tx.blocking_send(StreamEvent::Token(text)).is_err()
                             {
                                 return;
                             }
-                            stopped = true;
+                            stop_reason = StopReason::Stop;
                             break;
                         }
-                    }
-                    if stopped {
-                        stop_reason = StopReason::Stop;
-                        break;
-                    }
-                    if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
-                        return;
+                        output::PieceOutcome::Emit(text) => {
+                            if !text.is_empty()
+                                && tx.blocking_send(StreamEvent::Token(text)).is_err()
+                            {
+                                return;
+                            }
+                        }
                     }
                 }
                 Err(_) => break,
@@ -1766,6 +1788,15 @@ impl InferenceEngine {
             }
             n_cur += 1;
             tokens_generated += 1;
+        }
+
+        // Budget-exhausted end: hand over the held-back tail (see the text
+        // streaming path for why EOG and stop cases drop it instead).
+        if matches!(stop_reason, StopReason::Length) {
+            let tail = output::flush(&mut pending);
+            if !tail.is_empty() && tx.blocking_send(StreamEvent::Token(tail)).is_err() {
+                return;
+            }
         }
 
         let duration_ms = start.elapsed().as_millis() as u64;

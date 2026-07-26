@@ -27,6 +27,7 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use tokio::sync::mpsc;
 
+use super::output::{PieceOutcome, process_piece};
 use super::{GenerateRequest, InferenceConfig, StopReason, StreamEvent, random_seed_fallback};
 
 /// Below this many tokens per slot, a reasoning model routinely runs out of
@@ -1687,99 +1688,6 @@ fn prefill_sequence(
     Ok((n_tokens, tokens.len() as i32, effective_max_tokens))
 }
 
-/// Outcome of feeding one decoded piece through the stop-sequence filter.
-enum PieceOutcome {
-    /// Safe-to-stream text (may be empty); generation continues.
-    Emit(String),
-    /// A full stop sequence was hit. The contained text is whatever preceded
-    /// the stop marker and should be streamed before finishing.
-    Stop(String),
-}
-
-/// Length (in bytes) of the longest suffix of `buf` that is a *proper* prefix
-/// of any stop sequence. This is the amount of trailing text that must be held
-/// back: it could still grow into a full stop sequence on the next token.
-///
-/// A full match is handled by the caller (via `find`) before this is consulted,
-/// so we never report the entire stop sequence here.
-fn stop_prefix_holdback(buf: &str, stops: &[String]) -> usize {
-    let mut max = 0;
-    for s in stops {
-        if s.is_empty() {
-            continue;
-        }
-        // Try the longest possible overlap first; the suffix of `buf` must be a
-        // prefix of `s` and strictly shorter than `s` (full matches handled elsewhere).
-        let upper = buf.len().min(s.len().saturating_sub(1));
-        let mut k = upper;
-        while k >= 1 {
-            let start = buf.len() - k;
-            if buf.is_char_boundary(start) && s.as_bytes().starts_with(&buf.as_bytes()[start..]) {
-                if k > max {
-                    max = k;
-                }
-                break;
-            }
-            k -= 1;
-        }
-    }
-    max
-}
-
-/// Feed one decoded `piece` into the per-sequence `pending` hold-back buffer and
-/// decide what is safe to stream.
-///
-/// - If appending the piece completes a stop sequence, everything up to the
-///   stop marker is returned as `Stop(..)` and `pending` is cleared.
-/// - Otherwise the longest trailing run that could still become a stop sequence
-///   is retained in `pending`, and the rest is returned as `Emit(..)`.
-///
-/// This makes streaming robust against models that spell a turn delimiter out
-/// as ordinary text and only then emit an EOG token (e.g. Gemma emitting
-/// `<end_of_turn` + EOG): the partial delimiter sits in `pending` and is
-/// discarded when the caller observes EOG, instead of leaking to the client.
-fn process_piece(
-    pending: &mut String,
-    stops: &[String],
-    filters: &[String],
-    piece: &str,
-) -> PieceOutcome {
-    pending.push_str(piece);
-
-    // 1. Stop sequences win: terminate generation at the earliest hit.
-    let mut cut: Option<usize> = None;
-    for s in stops {
-        if let Some(pos) = pending.find(s.as_str()) {
-            cut = Some(cut.map_or(pos, |c| c.min(pos)));
-        }
-    }
-    if let Some(pos) = cut {
-        let out = pending[..pos].to_string();
-        pending.clear();
-        return PieceOutcome::Stop(out);
-    }
-
-    // 2. Filter sequences: silently elide every completed occurrence, then
-    // continue. Unlike stops, these do not terminate the response.
-    for f in filters {
-        if f.is_empty() {
-            continue;
-        }
-        while let Some(pos) = pending.find(f.as_str()) {
-            pending.replace_range(pos..pos + f.len(), "");
-        }
-    }
-
-    // 3. Hold back any trailing run that could still complete EITHER a stop
-    // or a filter sequence. Reuses `stop_prefix_holdback` for both — it just
-    // looks at suffix→prefix overlaps and is agnostic to the list's meaning.
-    let holdback = stop_prefix_holdback(pending, stops).max(stop_prefix_holdback(pending, filters));
-    let emit_upto = pending.len() - holdback;
-    let out = pending[..emit_upto].to_string();
-    pending.drain(..emit_upto);
-    PieceOutcome::Emit(out)
-}
-
 /// Bytes per element for a KV cache type (approximate for quantized types).
 /// Thin alias over the shared helper so existing call sites stay unchanged.
 fn cache_type_bytes_per_elem(ct: &super::KvCacheType) -> f64 {
@@ -2053,10 +1961,10 @@ fn warn_if_logits_corrupt(ctx: &LlamaContext, idx: i32, seq_id: i32) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::output::stop_prefix_holdback;
     use super::{
         CachedSlot, PieceOutcome, PromptCheckpoint, SendOutcome, StreamEvent, best_checkpoint,
-        common_prefix_len, pick_slot, process_piece, stop_prefix_holdback, text_prefix_match,
-        try_send_piece,
+        common_prefix_len, pick_slot, process_piece, text_prefix_match, try_send_piece,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
