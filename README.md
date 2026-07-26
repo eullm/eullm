@@ -135,7 +135,7 @@ What you get on top of the Ollama-compatible API:
 | **Single binary** — Rust, no Go runtime, no Python runtime, no Docker | ✅ |
 | **EU-hosted model registry** (Forge/Hub) | 🚧 in development |
 
-[→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm)
+[→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm) · [→ Changelog](CHANGELOG.md)
 
 ### Thinking mode and error codes (v0.6.39 / v0.6.40)
 
