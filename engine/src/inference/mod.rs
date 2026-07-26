@@ -289,6 +289,59 @@ pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
     }
 }
 
+/// Whether a KV cache type is a four-bit quantization.
+///
+/// Split out because keys and values are not equally tolerant of it. A 4-bit
+/// *value* cache is a reasonable trade at long context; a 4-bit *key* cache is
+/// not, and llama.cpp's own guidance tops out at q8_0 for keys. Confirmed the
+/// hard way in issue #140: `--cache-type-k q4_0 --cache-type-v q4_0` produced
+/// word salad on Metal, on x86 CPU and on ARM CPU alike, while the same builds
+/// on the same machines were coherent with q8_0 keys.
+pub fn is_four_bit(t: KvCacheType) -> bool {
+    matches!(t, KvCacheType::Q4_0 | KvCacheType::Q4_1)
+}
+
+/// Warn once at startup when the key cache is quantized to four bits.
+///
+/// Not an error: someone squeezing a long context onto a small card may
+/// genuinely want it, and refusing would be us overriding a deliberate choice.
+/// But it must not be a silent one — the failure mode is degraded text, which
+/// looks like a model problem rather than a configuration problem, and that is
+/// exactly how it cost an external tester several days.
+pub fn warn_on_lossy_kv(cache_type_k: KvCacheType, cache_type_v: KvCacheType) {
+    if is_four_bit(cache_type_k) {
+        eprintln!(
+            "[EULLM] Warning: --cache-type-k {} is a 4-bit key cache. This degrades \
+             output quality badly on most models — often into incoherent text — for \
+             little memory saved over q8_0. Prefer --cache-type-k q8_0 --cache-type-v {}.",
+            cache_type_name(cache_type_k),
+            cache_type_name(cache_type_v),
+        );
+    }
+}
+
+/// The CLI spelling of a cache type — the inverse of [`parse_cache_type`].
+///
+/// Used instead of `{:?}` wherever the value appears in a message a user might
+/// copy back onto a command line: `Q4_0` is not something the parser accepts
+/// without lowercasing, and suggesting text that does not work as typed is a
+/// small, avoidable insult.
+pub fn cache_type_name(t: KvCacheType) -> &'static str {
+    match t {
+        KvCacheType::F16 => "f16",
+        KvCacheType::F32 => "f32",
+        KvCacheType::Q8_0 => "q8_0",
+        KvCacheType::Q4_0 => "q4_0",
+        KvCacheType::Q4_1 => "q4_1",
+        KvCacheType::Q5_0 => "q5_0",
+        KvCacheType::Q5_1 => "q5_1",
+        other => {
+            debug_assert!(false, "unhandled KV cache type {other:?}");
+            "f16"
+        }
+    }
+}
+
 /// Gemma 4's mixed SWA architecture (25 SWA layers at head_dim=256 + 5
 /// global layers at head_dim=512) is incompatible with quantized KV cache in
 /// stock llama.cpp: the SWA bypass to f16 has not yet been merged upstream.
@@ -1447,5 +1500,50 @@ mod tests {
             !summary.is_empty() && summary != "unknown (llama_print_system_info returned null)",
             "expected real content from llama_print_system_info, got: {summary:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod kv_cache_naming_tests {
+    use super::*;
+
+    #[test]
+    fn cache_type_name_round_trips_through_the_parser() {
+        // The names are printed in messages users copy back onto a command
+        // line, so every one of them has to parse.
+        for t in [
+            KvCacheType::F16,
+            KvCacheType::F32,
+            KvCacheType::Q8_0,
+            KvCacheType::Q4_0,
+            KvCacheType::Q4_1,
+            KvCacheType::Q5_0,
+            KvCacheType::Q5_1,
+        ] {
+            let name = cache_type_name(t);
+            assert_eq!(
+                parse_cache_type(name).unwrap(),
+                t,
+                "'{name}' must parse back to the type it names"
+            );
+        }
+    }
+
+    #[test]
+    fn only_four_bit_key_caches_are_flagged() {
+        // q8_0 keys with a q4_0 value cache is the aggressive-but-usable
+        // combination; it must not be warned about, or the warning becomes
+        // noise and stops being read.
+        assert!(is_four_bit(KvCacheType::Q4_0));
+        assert!(is_four_bit(KvCacheType::Q4_1));
+        for t in [
+            KvCacheType::F16,
+            KvCacheType::F32,
+            KvCacheType::Q8_0,
+            KvCacheType::Q5_0,
+            KvCacheType::Q5_1,
+        ] {
+            assert!(!is_four_bit(t), "{t:?} is not a 4-bit type");
+        }
     }
 }

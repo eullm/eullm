@@ -633,7 +633,7 @@ not a bigger token budget.
 **New in v0.6.11** — **`--cpu-moe`**: run MoE models (Qwen3-30B-A3B, Qwen3.6-35B-A3B, …) on a small GPU by keeping expert tensors on CPU RAM while attention, embeddings, and the KV cache stay on GPU — VRAM headroom whole-layer `--gpu-layers` offload can't reach. See "Run MoE models on a small GPU" above.
 
 **New in v0.6.10** — consumer-GPU and operations pass on top of v0.6.3:
-- **`--fit`** auto-sizes GPU-offloaded layers to free VRAM (CUDA), charging each layer its weight share *and* its KV-cache slice for the chosen context/cache type — quantizing the KV (`--cache-type-k/v q4_0`) frees room for more layers, the gain growing with context length. On by default from the interactive picker; opt-in on the scriptable CLI. Falls back to partial offload, or to a manual `--gpu-layers`, when it can't size the model.
+- **`--fit`** auto-sizes GPU-offloaded layers to free VRAM (CUDA), charging each layer its weight share *and* its KV-cache slice for the chosen context/cache type — quantizing the KV (`--cache-type-k q8_0 --cache-type-v q4_0`) frees room for more layers, the gain growing with context length. On by default from the interactive picker; opt-in on the scriptable CLI. Falls back to partial offload, or to a manual `--gpu-layers`, when it can't size the model.
 - **`hf.co/<repo>[:quant]` shorthand** — `eullm run hf.co/unsloth/Qwen3-14B-GGUF:Q4_K_M` pulls and runs any HuggingFace GGUF repo directly, catalog or not.
 - **Parallel, resumable downloads** — model pulls fan out across up to 16 concurrent HTTP Range requests (default 8) instead of one stream, and a dropped connection retries only the missing chunk instead of restarting the whole file.
 - **Linux ARM64 + NVIDIA CUDA** binary (`eullm-linux-arm64-cuda-12.8`) — validated end-to-end on an RTX 3060 12GB ARM server (qwen3-14b Q4, 33 tok/s, full GPU offload). Ships without an NCCL runtime dependency, so it starts with only the NVIDIA driver installed — no extra packages, no root required.
@@ -722,7 +722,7 @@ Key features:
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
-- **Quantized KV cache** — standard llama.cpp Q4_0/Q5_0/Q5_1/Q8_0 KV types reduce memory ~2-4× at small quality cost (`--cache-type-k q4_0 --cache-type-v q4_0`). We also tested the experimental TurboQuant approach (see [Research](#research--experiments))
+- **Quantized KV cache** — standard llama.cpp Q4_0/Q5_0/Q5_1/Q8_0 KV types reduce memory ~2-4× at some quality cost (`--cache-type-k q8_0 --cache-type-v q4_0`). Keep the **key** cache at q8_0: a 4-bit key cache saves little more and degrades output badly — on Metal, x86 CPU and ARM CPU alike, `q4_0` keys turned coherent answers into word salad during [#140](https://github.com/eullm/eullm/issues/140). The engine warns at startup if you ask for it anyway. We also tested the experimental TurboQuant approach (see [Research](#research--experiments))
 - **Daemon mode** (`--daemon`) — detaches into the background with PID file + log file, freeing the terminal; `kill $(cat /tmp/eullm.pid)` stops it gracefully. See [Run it as a daemon](#run-it-as-a-daemon-background-service)
 - **CORS enabled** — Open WebUI and browser-based tools work out of the box
 - **Cross-platform binaries** — Linux x64 + Windows x64 *(tested)* · Linux ARM64 + macOS Apple Silicon/Metal *(community-validated)* · macOS x64 *(builds available, [community testing wanted](#-platform-status--help-us-test))*
@@ -1064,12 +1064,12 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 * GGUF model support, transparent web browsing, audit trail
 * ✅ **Multimodal (v0.6.0)** — vision + experimental audio understanding via `mtmd` (Gemma 4 12B), in the Chat UI and CLI
 * **Planned — embeddings endpoint** (`/api/embeddings` + `/v1/embeddings`): API parity with Ollama/OpenAI for tooling that expects a vector endpoint
-* ✅ **Auto GPU layer fitting (v0.6.5)** (`--fit` flag): probes free VRAM (CUDA) and sizes `--gpu-layers` to what actually fits — charging each offloaded layer its weight share **plus** its KV-cache slice for the chosen context and cache type, so quantizing the KV (`--cache-type-k/v q4_0`) frees room for more GPU layers (the gain grows with context length). Falls back to partial CPU offload when the model doesn't fully fit, and to the manual `--gpu-layers` value on non-CUDA builds or headless runs. Enabled by default when you pick a model from the interactive menu; opt-in on the scriptable CLI.
+* ✅ **Auto GPU layer fitting (v0.6.5)** (`--fit` flag): probes free VRAM (CUDA) and sizes `--gpu-layers` to what actually fits — charging each offloaded layer its weight share **plus** its KV-cache slice for the chosen context and cache type, so quantizing the KV (`--cache-type-k q8_0 --cache-type-v q4_0`) frees room for more GPU layers (the gain grows with context length). Falls back to partial CPU offload when the model doesn't fully fit, and to the manual `--gpu-layers` value on non-CUDA builds or headless runs. Enabled by default when you pick a model from the interactive menu; opt-in on the scriptable CLI.
 
   ```bash
   eullm run qwen3-14b --fit                     # auto-size layers to free VRAM
   eullm run qwq-32b --fit --ctx-size 32768 \
-      --cache-type-k q4_0 --cache-type-v q4_0   # quantized KV → more layers at long context
+      --cache-type-k q8_0 --cache-type-v q4_0   # quantized KV → more layers at long context
   ```
 * Public launch on HackerNews, [dev.to](http://dev.to), Hashnode, LinkedIn
 * GitHub repository active, contributor onboarding

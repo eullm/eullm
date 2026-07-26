@@ -699,6 +699,9 @@ async fn main() {
                 ctk = corrected_k;
                 ctv = corrected_v;
             }
+            // After the Gemma correction, so the warning describes what will
+            // actually be used rather than what was typed.
+            inference::warn_on_lossy_kv(ctk, ctv);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
                 eprintln!(
@@ -780,6 +783,7 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
+            inference::warn_on_lossy_kv(ctk, ctv);
             let ui_port_opt = if ui { Some(ui_port) } else { None };
             cmd_serve(
                 port,

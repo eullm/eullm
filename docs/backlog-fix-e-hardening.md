@@ -31,8 +31,11 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
-**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E e H2-K —
-21 voci chiuse su 38. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
+**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E, H2-K e
+H2-L — 22 voci chiuse su 39. Le ultime due non vengono da una revisione del
+codice ma dai report di un tester esterno sull'issue #140: vale la pena
+notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
+prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
 deployment in container ha ora un controllo d'accesso funzionante *ed
 esprimibile*, e ogni input esterno che diventa un percorso o una richiesta di
 rete è validato. Resta **H1-F**, che è lo stesso gate applicato all'**Hub**: il
@@ -41,7 +44,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 160 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 162 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -543,6 +546,30 @@ esterni non si fidano dei valori che leggono.
   default vedrà ora più consumo di VRAM per la KV cache (circa 2× su K, 4× su V)
   e output migliore. Chi ha bisogno del comportamento vecchio lo ottiene con
   `--cache-type-k q8_0 --cache-type-v q4_0`, e ora sa di averlo chiesto.
+
+- [x] **H2-L · Una key cache a 4 bit non va consigliata: distrugge l'output** *(P1)*
+  Sempre dai report dell'issue #140, e questa è la scoperta più netta di tutta
+  la serie. Con `--cache-type-k q4_0 --cache-type-v q4_0` l'output diventa
+  incoerente **su ogni piattaforma provata** — Metal su M4 Pro, CPU x86 su mac
+  mini 2018, CPU ARM su Raspberry Pi 5 — mentre le stesse macchine, con lo
+  stesso binario e lo stesso GGUF, rispondono correttamente con `q8_0` sulle
+  chiavi. Non è quindi un problema di backend né di hardware: è la
+  quantizzazione a 4 bit della **key** cache. I valori tollerano 4 bit, le
+  chiavi no, e la guida di llama.cpp si ferma infatti a q8_0 per le chiavi.
+  Il punto imbarazzante: `scheduler.rs:387-391` suggeriva **esattamente quella
+  combinazione** nel messaggio d'errore che compare quando la KV cache non entra
+  in VRAM, e il README la usava come esempio in quattro punti. Stavamo indicando
+  come rimedio una configurazione che rompe l'output, a chi era già in
+  difficoltà.
+  Chiuso: il suggerimento diventa `q8_0`/`q4_0` con una riga esplicita sul
+  perché non q4_0 sulle chiavi; `inference::warn_on_lossy_kv` avvisa all'avvio
+  se le chiavi sono a 4 bit (`run` e `serve`, dopo la correzione Gemma così
+  descrive ciò che verrà davvero usato); README allineato. Non è un errore
+  fatale: chi ha davvero bisogno di quel contesto su quella scheda può
+  chiederlo, ma non può più ottenerlo senza saperlo. Aggiunto anche
+  `cache_type_name`, inverso di `parse_cache_type`, perché i messaggi stampavano
+  `Q4_0` in Debug — una stringa che il parser non accetta così com'è, cioè un
+  suggerimento non copiabile.
 
 ---
 
