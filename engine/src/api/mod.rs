@@ -129,6 +129,37 @@ pub struct AppState {
     pub launch_model: Option<(String, PathBuf)>,
 }
 
+/// Why a model could not be made ready.
+///
+/// The distinction exists because it is the difference between a 4xx and a
+/// 5xx, and getting it wrong is not cosmetic: a client with automatic retry
+/// treats a 500 as "try again" and will hammer a request that can never
+/// succeed. Asking for a model that does not exist is a client mistake;
+/// failing to load one that does is ours.
+#[derive(Debug)]
+pub enum ModelError {
+    /// No such model, by any accepted spelling. The caller should get a 404.
+    NotFound(String),
+    /// The model exists but could not be loaded: out of VRAM, corrupt GGUF,
+    /// a context that will not allocate. The caller should get a 500.
+    LoadFailed(String),
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound(m) | Self::LoadFailed(m) => f.write_str(m),
+        }
+    }
+}
+
+impl From<String> for ModelError {
+    /// Everything that is not explicitly a lookup miss is a load failure.
+    fn from(m: String) -> Self {
+        Self::LoadFailed(m)
+    }
+}
+
 impl AppState {
     /// Swap the currently loaded model.  Drops the old engine/scheduler
     /// (in-flight requests on cloned handles still complete) and loads
@@ -145,7 +176,7 @@ impl AppState {
         name: &str,
         override_batch_size: Option<usize>,
         override_ctx_size: Option<u32>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ModelError> {
         // Serialize swaps — if another request is already swapping,
         // wait for it to finish instead of starting a parallel swap.
         let _swap_guard = self.swap_lock.lock().await;
@@ -370,7 +401,7 @@ impl AppState {
     /// The launch path is always accepted regardless: `/api/tags` reports it as
     /// the loaded model's name, clients echo back what they were told, and
     /// refusing our own answer would break `eullm run ./model.gguf`.
-    fn resolve_model(&self, name: &str) -> Result<PathBuf, String> {
+    fn resolve_model(&self, name: &str) -> Result<PathBuf, ModelError> {
         let path = PathBuf::from(name);
 
         // 0. The model this process was launched with, by the name the API
@@ -430,12 +461,12 @@ impl AppState {
             return Ok(p);
         }
 
-        Err(format!(
+        Err(ModelError::NotFound(format!(
             "Model '{name}' not found. Accepted formats:\n  \
              - GGUF file path: /models/model.gguf\n  \
              - Directory with GGUF: /models/mymodel/\n  \
              - Registered name: eullm import-ollama {name}"
-        ))
+        )))
     }
 }
 

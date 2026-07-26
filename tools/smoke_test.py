@@ -522,11 +522,15 @@ def check_override_validation(rep: Report, api: str) -> None:
         code != 400,
         f"http={code} (a non-400 here means validation let it through)",
     )
-    # Tracked as H2-I: this ought to be 404, not 500.
+    # A model that does not exist is a client mistake. 500 was worse than
+    # merely wrong: clients with automatic retry treat it as transient and
+    # re-send a request that can never succeed. Fixed in 0.6.40 (H2-I), and
+    # this is now a hard assertion rather than a tolerated skip.
     rep.add(
-        "unknown model returns 404",
-        None if code == 500 else (code == 404),
-        f"http={code} — currently 500, should be 404 (backlog H2-I)",
+        "unknown model returns 404, not 500",
+        code == 404,
+        f"http={code}"
+        + ("" if code == 404 else " — a 5xx here invites clients to retry forever"),
     )
 
 

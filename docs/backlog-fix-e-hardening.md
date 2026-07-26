@@ -515,6 +515,19 @@ esterni non si fidano dei valori che leggono.
   della singola richiesta quando `think` è falso. È una decisione lato
   chiamante, non lato `process_piece`, e merita il suo cambio.
 
+  **Punto 2 chiuso in 0.6.40.** `inference::default_filters(think)` costruisce
+  la lista per richiesta: le Harmony sempre, più `<think>` e `</think>` solo
+  quando `think` è falso. Lì il prompt porta già un blocco think chiuso e
+  vuoto, quindi un tag **in uscita** è spurio per costruzione. Con
+  `think: true` i tag sono output legittimo che la UI rende come sezione di
+  ragionamento e non vanno toccati.
+  È una guardia, non un parser: il meccanismo dei filtri lavora su
+  sottostringhe letterali, quindi toglie i tag ma non può eliminare un blocco
+  `<think>…</think>` con contenuto dentro. Sopprimere il ragionamento è
+  compito del prefisso, che è la correzione vera; questa è la seconda linea.
+  Tre test, incluso quello che verifica che i filtri Harmony sopravvivano in
+  entrambe le modalità — la regressione che una riscrittura ingenua causerebbe.
+
 - [x] **H2-E · Estrarre la costruzione della catena di sampling** *(P2)*
   La catena è duplicata in quattro punti (`scheduler.rs:929-966`;
   `inference/mod.rs:781-812, 1000-1031, 1313-1341`) e la divergenza è già iniziata: il
@@ -578,7 +591,7 @@ esterni non si fidano dei valori che leggono.
   `n_ubatch=1024` (riga di log del loader, o `nvidia-smi`) su almeno due modelli e fissare
   il valore sul dato. Da fare insieme a `0.7-E`, che tocca lo stesso sizer.
 
-- [ ] **H2-I · Un modello inesistente deve dare 404, non 500** *(P2)*
+- [x] **H2-I · Un modello inesistente deve dare 404, non 500** *(P2)*
   Emerso testando il binario pubblicato di v0.6.35: una richiesta con
   `{"model":"non-esiste"}` restituisce **500** con `Failed to load model ...`
   (`api/routes.rs:171-180` — l'errore di `swap_model` è mappato su
@@ -589,7 +602,18 @@ esterni non si fidano dei valori che leggono.
   caricamento — VRAM insufficiente, GGUF corrotto — che resta 500. Comporta far
   ritornare a `resolve_model` un errore tipizzato invece di una `String`.
 
-- [ ] **H2-J · Con `think: false` un `</think>` finisce nel testo visibile** *(P2)*
+  **Chiusa.** `ModelError { NotFound, LoadFailed }` in `api/mod.rs`, con
+  `From<String>` che manda tutto ciò che non è esplicitamente una ricerca
+  fallita su `LoadFailed` — così il default è il 500 e il 404 va chiesto,
+  non il contrario. `resolve_model` e `swap_model` lo restituiscono, e
+  `routes.rs` mappa i due casi. Un solo chiamante di `swap_model`, quindi il
+  cambio di firma non si è propagato.
+  Verificato sul binario: `{"model":"non-esiste"}` risponde **404** su
+  `/api/chat` e su `/v1/chat/completions`, un modello vero resta **200**. Lo
+  smoke test aveva questo controllo come `skip` tollerato: ora è
+  un'asserzione dura e il totale passa da 32 a 33 pass.
+
+- [x] **H2-J · Con `think: false` un `</think>` finisce nel testo visibile** *(P2)*
   Emerso dallo smoke test su ARM (Radxa Orion O6, qwen3-0.6b, `think: false`,
   `temperature: 0`): il contenuto ricostruito dallo stream NDJSON è
   `"</think>\n\nCount: one two three"` — il tag di chiusura arriva al client come
@@ -997,10 +1021,21 @@ esterni non si fidano dei valori che leggono.
     è ciò che serve: il difetto 1 era invisibile proprio perché ci fidavamo
     di una feature al posto di un controllo.
 
-  **Nota di metodo, la parte scomoda.** Il 22 luglio ho scritto
-  «eullm-macos-x64 è costruito senza Metal, quindi non tocca mai la GPU» e su
-  quella frase è stata costruita una settimana di indagine nella direzione
-  sbagliata — inclusa la caccia alla cross-compilazione di H2-S, che resta
+  **Nota di metodo, la parte scomoda — e non è quella che sembra.** La
+  diagnosi non è arrivata tardi: è arrivata il **22 luglio**, due giorni dopo
+  il primo report di Peter, ed era giusta. Quel giorno abbiamo rilasciato
+  quella che credevamo fosse la correzione (0.6.31, commit `c891fc8`): **una
+  riga cancellata**, `features: metal`, dalla matrice di build. Peter ha
+  provato e ha risposto «no changes from 0.6.30».
+  **Lì sta l'errore.** Un risultato negativo dopo una correzione ha due
+  spiegazioni — l'ipotesi è sbagliata, oppure la correzione non ha fatto
+  effetto — e ne abbiamo considerata una sola. Abbiamo scartato l'ipotesi
+  giusta e siamo andati a cercare altrove per quattro giorni: baseline AVX2,
+  default dei thread, tipi di KV cache, guardia NaN, cross-compilazione.
+  Quello che avrebbe chiuso tutto è un `grep ggml_metal` sul binario
+  pubblicato. Il 22 luglio ho scritto «eullm-macos-x64 è costruito senza
+  Metal, quindi non tocca mai la GPU» senza mai averlo verificato su un
+  binario — inclusa la caccia alla cross-compilazione di H2-S, che resta
   corretta come igiene ma non era questo. Non avevo mai letto un log di avvio
   di quel binario su una macchina Apple: se l'avessi fatto, `ggml_metal_init`
   era lì dalla prima riga. La lezione non è «Metal è insidioso», è che una
