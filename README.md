@@ -74,7 +74,7 @@ curl http://localhost:11434/v1/chat/completions \
 | 🐧 Linux ARM64 | `eullm-linux-arm64` | ✅ Tested (community) | Validated on Raspberry Pi 400; RPi 4/5, Orange Pi 5+, Jetson, etc. |
 | 🐧 Linux ARM64 (NVIDIA) | `eullm-linux-arm64-cuda-12.8` | ✅ Tested | ARM host + discrete NVIDIA GPU (sm_86/89/120); validated on an RTX 3060 12GB ARM server, qwen3-14b Q4 at 33 tok/s |
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | ✅ Tested (community) | Validated on M2 Pro (Metal); M1/M2/M3/M4 |
-| 🍎 macOS Intel | `eullm-macos-x64` | 🧪 [Experimental — untested](#-platform-status--help-us-test) | Pre-Apple-Silicon Macs |
+| 🍎 macOS Intel | `eullm-macos-x64` | ✅ Tested (community) | Validated on a 2018 Mac mini (i7-8700B, 54 tok/s) and a 2018 MacBook Pro 15" (i9-8950HK, 41 tok/s), qwen3-0.6b Q4. CPU only: Metal is deliberately not built for Intel Macs, see below |
 | 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | ✅ Tested | Standalone binary, CLI/server |
 | 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ✅ Tested | ZIP bundles CUDA DLLs — extract, run |
 
@@ -88,7 +88,9 @@ curl http://localhost:11434/v1/chat/completions \
 
 ### 🧪 Platform status / help us test
 
-The Linux x64, Windows x64, and Linux ARM64 (CUDA) binaries are validated end-to-end by the maintainer. **macOS Apple Silicon (Metal)** and **Linux ARM64 (CPU)** are now **community-validated** (see the testers below). **macOS Intel (x64)** still compiles in CI but nobody has run it on that hardware yet — it remains **Experimental — untested**.
+The Linux x64, Windows x64, and Linux ARM64 (CUDA) binaries are validated end-to-end by the maintainer. **macOS Apple Silicon (Metal)**, **Linux ARM64 (CPU)** and, as of v0.6.39, **macOS Intel (x64)** are **community-validated** (see the testers below). Every published binary has now been run on real hardware by someone.
+
+> **Why macOS Intel is CPU only.** From v0.6.39 the `eullm-macos-x64` binary is built with the Metal backend genuinely disabled, and this is not a limitation we are apologising for: llama.cpp's Metal kernels produce wrong results on the non-Apple GPUs those machines carry (Intel UHD 630, AMD Radeon Pro), which is documented upstream in [ggml-org/llama.cpp#19563](https://github.com/ggml-org/llama.cpp/issues/19563) and [#4004](https://github.com/ggml-org/llama.cpp/issues/4004). llama.cpp builds its own macOS x64 release the same way. Between v0.6.30 and v0.6.38 we *believed* we had disabled it while the backend was in fact still compiled and still being used, which produced NaN logits and garbage output on exactly those machines — see the tester note below.
 
 If you run local LLMs on a Mac or an ARM64 board (Raspberry Pi 4/5, Orange Pi 5+, Rock 5B, Jetson, …), **your help validating these binaries is hugely appreciated**. See the open testing call:
 
@@ -97,6 +99,8 @@ If you run local LLMs on a Mac or an ARM64 board (Raspberry Pi 4/5, Orange Pi 5+
 The remaining gap is **macOS Intel (x86_64)** — if you run local LLMs on a pre-Apple-Silicon Mac, reports with `eullm --version` output, model used, and what worked/broke are very welcome.
 
 **Community testers — thank you 🙏** Early hands-on reports are already in (see #140):
+
+- **[@PeterHickman](https://github.com/PeterHickman)** — five machines (2018 Mac mini and 2018 MacBook Pro on Intel, Mac mini M1 and M4 Pro, Raspberry Pi 5), re-tested on every release across a week of near-daily ones, with full logs every time. His reports are the reason macOS Intel works at all: they exposed that the published binary was loading all 29 layers onto the machine's GPU through Metal while printing "all inference will run on CPU", and the run he did of llama.cpp's own `llama-cli` on the same model and the same box is what proved the fault was ours rather than his hardware. Two further defects came out of the same thread: the CPU-only binaries were built without an AVX2 baseline, and `eullm serve` was starting with different KV cache defaults than `eullm run`.
 
 - **[@andreyluiz](https://github.com/andreyluiz)** — macOS (Apple M2 Pro, Metal) and Raspberry Pi 400 (Cortex-A72, ARM64), with full logs. His macOS run surfaced a real packaging bug: the published `eullm-macos-arm64` had been built without Metal and silently ran on CPU — the release now builds the macOS binaries with `--features metal`. Genuinely grateful for the time he's putting into validating hardware the maintainer can't reach.
 
