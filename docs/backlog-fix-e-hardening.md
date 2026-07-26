@@ -755,7 +755,7 @@ perché ognuna di queste era un sospetto plausibile:
 garantisce ciò che dichiara; le dipendenze sono controllate per costruzione e non per
 diligenza manuale.
 
-- [ ] **H3-A · La CI deve compilare le feature che può compilare a costo basso** *(P1)*
+- [x] **H3-A · La CI deve compilare le feature che può compilare a costo basso** *(P1)*
   *Riformulata dopo aver misurato i costi reali: la CI gira solo su `push: [main]`,
   in ~7 minuti, su runner standard di un repo pubblico — quindi gratuiti. Il
   vincolo non sono i minuti ma il wall-clock, e le feature GPU richiedono il
@@ -771,6 +771,22 @@ diligenza manuale.
   imparato quanto costa scoprire un problema durante una release. Aggiungere un job
   `cargo check --features <x>` per ciascuna feature (economico: nessun link finale) e
   `cargo test --features multimodal` dove i test non richiedono GPU.
+
+  **Chiusa dal modo peggiore: rompendo una release.** Il refactor di `StopReason`
+  ha toccato `GenerateResult` e `StreamEvent::Done`, tipi usati anche da codice
+  dietro `#[cfg(feature = "multimodal")]`. Quel codice è invisibile a
+  `cargo build`, `cargo test` e `cargo clippy` senza la feature: tutto verde in
+  locale, tutto verde sulla CI di main, e poi **tre job CUDA falliti al tag**,
+  perché i build di release usano `--features "cuda,multimodal"`. Tre build
+  lunghi e una release da rifare per un errore che `cargo check` trovava in un
+  minuto.
+  Aggiunto `cargo check --features multimodal` al job engine. `check` e non
+  `build` perché il fallimento da prevenire è di tipi, non di link; e `cuda`
+  resta fuori di proposito — richiede il toolkit CUDA, minuti di installazione a
+  ogni push, e condivide lo stesso codice Rust che questo step già copre.
+  Nota per chi ci tornerà: `cargo clippy --features multimodal` segnala oggi due
+  lint preesistenti in `inference/mod.rs:867` e `:1578`, in codice mai passato
+  sotto lint. Vanno sistemati prima di poter alzare anche clippy alla feature.
 
 - [ ] **H3-B · Il mirror non deve poter sovrascrivere i tag** *(P1)*
   `mirror-sync.yml:9-11` dichiara che i tag sono immutabili e che ogni versione da cui si è

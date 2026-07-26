@@ -3255,6 +3255,8 @@ async fn run_multimodal_oneshot(engine: Arc<InferenceEngine>, image_path: PathBu
                 tokens_generated,
                 tokens_prompt,
                 duration_ms,
+                // The one-shot multimodal probe prints no stop reason.
+                stop_reason: _,
             } => {
                 let _ = writeln!(stdout);
                 let _ = writeln!(
