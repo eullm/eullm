@@ -33,7 +33,7 @@ H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
 **Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
 **Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
-H2-O (`done_reason`) e H2-P (`--daemon`) — 26 su 43. Le ultime due non vengono da una revisione del
+H2-O (`done_reason`), H2-P (`--daemon`) e H2-Q (audit concorrente) — 27 su 44. Le ultime due non vengono da una revisione del
 codice ma dai report di un tester esterno sull'issue #140: vale la pena
 notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
 prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
@@ -45,7 +45,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 173 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 174 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -713,6 +713,26 @@ esterni non si fidano dei valori che leggono.
   scrive alcun pidfile (uno stantio è peggio di nessuno, perché uno script di stop
   ci crede) e si esce con 1. Verificato: avvio pulito → PID vivo ed exit 0; stessa
   porta due volte → errore del figlio riportato, nessun pidfile, exit 1.
+
+- [x] **H2-Q · Il registro di audit si corrompeva sotto concorrenza** *(P0)*
+  Trovato dallo smoke test al giro finale di verifica, non da una revisione:
+  `audit records written — unreadable: Extra data: line 1 column 204`.
+  `persist` usava `writeln!(file, "{json}")`, e `writeln!` passa da `write_fmt`,
+  che emette **due syscall** — una per il valore formattato e una per il newline.
+  Con `O_APPEND` ogni singola write è atomica, ma due scrittori concorrenti si
+  intrecciano *fra* le due: il risultato è `{a}{b}\n\n`, cioè una riga con due
+  record dentro e un file JSONL che non è più JSONL.
+  Gravità: è il registro che esiste per essere una prova difendibile ai fini
+  dell'AI Act, e `read_all` su un file così o fallisce o scarta record in
+  silenzio. Il difetto si manifesta solo sotto carico concorrente, cioè
+  esattamente in produzione e mai in un test manuale.
+  Chiuso costruendo la riga completa e facendo **una sola** `write_all`. Test di
+  regressione con 8 thread × 40 record e lunghezze variabili (così un intreccio
+  non può essere mascherato da record tutti uguali): contro il codice vecchio
+  fallisce con **275 righe su 320 — 45 record persi**; con il fix passa, e due
+  esecuzioni consecutive dello smoke test danno 33 PASS / 0 FAIL.
+  Da notare per il metodo: questo non lo avremmo mai trovato leggendo il codice
+  o testando a mano. L'ha trovato un harness che manda 8 richieste insieme.
 
 ### Verificato e **non** indotto da noi
 
