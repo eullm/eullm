@@ -94,6 +94,33 @@ Earlier versions (v0.5.x) shipped a TurboQuant-experimental variant via the Ames
 
 **Nuclear option** if cache contamination is ever suspected: bump the cache key suffix (e.g., `sccache-windows-cuda-v2-...`). Full miss next run, fresh state.
 
+### Every release updates `CHANGELOG.md` (MANDATORY)
+
+Before pushing a `EuLLM-v*` tag, add the version's section to `CHANGELOG.md`.
+The bump commit is the natural place for it.
+
+**Write it for someone deciding whether to upgrade, not for someone reading the
+diff.** The test: an entry that names a function, a module, or a refactor has
+failed. "One decode output path instead of three" tells a user nothing; "stop
+sequences are now honoured in every mode, which affects `--batch-size 0` and
+multimodal requests" tells them whether this release matters to them. State the
+consequence, and where it exists, the workaround — the 0.6.36 entry gives both
+the extra VRAM cost of the new KV defaults and the flags that restore the old
+behaviour.
+
+Two sections per version, `### Added` and `### Fixed`, plus `### Performance`
+when something measurably got faster. A release with no user-facing change says
+so in one line (see 0.6.38) rather than being omitted, so no version number
+looks mysteriously missing.
+
+Leave out `docs`, `chore`, `ci`, `test` and internal refactors. A changelog is
+not the commit history; the commit history is already the commit history.
+
+Entries below 0.6.36 were generated from commit subjects and read like it. The
+file's header admits this. **Do not regenerate the hand-written span from git
+log** to "make it consistent": that would replace the only part written for
+users with the part that is not.
+
 ### Release graceful degradation (added v0.5.2)
 
 The `release` job uses `if: ${{ !cancelled() }}` + `fail_on_unmatched_files: false`. **Do not remove these.**
