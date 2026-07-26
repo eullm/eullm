@@ -677,9 +677,27 @@ fn main() {
         config.define("GGML_BLAS", "OFF");
     }
 
-    // watchOS has no Metal framework, so disable the Metal backend there.
-    // Also define _DARWIN_C_SOURCE so BSD types (u_int, u_char, u_short) used by
-    // some sources are visible — implicit on macOS/iOS but not on watchOS.
+    // The `metal` feature must actually decide whether the Metal backend is
+    // built. ggml's CMake defaults GGML_METAL to ON for every Apple target, so
+    // without this the feature is decorative: a build with the feature off
+    // still shipped the backend, llama.cpp still enumerated a Metal device,
+    // and a caller asking to offload layers still got them offloaded.
+    //
+    // That is not hypothetical. eullm's macOS x64 binary dropped the feature
+    // in v0.6.30 and was described as CPU-only from then on, while in the
+    // field (issue #140) it was offloading all 29 layers of Qwen3 onto an
+    // Intel UHD 630 on one Mac and an AMD Radeon Pro 560X on another — the
+    // non-Apple-GPU configuration that upstream reports as producing wrong
+    // results (ggml-org/llama.cpp#19563, #4004). llama.cpp's own macOS x64
+    // release is built with -DGGML_METAL=OFF for the same reason.
+    //
+    // watchOS has no Metal framework at all, so it stays off there
+    // unconditionally. It also needs _DARWIN_C_SOURCE so BSD types (u_int,
+    // u_char, u_short) used by some sources are visible — implicit on
+    // macOS/iOS but not on watchOS.
+    if matches!(target_os, TargetOs::Apple(_)) && !cfg!(feature = "metal") {
+        config.define("GGML_METAL", "OFF");
+    }
     if matches!(target_os, TargetOs::Apple(AppleVariant::WatchOS)) {
         config.define("GGML_METAL", "OFF");
         config.cflag("-D_DARWIN_C_SOURCE");

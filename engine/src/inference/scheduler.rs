@@ -633,7 +633,10 @@ fn run_scheduler_loop(
     shutdown: Arc<AtomicBool>,
     ready_tx: std::sync::mpsc::Sender<Result<ModelReadyInfo, String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    super::check_gpu_support(config.gpu_layers);
+    // Use the RETURNED value, never `config.gpu_layers` — on a binary with no
+    // GPU backend this is 0. See `super::check_gpu_support` for what asking
+    // for more did on Intel Macs.
+    let gpu_layers = super::check_gpu_support(config.gpu_layers);
 
     tracing::info!("Initializing llama.cpp backend (scheduler)...");
     let mut backend = LlamaBackend::init()?;
@@ -644,8 +647,8 @@ fn run_scheduler_loop(
     // Once the context is up, void_logs() is called to suppress the repetitive
     // per-decode messages (CUDA graph warmup etc.) that pollute interactive output.
 
-    let model_params = if config.gpu_layers >= 0 {
-        LlamaModelParams::default().with_n_gpu_layers(config.gpu_layers as u32)
+    let model_params = if gpu_layers >= 0 {
+        LlamaModelParams::default().with_n_gpu_layers(gpu_layers as u32)
     } else {
         LlamaModelParams::default().with_n_gpu_layers(1000)
     };
