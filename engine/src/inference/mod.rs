@@ -658,6 +658,40 @@ pub const DEFAULT_HARMONY_FILTERS: &[&str] = &[
     "<audio|>",
 ];
 
+/// The filter list for one request, given whether the client asked for
+/// thinking.
+///
+/// With `think: false` the prompt already carries a closed, empty think block
+/// (see [`crate::chat_template::ChatTemplate::think_suppression_prefix`]), so
+/// any think tag appearing in the *output* is spurious by construction and is
+/// stripped here.
+///
+/// That case is not hypothetical: until v0.6.39 the injected prefix was one
+/// newline short of what Qwen3's own template emits, which put the prompt off
+/// distribution and made the model reason in the visible channel and close
+/// with the tag. The prefix is fixed, so this is the second line of defence
+/// rather than the fix, and it costs nothing when the model behaves.
+///
+/// With `think: true` the tags are legitimate output the UI renders as a
+/// reasoning section, and must not be touched.
+///
+/// This is a guard, not a parser: the filter mechanism matches literal
+/// substrings, so it removes stray tags but cannot elide a whole
+/// `<think>…</think>` block with content in it. Removing the markers of
+/// reasoning the client did not ask for is an improvement on showing both;
+/// suppressing the reasoning itself is the prefix's job.
+pub fn default_filters(think: bool) -> Vec<String> {
+    let mut out: Vec<String> = DEFAULT_HARMONY_FILTERS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    if !think {
+        out.push("</think>".to_string());
+        out.push("<think>".to_string());
+    }
+    out
+}
+
 /// Request for text generation.
 #[derive(Debug, Clone)]
 pub struct GenerateRequest {
@@ -1944,6 +1978,40 @@ core id\t\t: 0
             "physical cores ({t}) cannot exceed logical ({})",
             logical_core_count()
         );
+    }
+}
+
+#[cfg(test)]
+mod think_filter_tests {
+    use super::*;
+
+    #[test]
+    fn think_true_leaves_the_tags_alone() {
+        let f = default_filters(true);
+        assert!(!f.iter().any(|s| s.contains("think")), "{f:?}");
+        assert_eq!(f.len(), DEFAULT_HARMONY_FILTERS.len());
+    }
+
+    #[test]
+    fn think_false_strips_stray_think_tags() {
+        let f = default_filters(false);
+        assert!(f.iter().any(|s| s == "</think>"));
+        assert!(f.iter().any(|s| s == "<think>"));
+    }
+
+    // The Harmony filters exist independently of thinking and must survive
+    // either way; this is the regression that a naive rewrite would cause.
+    #[test]
+    fn the_harmony_filters_are_present_in_both_modes() {
+        for think in [true, false] {
+            let f = default_filters(think);
+            for expected in DEFAULT_HARMONY_FILTERS {
+                assert!(
+                    f.iter().any(|s| s == expected),
+                    "{expected} missing with think={think}"
+                );
+            }
+        }
     }
 }
 

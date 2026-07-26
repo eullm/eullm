@@ -174,11 +174,21 @@ async fn ensure_model(
             state
                 .swap_model(name, override_batch_size, override_ctx_size)
                 .await
-                .map_err(|e| {
-                    (
+                .map_err(|e| match e {
+                    // A model that does not exist is a client mistake, and a
+                    // 5xx here is actively harmful: clients with automatic
+                    // retry treat it as transient and hammer a request that
+                    // can never succeed. Ollama answers 404 for this.
+                    crate::api::ModelError::NotFound(msg) => {
+                        (StatusCode::NOT_FOUND, Json(json!({ "error": msg })))
+                    }
+                    // The model exists but would not load: out of VRAM, a
+                    // corrupt GGUF, a context that will not allocate. That is
+                    // ours, and 500 is correct.
+                    crate::api::ModelError::LoadFailed(msg) => (
                         StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": format!("Failed to load model '{name}': {e}") })),
-                    )
+                        Json(json!({ "error": format!("Failed to load model '{name}': {msg}") })),
+                    ),
                 })?;
         }
     }
@@ -828,10 +838,8 @@ async fn chat(
             // generate() add its own BOS/template on top.
             raw: true,
             stop_sequences: vec!["<end_of_turn>".to_string()],
-            filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
-                .iter()
-                .map(|s| (*s).to_string())
-                .collect(),
+            // Gemma has no think toggle, so nothing extra to strip here.
+            filter_sequences: crate::inference::default_filters(true),
             grammar: None,
         };
         if is_streaming(&body) {
@@ -900,10 +908,9 @@ async fn chat(
         seed: sp.seed,
         num_ctx: sp.num_ctx,
         stop_sequences,
-        filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
+        // think-aware: with think:false a think tag in the OUTPUT is
+        // spurious, since the prompt already carries a closed empty block.
+        filter_sequences: crate::inference::default_filters(think),
         grammar,
         raw: false,
     };
@@ -1125,10 +1132,9 @@ async fn chat_completions(
         seed: sp.seed,
         num_ctx: sp.num_ctx,
         stop_sequences,
-        filter_sequences: crate::inference::DEFAULT_HARMONY_FILTERS
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect(),
+        // think-aware: with think:false a think tag in the OUTPUT is
+        // spurious, since the prompt already carries a closed empty block.
+        filter_sequences: crate::inference::default_filters(think),
         grammar,
         raw: false,
     };
