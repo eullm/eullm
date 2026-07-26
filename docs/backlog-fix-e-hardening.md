@@ -35,6 +35,12 @@ H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 H2-S, aperta: il runner di build di `eullm-macos-x64` (vedi H2-S per cosa la
 ricerca a monte ha escluso e cosa no).
 
+**In v0.6.38:** solo il cambio di runner di H2-S. Nessuna riga di codice del
+motore: il binario `eullm-macos-x64` è lo stesso sorgente della 0.6.37
+compilato su hardware Intel nativo invece che cross-compilato. È proprio questo
+che la rende una prova utile — se le due macchine Intel di Peter cambiano
+comportamento, la differenza è l'ambiente di build e nient'altro.
+
 **Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
 **Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
 H2-O (`done_reason`), H2-P (`--daemon`) e H2-Q (audit concorrente) — 27 su 44. Le ultime due non vengono da una revisione del
@@ -804,9 +810,10 @@ esterni non si fidano dei valori che leggono.
 
   Cambiato: `x86_64-apple-darwin` passa da `macos-15` a `macos-15-intel`
   (GA fino ad agosto 2027, ultima immagine x86_64 che GitHub offrirà; `macos-13`
-  è ritirata). Una riga. **Non è dichiarato come la soluzione del NaN**: è la
-  rimozione dell'ultima variabile di build non esaminata, e serve una release
-  per sapere se cambia qualcosa sulle due macchine di Peter.
+  è ritirata). Una riga, e va in 0.6.38 da sola. **Non è dichiarata come la
+  soluzione del NaN**: è la rimozione dell'ultima variabile di build non
+  esaminata, e serve la release per sapere se cambia qualcosa sulle due
+  macchine di Peter.
 
   Escluse leggendo il nostro codice, non ipotizzando:
   - **Accelerate / BLAS**: `build.rs` mette `GGML_BLAS=OFF` su *tutti* i target
