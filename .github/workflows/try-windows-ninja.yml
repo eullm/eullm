@@ -71,7 +71,7 @@ jobs:
           # with the full toolkit on v0.6.38) and whether the build below still
           # links. A missing component fails the build outright.
           method: local
-          sub-packages: '["nvcc","nvvm","crt","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
+          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
