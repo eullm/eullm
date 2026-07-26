@@ -149,7 +149,19 @@ jobs:
             os: ubuntu-22.04
             artifact: eullm-linux-arm64
           - target: x86_64-apple-darwin
-            os: macos-15
+            # Native Intel runner, NOT macos-15 (Apple Silicon) with a
+            # cross-compile. This was the last unexamined variable behind the
+            # all-NaN logits reported on two Intel Macs in issue #140: this
+            # artifact was the only one in the matrix built for an architecture
+            # its runner does not have, and llama.cpp upstream deliberately
+            # builds its own macOS x64 release on macos-15-intel rather than
+            # cross-compiling it. GGML_NATIVE is off either way (build.rs turns
+            # it off whenever target-cpu != native), but a native host removes
+            # the whole class of host/target confusion from the CPU backend's
+            # CMake feature detection. macos-15-intel is GA until Aug 2027 and
+            # is the last x86_64 macOS image GitHub will offer; macos-13 is
+            # retired. Keep this in step with upstream's choice of runner.
+            os: macos-15-intel
             artifact: eullm-macos-x64
             # Same x86-64-v3 baseline as eullm-linux-x64 above — see that
             # entry's comment. Metal was removed from this target separately

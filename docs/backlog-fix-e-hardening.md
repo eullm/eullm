@@ -31,7 +31,9 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
-**Chiusa in v0.6.37:** H2-R (guardia sui logit NaN) — 28 su 45.
+**Chiusa in v0.6.37:** H2-R (guardia sui logit NaN) — 28 su 46. La voce in più è
+H2-S, aperta: il runner di build di `eullm-macos-x64` (vedi H2-S per cosa la
+ricerca a monte ha escluso e cosa no).
 
 **Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
 **Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
@@ -772,6 +774,53 @@ esterni non si fidano dei valori che leggono.
   `LlamaSampler::sample` ha appena usato una riga sopra. Verificato con 8
   sequenze concorrenti nello smoke test, che è il percorso multi-sequenza dove
   un indice sbagliato si vedrebbe.
+
+- [ ] **H2-S · L'unico artefatto della matrice compilato per un'architettura che
+  il runner non ha** *(P1)*
+  Prima di questo punto ci sono tre giorni di ipotesi sul NaN degli Intel Mac
+  senza aver mai guardato né l'issue tracker di llama.cpp né come llama.cpp
+  stesso pubblica il proprio binario macOS x64. Errore di metodo, non di stile:
+  due delle quattro ipotesi si chiudevano leggendo il nostro `build.rs`, una
+  terza con una ricerca. Registrato qui perché si ripete facilmente.
+
+  Cosa dice il confronto con monte:
+  - llama.cpp costruisce il proprio `macos-x64` su un runner **Intel nativo**
+    (`macos-15-intel`), con `-DGGML_METAL=OFF`. Non lo cross-compila.
+  - noi lo costruivamo su `macos-15`, che è Apple Silicon. Era **l'unico
+    artefatto della matrice** compilato per un'architettura che il runner non
+    possiede, e l'unico che non ha un percorso di cross-compilazione gestito
+    esplicitamente in `build.rs` (per `aarch64-unknown-linux-gnu` c'è: forza
+    `GGML_NATIVE=OFF` e fissa `GGML_CPU_ARM_ARCH`; per x86_64-su-arm64-macOS
+    niente). Nota contro me stesso: il binario linux-arm64 è anch'esso
+    cross-compilato e sul Pi 5 di Peter va a 26,5 tok/s — quindi
+    «cross-compilare rompe» non è una legge, è un sospetto su *questo* percorso.
+  - `issue #9873` di llama.cpp è la stessa classe di sintomo: su macOS 15 Intel
+    un binario **compilato in casa** produce token spazzatura (`iorimondeaphans1
+    联…`) mentre il binario **ufficiale** risponde bene, stesso modello. Aperta,
+    `bug-unconfirmed`. In quel caso la differenza plausibile è Metal (l'utente
+    aveva Metal ON su una Iris Plus, l'ufficiale OFF), quindi **non spiega** il
+    risultato di Peter su 0.6.36 — ma dimostra che su macOS 15 Intel
+    «l'ambiente di build del binario, non la macchina» è un modo di guasto reale.
+
+  Cambiato: `x86_64-apple-darwin` passa da `macos-15` a `macos-15-intel`
+  (GA fino ad agosto 2027, ultima immagine x86_64 che GitHub offrirà; `macos-13`
+  è ritirata). Una riga. **Non è dichiarato come la soluzione del NaN**: è la
+  rimozione dell'ultima variabile di build non esaminata, e serve una release
+  per sapere se cambia qualcosa sulle due macchine di Peter.
+
+  Escluse leggendo il nostro codice, non ipotizzando:
+  - **Accelerate / BLAS**: `build.rs` mette `GGML_BLAS=OFF` su *tutti* i target
+    Apple. Il prefill non passa da `cblas_sgemm`. Non è quello.
+  - **Metal su GPU non-Apple**: già rimosso da questo target il 2026-07-22
+    (`c891fc8`, v0.6.30), cioè **prima** della 0.6.36 che Peter ha provato. È
+    invece la spiegazione più probabile delle sue primissime segnalazioni: su
+    Intel Mac è un guasto documentato a monte, sia su AMD discrete
+    (`issue #19563`, Radeon Pro 5300M — stessa famiglia del MacBook Pro 2018)
+    sia via Vulkan/MoltenVK (`issue #20104`, «produce gibberish»).
+  - **Un bug noto di llama.cpp su Coffee Lake CPU-only**: non esiste. Nessuna
+    segnalazione a monte di logit tutti NaN su un build CPU-only x86. L'assenza
+    conta: rende meno probabile «llama.cpp è rotto su quella CPU» e più
+    probabile qualcosa di specifico del nostro binario o di quelle due macchine.
 
 ### Verificato e **non** indotto da noi
 
