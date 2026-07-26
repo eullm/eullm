@@ -31,8 +31,7 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
-**Chiuse dopo la v0.6.35, non ancora rilasciate:** H1-A, H1-C, H1-E, H2-K e
-H2-L — 22 voci chiuse su 39. Le ultime due non vengono da una revisione del
+**Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39. Le ultime due non vengono da una revisione del
 codice ma dai report di un tester esterno sull'issue #140: vale la pena
 notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
 prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
