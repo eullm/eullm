@@ -90,7 +90,7 @@ curl http://localhost:11434/v1/chat/completions \
 
 The Linux x64, Windows x64, and Linux ARM64 (CUDA) binaries are validated end-to-end by the maintainer. **macOS Apple Silicon (Metal)**, **Linux ARM64 (CPU)** and, as of v0.6.39, **macOS Intel (x64)** are **community-validated** (see the testers below). Every published binary has now been run on real hardware by someone.
 
-> **Why macOS Intel is CPU only.** From v0.6.39 the `eullm-macos-x64` binary is built with the Metal backend genuinely disabled, and this is not a limitation we are apologising for: llama.cpp's Metal kernels produce wrong results on the non-Apple GPUs those machines carry (Intel UHD 630, AMD Radeon Pro), which is documented upstream in [ggml-org/llama.cpp#19563](https://github.com/ggml-org/llama.cpp/issues/19563) and [#4004](https://github.com/ggml-org/llama.cpp/issues/4004). llama.cpp builds its own macOS x64 release the same way. Between v0.6.30 and v0.6.38 we *believed* we had disabled it while the backend was in fact still compiled and still being used, which produced NaN logits and garbage output on exactly those machines — see the tester note below.
+> **Intel Macs run on CPU, on purpose.** `eullm-macos-x64` ships without the Metal backend, because Metal produces wrong output on the GPUs those machines carry (Intel UHD 630, AMD Radeon Pro) — a known llama.cpp limitation ([#19563](https://github.com/ggml-org/llama.cpp/issues/19563), [#4004](https://github.com/ggml-org/llama.cpp/issues/4004)), which is why llama.cpp ships its own macOS x64 build the same way. Expect roughly 40-55 tok/s on a 0.6B Q4 model on 2018-era hardware. **If you are on a version before v0.6.39, upgrade**: those builds tried to use the GPU and returned garbage on Intel Macs.
 
 If you run local LLMs on a Mac or an ARM64 board (Raspberry Pi 4/5, Orange Pi 5+, Rock 5B, Jetson, …), **your help validating these binaries is hugely appreciated**. See the open testing call:
 
@@ -136,6 +136,40 @@ What you get on top of the Ollama-compatible API:
 | **EU-hosted model registry** (Forge/Hub) | 🚧 in development |
 
 [→ Engine scaling](#benchmarks--continuous-batching-scaling) · [→ Why EULLM](#why-eullm)
+
+### Thinking mode and error codes (v0.6.39 / v0.6.40)
+
+**`"think": false` now works.** Qwen3-style models reason before answering, and
+`think: false` is supposed to turn that off. Before v0.6.39 it did not: the model
+kept reasoning, you paid for those tokens, and a stray `</think>` tag showed up in
+the reply. Ask for a direct answer and you get one:
+
+```bash
+curl -s http://localhost:11434/api/chat -H 'Content-Type: application/json' -d '{
+  "model": "qwen3-0.6b",
+  "messages": [{"role": "user", "content": "How many continents are there?"}],
+  "think": false,
+  "stream": false
+}'
+```
+
+Leave `think` out (or set it to `true`) and the reasoning comes back, tags
+included, so a UI can render it as a collapsible section.
+
+**Asking for a model that does not exist returns `404`, not `500`.** This matters
+if your client retries automatically: a `5xx` reads as "temporary, try again", so
+a typo in a model name used to turn into a retry loop that could never succeed.
+A `404` says *you* need to change something; a `500` still means the model exists
+but could not be loaded (out of VRAM, corrupt file), which is worth retrying.
+
+```
+$ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:11434/api/chat \
+    -d '{"model":"typo-in-the-name","messages":[{"role":"user","content":"hi"}]}'
+404
+```
+
+Both endpoints behave the same way, Ollama-style `/api/chat` and OpenAI-style
+`/v1/chat/completions`.
 
 ### Run it as a daemon (background service)
 
