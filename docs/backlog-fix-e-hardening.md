@@ -31,7 +31,9 @@ esistenti non sono ripetute qui: sono elencate nella tabella dei rimandi in fond
 **Chiuse (v0.6.35):** tutte le H0, più H1-B, H1-D, H1-G, H2-A, H2-B, H2-C,
 H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 
-**Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39. Le ultime due non vengono da una revisione del
+**Chiuse in v0.6.36:** H1-A, H1-C, H1-E, H2-K e H2-L — 22 voci chiuse su 39.
+**Chiuse dopo la 0.6.36:** H2-M (default dei thread), H2-N (contesto per slot)
+H2-O (`done_reason`), H2-P (`--daemon`) e H2-Q (audit concorrente) — 27 su 44. Le ultime due non vengono da una revisione del
 codice ma dai report di un tester esterno sull'issue #140: vale la pena
 notarlo, perché sono anche le due con l'impatto più diretto su chi usa il
 prodotto. Il gate di uscita della tier H1 è soddisfatto **per l'Engine**: un
@@ -43,7 +45,7 @@ sbloccata (dipendeva da H1-A) ma non è un cambiamento dello stesso tipo — vuo
 l'estrazione delle tre policy in un crate condiviso del workspace, quindi tocca
 due binari e la struttura dei moduli. Tenuta fuori da questo blocco per non
 mescolare un refactor di workspace con l'hardening dell'Engine.
-Engine 166 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
+Engine 174 test (da 114), clippy pulito con `-D warnings`, `cargo fmt` pulito.
 
 La cosa che tiene insieme le tre voci è una regola di configurazione, ora scritta
 in `CLAUDE.md`: **la configurazione di modello e inferenza va nei flag CLI, quella
@@ -595,6 +597,155 @@ esterni non si fidano dei valori che leggono.
   test guardava la qualità dell'output fuori dai default, quindi la combinazione
   che raccomandavamo attivamente non è mai stata eseguita da nessuno prima di un
   tester esterno, quindici giorni dopo.
+
+- [x] **H2-M · Il default dei thread conta le CPU logiche, non i core** *(P1)*
+  Emerso da una domanda sul report del MacBook Pro: quella macchina genera a
+  **0,8 tok/s**, contro 11,7 del mac mini 2018 (stessa generazione di CPU, stesso
+  binario) e 26,5 di un Raspberry Pi 5. Avevo liquidato i suoi timeout come
+  «aritmetici, è solo lenta»: sbagliato. Un i9-8950HK 34 volte più lento di un
+  Pi 5 non è una macchina lenta, è una macchina in una condizione anomala — e
+  parte di quella condizione la creiamo noi.
+
+  `threads.unwrap_or_else(available_parallelism)` chiedeva **tutte le CPU
+  logiche**. `llama-cli` usa `common_cpu_get_num_math` →
+  `common_cpu_get_num_physical_cores`, che su macOS legge
+  `hw.perflevel0.physicalcpu`, cioè i core fisici *performance*. Sull'i9-8950HK
+  fa 12 contro 6; sull'M1 fa 8 (4P+4E) contro 4.
+
+  Misurato qui su una VM a 4 core senza SMT, dove la sovrasottoscrizione è
+  l'unica variabile in gioco:
+
+  | `--threads` | throughput |
+  |---|---|
+  | 1 | 16,4 tok/s |
+  | 2 | 25,4 tok/s |
+  | **4** | **41,9 tok/s** |
+  | 8 | 16,9 tok/s |
+  | 12 | 14,6 tok/s |
+
+  Chiedere più thread di quanti core li possano eseguire costa il **60%** del
+  throughput. Su Apple Silicon il meccanismo è anche peggiore: ggml divide il
+  grafo equamente fra i thread, quindi ogni passo aspetta il più lento, e quattro
+  core performance più quattro efficiency vanno **più piano** di quattro
+  performance da soli. Su un portatile termicamente limitato poi si somma: più
+  thread AVX-heavy significa più potenza assorbita, quindi clock sostenuto più
+  basso — che è esattamente il difetto noto del MacBook Pro 15" 2018.
+
+  Chiuso con `inference::default_thread_count`, che replica l'euristica di
+  llama.cpp: core fisici performance su macOS via `sysctlbyname`, coppie
+  `(physical id, core id)` distinte da `/proc/cpuinfo` su Linux, e il conteggio
+  logico come ultima risorsa quando la piattaforma non sa rispondere — mai zero.
+  Cinque test, incluso il caso ARM in cui il kernel omette `core id` del tutto.
+
+  **Onestà su cosa è verificato**: la misura sopra è su una macchina senza SMT,
+  quindi prova che la sovrasottoscrizione fa danno, non che il *nostro* nuovo
+  default sia migliore su hardware ibrido — lì i due valori coincidono e il
+  cambiamento è un no-op. La verifica vera arriva dai box di Peter con
+  `--threads 6` sull'i9 e `--threads 4` sull'M1. Allineare l'euristica a quella
+  dell'implementazione di riferimento è comunque la scelta conservativa, ed è
+  anche ciò che rende sensato un confronto like-for-like con `llama-cli`.
+  Prossimo sospetto sul gap con llama-cli, una volta chiuso questo.
+
+- [x] **H2-N · `serve` di default dà 512 token di contesto a richiesta** *(P1)*
+  `--ctx-size` è il budget KV **totale** e viene diviso equamente fra gli slot
+  (`scheduler.rs:685-686`), mentre `serve` ha `--batch-size 8` di default contro
+  l'1 di `run`. Risultato: `eullm serve` senza argomenti dà a ogni richiesta
+  **4096 / 8 = 512 token**, `eullm run` gliene dà 4096. È la stessa classe di
+  divergenza `run`/`serve` di H2-K, applicata al contesto invece che alla KV
+  cache, e per un modello che ragiona è mutilante: Qwen3 spende più di 512 token
+  solo nel `<think>`.
+  Misurato con la stessa domanda su tre configurazioni:
+
+  | configurazione | token generati | ctx per slot |
+  |---|---|---|
+  | `serve` default (8 slot) | **477, tagliata** | 512 |
+  | `--batch-size 4` | 978, tagliata | 1024 |
+  | `--batch-size 1` (come `run`) | 1055, completa | 4096 |
+
+  Spiega direttamente i numeri nei report di Peter: `eval_count` 1001, 1014,
+  1024 con `--batch-size 4` non sono coincidenze, sono il soffitto dello slot.
+  Chiuso **non** cambiando il default alla cieca — sarebbe l'errore di H2-L
+  un'altra volta — ma rendendo la divisione impossibile da non vedere: warning
+  all'avvio con i due numeri che la risolvono («raise --ctx-size to 16384 or
+  lower --batch-size»), soglia `MIN_COMFORTABLE_SEQ_CTX` a 2048. **La scelta dei
+  default resta aperta** e va fatta con una misura di VRAM, non a intuito: il
+  motivo per cui il contesto è totale e non per-sequenza è che la versione
+  per-sequenza moltiplicava e andava in OOM (vedi il commento a
+  `scheduler.rs:681-685`).
+
+- [x] **H2-O · `done_reason` diceva sempre `"stop"`, anche quando mentiva** *(P1)*
+  `done_reason` e `finish_reason` erano la stringa letterale `"stop"` in **undici
+  punti** di `routes.rs`, e `StreamEvent::Done` non trasportava affatto il
+  motivo: l'informazione non usciva nemmeno dallo scheduler. Una risposta tagliata
+  perché lo slot ha esaurito il contesto era quindi **indistinguibile** da una che
+  il modello ha deciso di terminare. È il difetto che ha reso invisibile H2-N per
+  mesi, e che ha fatto leggere a un tester esterno delle troncature come «il
+  modello si comporta male».
+  Peggio: due dei siti erano il ramo `Err(_)` di un decode fallito. Un errore di
+  decodifica a metà generazione veniva riportato al client come completamento
+  regolare.
+  Chiuso con `StopReason { Stop, Length }` propagato dallo scheduler *e* dal
+  motore sequenziale fino a `done_reason`/`finish_reason`, con i due siti di
+  errore convertiti in `StreamEvent::Error` (che entrambi i percorsi di streaming
+  già sapevano rendere). Il default in `collect_stream` è `Length`, non `Stop`:
+  se lo stream finisce senza un evento `Done` la risposta è incompleta, e l'ipotesi
+  onesta è quella. La CLI interattiva stampa `truncated — out of context`.
+  Verificato end-to-end: `num_predict: 8` → `done_reason='length'`, risposta che
+  finisce da sola → `'stop'`, e il default di `serve` → `'length'` a 477 token.
+  Due test unitari più due controlli nello smoke test.
+
+- [x] **H2-P · `--daemon` dichiarava avviato un processo già morto** *(P1)*
+  `daemonize` stampava «eullm daemon started (PID N)» nell'istante in cui
+  `spawn()` ritornava, senza controllare nulla (`main.rs:3050-3062`). Se il figlio
+  moriva subito — porta occupata è il caso comune — l'operatore riceveva comunque
+  un messaggio di successo, un pidfile che punta a un processo inesistente e
+  **exit code 0**. Lo script di chi testa prova allora a uccidere un PID che non
+  c'è più, mentre il server *precedente* continua a rispondere: le richieste
+  successive finiscono su un server avviato con flag diversi, senza che niente lo
+  segnali.
+  Non è teoria: è successo nei report dell'issue #140 su cinque macchine, ed è il
+  motivo per cui non sappiamo con certezza quale server abbia risposto a quali
+  query nei blocchi con `--cache-type-k q4_0`. Ha invalidato in silenzio parte di
+  una raccolta dati fatta da qualcun altro con il suo tempo.
+  Chiuso: dopo lo spawn si attende `DAEMON_STARTUP_GRACE` (1200 ms) controllando
+  `try_wait()`. Se il figlio è già uscito si stampano il suo codice e le ultime
+  dieci righe del suo log — che è dove sono finite le sue diagnostiche — non si
+  scrive alcun pidfile (uno stantio è peggio di nessuno, perché uno script di stop
+  ci crede) e si esce con 1. Verificato: avvio pulito → PID vivo ed exit 0; stessa
+  porta due volte → errore del figlio riportato, nessun pidfile, exit 1.
+
+- [x] **H2-Q · Il registro di audit si corrompeva sotto concorrenza** *(P0)*
+  Trovato dallo smoke test al giro finale di verifica, non da una revisione:
+  `audit records written — unreadable: Extra data: line 1 column 204`.
+  `persist` usava `writeln!(file, "{json}")`, e `writeln!` passa da `write_fmt`,
+  che emette **due syscall** — una per il valore formattato e una per il newline.
+  Con `O_APPEND` ogni singola write è atomica, ma due scrittori concorrenti si
+  intrecciano *fra* le due: il risultato è `{a}{b}\n\n`, cioè una riga con due
+  record dentro e un file JSONL che non è più JSONL.
+  Gravità: è il registro che esiste per essere una prova difendibile ai fini
+  dell'AI Act, e `read_all` su un file così o fallisce o scarta record in
+  silenzio. Il difetto si manifesta solo sotto carico concorrente, cioè
+  esattamente in produzione e mai in un test manuale.
+  Chiuso costruendo la riga completa e facendo **una sola** `write_all`. Test di
+  regressione con 8 thread × 40 record e lunghezze variabili (così un intreccio
+  non può essere mascherato da record tutti uguali): contro il codice vecchio
+  fallisce con **275 righe su 320 — 45 record persi**; con il fix passa, e due
+  esecuzioni consecutive dello smoke test danno 33 PASS / 0 FAIL.
+  Da notare per il metodo: questo non lo avremmo mai trovato leggendo il codice
+  o testando a mano. L'ha trovato un harness che manda 8 richieste insieme.
+
+### Verificato e **non** indotto da noi
+
+Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
+perché ognuna di queste era un sospetto plausibile:
+
+| sospetto | verdetto |
+|---|---|
+| Politica flash attention | **Corretta.** Passiamo AUTO (-1), non ENABLED, quindi llama.cpp fa la sua verifica di compatibilità (`inference/mod.rs:134-149`). Che poi AUTO non intercetti le chiavi a 4 bit è un limite a monte, non una nostra forzatura. |
+| BOS aggiunto due volte | **No.** `AddBos::Always` è `add_special=true`, e `llama_tokenize` lo applica solo se il vocabolario dichiara `add_bos_token` — che Qwen3 mette a false. |
+| Divisione del contesto = bug | **No, è il comportamento anche di `llama-server`.** Il difetto è il *default* (H2-N), non la semantica. |
+| Overhead dello scheduler su singola richiesta | **Nessuno di misurabile**: 42,7 tok/s con `--batch-size 4` contro 39,6 sequenziale, stessa macchina. |
+| Default di sampling diversi da llama.cpp | **Diversi ma deliberati**: seguiamo Ollama (temp 0.8, top_k 40, top_p 0.9, repeat_penalty 1.1) mentre llama.cpp usa top_p 0.95, `min_p 0.05`, repeat_penalty 1.0. L'unico che vale la pena riconsiderare è `min_p`: a 0.0 non filtriamo la coda della distribuzione, e su una macchina dai numeri marginali è meno protettivo. Da valutare, non un bug. |
 
 ---
 

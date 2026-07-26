@@ -605,6 +605,51 @@ def check_inference(rep: Report, api: str, model: str) -> dict:
     except Exception as e:
         rep.add("inference: /api/chat NDJSON streaming", False, str(e))
 
+    # A truncated answer must say so. Until v0.6.36 done_reason was the literal
+    # string "stop" in eleven hardcoded places, so an answer cut off by the
+    # token budget was indistinguishable from one the model chose to end — which
+    # is how truncation gets read as the model being broken.
+    try:
+        code, body = post(
+            f"{api}/api/chat",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "Count slowly from 1 to 200."}],
+                "think": False,
+                "stream": False,
+                "options": {"num_predict": 8, "temperature": 0},
+            },
+        )
+        reason = body.get("done_reason") if isinstance(body, dict) else None
+        rep.add(
+            "a truncated answer reports done_reason=length",
+            code == 200 and reason == "length",
+            f"http={code}, done_reason={reason!r} (capped at 8 tokens)",
+        )
+    except Exception as e:
+        rep.add("a truncated answer reports done_reason=length", False, str(e))
+
+    # ...and one that ends on its own must not claim it was truncated.
+    try:
+        code, body = post(
+            f"{api}/api/chat",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with exactly: ok"}],
+                "think": False,
+                "stream": False,
+                "options": {"num_predict": 200, "temperature": 0},
+            },
+        )
+        reason = body.get("done_reason") if isinstance(body, dict) else None
+        rep.add(
+            "a complete answer reports done_reason=stop",
+            code == 200 and reason == "stop",
+            f"http={code}, done_reason={reason!r}",
+        )
+    except Exception as e:
+        rep.add("a complete answer reports done_reason=stop", False, str(e))
+
     # OpenAI SSE: `data: ` prefixed chunks terminated by `data: [DONE]`.
     try:
         lines = list(

@@ -190,7 +190,16 @@ impl AuditLogger {
             .append(true)
             .open(&self.log_path)?;
 
-        writeln!(file, "{json}")?;
+        // One write, not two. `writeln!` goes through `write_fmt`, which issues
+        // a separate syscall for the formatted value and for the newline. Under
+        // O_APPEND each individual write is atomic, but two concurrent writers
+        // interleave *between* them, producing `{a}{b}\n\n` — one line holding
+        // two records, and a JSONL file that no longer parses. Found by the
+        // release smoke test's eight-concurrent-request check, on an audit trail
+        // whose entire purpose is to be a defensible record.
+        let mut line = json;
+        line.push('\n');
+        file.write_all(line.as_bytes())?;
 
         Ok(())
     }
@@ -330,5 +339,62 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(tmp_dir);
+    }
+}
+
+#[cfg(test)]
+mod concurrent_append_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    /// Every record must survive concurrent writers, intact and on its own line.
+    ///
+    /// The regression: `writeln!` on a `File` is two syscalls, so two threads
+    /// could interleave between the JSON and its newline and leave a line with
+    /// two records on it. `read_all` then either fails or silently drops
+    /// entries — on a trail that exists to be a defensible record of what the
+    /// system did.
+    #[test]
+    fn concurrent_writers_never_interleave_a_line() {
+        let dir = std::env::temp_dir().join(format!("eullm-audit-race-{}", Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("audit.jsonl");
+        let logger = Arc::new(AuditLogger::with_path(path.clone()));
+
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 40;
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let logger = Arc::clone(&logger);
+                std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        // Vary the length so an interleave cannot be masked by
+                        // every record happening to be the same size.
+                        let model = format!("model-{t}-{}", "x".repeat(i % 17));
+                        let mut e = AuditEntry::new(model, "chat".to_string());
+                        e.input_tokens = i as u32;
+                        logger.log(&e);
+                    }
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let contents = fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            THREADS * PER_THREAD,
+            "every record must be on exactly one line"
+        );
+        for (n, line) in lines.iter().enumerate() {
+            serde_json::from_str::<AuditEntry>(line)
+                .unwrap_or_else(|e| panic!("line {} does not parse: {e}\n{line}", n + 1));
+        }
+        assert_eq!(logger.read_all().unwrap().len(), THREADS * PER_THREAD);
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

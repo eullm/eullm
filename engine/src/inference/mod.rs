@@ -289,6 +289,124 @@ pub fn parse_cache_type(s: &str) -> Result<KvCacheType, String> {
     }
 }
 
+/// How many threads to run inference on when the user did not say.
+///
+/// # Why not simply every logical CPU
+///
+/// That is what this used to do, via `available_parallelism()`, and it is
+/// measurably wrong on two very common machines:
+///
+/// * **Hyperthreaded x86.** ggml's decode is SIMD- and memory-bandwidth-bound,
+///   so two threads sharing one core's execution units do not do twice the
+///   work — they contend. On a 6-core/12-thread i9 we were asking for 12.
+/// * **Apple Silicon.** `available_parallelism()` counts efficiency cores, and
+///   ggml splits a graph evenly across its threads, so every step ends up
+///   waiting on the slowest one. Four performance cores plus four efficiency
+///   cores run *slower* than four performance cores alone.
+///
+/// Measured on a 4-core machine with no SMT at all, where over-subscription is
+/// the only variable: 41.9 tok/s at 4 threads, 16.9 at 8, 14.6 at 12. Asking
+/// for more threads than there are cores to run them costs about 60% of
+/// throughput. That is not a rounding error, and on a thermally limited laptop
+/// it compounds — more AVX-heavy threads means more power, means a lower
+/// sustained clock.
+///
+/// So this mirrors what `llama-cli` does (`common_cpu_get_num_math` →
+/// `common_cpu_get_num_physical_cores`): performance physical cores, falling
+/// back to all physical cores, falling back to the logical count when the
+/// platform will not tell us. Matching the reference implementation is also
+/// what makes a like-for-like benchmark against it meaningful.
+pub fn default_thread_count() -> u32 {
+    physical_core_count().unwrap_or_else(logical_core_count)
+}
+
+/// Logical CPUs — the last-resort answer, and the previous default.
+fn logical_core_count() -> u32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get() as u32)
+        .unwrap_or(4)
+}
+
+/// Performance physical cores, or `None` when the platform cannot say.
+#[cfg(target_os = "macos")]
+fn physical_core_count() -> Option<u32> {
+    // `hw.perflevel0.physicalcpu` is the performance-core count on Apple
+    // Silicon and equals `hw.physicalcpu` on Intel Macs, so one query covers
+    // both and the second is only a fallback for older kernels.
+    sysctl_u32("hw.perflevel0.physicalcpu")
+        .or_else(|| sysctl_u32("hw.physicalcpu"))
+        .filter(|&n| n > 0)
+}
+
+#[cfg(target_os = "macos")]
+fn sysctl_u32(name: &str) -> Option<u32> {
+    use std::ffi::CString;
+    let cname = CString::new(name).ok()?;
+    let mut value: i32 = 0;
+    let mut len = std::mem::size_of::<i32>();
+    // SAFETY: `cname` is a valid NUL-terminated string for the duration of the
+    // call, and `value`/`len` are a correctly sized out-parameter pair.
+    let rc = unsafe {
+        libc::sysctlbyname(
+            cname.as_ptr(),
+            (&raw mut value).cast::<libc::c_void>(),
+            &raw mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc == 0 && value > 0 {
+        Some(value as u32)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn physical_core_count() -> Option<u32> {
+    let cpuinfo = std::fs::read_to_string("/proc/cpuinfo").ok()?;
+    parse_physical_cores(&cpuinfo)
+}
+
+/// Count distinct `(physical id, core id)` pairs in `/proc/cpuinfo`.
+///
+/// Split out from the file read so the parsing is testable against real
+/// `/proc/cpuinfo` shapes without needing the matching hardware.
+#[cfg(target_os = "linux")]
+fn parse_physical_cores(cpuinfo: &str) -> Option<u32> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let (mut pkg, mut core) = (None, None);
+    for line in cpuinfo.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            // A blank line ends one processor block. Record whatever it had.
+            if line.trim().is_empty()
+                && let (Some(p), Some(c)) = (pkg.take(), core.take())
+            {
+                seen.insert((p, c));
+            }
+            continue;
+        };
+        match key.trim() {
+            "physical id" => pkg = Some(value.trim().to_string()),
+            "core id" => core = Some(value.trim().to_string()),
+            _ => {}
+        }
+    }
+    // The last block may not be followed by a blank line.
+    if let (Some(p), Some(c)) = (pkg, core) {
+        seen.insert((p, c));
+    }
+    // Kernels on some architectures omit these fields entirely (notably ARM),
+    // in which case we learned nothing and should say so rather than answer 0.
+    (!seen.is_empty()).then_some(seen.len() as u32)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn physical_core_count() -> Option<u32> {
+    None
+}
+
 /// Whether a KV cache type is a four-bit quantization.
 ///
 /// Split out because keys and values are not equally tolerant of it. A 4-bit
@@ -573,6 +691,40 @@ pub struct GenerateResult {
     pub tokens_generated: u32,
     pub tokens_prompt: u32,
     pub duration_ms: u64,
+    /// Why generation ended — see [`StopReason`]. Carried here for the same
+    /// reason it is carried on the streaming event: without it the API cannot
+    /// tell a finished answer from a truncated one.
+    pub stop_reason: StopReason,
+}
+
+/// Why generation stopped.
+///
+/// This exists because the API used to report `"stop"` unconditionally, in
+/// eleven separate hardcoded places, and the scheduler never told it anything
+/// else. An answer cut off because the sequence ran out of context was
+/// therefore indistinguishable from one the model chose to end — which is
+/// exactly how a truncated answer gets read as the model being broken. Ollama
+/// reports `"length"` for this and OpenAI reports `finish_reason: "length"`;
+/// we now do too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// The model emitted an end-of-generation token, or a configured stop
+    /// sequence matched. The answer is complete.
+    Stop,
+    /// The token budget ran out: either the caller's `num_predict`/`max_tokens`
+    /// or, more often, the context left for this sequence. The answer is
+    /// **truncated**.
+    Length,
+}
+
+impl StopReason {
+    /// The string Ollama and OpenAI clients expect.
+    pub fn as_api_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+        }
+    }
 }
 
 /// A single token event emitted during streaming generation.
@@ -585,6 +737,8 @@ pub enum StreamEvent {
         tokens_generated: u32,
         tokens_prompt: u32,
         duration_ms: u64,
+        /// Why generation ended — see [`StopReason`].
+        stop_reason: StopReason,
     },
     /// An error occurred during generation.
     Error(String),
@@ -911,6 +1065,10 @@ impl InferenceEngine {
         let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
+        // Assume truncation and prove otherwise: the loop can end by exhausting
+        // its token budget, and that is the case the API used to misreport as a
+        // clean stop.
+        let mut stop_reason = StopReason::Length;
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             // Sample from the last output (-1). After prompt decode there is
@@ -921,6 +1079,7 @@ impl InferenceEngine {
 
             // End of generation?
             if self.model.is_eog_token(token) {
+                stop_reason = StopReason::Stop;
                 break;
             }
 
@@ -964,6 +1123,7 @@ impl InferenceEngine {
             tokens_generated,
             tokens_prompt,
             duration_ms,
+            stop_reason,
         })
     }
 
@@ -1130,12 +1290,17 @@ impl InferenceEngine {
         let mut n_cur = tokens_prompt as i32;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
+        // Assume truncation and prove otherwise: the loop can end by exhausting
+        // its token budget, and that is the case the API used to misreport as a
+        // clean stop.
+        let mut stop_reason = StopReason::Length;
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
 
             if self.model.is_eog_token(token) {
+                stop_reason = StopReason::Stop;
                 break;
             }
 
@@ -1168,6 +1333,7 @@ impl InferenceEngine {
                     }
 
                     if stopped {
+                        stop_reason = StopReason::Stop;
                         break;
                     }
 
@@ -1200,6 +1366,7 @@ impl InferenceEngine {
             tokens_generated,
             tokens_prompt,
             duration_ms,
+            stop_reason,
         });
     }
 
@@ -1441,11 +1608,16 @@ impl InferenceEngine {
         let mut n_cur = new_n_past;
         let mut tokens_generated: u32 = 0;
         let mut batch = LlamaBatch::new(1, 1);
+        // Assume truncation and prove otherwise: the loop can end by exhausting
+        // its token budget, and that is the case the API used to misreport as a
+        // clean stop.
+        let mut stop_reason = StopReason::Length;
 
         while n_cur <= n_len && tokens_generated < max_tokens {
             let token = sampler.sample(&ctx, -1);
             sampler.accept(token);
             if self.model.is_eog_token(token) {
+                stop_reason = StopReason::Stop;
                 break;
             }
 
@@ -1472,6 +1644,7 @@ impl InferenceEngine {
                         }
                     }
                     if stopped {
+                        stop_reason = StopReason::Stop;
                         break;
                     }
                     if tx.blocking_send(StreamEvent::Token(piece)).is_err() {
@@ -1500,6 +1673,7 @@ impl InferenceEngine {
             tokens_generated,
             tokens_prompt,
             duration_ms,
+            stop_reason,
         });
     }
 }
@@ -1641,5 +1815,102 @@ mod flash_attn_kv_correction_tests {
         let (twice, corrected) = correct_kv_cache_for_flash_attn(once, true);
         assert!(!corrected);
         assert_eq!(once, twice);
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod physical_core_tests {
+    use super::*;
+
+    #[test]
+    fn counts_cores_not_hyperthreads() {
+        // A 2-core/4-thread part: two logical CPUs share each core id.
+        let cpuinfo = "\
+processor\t: 0
+physical id\t: 0
+core id\t\t: 0
+
+processor\t: 1
+physical id\t: 0
+core id\t\t: 1
+
+processor\t: 2
+physical id\t: 0
+core id\t\t: 0
+
+processor\t: 3
+physical id\t: 0
+core id\t\t: 1
+";
+        assert_eq!(parse_physical_cores(cpuinfo), Some(2));
+    }
+
+    #[test]
+    fn counts_across_sockets() {
+        // Same core ids on two packages must not collapse into one.
+        let cpuinfo = "\
+processor\t: 0
+physical id\t: 0
+core id\t\t: 0
+
+processor\t: 1
+physical id\t: 1
+core id\t\t: 0
+";
+        assert_eq!(parse_physical_cores(cpuinfo), Some(2));
+    }
+
+    #[test]
+    fn the_last_block_counts_even_without_a_trailing_blank_line() {
+        let cpuinfo = "processor\t: 0\nphysical id\t: 0\ncore id\t\t: 0";
+        assert_eq!(parse_physical_cores(cpuinfo), Some(1));
+    }
+
+    #[test]
+    fn absent_topology_yields_none_rather_than_zero() {
+        // Many ARM kernels omit `core id` entirely. Answering 0 there would be
+        // worse than admitting we don't know and using the logical count.
+        let cpuinfo = "processor\t: 0\nBogoMIPS\t: 108.00\n\nprocessor\t: 1\n";
+        assert_eq!(parse_physical_cores(cpuinfo), None);
+        assert_eq!(parse_physical_cores(""), None);
+    }
+
+    #[test]
+    fn the_default_is_sane_on_whatever_machine_runs_the_tests() {
+        let t = default_thread_count();
+        assert!(t >= 1, "must never be zero");
+        assert!(
+            t <= logical_core_count(),
+            "physical cores ({t}) cannot exceed logical ({})",
+            logical_core_count()
+        );
+    }
+}
+
+#[cfg(test)]
+mod stop_reason_tests {
+    use super::*;
+
+    #[test]
+    fn the_api_strings_are_what_ollama_and_openai_expect() {
+        // These land verbatim in `done_reason` and `finish_reason`, and clients
+        // branch on them — "length" is how a caller learns to ask for more.
+        assert_eq!(StopReason::Stop.as_api_str(), "stop");
+        assert_eq!(StopReason::Length.as_api_str(), "length");
+    }
+
+    #[test]
+    fn a_generate_result_carries_its_reason() {
+        // Guards the field being dropped in a refactor: the whole point is that
+        // the non-streaming path can distinguish the two, which it could not
+        // before because the API hardcoded "stop" in eleven places.
+        let r = GenerateResult {
+            text: "x".into(),
+            tokens_generated: 1,
+            tokens_prompt: 1,
+            duration_ms: 1,
+            stop_reason: StopReason::Length,
+        };
+        assert_eq!(r.stop_reason.as_api_str(), "length");
     }
 }
