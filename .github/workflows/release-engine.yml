@@ -145,9 +145,11 @@ jobs:
             # SIGILL crash instead of a slow-but-working binary — see
             # docs/x86-64-baseline.md for the compatibility trade-off writeup.
             rustflags: "-C target-cpu=x86-64-v3"
+            features: multimodal
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04
             artifact: eullm-linux-arm64
+            features: multimodal
           - target: x86_64-apple-darwin
             # Native Intel runner, NOT macos-15 (Apple Silicon) with a
             # cross-compile. This was the last unexamined variable behind the
@@ -166,19 +168,22 @@ jobs:
             # Same x86-64-v3 baseline as eullm-linux-x64 above — see that
             # entry's comment.
             #
-            # This target carries no `features:` entry, and from v0.6.39 that
+            # This target carries no `metal` feature, and from v0.6.39 that
             # genuinely means no Metal. Between v0.6.30 and v0.6.38 it did
             # not: ggml's CMake enables the Metal backend on every Apple
             # target regardless of cargo features, so dropping the feature
             # changed nothing and this binary kept offloading whole models
             # onto Intel-Mac GPUs (issue #140). llama-cpp-sys-2's build.rs now
             # passes -DGGML_METAL=OFF when the feature is absent, matching how
-            # llama.cpp builds its own macOS x64 release.
+            # llama.cpp builds its own macOS x64 release. `multimodal` is
+            # unrelated to that: it compiles llama.cpp's mtmd helper and
+            # touches no backend.
             rustflags: "-C target-cpu=x86-64-v3"
+            features: multimodal
           - target: aarch64-apple-darwin
             os: macos-15
             artifact: eullm-macos-arm64
-            features: metal
+            features: metal,multimodal
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -572,7 +577,7 @@ jobs:
         run: sudo DEBIAN_FRONTEND=noninteractive apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential pkg-config libssl-dev
 
       - name: Build engine (CIX P1 profile)
-        run: cargo build --release -p eullm-engine
+        run: cargo build --release --features multimodal -p eullm-engine
         env:
           # Read by engine/vendor/llama-cpp-rs/llama-cpp-sys-2/build.rs; falls
           # back to the generic armv8-a baseline everywhere this isn't set.
@@ -655,7 +660,7 @@ jobs:
           # Same x86-64-v3 baseline as eullm-linux-x64/eullm-macos-x64 — see
           # docs/x86-64-baseline.md.
           RUSTFLAGS: "-C target-cpu=x86-64-v3"
-        run: cargo build --release --target x86_64-pc-windows-msvc -p eullm-engine
+        run: cargo build --release --target x86_64-pc-windows-msvc --features multimodal -p eullm-engine
 
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
