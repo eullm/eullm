@@ -243,6 +243,34 @@ impl ModelStore {
         None
     }
 
+    /// The directory this store reads and writes, and where that came from.
+    ///
+    /// Printed by `eullm list` and at server startup because the alternative
+    /// is what happened in practice: `list` showed a model as installed while
+    /// the API answered 404 for the same name, and both were right, because
+    /// the two processes had different roots. Nothing anywhere said which
+    /// directory was in use. The audit trail already reports its own path at
+    /// startup; the model store not doing so was an inconsistency, not a
+    /// decision.
+    pub fn root_with_source(&self) -> (&Path, &'static str) {
+        let source = if std::env::var_os("EULLM_MODELS_DIR").is_some() {
+            "EULLM_MODELS_DIR"
+        } else {
+            "default"
+        };
+        (&self.root, source)
+    }
+
+    /// Whether the GGUF this manifest names is actually on disk.
+    ///
+    /// `status` is a string copied into the manifest when the model was
+    /// pulled, so it keeps saying `ready` after the file is gone or was never
+    /// fully written. A listing that repeats it without looking is how a user
+    /// ends up trusting a model that cannot load.
+    pub fn is_present(&self, id: &str) -> bool {
+        self.gguf_path(id).is_some()
+    }
+
     /// List all locally available models.
     pub fn list(&self) -> Result<Vec<ModelManifest>, Box<dyn std::error::Error>> {
         let mut models = Vec::new();

@@ -1078,6 +1078,30 @@ esterni non si fidano dei valori che leggono.
   compila e nient'altro. Il difetto era invisibile a 191 test e visibile alla
   prima richiesta vera.
 
+- [x] **H2-W · Niente diceva quale archivio di modelli era in uso** *(P1)*
+  Trovata inciampandoci: `eullm list` mostrava `gemma-4-e4b ready` mentre l'API
+  rispondeva 404 per lo stesso nome. **Entrambe avevano ragione**, perché i due
+  processi leggevano directory diverse — una con `EULLM_MODELS_DIR` impostata,
+  l'altra senza. Nessuno dei due lo diceva, quindi la diagnosi è costata tre
+  scambi e un manifest ricostruito a mano per un modello che stava altrove.
+
+  L'incoerenza era già visibile nel codice: all'avvio il server stampa la
+  destinazione dell'**audit**, l'allowlist degli IP, le origini permesse. Non
+  la directory dei modelli, che è quella su cui risolve ogni richiesta.
+
+  Chiuso stampandola dove serve. `list` intesta l'elenco con
+  `Models in <root> [EULLM_MODELS_DIR|default]`, e lo dice anche quando
+  l'elenco è vuoto — che è il caso in cui serve di più. Il server la registra
+  all'avvio accanto alle altre righe di configurazione.
+
+  **Secondo difetto trovato nello stesso giro**: `list` riportava `status`
+  copiandolo dal manifest, che è una stringa scritta al momento del pull. Un
+  modello il cui GGUF non c'è più, o non è mai arrivato, restava `ready` per
+  sempre. Ora la colonna guarda il disco: `ready (file missing)` quando il file
+  che il manifest nomina non esiste. È lo stesso vizio di H2-T e del banner GPU
+  — riportare ciò che è scritto da qualche parte invece di ciò che è vero — e
+  fa la terza volta in due giorni.
+
 ### Verificato e **non** indotto da noi
 
 Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
