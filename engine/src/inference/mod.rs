@@ -647,6 +647,15 @@ pub const DEFAULT_HARMONY_FILTERS: &[&str] = &[
     "<|channel>thought<channel|>",
     "<|channel>analysis<channel|>",
     "<|channel>final<channel|>",
+    // Same blocks with a newline after the role word. Gemma 4 12B emits
+    // exactly this, observed on a real request: `<|channel>thought\n<channel|>`
+    // immediately followed by the answer. Because filtering is literal
+    // substring matching, the no-newline forms above do not cover it, and the
+    // scaffolding reached the user. Found by running the multimodal path for
+    // the first time rather than by reading the code.
+    "<|channel>thought\n<channel|>",
+    "<|channel>analysis\n<channel|>",
+    "<|channel>final\n<channel|>",
     "<|message|>",
     // Stray non-channel markers — for mid-sentence leakage we have no UX for.
     // Note: we deliberately do NOT scrub bare `<|channel>` / `<channel|>` as
@@ -1569,8 +1578,16 @@ impl InferenceEngine {
             match MtmdBitmap::from_buffer(mtmd_ctx, bytes, false) {
                 Ok(b) => bitmaps.push(b),
                 Err(e) => {
+                    // `NullResult` on its own tells the caller nothing, and the
+                    // most common cause is simply an unsupported container: a
+                    // .webp fails exactly like a corrupt file does. Name the
+                    // formats so the answer is in the error rather than in the
+                    // source.
                     let _ = tx.blocking_send(StreamEvent::Error(format!(
-                        "Media #{i} failed to decode: {e:?}"
+                        "Media #{i} failed to decode ({e:?}). Supported images \
+                         are jpg, png, bmp and gif, and audio is wav, mp3 or \
+                         flac. Other containers, webp among them, are not \
+                         decoded by the multimodal backend."
                     )));
                     return;
                 }
@@ -1984,6 +2001,43 @@ core id\t\t: 0
 #[cfg(test)]
 mod think_filter_tests {
     use super::*;
+
+    // The exact bytes Gemma 4 12B produced on a real multimodal request. The
+    // no-newline form was in the list, this one was not, and the scaffolding
+    // reached the user because filtering is literal substring matching.
+    #[test]
+    fn the_gemma_channel_preamble_with_a_newline_is_filtered() {
+        let filters: Vec<String> = default_filters(true);
+        let mut pending = String::new();
+        let piece = "<|channel>thought\n<channel|>A small metallic device.";
+        match output::process_piece(&mut pending, &[], &filters, piece) {
+            output::PieceOutcome::Emit(out) => {
+                assert!(!out.contains("<|channel>"), "leaked opener: {out:?}");
+                assert!(!out.contains("<channel|>"), "leaked closer: {out:?}");
+                assert!(
+                    out.contains("A small metallic device."),
+                    "ate the answer: {out:?}"
+                );
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
+
+    // A block WITH content between the tags must still pass through: the UI
+    // renders it as a reasoning section, and scrubbing the bare delimiters used
+    // to leave the reasoning as naked text with no marker.
+    #[test]
+    fn a_channel_block_carrying_content_is_left_alone() {
+        let filters: Vec<String> = default_filters(true);
+        let mut pending = String::new();
+        let piece = "<|channel>thought\nreasoning here<channel|>answer";
+        match output::process_piece(&mut pending, &[], &filters, piece) {
+            output::PieceOutcome::Emit(out) => {
+                assert!(out.contains("reasoning here"), "{out:?}");
+            }
+            other => panic!("unexpected outcome: {other:?}"),
+        }
+    }
 
     #[test]
     fn think_true_leaves_the_tags_alone() {
