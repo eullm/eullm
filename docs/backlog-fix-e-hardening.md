@@ -1078,6 +1078,43 @@ esterni non si fidano dei valori che leggono.
   compila e nient'altro. Il difetto era invisibile a 191 test e visibile alla
   prima richiesta vera.
 
+- [x] **H2-V · Un `manifest.json` danneggiato nascondeva tutti i modelli** *(P1)*
+  Segnalato dal campo, non da una revisione: `eullm list` rispondeva
+  `Error listing models: expected ',' or '}' at line 24 column 3` e basta.
+  Nessun elenco, e nessuna indicazione di quale directory fosse il problema.
+
+  Due difetti che si alimentano a vicenda, ed è importante vederli entrambi
+  perché correggerne uno solo lascia il sistema fragile:
+
+  1. **Scrittura non atomica** (`store.rs`): `fs::write` tronca il file e poi
+     scrive. Un processo che muore in mezzo — crash, `kill`, disco pieno —
+     lascia un percorso valido con dentro contenuto invalido. È così che il
+     manifest si rompe.
+  2. **Lettura intollerante**: `list()` faceva `serde_json::from_str(&data)?`,
+     e quel `?` propaga. **Un** manifest rotto rendeva invisibili **tutti** gli
+     altri modelli. Le due funzioni sorelle nello stesso file
+     (`store.rs:186` e `:221`) erano già tolleranti: la sola severa era quella
+     che l'utente lancia davvero.
+
+  Chiuso su entrambi i fronti. La scrittura passa da `write_atomically`, che
+  scrive su un file temporaneo **nella stessa directory** — un rename fra
+  filesystem non è atomico e ricadrebbe in una copia, cioè proprio il modo di
+  guasto da evitare — e poi rinomina. `std::fs::rename` sostituisce la
+  destinazione esistente sia su Unix sia su Windows, quindi il lettore vede o
+  il vecchio manifest o il nuovo, mai un prefisso di uno dei due. La lettura
+  salta il manifest illeggibile con un warning che **nomina il file** e dice
+  cosa fare.
+
+  Verificato riproducendo il sintomo su un archivio con un manifest troncato:
+  il binario pubblicato stampa solo l'errore del parser, quello corretto elenca
+  il modello sano e nomina quello rotto. Quattro test, inclusi i due che
+  coprono l'atomicità.
+
+  Nota sul fixture: la prima versione del test passava per il motivo sbagliato,
+  perché il manifest "sano" che avevo scritto era incompleto e veniva scartato
+  anche lui — l'elenco risultava vuoto e l'asserzione lo prendeva per un
+  successo. Un test che non distingue i due casi non verifica niente.
+
 - [x] **H2-W · Niente diceva quale archivio di modelli era in uso** *(P1)*
   Trovata inciampandoci: `eullm list` mostrava `gemma-4-e4b ready` mentre l'API
   rispondeva 404 per lo stesso nome. **Entrambe avevano ragione**, perché i due

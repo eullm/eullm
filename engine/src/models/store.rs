@@ -72,6 +72,28 @@ pub struct ModelStore {
     root: PathBuf,
 }
 
+/// Write a file so a reader never sees it half-written.
+///
+/// `fs::write` truncates first and writes after, so a process that dies in
+/// between leaves a valid path holding invalid content. For `manifest.json`
+/// that turns into a parse error on the next `eullm list`, and the model looks
+/// as though it were never pulled. Seen in the field.
+///
+/// Writing to a sibling temporary file and renaming makes the swap atomic on
+/// every platform we ship: `std::fs::rename` replaces an existing destination
+/// on Unix and on Windows alike. The reader therefore observes either the old
+/// manifest or the new one, never a prefix of either.
+///
+/// The temporary file sits in the destination's own directory on purpose. A
+/// rename across filesystems is not atomic and would fall back to a copy,
+/// which is the failure mode this exists to avoid.
+fn write_atomically(path: &Path, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, contents)?;
+    fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 impl ModelStore {
     /// Create a store at the default location (`~/.eullm/models/`), or at
     /// `$EULLM_MODELS_DIR` when set.
@@ -127,7 +149,7 @@ impl ModelStore {
 
         let manifest_path = model_dir.join("manifest.json");
         let json = serde_json::to_string_pretty(&manifest)?;
-        fs::write(&manifest_path, json)?;
+        write_atomically(&manifest_path, &json)?;
 
         Ok(model_dir)
     }
@@ -168,7 +190,7 @@ impl ModelStore {
 
         let manifest_path = model_dir.join("manifest.json");
         let json = serde_json::to_string_pretty(&manifest)?;
-        fs::write(&manifest_path, json)?;
+        write_atomically(&manifest_path, &json)?;
 
         Ok(model_dir)
     }
@@ -284,8 +306,34 @@ impl ModelStore {
             if entry.file_type()?.is_dir() {
                 let manifest_path = entry.path().join("manifest.json");
                 if manifest_path.exists() {
-                    let data = fs::read_to_string(&manifest_path)?;
-                    let mut manifest: ModelManifest = serde_json::from_str(&data)?;
+                    // One damaged manifest must not hide every other model.
+                    // This used to propagate with `?`, so a single truncated
+                    // file made `eullm list` print a bare parser position and
+                    // nothing else: no list, and no clue which directory was
+                    // at fault. Reported from the field as
+                    // "expected ',' or '}' at line 24 column 3".
+                    //
+                    // Note the two sibling readers below already tolerate this
+                    // (`if let Ok(manifest) = ...`); the listing was the strict
+                    // one, and it is the one people actually run.
+                    let data = match fs::read_to_string(&manifest_path) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            tracing::warn!("skipping {}: {e}", manifest_path.display());
+                            continue;
+                        }
+                    };
+                    let mut manifest: ModelManifest = match serde_json::from_str(&data) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            tracing::warn!(
+                                "skipping {}: {e}. Delete that directory and pull the model \
+                                 again to repair it.",
+                                manifest_path.display()
+                            );
+                            continue;
+                        }
+                    };
                     // Backfill the addressable id from the directory name for
                     // manifests written before the `id` field existed.
                     if manifest.id.is_empty()
@@ -486,6 +534,99 @@ mod safe_filename_tests {
             );
             assert_eq!(joined.parent(), Some(base));
         }
+    }
+}
+
+#[cfg(test)]
+mod manifest_robustness_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    // Every non-defaulted field of ModelManifest. A fixture missing one is
+    // rejected exactly like a truncated file, which would make the test below
+    // pass for the wrong reason.
+    const GOOD: &str = r#"{
+        "id": "good", "name": "Good", "description": "d", "languages": ["en"],
+        "base": "b", "vram_gb": 2, "size_bytes": 1, "license": "Apache-2.0",
+        "digest": "sha256:0", "pulled_at": "2026-07-27T00:00:00Z",
+        "status": "ready", "gguf_file": "g.gguf"
+    }"#;
+    // The shape reported from the field: a write that stopped partway.
+    const TRUNCATED: &str = "{\n  \"id\": \"broken\",\n  \"name\": \"Bro";
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let d = std::env::temp_dir().join(format!("eullm-store-{}", Uuid::new_v4()));
+            fs::create_dir_all(&d).expect("mkdir");
+            Self(d)
+        }
+        fn model(&self, name: &str, manifest: &str) {
+            let d = self.0.join(name);
+            fs::create_dir_all(&d).expect("mkdir");
+            fs::write(d.join("manifest.json"), manifest).expect("write");
+        }
+        fn store(&self) -> ModelStore {
+            ModelStore {
+                root: self.0.clone(),
+            }
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn one_damaged_manifest_does_not_hide_the_others() {
+        let s = Scratch::new();
+        s.model("good", GOOD);
+        s.model("broken", TRUNCATED);
+        let listed = s
+            .store()
+            .list()
+            .expect("listing must survive a bad manifest");
+        let ids: Vec<&str> = listed.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"good"), "the healthy model vanished: {ids:?}");
+        assert!(
+            !ids.contains(&"broken"),
+            "the damaged one must be skipped: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn a_directory_without_a_manifest_is_ignored() {
+        let s = Scratch::new();
+        s.model("good", GOOD);
+        fs::create_dir_all(s.0.join("empty")).expect("mkdir");
+        assert_eq!(s.store().list().expect("list").len(), 1);
+    }
+
+    // The other half of the defect. If the write is not atomic, an interrupted
+    // one produces exactly the truncated file the test above has to tolerate.
+    #[test]
+    fn an_atomic_write_leaves_no_temporary_behind() {
+        let s = Scratch::new();
+        let target = s.0.join("manifest.json");
+        write_atomically(&target, GOOD).expect("write");
+        assert_eq!(fs::read_to_string(&target).expect("read"), GOOD);
+        let leftovers: Vec<String> = fs::read_dir(&s.0)
+            .expect("readdir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "temporary left behind: {leftovers:?}");
+    }
+
+    #[test]
+    fn an_atomic_write_replaces_existing_content_whole() {
+        let s = Scratch::new();
+        let target = s.0.join("manifest.json");
+        write_atomically(&target, "{\"id\":\"old\"}").expect("first");
+        write_atomically(&target, GOOD).expect("second");
+        assert_eq!(fs::read_to_string(&target).expect("read"), GOOD);
     }
 }
 
