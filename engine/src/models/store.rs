@@ -265,6 +265,34 @@ impl ModelStore {
         None
     }
 
+    /// The directory this store reads and writes, and where that came from.
+    ///
+    /// Printed by `eullm list` and at server startup because the alternative
+    /// is what happened in practice: `list` showed a model as installed while
+    /// the API answered 404 for the same name, and both were right, because
+    /// the two processes had different roots. Nothing anywhere said which
+    /// directory was in use. The audit trail already reports its own path at
+    /// startup; the model store not doing so was an inconsistency, not a
+    /// decision.
+    pub fn root_with_source(&self) -> (&Path, &'static str) {
+        let source = if std::env::var_os("EULLM_MODELS_DIR").is_some() {
+            "EULLM_MODELS_DIR"
+        } else {
+            "default"
+        };
+        (&self.root, source)
+    }
+
+    /// Whether the GGUF this manifest names is actually on disk.
+    ///
+    /// `status` is a string copied into the manifest when the model was
+    /// pulled, so it keeps saying `ready` after the file is gone or was never
+    /// fully written. A listing that repeats it without looking is how a user
+    /// ends up trusting a model that cannot load.
+    pub fn is_present(&self, id: &str) -> bool {
+        self.gguf_path(id).is_some()
+    }
+
     /// List all locally available models.
     pub fn list(&self) -> Result<Vec<ModelManifest>, Box<dyn std::error::Error>> {
         let mut models = Vec::new();
@@ -599,5 +627,83 @@ mod manifest_robustness_tests {
         write_atomically(&target, "{\"id\":\"old\"}").expect("first");
         write_atomically(&target, GOOD).expect("second");
         assert_eq!(fs::read_to_string(&target).expect("read"), GOOD);
+    }
+}
+
+#[cfg(test)]
+mod store_lookup_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    // A catalog model as it lands on disk: the directory key and the
+    // human-readable title are different strings.
+    const MANIFEST: &str = r#"{
+        "id": "gemma-4-e4b", "name": "Gemma 4 E4B Instruct (vision-capable)",
+        "description": "d", "languages": ["en"], "base": "b", "vram_gb": 8,
+        "size_bytes": 1, "license": "Gemma Terms of Use", "digest": "sha256:0",
+        "pulled_at": "2026-07-27T00:00:00Z", "status": "ready",
+        "gguf_file": "g.gguf"
+    }"#;
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new() -> Self {
+            let d = std::env::temp_dir().join(format!("eullm-lookup-{}", Uuid::new_v4()));
+            fs::create_dir_all(d.join("gemma-4-e4b")).expect("mkdir");
+            fs::write(d.join("gemma-4-e4b").join("manifest.json"), MANIFEST).expect("manifest");
+            Self(d)
+        }
+        fn store(&self) -> ModelStore {
+            ModelStore {
+                root: self.0.clone(),
+            }
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    // The contract the picker was breaking: a model is addressed by `id`, the
+    // directory key, never by `name`. Looking up by name asks for a directory
+    // called "Gemma 4 E4B Instruct (vision-capable)" and finds nothing, so
+    // every catalog model on disk vanished from the picker's LOCAL section and
+    // only ones whose title happened to equal their id survived.
+    #[test]
+    fn a_model_resolves_by_id_and_not_by_display_name() {
+        let s = Scratch::new();
+        fs::write(s.0.join("gemma-4-e4b").join("g.gguf"), b"x").expect("gguf");
+        let store = s.store();
+        assert!(
+            store.gguf_path("gemma-4-e4b").is_some(),
+            "the directory key must resolve"
+        );
+        assert!(
+            store
+                .gguf_path("Gemma 4 E4B Instruct (vision-capable)")
+                .is_none(),
+            "the display name must not be used as a path"
+        );
+    }
+
+    // What the user actually hit: a manifest present, the GGUF absent. The
+    // listing used to repeat `status` from the manifest and call it ready.
+    #[test]
+    fn a_manifest_without_its_gguf_is_not_present() {
+        let s = Scratch::new();
+        let store = s.store();
+        assert!(!store.is_present("gemma-4-e4b"));
+        fs::write(s.0.join("gemma-4-e4b").join("g.gguf"), b"x").expect("gguf");
+        assert!(store.is_present("gemma-4-e4b"));
+    }
+
+    #[test]
+    fn the_root_reports_where_it_came_from() {
+        let s = Scratch::new();
+        let store = s.store();
+        let (root, source) = store.root_with_source();
+        assert_eq!(root, s.0.as_path());
+        assert!(matches!(source, "EULLM_MODELS_DIR" | "default"));
     }
 }

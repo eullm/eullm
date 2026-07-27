@@ -64,7 +64,14 @@ fn list_local_ggufs(store: &ModelStore) -> Vec<LocalModel> {
     // 1) Models registered with the store (have manifest.json).
     if let Ok(manifests) = store.list() {
         for m in manifests {
-            if let Some(gguf) = store.gguf_path(&m.name) {
+            // `id` is the directory key; `name` is the human-readable title.
+            // Looking up by name asks for a directory called "DeepSeek R1
+            // Distill (Qwen-14B)", which does not exist, so every catalog
+            // model on disk silently vanished from LOCAL. Only models whose
+            // title happens to equal their id survived, which is why the
+            // section usually showed exactly one entry.
+            let key = if m.id.is_empty() { &m.name } else { &m.id };
+            if let Some(gguf) = store.gguf_path(key) {
                 let size = std::fs::metadata(&gguf).map(|md| md.len()).unwrap_or(0);
                 out.push(LocalModel {
                     path: gguf,
@@ -76,11 +83,13 @@ fn list_local_ggufs(store: &ModelStore) -> Vec<LocalModel> {
     }
 
     // 2) Raw .gguf files dropped into the store root (no manifest).
-    if let Ok(root_path) = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .map(|h| PathBuf::from(h).join(".eullm").join("models"))
-        && let Ok(entries) = std::fs::read_dir(&root_path)
-    {
+    //
+    // Ask the store where it lives rather than re-deriving the default path:
+    // this branch used to hardcode $HOME/.eullm/models and so ignored
+    // EULLM_MODELS_DIR entirely, looking in a directory the rest of the
+    // process was not using.
+    let (root_path, _) = store.root_with_source();
+    if let Ok(entries) = std::fs::read_dir(root_path) {
         for e in entries.flatten() {
             let p = e.path();
             if p.is_file() && p.extension().is_some_and(|x| x == "gguf") {
@@ -166,8 +175,15 @@ fn prompt_user(
             let star = if m.recommended { "★" } else { " " };
             // Mark catalog entries already pulled to the local store so the
             // user can tell at a glance what is ready to run vs what would
-            // trigger a download.
-            let local_tag = if store.exists(&m.id) { "[local]" } else { "" };
+            // trigger a download. The test is whether the GGUF is on disk,
+            // not whether a manifest.json exists: a manifest is written
+            // before the download completes and survives a deleted weight
+            // file, so the cheaper check tags models that cannot be run.
+            let local_tag = if store.is_present(&m.id) {
+                "[local]"
+            } else {
+                ""
+            };
             let rec_tag = if m.recommended { "[recommended]" } else { "" };
             let tags = match (local_tag, rec_tag) {
                 ("", "") => String::new(),

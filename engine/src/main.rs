@@ -1333,7 +1333,8 @@ async fn download_mmproj(
 fn cmd_list(store: &ModelStore) {
     match store.list() {
         Ok(models) if models.is_empty() => {
-            println!("No models installed.");
+            let (root, source) = store.root_with_source();
+            println!("No models installed in {} [{}].", root.display(), source);
             println!("\nAvailable models in EU catalog:");
             for entry in catalog::EU_CATALOG.iter() {
                 println!(
@@ -1347,6 +1348,8 @@ fn cmd_list(store: &ModelStore) {
         Ok(models) => {
             // NAME is the addressable id — exactly what you pass to `eullm run`.
             // The human-readable name is shown as a trailing description.
+            let (root, source) = store.root_with_source();
+            println!("Models in {} [{}]\n", root.display(), source);
             println!(
                 "{:<24} {:>8} {:>6} {:<16} DESCRIPTION",
                 "NAME", "SIZE", "VRAM", "STATUS"
@@ -1365,9 +1368,17 @@ fn cmd_list(store: &ModelStore) {
                 let desc = catalog::find_model(id)
                     .map(|e| e.name.as_str())
                     .unwrap_or(m.name.as_str());
+                // `status` is whatever was written into the manifest at pull
+                // time, so it keeps saying `ready` for a model whose GGUF is
+                // missing. Check the disk instead of repeating the file.
+                let status = if store.is_present(id) {
+                    m.status.clone()
+                } else {
+                    format!("{} (file missing)", m.status)
+                };
                 println!(
                     "{:<24} {:>8} {:>4}GB  {:<16} {}",
-                    id, size, m.vram_gb, m.status, desc
+                    id, size, m.vram_gb, status, desc
                 );
             }
             println!(

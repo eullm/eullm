@@ -605,6 +605,14 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     // defensible record; degrading silently to "no record" is the one failure
     // mode it must not have.
     let audit = crate::audit::AuditLogger::new();
+    {
+        // Which store the server resolves model names against. Omitting this
+        // is how `eullm list` and the API came to disagree about whether a
+        // model existed, with no way to tell that they were reading different
+        // directories.
+        let (root, source) = cfg.store.root_with_source();
+        tracing::info!("Model store: {}  [source: {source}]", root.display());
+    }
     match audit.check_writable() {
         Ok(()) => tracing::info!("Audit trail: {}", audit.log_path().display()),
         // Explicitly configured destination that doesn't work → refuse to

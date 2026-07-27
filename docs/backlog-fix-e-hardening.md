@@ -1115,6 +1115,64 @@ esterni non si fidano dei valori che leggono.
   anche lui — l'elenco risultava vuoto e l'asserzione lo prendeva per un
   successo. Un test che non distingue i due casi non verifica niente.
 
+- [x] **H2-W · Niente diceva quale archivio di modelli era in uso** *(P1)*
+  Trovata inciampandoci: `eullm list` mostrava `gemma-4-e4b ready` mentre l'API
+  rispondeva 404 per lo stesso nome. **Entrambe avevano ragione**, perché i due
+  processi leggevano directory diverse — una con `EULLM_MODELS_DIR` impostata,
+  l'altra senza. Nessuno dei due lo diceva, quindi la diagnosi è costata tre
+  scambi e un manifest ricostruito a mano per un modello che stava altrove.
+
+  L'incoerenza era già visibile nel codice: all'avvio il server stampa la
+  destinazione dell'**audit**, l'allowlist degli IP, le origini permesse. Non
+  la directory dei modelli, che è quella su cui risolve ogni richiesta.
+
+  Chiuso stampandola dove serve. `list` intesta l'elenco con
+  `Models in <root> [EULLM_MODELS_DIR|default]`, e lo dice anche quando
+  l'elenco è vuoto — che è il caso in cui serve di più. Il server la registra
+  all'avvio accanto alle altre righe di configurazione.
+
+  **Secondo difetto trovato nello stesso giro**: `list` riportava `status`
+  copiandolo dal manifest, che è una stringa scritta al momento del pull. Un
+  modello il cui GGUF non c'è più, o non è mai arrivato, restava `ready` per
+  sempre. Ora la colonna guarda il disco: `ready (file missing)` quando il file
+  che il manifest nomina non esiste. È lo stesso vizio di H2-T e del banner GPU
+  — riportare ciò che è scritto da qualche parte invece di ciò che è vero — e
+  fa la terza volta in due giorni.
+
+- [x] **H2-X · Il selettore interattivo cercava i modelli con la chiave
+  sbagliata, nella directory sbagliata** *(P1)*
+  Trovata guardando la schermata di `eullm` lanciato senza argomenti mentre
+  cercavamo tutt'altro: la sezione `LOCAL` mostrava **una riga sola**, e i
+  modelli che sapevamo essere su disco non c'erano.
+
+  Tre difetti sovrapposti in quaranta righe, e tutti e tre della stessa
+  famiglia di H2-W — chiedere a una fonte che non è il disco.
+
+  1. **La chiave.** `list_local_ggufs` chiamava `store.gguf_path(&m.name)`.
+     `name` è il titolo leggibile («DeepSeek R1 Distill (Qwen-14B)»),
+     `gguf_path` lo usa come **nome di directory**. Nessuna directory si
+     chiama così, quindi ogni modello del catalogo presente su disco
+     spariva da `LOCAL`. Sopravvivevano solo quelli il cui titolo coincide
+     per caso con l'id: da lì la riga singola. Ora la chiave è `m.id`, con
+     `name` come ripiego per i manifest antecedenti al campo `id`.
+  2. **La directory.** Il ramo che raccoglie i `.gguf` sciolti nella radice
+     dell'archivio aveva `$HOME/.eullm/models` scritto a mano, quindi
+     ignorava `EULLM_MODELS_DIR` e guardava in una cartella che il resto del
+     processo non stava usando. Ora chiede la radice all'archivio
+     (`root_with_source`). È esattamente l'incoerenza di H2-W, in un punto
+     che quella correzione non aveva toccato.
+  3. **Il tag `[local]`.** La marcatura delle voci di catalogo già scaricate
+     usava `store.exists`, che verifica solo la presenza di `manifest.json`.
+     Il manifest viene scritto **prima** che il download finisca e resta lì
+     se il file dei pesi viene cancellato: il tag prometteva pronti dei
+     modelli che non partono. Ora usa `is_present`, che guarda il GGUF.
+
+  Nota di metodo: il selettore è la prima cosa che vede chi installa EuLLM e
+  non ha alcun test. Non è stato scoperto da un'analisi ma perché l'utente ha
+  incollato la schermata mentre indagavamo su un 404. Coperto con tre test
+  sull'archivio (risoluzione per id e non per titolo, radice con la sua
+  provenienza, manifest senza il proprio GGUF).
+
 ### Verificato e **non** indotto da noi
 
 Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
