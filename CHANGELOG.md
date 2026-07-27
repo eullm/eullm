@@ -13,6 +13,19 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.41 — 2026-07-27
+
+### Fixed
+- **Image replies no longer start with `<|channel>thought`.** Gemma emits a
+  channel preamble before its answer, and on image requests it was being shown
+  to you verbatim instead of being stripped. Reasoning blocks that actually
+  contain text still come through, so a UI can render them as a reasoning
+  section.
+- **An unsupported image format now says so.** Sending a `.webp` failed with
+  `Media #0 failed to decode: NullResult`, which looked the same as a corrupt
+  file. The error now names what the multimodal backend reads: jpg, png, bmp,
+  gif for images, and wav, mp3, flac for audio.
+
 ## 0.6.40 — 2026-07-26
 
 ### Fixed
