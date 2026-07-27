@@ -50,11 +50,18 @@ jobs:
           fi
           echo "Scanning: git log $range"
 
-          # Case-insensitive, and anchored on the trailers and marketing
-          # strings these tools emit rather than on the word "claude" alone —
-          # the repository legitimately contains CLAUDE.md, and commits that
-          # edit it must stay pushable.
-          pattern='Co-Authored-By:[[:space:]]*Claude|Claude-Session:|Generated with \[?Claude|claude\.ai/code/session'
+          # Anchored to the START OF A LINE, which is not a detail: a git
+          # trailer is only a trailer when it opens its own line. Without the
+          # anchor this job failed on the very commit that introduced it,
+          # because that commit's message explains the rule in prose and the
+          # words "Co-Authored-By: Claude" appear mid-sentence. A message that
+          # describes the convention must stay pushable; one that carries the
+          # trailer must not.
+          #
+          # Matching on the word "claude" alone is wrong for the same reason:
+          # the repository contains CLAUDE.md and commits that edit it are
+          # ordinary work.
+          pattern='^[[:space:]]*(🤖[[:space:]]*)?(Co-Authored-By:[[:space:]]*Claude|Claude-Session:|Generated with \[?Claude)'
 
           if git log $range --format='%H%n%an <%ae>%n%B%n---' | grep -inE "$pattern"; then
             echo
