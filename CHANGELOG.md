@@ -13,6 +13,42 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.42 — 2026-07-27
+
+### Added
+- **Images work without a GPU.** Multimodal input used to be compiled only into
+  the three CUDA builds, so sending an image to any other binary failed no
+  matter how much memory the machine had. Every published binary now reads
+  images: Linux x64 and arm64, both macOS builds, Windows, and the CIX P1
+  board. Expect it to be slow on CPU — the image encoder is the expensive part,
+  and a large photo can take tens of seconds before the first word — but on a
+  machine with shared memory it is the difference between slow and impossible.
+  The binaries are about 4 MB larger; nothing changes if you never send an
+  image.
+
+### Fixed
+- **`eullm list` no longer fails completely because of one damaged model.** A
+  `manifest.json` truncated by an interrupted download or a full disk made the
+  command answer with a parser error and nothing else, hiding every healthy
+  model. The damaged one is now skipped with a warning that names the directory,
+  and manifests are written atomically so an interrupted write cannot produce
+  that state in the first place.
+- **`list` and the server now say which model directory they are using.** When
+  `EULLM_MODELS_DIR` is set in one shell and not in another, `list` would show a
+  model as installed while the API answered `404` for the same name, and both
+  were right. Each now prints the directory it reads, and where that setting
+  came from.
+- **A model whose file is missing is no longer reported as ready.** `list` was
+  repeating the status recorded at download time, so a model whose weights were
+  deleted, or never fully arrived, stayed `ready` forever. It now checks the
+  disk and reports `ready (file missing)`.
+- **The model chooser finds your local models again.** The screen shown by a
+  plain `eullm` looked them up by their display title rather than their name, so
+  most models on disk were missing from the `LOCAL` section, and it ignored
+  `EULLM_MODELS_DIR` when scanning for loose `.gguf` files. The `[local]` tag
+  next to a catalog entry now means the weights are actually present, not just
+  that a download was started.
+
 ## 0.6.41 — 2026-07-27
 
 ### Fixed
