@@ -18,6 +18,61 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # ── No AI attribution in commit messages ────────────────────────────────
+  #
+  # CLAUDE.md already forbids this, but a rule enforced by attention gets
+  # broken by inattention: eight commits from 25 July carry a
+  # `Co-Authored-By: Claude Opus 5` trailer that nobody meant to publish, and
+  # GitHub renders those as a second author on the commit. They are inside
+  # released tags now, so rewriting them would invalidate the tags for a
+  # cosmetic gain. This stops the next one instead.
+  #
+  # Only inspects commits new to this push, so the existing history does not
+  # fail every run forever. `github.event.before` is all zeros on the first
+  # push of a branch; in that case fall back to the single head commit.
+  commit_hygiene:
+    name: No AI attribution in commit messages
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Scan new commit messages
+        env:
+          BEFORE: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BEFORE:-}" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            range="-1 $HEAD_SHA"
+          else
+            range="$BEFORE..$HEAD_SHA"
+          fi
+          echo "Scanning: git log $range"
+
+          # Case-insensitive, and anchored on the trailers and marketing
+          # strings these tools emit rather than on the word "claude" alone —
+          # the repository legitimately contains CLAUDE.md, and commits that
+          # edit it must stay pushable.
+          pattern='Co-Authored-By:[[:space:]]*Claude|Claude-Session:|Generated with \[?Claude|claude\.ai/code/session'
+
+          if git log $range --format='%H%n%an <%ae>%n%B%n---' | grep -inE "$pattern"; then
+            echo
+            echo "::error::A commit message carries AI attribution. See .claude/CLAUDE.md: commits are authored by primoco and carry no reference to the tool used to write them. Amend or rebase the offending commit and force-push the branch."
+            exit 1
+          fi
+
+          # Same rule for the author field itself: one merge commit reached
+          # main authored by "Claude" because the author override was set on
+          # the commits but not on the merge.
+          if git log $range --format='%an|%ae' | grep -iE '(^|\|)claude|anthropic\.com'; then
+            echo
+            echo "::error::A commit is authored by an AI tool identity. Commits must be authored by primoco <58369875+primoco@users.noreply.github.com>, merges included."
+            exit 1
+          fi
+
+          echo "No AI attribution found in the new commits."
+
   # ── Detect which components changed ──────────────────────────────────
   changes:
     name: Detect changes

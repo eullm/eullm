@@ -4,7 +4,7 @@
 
 - **Branch names**: NEVER use "claude" or any AI tool name in branch names. Use conventional prefixes: `feat/`, `fix/`, `docs/`, `chore/`.
 - **Commit author**: Use `primoco <58369875+primoco@users.noreply.github.com>` for all commits. Set this before committing.
-- **Commit messages**: Conventional commits (feat:, fix:, docs:, chore:). No references to AI tools or Claude in commit messages or code comments.
+- **Commit messages**: Conventional commits (feat:, fix:, docs:, chore:). No references to AI tools or Claude in commit messages or code comments. **This includes the `Co-Authored-By:` and `Claude-Session:` trailers some tooling appends by default** — GitHub renders those as a second author on the commit. It also includes merge commits, where the author override is easy to forget because it is not the same command as the one used for ordinary commits. Enforced by the `commit_hygiene` job in `ci.yml`, which scans only the commits new to a push, so existing history does not fail every run.
 - **Working branch**: Always ask the user which branch to work on, or use the one specified in session instructions. If the session specifies a `claude/` branch, rename it following the rules above before pushing.
 
 ## Coding Standards
