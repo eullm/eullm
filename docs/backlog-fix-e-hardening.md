@@ -1046,6 +1046,38 @@ esterni non si fidano dei valori che leggono.
   producano risposte valide. Finché non arriva quel dato, i NaN sono
   **spiegati in modo plausibile, non dimostrati**.
 
+- [x] **H2-U · Il filtro Harmony non copriva la forma che il modello emette
+  davvero** *(P2)*
+  Trovata eseguendo il percorso multimodale per la prima volta, non leggendo il
+  codice. Gemma 4 12B, richiesta reale con un'immagine, ha risposto:
+
+      <|channel>thought\n<channel|>A small, metallic electronic device...
+
+  C'è un **newline** fra `thought` e `<channel|>`. Il pattern combinato in
+  `DEFAULT_HARMONY_FILTERS` era `"<|channel>thought<channel|>"`, senza newline,
+  e siccome il filtraggio è per sottostringa letterale non agganciava niente.
+  L'impalcatura arrivava all'utente.
+
+  **Non è una regressione di H2-D**, ed è importante non raccontarla come tale:
+  prima della 0.6.40 su quel percorso i filtri **non venivano applicati
+  affatto**, quindi quel testo usciva comunque, e peggio. H2-D ha fatto arrivare
+  i filtri fin lì; questa voce è il pattern che, arrivato, non bastava.
+
+  Aggiunte le tre varianti con newline. Due test con i byte esatti osservati:
+  uno verifica che il preambolo sparisca e la risposta resti, l'altro che un
+  blocco **con contenuto** continui a passare — la UI lo rende come sezione di
+  ragionamento, e togliere i delimitatori nudi lascerebbe il ragionamento come
+  testo senza marcatore.
+
+  Seconda cosa emersa dallo stesso test: un `.webp` falliva con
+  `Media #0 failed to decode: NullResult`, che non dice niente. Il backend
+  multimodale decodifica jpg, png, bmp e gif; ora l'errore lo scrive, invece di
+  lasciare che la risposta stia nel sorgente.
+
+  Nota di metodo: `cargo check --features multimodal` dimostra che quel codice
+  compila e nient'altro. Il difetto era invisibile a 191 test e visibile alla
+  prima richiesta vera.
+
 ### Verificato e **non** indotto da noi
 
 Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
