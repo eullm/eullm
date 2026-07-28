@@ -13,6 +13,24 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.49 — 2026-07-28
+
+### Added
+- **Pulling a vision model from HuggingFace brings its projector too.** A
+  catalog model already did this; one pulled by repo name did not, so the
+  weights arrived without the file that lets the model see, and you had to
+  notice the second file yourself and pass `--mmproj`. `eullm pull
+  hf.co/owner/repo` now fetches both, the same as llama.cpp's `-hf`. If the
+  projector download fails the model is still usable for text, and the warning
+  says so.
+
+### Fixed
+- **A projector is no longer mistaken for the model itself.** It is a `.gguf`
+  in the same repo, so on a vision repo a plain pull saw two candidates and
+  refused as ambiguous, and asking for `:F16` could download `mmproj-F16.gguf`
+  as the weights, which then failed to load with an error about the file
+  rather than about the choice.
+
 ## 0.6.48 — 2026-07-28
 
 ### Added

@@ -989,10 +989,44 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
     };
     eprintln!();
 
+    // A vision repo ships the projector beside the weights, and without it the
+    // model loads but cannot see. llama.cpp's own `-hf` fetches both, and a
+    // user who has to notice the second file and pass `--mmproj` by hand is
+    // being asked to know something the repo layout already says (issue #286).
+    let mmproj_name: Option<String> = if result.is_ok() {
+        match registry::list_hf_ggufs(&hf.repo).await {
+            Ok(files) => files.into_iter().find(|f| registry::is_mmproj(f)),
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    let mut mmproj_stored: Option<String> = None;
+    if let Some(ref name) = mmproj_name {
+        let leaf = name.rsplit('/').next().unwrap_or(name).to_string();
+        println!("  Multimodal projector found in the repo: {leaf}");
+        let dest = model_dir.join(&leaf);
+        match registry::download_from_huggingface(&hf.repo, name, &dest, None, None).await {
+            Ok(()) => mmproj_stored = Some(leaf),
+            // The weights are already on disk and usable for text. Losing the
+            // projector costs image and audio input, not the model, so it is a
+            // warning and not a failed pull.
+            Err(e) => eprintln!(
+                "  Warning: projector download failed ({e}). Text still works; re-run the pull or pass --mmproj."
+            ),
+        }
+    }
+
     match result {
         Ok(()) => {
             let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
-            match store.write_external_manifest(&id, &filename, &hf.original, size) {
+            match store.write_external_manifest(
+                &id,
+                &filename,
+                &hf.original,
+                size,
+                mmproj_stored.as_deref(),
+            ) {
                 Ok(_) => {
                     println!("  Done. Model ready.");
                     println!("\nRun with: eullm run {id}");
@@ -1096,7 +1130,7 @@ async fn cmd_pull_url(store: &ModelStore, url: &str) {
     match result {
         Ok(()) => {
             let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
-            match store.write_external_manifest(&id, &filename, url, size) {
+            match store.write_external_manifest(&id, &filename, url, size, None) {
                 Ok(_) => {
                     println!("  Done. Model ready.");
                     println!("\nRun with: eullm run {id}");
