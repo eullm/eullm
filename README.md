@@ -77,7 +77,7 @@ curl http://localhost:11434/v1/chat/completions \
 | 🍎 macOS Intel | `eullm-macos-x64` | ✅ Tested (community) | Validated on a 2018 Mac mini (i7-8700B, 54 tok/s) and a 2018 MacBook Pro 15" (i9-8950HK, 41 tok/s), qwen3-0.6b Q4. CPU only: Metal is deliberately not built for Intel Macs, see below |
 | 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | ✅ Tested | Standalone binary, CLI/server |
 | 🪟 Windows 11 x64 (NVIDIA) | `eullm-windows-x64-cuda-12.8.zip` | ✅ Tested | ZIP bundles CUDA DLLs — extract, run |
-| 🐧 Linux x64 (Vulkan, AMD/Intel) | *build from source* | ✅ Tested (community) | Not a published binary — `cargo build --release --features vulkan`. Validated on a Ryzen AI 9 HX 470 with Radeon 890M integrated graphics (96 GB unified memory, openSUSE Tumbleweed): all 29 layers offloaded, qwen3-0.6b Q4 at ~135 tok/s |
+| 🐧 Linux x64 (Vulkan, AMD/Intel) | `eullm-linux-x64-vulkan` | ✅ Tested (community) | Any GPU with a Vulkan driver — AMD, Intel, and NVIDIA alike. Needs `libvulkan.so.1` and a driver on the machine (mesa RADV, amdvlk, NVIDIA, Intel ANV); nothing is bundled. Validated on a Ryzen AI 9 HX 470 with Radeon 890M integrated graphics (96 GB unified memory, openSUSE Tumbleweed): all 29 layers offloaded, qwen3-0.6b Q4 at ~135 tok/s |
 
 > **Embedded chat UI — cross-platform.** Every `eullm` binary (Linux, macOS, Windows — CPU, CUDA, Metal) ships with a built-in browser chat. Run `eullm run model.gguf` and open **`http://localhost:11435/`** — same OpenAI/Ollama API on `:11434`, separate chat UI port `:11435` so it never collides with RAG / OpenAI-client routes on `/`. Turn it off with `--no-ui` for headless deployments.
 >
@@ -948,6 +948,7 @@ curl http://localhost:11434/v1/chat/completions \
 With GPU acceleration:
 
 ```bash
+# Multimodal (image + audio input) is on by default, on every backend.
 cargo build --release --features cuda     # NVIDIA (CUDA)
 cargo build --release --features rocm     # AMD (ROCm)
 cargo build --release --features vulkan   # Cross-platform (NVIDIA + AMD + Intel)

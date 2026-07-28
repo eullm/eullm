@@ -821,6 +821,30 @@ async fn chat(
     )
     .await;
 
+    // A build without the `multimodal` feature has no branch below at all, so
+    // an `images` array used to be dropped on the floor and the request went
+    // through as plain text. The model, asked about a picture it never
+    // received, answers that it cannot see one — which reads as a limitation
+    // of the model rather than of the binary. Reported from a source build
+    // made with `--features vulkan` (issue #286), where the omission is easy:
+    // the published binaries all carry multimodal, a hand-built one need not.
+    #[cfg(not(feature = "multimodal"))]
+    if messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .and_then(|m| m.get("images"))
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty())
+    {
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "error": "This build has no multimodal support, so the attached media cannot be                           read. The published binaries include it; a build from source needs                           `--features multimodal` (combine it with a backend, e.g.                           `--features \"vulkan,multimodal\"`)."
+            })),
+        ));
+    }
+
     // ── Multimodal MVP branch ──────────────────────────────────────────
     // If the last user message carries `images`, route through the
     // sequential mtmd path. `swap_model` forces sequential mode when the

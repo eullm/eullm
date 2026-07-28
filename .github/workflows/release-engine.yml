@@ -317,6 +317,71 @@ jobs:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
 
+  # ── Vulkan: the GPU build for everything that is not NVIDIA ────────────────
+  #
+  # Added after the first Vulkan report we ever received (issue #286), from an
+  # AMD Ryzen with Radeon integrated graphics: the user had to build it himself
+  # because we published CPU-only and CUDA and nothing else. That leaves out
+  # every AMD and Intel GPU, and in particular the unified-memory machines where
+  # the GPU can address far more than any consumer discrete card.
+  #
+  # Vulkan is a loader, not a toolkit: the binary links `libvulkan.so.1` and the
+  # driver comes from the user's system (mesa RADV / amdvlk / NVIDIA / Intel
+  # ANV). So this needs the headers and `glslc` at build time, and nothing is
+  # bundled into the release beyond the binary itself — unlike CUDA, where we
+  # ship the runtime DLLs. A machine without a Vulkan driver gets a clear
+  # loader error rather than a broken binary.
+  build-vulkan:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-unknown-linux-gnu-vulkan
+
+      - name: Install build dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            cmake build-essential pkg-config libssl-dev \
+            libvulkan-dev glslc spirv-tools
+          # ggml-vulkan compiles its shaders at build time; without glslc the
+          # CMake configure step fails late and unhelpfully.
+          glslc --version
+          echo "Vulkan headers: $(pkg-config --modversion vulkan 2>/dev/null || echo 'via libvulkan-dev')"
+
+      - name: Build engine (Vulkan)
+        env:
+          # Same x86-64-v3 baseline as the other x86_64 Linux binaries: the CPU
+          # still runs everything the GPU does not. See docs/x86-64-baseline.md.
+          RUSTFLAGS: "-C target-cpu=x86-64-v3"
+        run: cargo build --release --features vulkan -p eullm-engine
+
+      - name: Package binary
+        run: |
+          cp target/release/eullm eullm-linux-x64-vulkan
+          strip --strip-all eullm-linux-x64-vulkan || true
+          chmod +x eullm-linux-x64-vulkan
+          # A binary that cannot find its own loader is worth catching here
+          # rather than on a user's machine.
+          ldd eullm-linux-x64-vulkan | grep -i vulkan || {
+            echo "::error::the built binary does not link libvulkan — the Vulkan backend was not compiled in"
+            exit 1
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: eullm-linux-x64-vulkan
+          path: eullm-linux-x64-vulkan
+
   build-cuda:
     if: ${{ github.event_name == 'push' }}
     strategy:
@@ -922,6 +987,7 @@ jobs:
       - require_green_ci
       - require_version_match
       - build
+      - build-vulkan
       - build-cuda
       - build-cuda-arm64
       - build-arm-cix-p1
@@ -1027,6 +1093,7 @@ jobs:
             | Binary | GPU Support | Requirements |
             |--------|-------------|--------------|
             | `eullm-linux-x64` | CPU only | None |
+            | `eullm-linux-x64-vulkan` | Any GPU with a Vulkan driver (AMD, Intel, NVIDIA) | `libvulkan.so.1` and a working driver on the machine — mesa RADV, amdvlk, NVIDIA or Intel ANV. Nothing is bundled |
             | `eullm-linux-x64-cuda-12.8` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
             | `eullm-linux-arm64` | CPU only | ARM64 Linux |
             | `eullm-macos-x64` | CPU only | macOS Intel |

@@ -982,12 +982,14 @@ impl InferenceEngine {
         // Mirror the text-side GPU policy: offload mmproj to GPU when the
         // text model itself is being offloaded. Threads count carries over
         // for the CPU-side image preprocessing inside mtmd.
-        let mut params = MtmdContextParams::default();
-        // Same rule as the text side: a binary with no GPU backend must not
-        // ask for one, whatever the config says (see `check_gpu_support`).
-        params.use_gpu = config.gpu_layers != 0 && has_gpu_backend();
-        params.print_timings = false;
-        params.n_threads = config.threads as i32;
+        let mut params = MtmdContextParams {
+            // Same rule as the text side: a binary with no GPU backend must
+            // not ask for one, whatever the config says (`check_gpu_support`).
+            use_gpu: config.gpu_layers != 0 && has_gpu_backend(),
+            print_timings: false,
+            n_threads: config.threads as i32,
+            ..MtmdContextParams::default()
+        };
 
         // Dynamic-resolution vision models (e.g. Gemma 4) cap image tokens
         // (Gemma4UV defaults to max 280). That low cap aggressively downscales
