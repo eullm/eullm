@@ -13,6 +13,49 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.44 — 2026-07-28
+
+### Fixed
+- **Building from source no longer fails on a missing header.** llama.cpp is a
+  git submodule and the README said to clone without `--recursive`, so the build
+  died minutes in on `llama.h file not found`, which reads like a broken
+  compiler rather than an incomplete checkout. The build now stops immediately
+  and prints the command that fixes it. Note that the `Source code (zip/tar.gz)`
+  archives on the releases page can never build: GitHub generates them without
+  submodule contents, so clone the repository instead.
+- **`eullm -V` reports the right version again.** The 0.6.43 binaries answer
+  `0.6.42`, because the version bump landed after that release was tagged. Only
+  the reported string was wrong: those binaries do contain everything listed
+  under 0.6.43.
+
+## 0.6.43 — 2026-07-28
+
+### Fixed
+- **The browser chat works again after choosing a model from the picker.** Start
+  `eullm` with no arguments, pick a model, and every message came back with
+  "No model loaded" while that model was loaded and answering. The model list
+  the UI reads marks the loaded model by leaving its checksum blank, and for a
+  model from the catalog that blank was immediately overwritten with the
+  catalog's real checksum, so the UI lost the only thing telling it what was
+  loaded. Starting from a file path (`eullm run ./model.gguf`) was never
+  affected, which is why this survived so long.
+- **A model already on your disk can be picked in the chat UI.** With
+  `eullm serve` the picker offered nothing selectable, because every catalog
+  entry was greyed out as "not yet downloaded" whether you had it or not. The
+  list now separates what is on this machine from what would be a download, and
+  the first one is selected for you when nothing is loaded. The server was
+  always able to switch to it on the first message.
+- **Voice notes and other audio formats are accepted.** A WhatsApp recording is
+  Ogg/Opus, which the engine cannot decode, so it arrived as unreadable bytes.
+  Audio outside wav, mp3 and flac is now converted in the browser before being
+  sent, the same as images outside jpg/png/bmp/gif already were. If your browser
+  cannot decode the file either, the message now says so and suggests a command.
+- **A download that cannot create its folder says why, before downloading.**
+  `eullm pull` reported `File exists (os error 17)` and then suggested the model
+  might not be published yet. Both halves were wrong: the problem was a local
+  path, and the model was fine. The check now runs first and names the path and
+  what is sitting on it.
+
 ## 0.6.42 — 2026-07-27
 
 ### Added
