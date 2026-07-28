@@ -11,9 +11,10 @@
 //! Not exposed as its own subcommand — it's just the default behavior when
 //! a required model argument is missing.
 
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
+use crate::lineedit::Line;
 use crate::models::{CatalogEntry, ModelStore, catalog};
 
 /// What the user picked.
@@ -133,31 +134,13 @@ fn format_size(bytes: u64) -> String {
 /// for what looked like an empty line. Dropping escape sequences and control
 /// characters makes those keys inert rather than destructive.
 ///
-/// This is not line editing: the cursor still cannot be moved. It stops a
-/// keystroke that does nothing from also breaking the input it lands in.
+/// This is only the folding: the escape sequences are gone before this sees
+/// the line, either because the editor never produced them or because the
+/// fallback reader stripped them. See `crate::lineedit`.
 fn sanitize_input(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\u{1b}' {
-            // CSI: ESC '[' then parameter bytes, ended by a byte in @..~.
-            if chars.peek() == Some(&'[') {
-                chars.next();
-                for c in chars.by_ref() {
-                    if ('\u{40}'..='\u{7e}').contains(&c) {
-                        break;
-                    }
-                }
-            } else {
-                chars.next();
-            }
-            continue;
-        }
-        if !c.is_control() {
-            out.push(c);
-        }
-    }
-    out.trim().to_lowercase()
+    crate::lineedit::strip_terminal_escapes(raw)
+        .trim()
+        .to_lowercase()
 }
 
 fn prompt_user(
@@ -250,15 +233,19 @@ fn prompt_user(
     println!("  ╰─");
     println!();
 
-    loop {
-        print!("  Choice > ");
-        let _ = std::io::stdout().flush();
+    // Reading through the editor rather than `read_line` is what stops the tty
+    // from echoing `^[[D` when the user presses left. Stripping the sequence
+    // from the value was only half the fix: the characters were still on
+    // screen, because in canonical mode the driver echoes them before we ever
+    // see the line.
+    let mut reader = crate::lineedit::LineReader::new();
 
-        let mut input = String::new();
-        if std::io::stdin().read_line(&mut input).is_err() {
-            return Picked::Quit;
-        }
-        let choice = sanitize_input(&input);
+    loop {
+        let choice = match reader.read("  Choice > ") {
+            Line::Text(l) => sanitize_input(&l),
+            // Ctrl+C at the menu means "I did not mean to be here".
+            Line::Eof | Line::Interrupted => return Picked::Quit,
+        };
 
         if choice.is_empty() {
             continue;
@@ -267,30 +254,25 @@ fn prompt_user(
             return Picked::Quit;
         }
         if choice == "p" {
-            print!("  Path to .gguf > ");
-            let _ = std::io::stdout().flush();
-            let mut p = String::new();
-            if std::io::stdin().read_line(&mut p).is_ok() {
+            // Not `sanitize_input`: a path keeps its case.
+            if let Line::Text(p) = reader.read("  Path to .gguf > ") {
                 let path = PathBuf::from(p.trim());
                 if path.exists() {
                     return Picked::Local(path);
                 }
                 println!("  ! File not found: {}", path.display());
-                continue;
             }
+            continue;
         }
         if choice == "u" {
-            print!("  URL > ");
-            let _ = std::io::stdout().flush();
-            let mut u = String::new();
-            if std::io::stdin().read_line(&mut u).is_ok() {
+            if let Line::Text(u) = reader.read("  URL > ") {
                 let url = u.trim().to_string();
                 if url.starts_with("http://") || url.starts_with("https://") {
                     return Picked::Url(url);
                 }
                 println!("  ! URL must start with http(s)://");
-                continue;
             }
+            continue;
         }
         if let Ok(n) = choice.parse::<usize>()
             && n >= 1

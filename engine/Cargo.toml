@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.6.51"
+version = "0.6.52"
 edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"
@@ -56,6 +56,13 @@ async-stream = "0.3"
 sha2 = "0.11.0"
 ipnet = "2.12.0"
 libc = "0.2"
+# Line editing for the terminal chat: arrow keys that move the cursor, in-session
+# history on up/down, and the ordinary emacs bindings. MIT licensed.
+# `default-features = false` drops `with-file-history` on purpose — the default
+# writes every line typed into a file under the user's home directory, and chat
+# messages are not something to start persisting without being asked. History
+# lives in memory and dies with the session.
+rustyline = { version = "18.0.1", default-features = false }
 
 [dev-dependencies]
 assert_cmd = "2"
