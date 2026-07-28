@@ -122,6 +122,41 @@ jobs:
             sleep 30
           done
 
+  # ── Gate: the tag must name the version the crate actually reports ──────────
+  #
+  # A tag is pushed by hand, and the version bump is a separate commit. Get the
+  # order wrong and the release publishes binaries that answer with the previous
+  # version: v0.6.43 shipped nine binaries reporting 0.6.42, because the bump
+  # landed one merge after the tag. Nothing failed, nothing looked wrong, and
+  # the mismatch is only visible by running `-V` on a downloaded artifact.
+  #
+  # Deliberately cheap and first: it finishes in seconds, so a bad tag is red
+  # long before the long-pole builds are done and can be deleted and re-pushed
+  # (the workflow's concurrency group cancels the stale run). Like
+  # require_green_ci it gates `release` only — compiling from a mis-tagged
+  # commit wastes nothing that matters, publishing from one does.
+  require_version_match:
+    name: Require the tag to match engine/Cargo.toml
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compare the tag with the crate version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          want="${TAG#EuLLM-v}"
+          want="${want#engine-v}"
+          # Anchored: a dependency's version is `foo = { version = "…" }` or
+          # `foo = "…"`, never a line starting with `version`.
+          have=$(grep -m1 '^version = ' engine/Cargo.toml | cut -d'"' -f2)
+          echo "tag says $want, engine/Cargo.toml says $have"
+          if [ "$want" != "$have" ]; then
+            echo "::error::Tag $TAG does not match engine/Cargo.toml ($have). Bump the version, merge it to main, and tag that commit. Delete this tag and push it again once the bump is in: git tag -d $TAG && git push origin :refs/tags/$TAG"
+            exit 1
+          fi
+
   build:
     # Manual dispatch is for testing build-arm-cix-p1 in isolation - skip
     # the rest of the matrix there.
@@ -885,6 +920,7 @@ jobs:
   release:
     needs:
       - require_green_ci
+      - require_version_match
       - build
       - build-cuda
       - build-cuda-arm64
@@ -905,7 +941,8 @@ jobs:
     if: >-
       ${{ !cancelled()
           && github.event_name == 'push'
-          && needs.require_green_ci.result == 'success' }}
+          && needs.require_green_ci.result == 'success'
+          && needs.require_version_match.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
