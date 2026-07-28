@@ -269,6 +269,11 @@ pub struct ModelReadyInfo {
     pub kv_k_mib: f64,
     /// KV cache value memory estimate in MiB.
     pub kv_v_mib: f64,
+    /// The context length the model was trained with. Reported so the banner
+    /// can say when the configured window throws away most of the model's
+    /// capacity: llama.cpp mentions it once, in a log line buried between two
+    /// hundred others, and the flag that fixes it is not named there.
+    pub n_ctx_train: u32,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -1675,6 +1680,7 @@ fn estimate_kv_memory(
         return ModelReadyInfo {
             kv_k_mib: 0.0,
             kv_v_mib: 0.0,
+            n_ctx_train: model.n_ctx_train(),
         };
     }
 
@@ -1688,6 +1694,7 @@ fn estimate_kv_memory(
     ModelReadyInfo {
         kv_k_mib: kv_k_bytes / (1024.0 * 1024.0),
         kv_v_mib: kv_v_bytes / (1024.0 * 1024.0),
+        n_ctx_train: model.n_ctx_train(),
     }
 }
 
