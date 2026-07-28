@@ -944,6 +944,34 @@ fn hf_ref_to_model_id(hf: &registry::HfRef) -> String {
 /// under an id derived from the repo + quant, and writes an external manifest.
 /// On ambiguity (multiple matches or sharded multi-file gguf) it prints the
 /// available filenames and exits, asking the user to re-run with `:<quant>`.
+/// A progress callback that redraws one line every 10 MB and at completion.
+///
+/// Built here rather than inline because a download without one is a silent
+/// stall: the projector fetch shipped with `None` and left 44 seconds of
+/// nothing between "found in the repo" and "Done", which reads like a hang.
+fn download_progress() -> registry::ProgressCallback {
+    use crate::registry::format_progress;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let last_printed = Arc::new(AtomicU64::new(0));
+    Box::new(move |downloaded, total| {
+        let last = last_printed.load(Ordering::Relaxed);
+        if downloaded.saturating_sub(last) > 10_000_000 || (total > 0 && downloaded >= total) {
+            last_printed.store(downloaded, Ordering::Relaxed);
+            eprint!("\r  {}", format_progress(downloaded, total));
+            // Close the line at completion. Whatever is logged next — and the
+            // "no integrity digest recorded" warning always is, for an
+            // off-catalog file — otherwise lands on the same line as the
+            // progress counter and reads as one garbled sentence.
+            if total > 0 && downloaded >= total {
+                eprintln!();
+            }
+            let _ = std::io::Write::flush(&mut std::io::stderr());
+        }
+    })
+}
+
 async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
     let id = hf_ref_to_model_id(hf);
 
@@ -972,20 +1000,15 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
     let gguf_dest = model_dir.join(&filename);
 
     let result = {
-        use crate::registry::{download_from_huggingface, format_progress};
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        let last_printed = Arc::new(AtomicU64::new(0));
-        let progress: registry::ProgressCallback = Box::new(move |downloaded, total| {
-            let last = last_printed.load(Ordering::Relaxed);
-            if downloaded - last > 10_000_000 || (total > 0 && downloaded >= total) {
-                last_printed.store(downloaded, Ordering::Relaxed);
-                eprint!("\r  {}", format_progress(downloaded, total));
-                let _ = std::io::Write::flush(&mut std::io::stderr());
-            }
-        });
-        download_from_huggingface(&hf.repo, &filename, &gguf_dest, None, Some(progress)).await
+        use crate::registry::download_from_huggingface;
+        download_from_huggingface(
+            &hf.repo,
+            &filename,
+            &gguf_dest,
+            None,
+            Some(download_progress()),
+        )
+        .await
     };
     eprintln!();
 
@@ -1006,7 +1029,16 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
         let leaf = name.rsplit('/').next().unwrap_or(name).to_string();
         println!("  Multimodal projector found in the repo: {leaf}");
         let dest = model_dir.join(&leaf);
-        match registry::download_from_huggingface(&hf.repo, name, &dest, None, None).await {
+        let done = registry::download_from_huggingface(
+            &hf.repo,
+            name,
+            &dest,
+            None,
+            Some(download_progress()),
+        )
+        .await;
+        eprintln!();
+        match done {
             Ok(()) => mmproj_stored = Some(leaf),
             // The weights are already on disk and usable for text. Losing the
             // projector costs image and audio input, not the model, so it is a

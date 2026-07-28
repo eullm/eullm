@@ -13,6 +13,20 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.50 — 2026-07-28
+
+### Fixed
+- **The arrow keys no longer break the model picker.** Pressing left to correct
+  a typo at the `Choice >` prompt inserted `^[[D` into the line and answered
+  "Invalid choice" for what looked blank. Those keys are now ignored. This is
+  not line editing: the cursor still cannot be moved, but a keystroke that does
+  nothing no longer breaks the input it lands in.
+- **A download no longer goes silent partway.** The projector was fetched
+  without a progress counter, so a pull sat for the best part of a minute
+  between announcing the file and finishing, with nothing on screen. It reports
+  progress like any other download, and its line is closed before the next
+  message rather than being written over.
+
 ## 0.6.49 — 2026-07-28
 
 ### Added
