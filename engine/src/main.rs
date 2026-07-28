@@ -1832,6 +1832,10 @@ async fn cmd_run(
             // ── Sequential mode ────────────────────────────────────
             match InferenceEngine::load(config) {
                 Ok(eng) => {
+                    let info = eng.ready_info();
+                    n_ctx_train = info.n_ctx_train;
+                    kv_k_mib = info.kv_k_mib;
+                    kv_v_mib = info.kv_v_mib;
                     engine = Some(Arc::new(eng));
                     println!("Model loaded (sequential mode).");
                 }

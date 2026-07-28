@@ -1663,7 +1663,9 @@ fn cache_type_bytes_per_elem(ct: &super::KvCacheType) -> f64 {
 }
 
 /// Estimate KV cache memory from model dimensions and cache types.
-fn estimate_kv_memory(
+/// Also called from the sequential engine, which loads without a scheduler
+/// and so has no other way to report the same two numbers.
+pub(crate) fn estimate_kv_memory(
     model: &LlamaModel,
     n_ctx: u64,
     cache_type_k: &super::KvCacheType,

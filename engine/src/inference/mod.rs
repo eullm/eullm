@@ -872,6 +872,20 @@ unsafe impl Send for InferenceEngine {}
 unsafe impl Sync for InferenceEngine {}
 
 impl InferenceEngine {
+    /// The same load-time facts the scheduler reports, for the sequential
+    /// path. Without this the startup banner silently prints less depending
+    /// on which loader ran: multimodal models always load sequentially, so
+    /// neither the KV cache size nor the model's trained context length was
+    /// ever shown for them.
+    pub fn ready_info(&self) -> scheduler::ModelReadyInfo {
+        scheduler::estimate_kv_memory(
+            &self.model,
+            u64::from(self.config.context_size),
+            &self.config.cache_type_k,
+            &self.config.cache_type_v,
+        )
+    }
+
     /// Load a GGUF model and prepare the inference engine.
     pub fn load(config: InferenceConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if !config.model_path.exists() {
