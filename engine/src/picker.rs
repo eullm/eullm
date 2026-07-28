@@ -124,6 +124,42 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Normalise a line read from a terminal in canonical mode.
+///
+/// The driver echoes and edits printable characters, but an arrow key is not
+/// one: it arrives as the escape sequence `\x1b[D`, which `read_line` hands
+/// over verbatim. Pressing left a few times to correct a typo therefore
+/// produced `^[[D^[[D^[[D` in the buffer and a bewildering "Invalid choice"
+/// for what looked like an empty line. Dropping escape sequences and control
+/// characters makes those keys inert rather than destructive.
+///
+/// This is not line editing: the cursor still cannot be moved. It stops a
+/// keystroke that does nothing from also breaking the input it lands in.
+fn sanitize_input(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            // CSI: ESC '[' then parameter bytes, ended by a byte in @..~.
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for c in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&c) {
+                        break;
+                    }
+                }
+            } else {
+                chars.next();
+            }
+            continue;
+        }
+        if !c.is_control() {
+            out.push(c);
+        }
+    }
+    out.trim().to_lowercase()
+}
+
 fn prompt_user(
     locals: &[LocalModel],
     catalog_models: &[CatalogEntry],
@@ -222,7 +258,7 @@ fn prompt_user(
         if std::io::stdin().read_line(&mut input).is_err() {
             return Picked::Quit;
         }
-        let choice = input.trim().to_lowercase();
+        let choice = sanitize_input(&input);
 
         if choice.is_empty() {
             continue;
@@ -280,5 +316,36 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..max.saturating_sub(1)])
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::sanitize_input;
+
+    // Reported from a real session: pressing the left arrow to fix a typo
+    // filled the line with escape sequences and the picker answered
+    // "Invalid choice" for something that looked blank.
+    #[test]
+    fn arrow_keys_do_not_become_input() {
+        assert_eq!(sanitize_input("\u{1b}[D\u{1b}[D\u{1b}[D\n"), "");
+        assert_eq!(sanitize_input("1\u{1b}[D\u{1b}[C\n"), "1");
+    }
+
+    #[test]
+    fn ordinary_choices_are_untouched() {
+        assert_eq!(sanitize_input("  12 \n"), "12");
+        assert_eq!(sanitize_input("Q\n"), "q");
+        assert_eq!(sanitize_input("\n"), "");
+    }
+
+    // A path is typed at the same prompt family, so stripping must not eat
+    // anything a filename can legitimately contain.
+    #[test]
+    fn a_path_survives() {
+        assert_eq!(
+            sanitize_input("/home/u/models/My Model-Q4_K_M.gguf\n"),
+            "/home/u/models/my model-q4_k_m.gguf"
+        );
     }
 }
