@@ -1162,7 +1162,17 @@ async fn cmd_pull(store: &ModelStore, model: &str) {
 
     // Download GGUF from HuggingFace
     let short_name = entry.id.as_str();
-    let model_dir = store.model_path(&entry.id);
+    // Before anything is fetched: the directory has to be creatable. Doing
+    // this here rather than letting the downloader hit it means a local
+    // problem is reported as one, instead of surfacing mid-download under a
+    // message about the model not being published.
+    let model_dir = match store.ensure_model_dir(&entry.id) {
+        Ok(dir) => dir,
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
+        }
+    };
     let gguf_dest = model_dir.join(&entry.hf_filename);
 
     println!(
