@@ -94,6 +94,19 @@ Earlier versions (v0.5.x) shipped a TurboQuant-experimental variant via the Ames
 
 **Nuclear option** if cache contamination is ever suspected: bump the cache key suffix (e.g., `sccache-windows-cuda-v2-...`). Full miss next run, fresh state.
 
+### The bump commit must be on `main` before the tag is pushed
+
+Enforced by `require_version_match` in `release-engine.yml`: a tag whose version
+does not equal `engine/Cargo.toml`'s fails in seconds and blocks `release`, so
+nothing is published. Learned from v0.6.43, which was tagged one merge before
+its bump: nine binaries went out answering `0.6.42` to `-V`, and the release
+also missed the last fix that was supposed to be in it. Nothing failed at the
+time and nothing looked wrong on the release page.
+
+A published tag is not moved to fix this. The release page and its checksums
+are already in users' hands; ship the next patch version and say in
+`CHANGELOG.md` what the mis-tagged one actually contains.
+
 ### Every release updates `CHANGELOG.md` (MANDATORY)
 
 Before pushing a `EuLLM-v*` tag, add the version's section to `CHANGELOG.md`.
