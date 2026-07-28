@@ -13,6 +13,16 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.51 — 2026-07-28
+
+### Fixed
+- **A context that does not fit says what did not fit.** Asking for a large
+  `--ctx-size` and getting `Failed to create context: null reference from
+  llama.cpp` told you nothing: the window was the thing that failed, and its
+  cost was on screen two lines earlier. The error now names the window, the
+  memory its KV cache needs, and the two flags that change it. Seen with
+  `--ctx-size 131072` on a 4B model, where the cache alone wants about 17 GB.
+
 ## 0.6.50 — 2026-07-28
 
 ### Fixed
