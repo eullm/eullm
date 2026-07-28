@@ -1173,6 +1173,55 @@ esterni non si fidano dei valori che leggono.
   sull'archivio (risoluzione per id e non per titolo, radice con la sua
   provenienza, manifest senza il proprio GGUF).
 
+- [x] **H2-Y · La chat non riconosceva il modello caricato** *(P0)*
+  Segnalata dall'uso, non da una revisione: si lancia `eullm`, si sceglie un
+  modello dal picker, si carica, si apre la chat e **ogni messaggio** risponde
+  `No model loaded`. Il pannello di stato diceva `(none loaded)` mentre il
+  modello era in memoria e rispondeva benissimo alle chiamate dirette all'API.
+
+  `/api/tags` segnala il modello nello slot mettendolo per primo **con il
+  digest vuoto**. Poi, se quel modello è nel catalogo, riscrive quella voce con
+  i metadati completi — digest vero compreso. La UI riconosceva il modello
+  caricato **proprio dal digest vuoto**, quindi la riscrittura cancellava
+  l'unico segnale disponibile: la voce diventava indistinguibile da un modello
+  mai scaricato e finiva fra quelle disabilitate.
+
+  Perché è sopravvissuta tanto: un modello avviato da percorso
+  (`eullm run ./model.gguf`) non passa mai da quel ramo, il digest resta vuoto
+  e tutto funziona. Si rompe **solo** scegliendo dal catalogo, che è il modo in
+  cui il prodotto si presenta a chi lo installa. Chiuso mettendo `loaded` nella
+  risposta invece di farlo dedurre.
+
+  **Secondo difetto trovato nello stesso giro**, indipendente: con `eullm serve`
+  la tendina non offriva *niente* di selezionabile, perché ogni voce di catalogo
+  era disabilitata come "non ancora scaricata" che tu l'avessi o no. Il server
+  sapeva già fare lo swap alla prima richiesta; mancava solo il modo di dirglielo
+  dalla UI. Ora `/api/tags` riporta anche `downloaded`, chiedendolo all'archivio,
+  e l'elenco separa ciò che è su questa macchina da ciò che sarebbe un download.
+
+  **Terzo, sullo stesso percorso**: un vocale WhatsApp è Ogg/Opus, che miniaudio
+  non legge, quindi arrivava al motore come byte non decodificabili. Le immagini
+  fuori formato venivano già riconvertite nel browser; ora lo è anche l'audio,
+  in WAV mono a 16 kHz. Verificato sul campo: trascrizione corretta di un
+  parlato in italiano, 4,25 s su CUDA e 143 s su CPU, stessa qualità.
+
+  Nota di metodo: la chat UI non ha un solo test, ed è la prima cosa che vede
+  chi installa EuLLM. Tre difetti in un pomeriggio, tutti trovati usandola.
+
+- [x] **H2-Z · Un `pull` che non può creare la sua directory incolpava
+  HuggingFace** *(P2)*
+  `eullm pull gemma-4-e4b` rispondeva `Download failed: File exists (os error
+  17)` e subito sotto «This may be because the model hasn't been published
+  yet». **Sbagliate tutte e due le metà**: l'errore veniva da `create_dir_all`
+  sulla directory del modello, e il modello sul server non c'entrava niente.
+
+  `create_dir_all` restituisce `AlreadyExists` in due casi che si leggono
+  identici — il percorso occupato da un file normale, oppure un symlink il cui
+  bersaglio non esiste più — e nessuno dei due è indovinabile da «File exists».
+  Ora la directory viene creata **prima** di qualsiasi richiesta HTTP, il
+  messaggio nomina il percorso e dice cosa c'è sopra, e il suggerimento sul
+  server non viene stampato per un problema locale.
+
 ### Verificato e **non** indotto da noi
 
 Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
@@ -1344,6 +1393,46 @@ diligenza manuale.
   quindi `default-src 'self'` è compatibile) più `X-Content-Type-Options: nosniff` sono una
   difesa in profondità a costo nullo che rende la proprietà "zero risorse esterne"
   verificabile dal browser invece che solo dichiarata.
+
+- [x] **H3-O · Compilare dai sorgenti era rotto per chiunque seguisse il
+  README** *(P1)*
+  Segnalato dalla issue #286, da openSUSE Tumbleweed: la build moriva su
+  `'llama.cpp/include/llama.h' file not found` dentro bindgen. Il primo sospetto
+  di chi segnalava è stata la distribuzione, il che è ragionevole: quell'errore
+  sembra un toolchain rotto.
+
+  Era il nostro README. llama.cpp è un **submodule** dall'8 luglio, e il README
+  diceva `git clone` senza `--recursive` in **due** punti. Quindi da tre
+  settimane ogni compilazione da sorgente fatta seguendo le istruzioni
+  falliva. La CI non se n'è accorta perché il workflow fa
+  `submodules: recursive`: l'unico percorso rotto era quello che nessuno di noi
+  percorre. In più gli archivi `Source code (zip/tar.gz)` allegati a ogni
+  release **non possono funzionare per definizione**, perché GitHub li genera
+  senza il contenuto dei submodule.
+
+  Chiuso su entrambi i fronti: il README clona con `--recursive` e spiega come
+  sistemare un clone già fatto, e `build.rs` controlla i sorgenti prima di
+  partire e stampa il comando che risolve, invece di lasciare che il sintomo
+  arrivi minuti dopo travestito da errore di compilatore.
+
+- [x] **H3-P · Il tag di una release poteva precedere il suo bump di versione**
+  *(P1)*
+  La v0.6.43 è stata taggata un merge prima del commit che alzava la versione.
+  Risultato: nove binari pubblicati che rispondono `0.6.42` a `-V`, un
+  `CHANGELOG.md` senza la sezione di quella versione, e la correzione della
+  build da sorgente (H3-O) rimasta fuori dalla release che avrebbe dovuto
+  contenerla. **Niente è fallito e la pagina della release sembrava normale**:
+  lo scarto era visibile solo eseguendo un artefatto scaricato.
+
+  Chiuso con `require_version_match` in `release-engine.yml`, che confronta il
+  tag con `engine/Cargo.toml` e blocca `release` — non le build, che da un
+  commit mal taggato non costano niente. Gira in pochi secondi, quindi un tag
+  sbagliato diventa rosso mentre le build lunghe stanno ancora partendo e fa in
+  tempo a essere cancellato e ripushato.
+
+  Un tag già pubblicato **non si sposta**: la pagina e i suoi checksum sono già
+  in mano a chi ha scaricato. Si rilascia la patch successiva e si scrive nel
+  changelog cosa conteneva davvero quella sbagliata.
 
 - [ ] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
   Il banner con `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache`

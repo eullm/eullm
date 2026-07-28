@@ -799,8 +799,18 @@ loads it automatically, routes `/api/chat` requests that carry an `images`
 field through the `mtmd` encode path, and streams the answer back. The projector
 is content-addressed and auto-detects image vs audio from the file bytes.
 
+> **No GPU required (since v0.6.42).** Multimodal used to be compiled only into
+> the CUDA binaries; every published binary now carries it. Validated on the
+> CPU-only Linux x64 build with Gemma 4 12B Q4: image description, stop-sequence
+> handling and truncation reporting all behave as they do on CUDA. Expect it to
+> be slow. Transcribing the same 40-second voice note on the same machine took
+> **4.3 s on CUDA and 143 s on CPU**, about 32x, with output of the same quality.
+> On a machine with plenty of shared memory and no discrete GPU, that is the
+> difference between slow and impossible.
+
 > **Honest scope (it's an MVP):**
-> - **Vision** is solid and validated on Linux + Windows CUDA. **Audio** is
+> - **Vision** is solid and validated on Linux + Windows CUDA, and on CPU-only
+>   Linux x64 (see above). **Audio** is
 >   experimental upstream (llama.cpp flags it as *"audio input is in
 >   experimental stage and may have reduced quality"*). In our tests, clean
 >   single-speaker speech transcribed accurately and was searchable by content;
@@ -818,8 +828,11 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   yet supported — the engine refuses media input on them for now.
 > - Multimodal models load in **sequential mode** (the continuous-batching
 >   scheduler is text-only); text-only models keep full batching.
-> - Web Chat UI accepts **both images and audio** (`.wav`/`.mp3`/`.flac`) as of
->   v0.6.2 — 📎 attach or drag & drop.
+> - Web Chat UI accepts **both images and audio** as of v0.6.2 — 📎 attach or
+>   drag & drop. The engine itself reads `.wav`/`.mp3`/`.flac` and
+>   `.jpg`/`.png`/`.bmp`/`.gif`; since v0.6.43 anything else the browser can
+>   decode is converted before it is sent, so a WhatsApp voice note (Ogg/Opus)
+>   or a WebP screenshot works without you converting it first.
 > - Quality is bounded by the quantized model — a Q4 12B does great OCR and
 >   scene description but can hallucinate specific facts (e.g. a landmark name).
 > - **Linux CUDA note:** the GPU binary links `libnccl.so.2`. If you see
