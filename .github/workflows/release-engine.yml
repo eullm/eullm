@@ -5,7 +5,8 @@ on:
     tags:
       - "engine-v*"
       - "EuLLM-v*"
-  # Manual dispatch runs ONLY build-arm-cix-p1 (see its `if:` below) - lets
+  # Manual dispatch runs only build-arm-cix-p1 and build-vulkan (see their
+  # `if:` below) - lets
   # that job be iterated on and re-run from the Actions tab without a real
   # tag, without paying for the rest of the release matrix (Windows CUDA
   # alone is a ~50 min cold build), and without ever creating a GitHub
@@ -331,8 +332,13 @@ jobs:
   # bundled into the release beyond the binary itself — unlike CUDA, where we
   # ship the runtime DLLs. A machine without a Vulkan driver gets a clear
   # loader error rather than a broken binary.
+  # No `if:` guard, unlike the other build jobs: this one also runs on a manual
+  # workflow_dispatch, so a change to the Vulkan toolchain can be validated from
+  # the Actions tab without spending a release. The first attempt at this job
+  # died on `apt-get install glslc`, a package jammy does not have, and took
+  # v0.6.46's Vulkan binary with it. `release` still only runs on a real tag, so
+  # a dispatch publishes nothing.
   build-vulkan:
-    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -346,16 +352,27 @@ jobs:
         with:
           key: x86_64-unknown-linux-gnu-vulkan
 
+      # ggml-vulkan compiles its shaders at build time and needs `glslc`, which
+      # jammy does not package: `apt-get install glslc` fails with "unable to
+      # locate package" and took a release with it. The LunarG repository is
+      # where it comes from on 22.04, and is what llama.cpp's own release
+      # workflow uses for this exact runner. Ubuntu 24.04 does have a `glslc`
+      # package, but moving this build there would raise the glibc floor of a
+      # published binary above every other Linux artifact we ship — the reason
+      # they are all built on 22.04 in the first place.
       - name: Install build dependencies
         run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wget gnupg
+          wget -qO- https://packages.lunarg.com/lunarg-signing-key-pub.asc \
+            | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/lunarg.gpg
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list \
+            https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
           sudo DEBIAN_FRONTEND=noninteractive apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-            cmake build-essential pkg-config libssl-dev \
-            libvulkan-dev glslc spirv-tools
-          # ggml-vulkan compiles its shaders at build time; without glslc the
-          # CMake configure step fails late and unhelpfully.
+            cmake build-essential pkg-config libssl-dev vulkan-sdk
           glslc --version
-          echo "Vulkan headers: $(pkg-config --modversion vulkan 2>/dev/null || echo 'via libvulkan-dev')"
 
       - name: Build engine (Vulkan)
         env:
@@ -369,12 +386,19 @@ jobs:
           cp target/release/eullm eullm-linux-x64-vulkan
           strip --strip-all eullm-linux-x64-vulkan || true
           chmod +x eullm-linux-x64-vulkan
-          # A binary that cannot find its own loader is worth catching here
-          # rather than on a user's machine.
-          ldd eullm-linux-x64-vulkan | grep -i vulkan || {
-            echo "::error::the built binary does not link libvulkan — the Vulkan backend was not compiled in"
+          # Prove the backend is actually inside the binary. The check is on
+          # ggml's own symbols rather than on `ldd`, because the Vulkan loader
+          # can be reached either by linking libvulkan or by dlopen, and only
+          # one of those shows up in the link table — a check that reads the
+          # wrong one either passes a hollow binary or fails a good one. This
+          # is the same discriminating test that settled the Metal case: what
+          # the binary contains, not what the build was asked to contain.
+          if ! strings eullm-linux-x64-vulkan | grep -q ggml_vk_; then
+            echo "::error::no ggml_vk_* symbols in the binary — the Vulkan backend was not compiled in"
             exit 1
-          }
+          fi
+          echo "Vulkan symbols present: $(strings eullm-linux-x64-vulkan | grep -c ggml_vk_)"
+          ldd eullm-linux-x64-vulkan | grep -i vulkan || echo "note: libvulkan is not in the link table (loader reached via dlopen)"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6

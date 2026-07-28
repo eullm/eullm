@@ -641,6 +641,34 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         }));
     }
 
+    // Models on disk that the catalog does not know about — anything pulled
+    // from a URL or a HuggingFace repo. Same omission as `/v1/models` had: the
+    // list was assembled from the catalog and the loaded slot, so a model the
+    // user had deliberately downloaded was missing from it unless it happened
+    // to be loaded at that moment.
+    let already: std::collections::HashSet<String> = models
+        .iter()
+        .filter_map(|m| m.get("name").and_then(|v| v.as_str()).map(String::from))
+        .collect();
+    for m in state.store.list().unwrap_or_default() {
+        if m.id.is_empty() || already.contains(&m.id) {
+            continue;
+        }
+        models.push(json!({
+            "name": m.id,
+            "size": m.size_bytes,
+            "digest": m.digest,
+            "downloaded": state.store.is_present(&m.id),
+            "details": {
+                "format": "gguf",
+                "family": m.base,
+                "parameter_size": "",
+                "quantization_level": "",
+                "display_name": m.name,
+            }
+        }));
+    }
+
     Json(json!({ "models": models }))
 }
 
@@ -1109,21 +1137,71 @@ async fn pull_model(Json(body): Json<Value>) -> Json<Value> {
 
 // ── OpenAI-compatible handlers ───────────────────────────────────────────────
 
-async fn list_models_openai() -> Json<Value> {
-    // The OpenAI `id` field is what clients echo back as the `model` parameter
-    // in chat requests, so it has to be the addressable catalog id, not the
-    // human display name.
-    let data: Vec<Value> = EU_CATALOG
-        .iter()
-        .map(|m| {
-            json!({
-                "id": m.id,
+/// Ids of the models actually present in the local store, in listing order.
+///
+/// Both model-list endpoints answered from the catalog alone, so a model pulled
+/// from a URL or a HuggingFace repo — anything not in the 22 curated entries —
+/// was invisible to them even while it was loaded and answering. On `/v1/models`
+/// that is the difference between usable and not: a coding editor picks the
+/// model from that list, so a model it does not name cannot be selected at all
+/// (issue #294).
+fn local_model_ids(state: &AppState) -> Vec<String> {
+    state
+        .store
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| !m.id.is_empty())
+        .map(|m| m.id)
+        .collect()
+}
+
+async fn list_models_openai(State(state): State<S>) -> Json<Value> {
+    let mut data: Vec<Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // What is on this machine comes first: it can be used right now, and it
+    // includes models the catalog has never heard of.
+    for id in local_model_ids(&state) {
+        if seen.insert(id.clone()) {
+            data.push(json!({
+                "id": id,
                 "object": "model",
                 "created": 1700000000_u64,
                 "owned_by": "eullm"
-            })
-        })
-        .collect();
+            }));
+        }
+    }
+
+    // The model in the slot, when it was launched from a path rather than
+    // pulled, has no manifest and so is not in the list above.
+    if let Some(name) = state.slot.read().await.model_name.clone()
+        && seen.insert(name.clone())
+    {
+        data.push(json!({
+            "id": name,
+            "object": "model",
+            "created": 1700000000_u64,
+            "owned_by": "eullm"
+        }));
+    }
+
+    // The OpenAI `id` field is what clients echo back as the `model` parameter
+    // in chat requests, so it has to be the addressable catalog id, not the
+    // human display name.
+    data.extend(
+        EU_CATALOG
+            .iter()
+            .filter(|m| !seen.contains(&m.id))
+            .map(|m| {
+                json!({
+                    "id": m.id,
+                    "object": "model",
+                    "created": 1700000000_u64,
+                    "owned_by": "eullm"
+                })
+            }),
+    );
 
     Json(json!({ "object": "list", "data": data }))
 }
