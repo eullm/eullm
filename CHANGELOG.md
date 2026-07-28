@@ -13,6 +13,16 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.45 — 2026-07-28
+
+### Fixed
+- **Gemma replies no longer end with a stray `</start_of_turn>`.** The model
+  sometimes closes a turn by writing that tag as ordinary text instead of
+  emitting the end-of-generation token, and only the plain `<end_of_turn>`
+  spelling was being watched for, so the closing form was passed through to
+  you. Seen at the end of an audio transcription; it affects text replies the
+  same way. Both closing spellings now end the turn.
+
 ## 0.6.44 — 2026-07-28
 
 ### Fixed
