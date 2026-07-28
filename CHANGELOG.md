@@ -13,16 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.49 — 2026-07-28
-
-### Added
-- **Pulling a vision model from HuggingFace brings its projector too.** A
-  catalog model already did this; one pulled by repo name did not, so the
-  weights arrived without the file that lets the model see, and you had to
-  notice the second file yourself and pass `--mmproj`. `eullm pull
-  hf.co/owner/repo` now fetches both, the same as llama.cpp's `-hf`. If the
-  projector download fails the model is still usable for text, and the warning
-  says so.
+## 0.6.50 — 2026-07-28
 
 ### Fixed
 - **The arrow keys no longer break the model picker.** Pressing left to correct
@@ -35,6 +26,19 @@ something changed, less so for understanding what it means.
   between announcing the file and finishing, with nothing on screen. It reports
   progress like any other download, and its line is closed before the next
   message rather than being written over.
+
+## 0.6.49 — 2026-07-28
+
+### Added
+- **Pulling a vision model from HuggingFace brings its projector too.** A
+  catalog model already did this; one pulled by repo name did not, so the
+  weights arrived without the file that lets the model see, and you had to
+  notice the second file yourself and pass `--mmproj`. `eullm pull
+  hf.co/owner/repo` now fetches both, the same as llama.cpp's `-hf`. If the
+  projector download fails the model is still usable for text, and the warning
+  says so.
+
+### Fixed
 - **A projector is no longer mistaken for the model itself.** It is a `.gguf`
   in the same repo, so on a vision repo a plain pull saw two candidates and
   refused as ambiguous, and asking for `:F16` could download `mmproj-F16.gguf`
