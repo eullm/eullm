@@ -35,6 +35,16 @@ H2-G, H3-D, H3-K, H3-L, H3-M e D-01 — 18 voci su 36.
 H2-S, aperta: il runner di build di `eullm-macos-x64` (vedi H2-S per cosa la
 ricerca a monte ha escluso e cosa no).
 
+**28 luglio (0.6.42 → 0.6.48), sette release in un giorno:** H2-V, H2-W, H2-X,
+H2-Y, H2-Z, H2-AA, H2-AB, H2-AC, H2-AD, H3-O, H3-P, H3-Q. Undici voci su
+dodici vengono da **due tester esterni o dall'uso diretto del prodotto**, non
+da revisioni del codice: la chat che non riconosceva il modello caricato, gli
+elenchi che ignoravano il disco, il proiettore raggiungibile solo dal catalogo
+e la build da sorgente rotta da tre settimane erano tutte invisibili a 201
+test verdi. Vale la pena registrarlo qui: in questa fase il rapporto costo/resa
+migliore non ce l'ha una revisione a tavolino, ce l'ha far girare il prodotto e
+leggere l'output di avvio di chi lo usa.
+
 **In v0.6.39:** H2-T (Metal acceso su un binario che dichiarava di non averlo —
 la voce più importante del documento) e H2-J (`think: false` non sopprimeva
 niente). Entrambe trovate su segnalazioni di Peter, nessuna delle due da una
@@ -1222,6 +1232,95 @@ esterni non si fidano dei valori che leggono.
   messaggio nomina il percorso e dice cosa c'è sopra, e il suggerimento sul
   server non viene stampato per un problema locale.
 
+- [x] **H2-AA · Il banner riportava metà della memoria KV su Qwen3** *(P2)*
+  Trovata nel log di avvio di un utente esterno (issue #286), non da un
+  controllo nostro, e visibile a due righe di distanza nello stesso schermo:
+
+      llama_kv_cache: K (f16): 224.00 MiB, V (f16): 224.00 MiB   ← llama.cpp
+        KV memory:     K=112 MiB, V=112 MiB                       ← noi
+
+  Calcolavamo la dimensione della testa come `n_embd / n_head`. Quello è il
+  **default** del formato GGUF, non una definizione: un modello può dichiarare
+  `attention.key_length` e `value_length` per conto suo, e Qwen3 lo fa —
+  1024 su 16 teste con lunghezza dichiarata 128, non i 64 che dà la divisione.
+  Quindi **ogni modello Qwen3** veniva riportato a metà del suo costo reale.
+
+  Ora leggiamo il valore dichiarato, con la divisione come ripiego per i
+  modelli che non lo portano. La cache era sempre stata allocata giusta da
+  llama.cpp: sbagliato era solo il numero che mostravamo. Contava lo stesso,
+  perché quel numero serve a scegliere una finestra di contesto che ci stia, e
+  sbagliava **per difetto** — la direzione che ti porta a chiederne una che non
+  entra.
+
+  Nota di metodo: è il terzo difetto di fila trovato leggendo l'output di
+  avvio di qualcun altro, dopo i Mac Intel e il GPU backend. Continuare a
+  chiedere il log completo invece delle sole risposte dell'API è la pratica
+  che sta pagando di più.
+
+- [x] **H2-AB · Il banner stampava meno per certi modelli, senza dirlo** *(P2)*
+  Sullo stesso schermo, `gemma-4-e4b` su CPU: sotto `Context:` non compariva
+  né la riga `KV memory:` né l'avviso sul contesto di addestramento. Non erano
+  rotti, non venivano proprio prodotti — entrambi i numeri li calcolava lo
+  **scheduler**, e un modello multimodale carica sempre in modalità
+  sequenziale, come `--batch-size 0`.
+
+  La parte che conta non è la riga mancante ma il silenzio: nessuna riga
+  diceva "questi numeri non sono disponibili", quindi sembrava un modello che
+  non aveva niente da riportare. È lo stesso vizio del `GPU layers: all` sui
+  Mac Intel — un output che tace invece di dichiarare.
+
+  Chiuso condividendo la stima: il percorso sequenziale la chiede al
+  caricamento. Da notare che io stesso avevo proposto quelle due righe come
+  "verifica gratuita" senza accorgermi che su quel modello non potevano
+  comparire: la prova era stata scritta senza guardare quale ramo di codice
+  la produceva.
+
+- [x] **H2-AC · Gli elenchi dei modelli ignoravano il disco** *(P1)*
+  Segnalata come issue #294: un modello scaricato da URL è utilizzabile dalla
+  chat ma non compare in `/v1/models`, quindi non è selezionabile da un editor.
+
+  Entrambi gli endpoint erano costruiti dal catalogo interno più il modello
+  eventualmente caricato in quel momento, e **non guardavano mai l'archivio**.
+  Un modello preso da un URL o da un repo HuggingFace era invisibile a
+  entrambi se non era caricato proprio allora.
+
+  Su `/v1/models` non è una questione estetica: **un plugin da editor offre i
+  modelli che quell'endpoint nomina**, quindi un modello non nominato non è
+  assente da una lista, è irraggiungibile, e l'utente non ha niente da
+  digitare per aggirarlo. Ora entrambi elencano prima ciò che è su disco, poi
+  il modello caricato, poi il catalogo, saltando i duplicati.
+
+- [x] **H2-AD · Il proiettore multimodale era raggiungibile solo dal catalogo**
+  *(P1)*
+  Emersa dal confronto che ha fatto l'utente: «lo stesso prompt, immagine e
+  modello funzionano con llama.cpp». Con llama.cpp il proiettore glielo passi
+  con `--mmproj`. **Noi quel flag non ce l'avevamo.**
+
+  `mmproj_path` cercava dentro l'archivio, per id del modello. Funzionava per
+  i modelli scaricati dal nostro catalogo e per nient'altro: un GGUF preso a
+  mano non poteva essere multimodale nemmeno con `mmproj-F16.gguf` nella stessa
+  cartella — che è il layout di ogni repo vision su HuggingFace. Quindi «con
+  llama.cpp funziona» non era una differenza di qualità, era un flag mancante.
+
+  Chiuso su tre fronti: un `mmproj*.gguf` accanto ai pesi viene usato da solo,
+  `--mmproj <path>` copre il caso in cui i due file stanno separati (su `run`
+  **e** su `serve`, regola di parità), e il rifiuto ora nomina il modello e
+  dice entrambe le strade invece di parlare di modalità interne del loader.
+
+  Rischio dichiarato nel messaggio e nell'aiuto del flag, perché fallisce in
+  silenzio: un proiettore appartiene ai pesi su cui è stato addestrato.
+  Accoppiarlo a pesi diversi **non dà errore**, dà risposte convinte e
+  sbagliate. Su `serve` si applica solo ai modelli che non ne hanno uno
+  proprio, e ogni volta che si applica viene loggato.
+
+  **Difetto gemello, stesso giro**: una build senza la feature `multimodal`
+  scartava l'array `images` in silenzio e passava la domanda come testo. Il
+  modello, interrogato su un'immagine mai ricevuta, rispondeva di non vederla
+  — e sembrava un limite del modello. Ora `multimodal` è feature di default
+  (tutti i binari pubblicati ce l'avevano dalla 0.6.42; solo le build da
+  sorgente no) e una build che davvero non ce l'ha risponde 501 nominando il
+  flag mancante.
+
 ### Verificato e **non** indotto da noi
 
 Elencato perché l'assenza di un difetto va registrata quanto la presenza, e
@@ -1433,6 +1532,37 @@ diligenza manuale.
   Un tag già pubblicato **non si sposta**: la pagina e i suoi checksum sono già
   in mano a chi ha scaricato. Si rilascia la patch successiva e si scrive nel
   changelog cosa conteneva davvero quella sbagliata.
+
+- [x] **H3-Q · La release pubblicava una lista scritta a mano, non ciò che
+  aveva costruito** *(P1)*
+  La v0.6.47 ha pubblicato nove binari su dieci. `build-vulkan` è andato a
+  buon fine, il suo artefatto è stato scaricato, il suo checksum è finito in
+  `checksums.txt`, e il file non è mai stato allegato: l'elenco dei file da
+  pubblicare era scritto a mano e per quello nuovo nessuno aveva aggiunto la
+  riga. In più `fail_on_unmatched_files: false` — che esiste perché una build
+  fallita non affondi la release — rendeva l'omissione **silenziosa per
+  costruzione**.
+
+  Ora il passo di pubblicazione allega `artifacts/*/*`. Ogni job carica un
+  file dentro una directory che porta il suo nome, quindi il glob **è**
+  l'insieme di ciò che è stato costruito, e aggiungere un job dimenticando la
+  riga di pubblicazione è un errore che il workflow non può più commettere.
+
+  Indizio da ricordare: `checksums.txt` viene generato camminando le directory
+  degli artefatti, quindi elencava il binario mancante **entrambe le volte**
+  (988 byte → 1100). Quando una release sembra sbagliata, confrontare il file
+  dei checksum con gli asset allegati risponde separatamente a "è stato
+  costruito?" e "è stato pubblicato?".
+
+  **Contesto, perché la lezione vera è cumulativa.** In un solo pomeriggio tre
+  release hanno annunciato qualcosa che non contenevano: la 0.6.43 il proprio
+  numero di versione, la 0.6.46 un binario che non era stato compilato, la
+  0.6.47 un binario compilato e non allegato. Tre cause diverse, un'unica
+  forma: **il meccanismo di rilascio si fidava della memoria di chi lo usava**.
+  Le tre correzioni sono altrettanti controlli — `require_version_match`, il
+  `workflow_dispatch` che valida una toolchain senza spendere una release, e
+  questo glob. Nessuna delle tre è stata trovata da una revisione: tutte e tre
+  guardando cosa conteneva davvero il tag prima di scrivere "fixed in vX".
 
 - [ ] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
   Il banner con `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache`
