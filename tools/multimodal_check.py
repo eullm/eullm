@@ -47,7 +47,14 @@ import urllib.request
 from pathlib import Path
 
 # Markers that must never appear in text handed to a client.
-TURN_DELIMITERS = ["<end_of_turn>", "<start_of_turn>", "<|im_end|>"]
+#
+# Matched on the bare name, without the surrounding punctuation. The exact
+# spellings were listed here once and a real leak walked straight through
+# them: the model closed a transcription with ``</start_of_turn>``, which does
+# not contain ``<start_of_turn>`` because of the slash, so every case reported
+# "clean" while the delimiter was visible in the reply. Whatever brackets the
+# model puts around it, the name itself has no business in a reply.
+TURN_DELIMITERS = ["start_of_turn", "end_of_turn", "im_end"]
 HARMONY_MARKERS = ["<|channel>", "<channel|>", "<|message|>", "<|image>", "<image|>"]
 
 failures = 0

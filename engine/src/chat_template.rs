@@ -50,7 +50,21 @@ impl ChatTemplate {
     pub fn stop_sequences(&self) -> Vec<String> {
         match self {
             Self::ChatML => vec!["<|im_end|>".into()],
-            Self::Gemma => vec!["<end_of_turn>".into()],
+            // The closing-tag spellings are not in Gemma's vocabulary: the
+            // model writes them as ordinary text, so they are never the EOG
+            // token and generation runs straight past them. Observed at the
+            // end of a real transcription:
+            //
+            //     … Ok? Ecco. Ciao.\n</start_of_turn>
+            //
+            // Listing them as stop sequences both ends the turn and keeps them
+            // out of the reply, since the hold-back buffer withholds any
+            // prefix of a stop sequence until it is known not to be one.
+            Self::Gemma => vec![
+                "<end_of_turn>".into(),
+                "</end_of_turn>".into(),
+                "</start_of_turn>".into(),
+            ],
             Self::Llama2 => vec!["[/INST]".into(), "</s>".into()],
         }
     }
@@ -239,7 +253,18 @@ mod tests {
     #[test]
     fn test_stop_sequences() {
         assert_eq!(ChatTemplate::ChatML.stop_sequences(), vec!["<|im_end|>"]);
-        assert_eq!(ChatTemplate::Gemma.stop_sequences(), vec!["<end_of_turn>"]);
+        assert_eq!(
+            ChatTemplate::Gemma.stop_sequences(),
+            vec!["<end_of_turn>", "</end_of_turn>", "</start_of_turn>"]
+        );
+    }
+
+    // The closing-tag form reached a user at the end of a transcription. It is
+    // ordinary text to the model, so only the stop list keeps it out.
+    #[test]
+    fn gemma_stops_on_the_closing_tag_the_model_actually_writes() {
+        let stops = ChatTemplate::Gemma.stop_sequences();
+        assert!(stops.iter().any(|s| s == "</start_of_turn>"));
     }
 
     #[test]

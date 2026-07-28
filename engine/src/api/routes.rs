@@ -856,7 +856,10 @@ async fn chat(
             // Hand-built Gemma template with the mtmd marker — do NOT let
             // generate() add its own BOS/template on top.
             raw: true,
-            stop_sequences: vec!["<end_of_turn>".to_string()],
+            // The same list the text path uses. It was spelled out here, so a
+            // stop sequence added for Gemma applied everywhere except the one
+            // path that only runs with a Gemma model.
+            stop_sequences: crate::chat_template::ChatTemplate::Gemma.stop_sequences(),
             // Gemma has no think toggle, so nothing extra to strip here.
             filter_sequences: crate::inference::default_filters(true),
             grammar: None,
