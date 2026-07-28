@@ -13,25 +13,40 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.51 — 2026-07-28
+## 0.6.52 — 2026-07-28
 
 ### Fixed
-- **`--cli` and `--no-ui` work again on multimodal models.** On a model that
-  loads in sequential mode — every multimodal model, and anything run with
-  `--batch-size 0` — asking to stay in the terminal printed "Type a message to
-  chat" and then quit without a word, taking the API server with it. The
-  terminal chat could only be driven by the batching scheduler, which those
-  models do not have. It now works from either backend, so the terminal chat is
-  available for exactly the same models the API is.
+- **The terminal chat works on multimodal models.** 0.6.51 stopped `--cli` and
+  `--no-ui` from killing the engine on a model that loads in sequential mode,
+  but it did so by explaining that the terminal chat was unavailable there —
+  which covers every vision and audio model, so `eullm run <a vision model>
+  --cli` still left you without a prompt. The chat now runs on either backend,
+  so it is available for exactly the same models the API is.
 - **The arrow keys work in the terminal chat and in the model picker.** Both
   prompts read the line raw, so pressing left to fix a typo printed `^[[D` on
   screen and put it in what you sent: a bewildering "Invalid choice" at the
-  picker, and escape sequences inside the message at the `>>>` prompt. Both now
-  read through a real line editor, so left and right move the cursor, backspace
-  works anywhere in the line, and up and down recall what you typed earlier in
-  the session. That history is kept in memory only and is not written to disk.
-  Ctrl+C now discards the line being typed instead of killing the engine; Ctrl+D
-  quits, as does `/bye`.
+  picker, and escape sequences inside the message at the `>>>` prompt. 0.6.50
+  removed them from the value but not from the display, and left the cursor
+  unable to move. Both prompts now use a real line editor: left and right move
+  the cursor, backspace works anywhere in the line, and up and down recall what
+  you typed earlier in the session. That history is kept in memory only and is
+  never written to disk. Ctrl+C discards the line being typed instead of killing
+  the engine; Ctrl+D quits, as does `/bye`.
+- **Asking for the terminal chat and not getting it is never silent.** Only two
+  things can stop it now — no model loaded, or a standard input that is not a
+  terminal — and each says which.
+
+## 0.6.51 — 2026-07-28
+
+### Fixed
+- **`--cli` and `--no-ui` no longer make the engine exit immediately.** On a
+  model that loads in sequential mode — every multimodal model, and anything
+  run with `--batch-size 0` — asking to stay in the terminal printed "Type a
+  message to chat" and then quit without a word, taking the API server with it.
+  The terminal chat needs the batching scheduler, which those models do not
+  have. The engine now stays up and serves the API, and says plainly that the
+  terminal chat is unavailable for this model instead of promising it. It still
+  does not give you the terminal chat on those models — 0.6.52 does that.
 - **A context that does not fit says what did not fit.** Asking for a large
   `--ctx-size` and getting `Failed to create context: null reference from
   llama.cpp` told you nothing: the window was the thing that failed, and its
