@@ -269,6 +269,11 @@ pub struct ModelReadyInfo {
     pub kv_k_mib: f64,
     /// KV cache value memory estimate in MiB.
     pub kv_v_mib: f64,
+    /// The context length the model was trained with. Reported so the banner
+    /// can say when the configured window throws away most of the model's
+    /// capacity: llama.cpp mentions it once, in a log line buried between two
+    /// hundred others, and the flag that fixes it is not named there.
+    pub n_ctx_train: u32,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -1675,19 +1680,40 @@ fn estimate_kv_memory(
         return ModelReadyInfo {
             kv_k_mib: 0.0,
             kv_v_mib: 0.0,
+            n_ctx_train: model.n_ctx_train(),
         };
     }
 
-    let head_dim = n_embd / n_head;
-    // Elements per K or V = n_layer × n_ctx × n_head_kv × head_dim
-    let n_elements = n_layer * n_ctx as f64 * n_head_kv * head_dim;
+    // `n_embd / n_head` is the *default* head dimension, not a definition: a
+    // model may declare `<arch>.attention.key_length` and `value_length`
+    // independently, and several do. Qwen3-0.6B carries n_embd 1024 over 16
+    // heads but a key length of 128, so the division gives 64 and the estimate
+    // came out at exactly half of what llama.cpp then allocated (112 MiB
+    // reported against 224 MiB actual, spotted in a user's startup log).
+    // Understating is the harmful direction: it invites a context size that
+    // does not fit. Read the declared lengths and fall back to the division,
+    // which is what the format says the default is.
+    let default_head_dim = n_embd / n_head;
+    let declared = |suffix: &str| -> Option<f64> {
+        let arch = model.meta_val_str("general.architecture").ok()?;
+        let v = model
+            .meta_val_str(&format!("{arch}.attention.{suffix}"))
+            .ok()?;
+        v.trim().parse::<f64>().ok().filter(|d| *d > 0.0)
+    };
+    let head_dim_k = declared("key_length").unwrap_or(default_head_dim);
+    let head_dim_v = declared("value_length").unwrap_or(default_head_dim);
 
-    let kv_k_bytes = n_elements * cache_type_bytes_per_elem(cache_type_k);
-    let kv_v_bytes = n_elements * cache_type_bytes_per_elem(cache_type_v);
+    // Elements per K or V = n_layer × n_ctx × n_head_kv × head_dim
+    let elements = |head_dim: f64| n_layer * n_ctx as f64 * n_head_kv * head_dim;
+
+    let kv_k_bytes = elements(head_dim_k) * cache_type_bytes_per_elem(cache_type_k);
+    let kv_v_bytes = elements(head_dim_v) * cache_type_bytes_per_elem(cache_type_v);
 
     ModelReadyInfo {
         kv_k_mib: kv_k_bytes / (1024.0 * 1024.0),
         kv_v_mib: kv_v_bytes / (1024.0 * 1024.0),
+        n_ctx_train: model.n_ctx_train(),
     }
 }
 

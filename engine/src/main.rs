@@ -1595,7 +1595,18 @@ fn open_browser(url: &str) -> std::io::Result<()> {
         c.arg(url);
         c
     };
-    cmd.spawn().map(|_| ())
+    // The handler's own diagnostics are not ours to print. On a machine with
+    // no graphical browser, xdg-open walks its fallback list and reports each
+    // miss, so the engine's startup ended in seven `command not found` lines
+    // followed by `no method available` — noise that reads like the engine
+    // failing, right after the banner said it was ready. Reported from a real
+    // session (issue #286). The spawn result still decides which of the two
+    // messages the caller prints, so a failure is still visible, in one line
+    // and in our own words.
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1650,6 +1661,7 @@ async fn cmd_run(
     let launch_gguf_path: Option<PathBuf>;
     let mut engine: Option<Arc<InferenceEngine>> = None;
     let mut scheduler: Option<inference::SchedulerHandle> = None;
+    let mut n_ctx_train: u32 = 0;
     let mut kv_k_mib: f64 = 0.0;
     let mut kv_v_mib: f64 = 0.0;
 
@@ -1805,6 +1817,7 @@ async fn cmd_run(
             let sched = BatchScheduler::new(config, sched_config);
             match sched.start() {
                 Ok((handle, model_info)) => {
+                    n_ctx_train = model_info.n_ctx_train;
                     kv_k_mib = model_info.kv_k_mib;
                     kv_v_mib = model_info.kv_v_mib;
                     scheduler = Some(handle);
@@ -1928,6 +1941,17 @@ async fn cmd_run(
             }
         } else {
             println!("  Context:       {ctx_size}");
+        }
+        // A window far below what the model was trained for is a silent
+        // downgrade: the model still answers, just with far less history than
+        // it can hold, and nothing on screen connects that to a flag. Reported
+        // by a user whose editor plugin needed more than the 4096 default
+        // (issue #286). Half is the threshold because a deliberate reduction
+        // for memory is normal and should not be nagged at.
+        if n_ctx_train > 0 && ctx_size < n_ctx_train / 2 {
+            println!(
+                "    this model was trained for {n_ctx_train} — raise it with --ctx-size (costs KV memory)"
+            );
         }
         println!(
             "  Flash attn:    {} (auto-detect)",

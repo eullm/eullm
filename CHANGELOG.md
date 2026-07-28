@@ -22,6 +22,23 @@ something changed, less so for understanding what it means.
   spelling was being watched for, so the closing form was passed through to
   you. Seen at the end of an audio transcription; it affects text replies the
   same way. Both closing spellings now end the turn.
+- **The reported KV cache memory was half the real figure on Qwen3 models.**
+  The startup banner works out how much memory the context window costs, and it
+  derived a value the model can declare for itself. On Qwen3 the two differ by a
+  factor of two, so the banner promised 112 MB where 224 MB was allocated. It
+  now reads what the model declares. The cache itself was always the right size;
+  only the number shown to you was wrong, and it was wrong in the direction that
+  invites choosing a context window that does not fit.
+- **The banner says when the context window is far below what the model can
+  hold.** The default is 4096 tokens, models are commonly trained for ten times
+  that, and nothing connected a plugin running out of room to the flag that
+  fixes it. When the window is below half the model's, the banner now says so
+  and names `--ctx-size`.
+- **Starting the browser no longer prints a wall of errors.** On a machine with
+  no graphical browser, the desktop handler reports every fallback it tried,
+  which landed seven `command not found` lines immediately after the banner said
+  the engine was ready. A failure to open now costs one line, and the chat URL
+  is printed either way.
 
 ## 0.6.44 — 2026-07-28
 

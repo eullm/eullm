@@ -69,12 +69,20 @@ jobs:
             exit 1
           fi
 
-          # Same rule for the author field itself: one merge commit reached
-          # main authored by "Claude" because the author override was set on
-          # the commits but not on the merge.
-          if git log $range --format='%an|%ae' | grep -iE '(^|\|)claude|anthropic\.com'; then
+          # Same rule for the identity fields: one merge commit reached main
+          # authored by "Claude" because the author override was set on the
+          # commits but not on the merge.
+          #
+          # Both fields, not just the author. A commit carries an author and a
+          # committer, and `git cherry-pick`, `rebase` and `commit --amend`
+          # rewrite the second one from whatever identity the environment has
+          # configured while faithfully preserving the first. Two commits
+          # reached main that way, and GitHub renders them as "primoco authored
+          # and Claude committed" — the exact second name this check exists to
+          # keep out, sitting in the one field it was not looking at.
+          if git log $range --format='%an|%ae|%cn|%ce' | grep -iE '(^|\|)claude|anthropic\.com'; then
             echo
-            echo "::error::A commit is authored by an AI tool identity. Commits must be authored by primoco <58369875+primoco@users.noreply.github.com>, merges included."
+            echo "::error::A commit carries an AI tool identity as its author or committer. Both must be primoco <58369875+primoco@users.noreply.github.com>, merges included. The committer is set by the environment's git config, so a cherry-pick or rebase can reintroduce it even when every author is right: check `git log --format='%h %an|%cn'`."
             exit 1
           fi
 
