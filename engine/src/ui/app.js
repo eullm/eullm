@@ -579,36 +579,39 @@
       const r = await fetch("/api/tags", withAuth());
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const data = await r.json();
-      const loaded = (data.models || []).filter((m) => m.size === 0 || m.size === undefined || /\.gguf$/i.test(m.name) || !m.digest);
-      // Heuristic: locally-loaded entry has size=0 and empty digest. Catalog entries have real digest+size.
-      const reallyLoaded = (data.models || []).filter((m) => !m.digest || m.digest === "");
-      const catalog = (data.models || []).filter((m) => m.digest && m.digest !== "");
+      // Three groups, and the middle one is the point: a model whose weights
+      // are on disk is selectable even when nothing is loaded yet, because the
+      // server swaps to it on the first request. Until `downloaded` existed
+      // every catalog entry was disabled, so starting with `eullm serve` and
+      // an already-pulled model left the picker empty and the UI unusable.
+      // Heuristic for the loaded slot: it has no digest. Catalog entries do.
+      const all = data.models || [];
+      const reallyLoaded = all.filter((m) => !m.digest || m.digest === "");
+      const onDisk = all.filter((m) => m.digest && m.downloaded);
+      const catalog = all.filter((m) => m.digest && !m.downloaded);
+
+      const addGroup = (label, items, disabled, text) => {
+        if (!items.length) return;
+        const group = document.createElement("optgroup");
+        group.label = label;
+        for (const m of items) {
+          const opt = document.createElement("option");
+          opt.value = m.name;
+          opt.textContent = text(m);
+          opt.disabled = disabled;
+          group.appendChild(opt);
+        }
+        els.modelSelect.appendChild(group);
+      };
 
       els.modelSelect.innerHTML = "";
-      if (reallyLoaded.length) {
-        const group = document.createElement("optgroup");
-        group.label = "Loaded";
-        for (const m of reallyLoaded) {
-          const opt = document.createElement("option");
-          opt.value = m.name;
-          opt.textContent = m.name;
-          group.appendChild(opt);
-        }
-        els.modelSelect.appendChild(group);
-      }
-      if (catalog.length) {
-        const group = document.createElement("optgroup");
-        group.label = "EU Catalog (not yet downloaded)";
-        for (const m of catalog) {
-          const opt = document.createElement("option");
-          opt.value = m.name;
-          opt.textContent = `${m.name} — ${(m.size / 1e9).toFixed(1)} GB`;
-          opt.disabled = true;
-          group.appendChild(opt);
-        }
-        els.modelSelect.appendChild(group);
-      }
-      currentModel = reallyLoaded[0]?.name || "";
+      addGroup("Loaded", reallyLoaded, false, (m) => m.name);
+      addGroup("On this machine", onDisk, false, (m) => `${m.name} — ${(m.size / 1e9).toFixed(1)} GB`);
+      addGroup("EU Catalog (not yet downloaded)", catalog, true, (m) => `${m.name} — ${(m.size / 1e9).toFixed(1)} GB`);
+
+      // Prefer what is already loaded; otherwise pre-select something that can
+      // actually answer, so the first message does not need a manual pick.
+      currentModel = reallyLoaded[0]?.name || onDisk[0]?.name || "";
       if (currentModel) els.modelSelect.value = currentModel;
       updateStatus(reallyLoaded[0]);
     } catch (err) {
@@ -653,7 +656,14 @@
   // ── Streaming chat ────────────────────────────────────────────────────
   async function send(userText) {
     if (!currentModel) {
-      alert("No model loaded.\n\nStart the engine with:\n  eullm run /path/to/model.gguf");
+      // Reached only when nothing is loaded and nothing is on disk either:
+      // with `eullm serve` a downloaded model is selectable and swaps in on
+      // the first request, so telling everyone to restart the engine was
+      // wrong advice for the one command that does not need it.
+      alert(
+        "No model available.\n\nDownload one:\n  eullm pull gemma-4-12b\n\n" +
+          "or start the engine with a file:\n  eullm run /path/to/model.gguf",
+      );
       return;
     }
     // Snapshot + clear the pending media at send time so a fast re-attach

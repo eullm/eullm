@@ -606,10 +606,18 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
             }
             continue;
         }
+        // Whether the weights are on disk. Ollama has no equivalent field
+        // because its `/api/tags` lists only what has been pulled; ours lists
+        // the whole catalog, and without this a client cannot tell a model it
+        // can run right now from one that would first download several
+        // gigabytes. The chat UI disabled every catalog entry for exactly that
+        // reason, which made a downloaded-but-not-loaded model unselectable
+        // even though the server swaps to it on request.
         models.push(json!({
             "name": m.id,
             "size": m.size_bytes,
             "digest": m.digest,
+            "downloaded": state.store.is_present(&m.id),
             "details": {
                 "format": "gguf",
                 "family": m.base(),
