@@ -568,6 +568,7 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
             "name": name,
             "size": 0,
             "digest": "",
+            "loaded": true,
             "details": {
                 "format": "gguf",
                 "family": "",
@@ -587,12 +588,22 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         if loaded_name.as_deref() == Some(m.name.as_str())
             || loaded_name.as_deref() == Some(m.id.as_str())
         {
-            // Replace the placeholder entry above with full catalog metadata
+            // Replace the placeholder entry above with full catalog metadata.
+            // `loaded` must survive that replacement: it is the only thing in
+            // the response that says which model is in the slot. Clients used
+            // to infer it from the empty digest of the placeholder, and this
+            // line overwrites that with the catalog's real digest — so a
+            // loaded *catalog* model looked exactly like one that had never
+            // been downloaded, while a loaded raw `.gguf` path (which never
+            // reaches this branch) looked correct. That is why the chat UI
+            // reported "No model loaded" only after picking from the picker.
             if let Some(first) = models.first_mut() {
                 *first = json!({
                     "name": m.id,
                     "size": m.size_bytes,
                     "digest": m.digest,
+                    "loaded": true,
+                    "downloaded": true,
                     "details": {
                         "format": "gguf",
                         "family": m.base(),
@@ -606,10 +617,18 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
             }
             continue;
         }
+        // Whether the weights are on disk. Ollama has no equivalent field
+        // because its `/api/tags` lists only what has been pulled; ours lists
+        // the whole catalog, and without this a client cannot tell a model it
+        // can run right now from one that would first download several
+        // gigabytes. The chat UI disabled every catalog entry for exactly that
+        // reason, which made a downloaded-but-not-loaded model unselectable
+        // even though the server swaps to it on request.
         models.push(json!({
             "name": m.id,
             "size": m.size_bytes,
             "digest": m.digest,
+            "downloaded": state.store.is_present(&m.id),
             "details": {
                 "format": "gguf",
                 "family": m.base(),

@@ -379,6 +379,20 @@ impl ModelStore {
         self.root.join(short_name)
     }
 
+    /// Create this model's directory, or explain why it cannot be created.
+    ///
+    /// A pull creates the directory implicitly, on its way to writing the
+    /// first byte of a multi-gigabyte download. When that fails the failure
+    /// arrives after the HTTP request has already started and is reported
+    /// alongside a suggestion that the model may not be published yet, which
+    /// sends the user to look at the wrong machine. Called up front, a local
+    /// problem is a local message and nothing is downloaded.
+    pub fn ensure_model_dir(&self, id: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let dir = self.model_path(id);
+        create_model_dir(&dir)?;
+        Ok(dir)
+    }
+
     /// Remove a model's entire directory from disk.
     ///
     /// Returns `Ok(Some(bytes_freed))` if the directory existed and was
@@ -399,10 +413,25 @@ impl ModelStore {
 /// Create a model directory (and its parents, including the store root),
 /// attaching a hint when the failure looks like a dangling symlink to an
 /// unmounted volume — the one place the store actually has to create the tree.
+///
+/// `create_dir_all` reports `AlreadyExists` for two situations that read
+/// identically as `File exists (os error 17)` and are the two most likely
+/// reasons this fails on a real machine: the path is occupied by a regular
+/// file, or it is a symlink whose target is gone. Neither is a plausible
+/// guess from that message alone, so both are named here.
 fn create_model_dir(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(dir).map_err(|e| {
+        let occupant = match fs::symlink_metadata(dir) {
+            Ok(md) if md.file_type().is_symlink() => {
+                " That path is a symlink; if its target no longer exists, remove the link."
+            }
+            Ok(md) if md.is_file() => {
+                " That path is a regular file, not a directory. Remove or rename it."
+            }
+            _ => "",
+        };
         format!(
-            "could not create model directory at {}: {e}. \
+            "could not create model directory at {}: {e}.{occupant} \
              If the store path is a symlink to an unmounted volume (e.g. a Windows/NAS mount), \
              mount it first, remove the dangling link, or set EULLM_MODELS_DIR to a writable path.",
             dir.display()
@@ -696,6 +725,32 @@ mod store_lookup_tests {
         assert!(!store.is_present("gemma-4-e4b"));
         fs::write(s.0.join("gemma-4-e4b").join("g.gguf"), b"x").expect("gguf");
         assert!(store.is_present("gemma-4-e4b"));
+    }
+
+    // A pull reported `File exists (os error 17)` and then suggested the model
+    // might not be published yet, which is the wrong machine entirely. The
+    // message has to name the path and say what is sitting on it.
+    #[test]
+    fn a_file_where_the_model_directory_goes_is_explained() {
+        let s = Scratch::new();
+        fs::write(s.0.join("blocked"), b"not a directory").expect("write");
+        let err = s
+            .store()
+            .ensure_model_dir("blocked")
+            .expect_err("a regular file must not pass for a model directory")
+            .to_string();
+        assert!(err.contains("blocked"), "the path must be named: {err}");
+        assert!(
+            err.contains("regular file"),
+            "the occupant must be named: {err}"
+        );
+    }
+
+    #[test]
+    fn an_existing_model_directory_is_accepted() {
+        let s = Scratch::new();
+        let dir = s.store().ensure_model_dir("gemma-4-e4b").expect("existing");
+        assert_eq!(dir, s.0.join("gemma-4-e4b"));
     }
 
     #[test]

@@ -23,7 +23,7 @@ something changed, less so for understanding what it means.
   board. Expect it to be slow on CPU — the image encoder is the expensive part,
   and a large photo can take tens of seconds before the first word — but on a
   machine with shared memory it is the difference between slow and impossible.
-  The binaries are about 4 MB larger; nothing changes if you never send an
+  The binaries are about 1 MB larger; nothing changes if you never send an
   image.
 
 ### Fixed
