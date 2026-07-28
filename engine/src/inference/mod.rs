@@ -871,6 +871,23 @@ pub struct InferenceEngine {
 unsafe impl Send for InferenceEngine {}
 unsafe impl Sync for InferenceEngine {}
 
+/// Explain a failed context allocation in terms of what the user chose.
+///
+/// llama.cpp answers a KV cache that does not fit with a null pointer, which
+/// reaches the client as "Failed to create context: null reference from
+/// llama.cpp" — true, and useless. The window and the memory it costs are
+/// both known here, and the flag that changes them is the one the user just
+/// set. Seen with `--ctx-size 131072` on a 4B model: 17 GB of KV cache, an
+/// allocation that could not be served, and nothing on screen connecting the
+/// three.
+fn context_alloc_error(err: &impl std::fmt::Display, ctx_size: u32, kv_mib: f64) -> String {
+    format!(
+        "could not allocate a context of {ctx_size} tokens: {err}. Its KV cache alone needs about \
+         {kv_mib:.0} MiB, which did not fit. Lower it with --ctx-size, or halve the cache with \
+         --cache-type-k q8_0 --cache-type-v q8_0."
+    )
+}
+
 impl InferenceEngine {
     /// The same load-time facts the scheduler reports, for the sequential
     /// path. Without this the startup banner silently prints less depending
@@ -1279,8 +1296,17 @@ impl InferenceEngine {
                 }
             }
             Err(e) => {
-                let _ =
-                    tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
+                let info = crate::inference::scheduler::estimate_kv_memory(
+                    &self.model,
+                    u64::from(self.config.context_size),
+                    &self.config.cache_type_k,
+                    &self.config.cache_type_v,
+                );
+                let _ = tx.blocking_send(StreamEvent::Error(context_alloc_error(
+                    &e,
+                    self.config.context_size,
+                    info.kv_k_mib + info.kv_v_mib,
+                )));
                 return;
             }
         };
@@ -1580,8 +1606,17 @@ impl InferenceEngine {
                 }
             }
             Err(e) => {
-                let _ =
-                    tx.blocking_send(StreamEvent::Error(format!("Failed to create context: {e}")));
+                let info = crate::inference::scheduler::estimate_kv_memory(
+                    &self.model,
+                    u64::from(self.config.context_size),
+                    &self.config.cache_type_k,
+                    &self.config.cache_type_v,
+                );
+                let _ = tx.blocking_send(StreamEvent::Error(context_alloc_error(
+                    &e,
+                    self.config.context_size,
+                    info.kv_k_mib + info.kv_v_mib,
+                )));
                 return;
             }
         };
