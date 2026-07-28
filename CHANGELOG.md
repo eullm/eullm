@@ -13,6 +13,33 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.46 — 2026-07-28
+
+### Added
+- **A Vulkan binary, `eullm-linux-x64-vulkan`.** Until now the published GPU
+  builds were NVIDIA only, which left out every AMD and Intel GPU — including
+  the unified-memory laptops and mini PCs whose integrated graphics can address
+  far more memory than a consumer discrete card. Vulkan needs a driver on your
+  machine (mesa RADV, amdvlk, NVIDIA, Intel ANV) and `libvulkan.so.1`; nothing
+  is bundled, unlike the CUDA builds which ship their runtime. First community
+  run: a Ryzen AI 9 HX 470 with Radeon 890M, all layers offloaded.
+- **Image and audio input now work on a build from source.** Multimodal is a
+  default feature, so `cargo build --release --features vulkan` (or cuda, or
+  rocm) gets it without asking. Every published binary already had it; only
+  hand-built ones did not.
+
+### Fixed
+- **A build that cannot read media says so instead of ignoring it.** Attaching
+  a photo to a binary compiled without multimodal support used to drop the
+  image on the way in and pass the question through as plain text, so the model
+  answered that it could not see any image — which reads as the model's
+  limitation rather than the binary's. It is now an explicit error naming what
+  is missing.
+- **The startup banner no longer reports less for some models than others.**
+  The KV cache size and the "this model was trained for N tokens" hint were
+  produced only by the batching loader, so for multimodal models and for
+  `--batch-size 0` both lines were simply absent, with nothing saying why.
+
 ## 0.6.45 — 2026-07-28
 
 ### Fixed

@@ -872,6 +872,20 @@ unsafe impl Send for InferenceEngine {}
 unsafe impl Sync for InferenceEngine {}
 
 impl InferenceEngine {
+    /// The same load-time facts the scheduler reports, for the sequential
+    /// path. Without this the startup banner silently prints less depending
+    /// on which loader ran: multimodal models always load sequentially, so
+    /// neither the KV cache size nor the model's trained context length was
+    /// ever shown for them.
+    pub fn ready_info(&self) -> scheduler::ModelReadyInfo {
+        scheduler::estimate_kv_memory(
+            &self.model,
+            u64::from(self.config.context_size),
+            &self.config.cache_type_k,
+            &self.config.cache_type_v,
+        )
+    }
+
     /// Load a GGUF model and prepare the inference engine.
     pub fn load(config: InferenceConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if !config.model_path.exists() {
@@ -968,12 +982,14 @@ impl InferenceEngine {
         // Mirror the text-side GPU policy: offload mmproj to GPU when the
         // text model itself is being offloaded. Threads count carries over
         // for the CPU-side image preprocessing inside mtmd.
-        let mut params = MtmdContextParams::default();
-        // Same rule as the text side: a binary with no GPU backend must not
-        // ask for one, whatever the config says (see `check_gpu_support`).
-        params.use_gpu = config.gpu_layers != 0 && has_gpu_backend();
-        params.print_timings = false;
-        params.n_threads = config.threads as i32;
+        let mut params = MtmdContextParams {
+            // Same rule as the text side: a binary with no GPU backend must
+            // not ask for one, whatever the config says (`check_gpu_support`).
+            use_gpu: config.gpu_layers != 0 && has_gpu_backend(),
+            print_timings: false,
+            n_threads: config.threads as i32,
+            ..MtmdContextParams::default()
+        };
 
         // Dynamic-resolution vision models (e.g. Gemma 4) cap image tokens
         // (Gemma4UV defaults to max 280). That low cap aggressively downscales
