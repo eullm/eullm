@@ -29,7 +29,21 @@ something changed, less so for understanding what it means.
   the release published the other nine binaries without it. This is the version
   that actually has it.
 
+### Added
+- **A projector next to the weights is found on its own, and `--mmproj` names
+  one that is not.** Vision and audio models only worked when pulled from the
+  catalog: the projector was looked up by model id inside the model store, so a
+  GGUF you downloaded yourself could never be multimodal, whatever sat beside
+  it. A file called `mmproj*.gguf` in the same folder as the weights is now
+  used automatically — the layout every HuggingFace vision repo ships — and
+  `--mmproj <path>` covers the case where the two live apart. Available on both
+  `run` and `serve`.
+
 ### Fixed
+- **Asking a text-only model for an image now says what to do about it.** The
+  refusal read "engine is in batched (text-only) mode", which is true and
+  useless: it named an internal mode rather than the missing projector. It now
+  names the model, and says both ways to get one.
 - **A model you pulled yourself now appears in the model lists.** Both
   `/v1/models` and `/api/tags` were assembled from the built-in catalog and
   whatever was loaded at that moment, so a model downloaded from a URL or a

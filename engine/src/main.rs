@@ -249,6 +249,18 @@ enum Commands {
         /// for that.
         #[arg(long)]
         rust_debug: bool,
+
+        /// Path to a multimodal projector (mmproj GGUF) for this model.
+        ///
+        /// Normally unnecessary: a model pulled from the catalog gets its
+        /// projector alongside the weights, and one sitting next to the GGUF
+        /// as `mmproj*.gguf` is picked up on its own. Needed when the two
+        /// live apart, which is common for a model assembled by hand from a
+        /// HuggingFace repo. A projector belongs to the model it was trained
+        /// with: pairing it with different weights produces confident
+        /// nonsense rather than an error.
+        #[arg(long, value_name = "PATH")]
+        mmproj: Option<PathBuf>,
     },
     /// List locally available models
     List,
@@ -396,6 +408,17 @@ enum Commands {
         /// See `eullm run --help` for the full rationale.
         #[arg(long)]
         rust_debug: bool,
+
+        /// Fallback multimodal projector (mmproj GGUF) for models that do not
+        /// carry one of their own.
+        ///
+        /// Only used when the model being loaded has no projector in the
+        /// store and none beside its weights. A projector belongs to the
+        /// model it was trained with, so on a server that swaps between
+        /// models this is a last resort for one you know needs it, not a
+        /// default to leave on — the pairing is logged whenever it applies.
+        #[arg(long, value_name = "PATH")]
+        mmproj: Option<PathBuf>,
     },
     /// Unload the currently loaded model from a running eullm server,
     /// freeing its VRAM — without restarting the server.
@@ -571,6 +594,7 @@ async fn main() {
                 pidfile: DEFAULT_PIDFILE.into(),
                 image: None,
                 rust_debug: false,
+                mmproj: None,
             },
             Some(picker::Picked::Catalog(entry)) => Commands::Run {
                 model: Some(entry.id.clone()),
@@ -599,6 +623,7 @@ async fn main() {
                 pidfile: DEFAULT_PIDFILE.into(),
                 image: None,
                 rust_debug: false,
+                mmproj: None,
             },
             Some(picker::Picked::Url(_url)) => {
                 eprintln!(
@@ -655,6 +680,7 @@ async fn main() {
             pidfile,
             image,
             rust_debug,
+            mmproj,
         } => {
             // `eullm run` with no model → picker, dispatch back through the same Run.
             let model = match model {
@@ -743,6 +769,7 @@ async fn main() {
                 open_chat,
                 image,
                 rust_debug,
+                mmproj,
             )
             .await;
         }
@@ -771,6 +798,7 @@ async fn main() {
             daemon,
             pidfile,
             rust_debug,
+            mmproj,
         } => {
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
@@ -816,6 +844,7 @@ async fn main() {
                 ctx_checkpoints,
                 checkpoint_min_step,
                 rust_debug,
+                mmproj,
             )
             .await;
         }
@@ -1635,6 +1664,7 @@ async fn cmd_run(
     open_chat: bool,
     image: Option<PathBuf>,
     rust_debug: bool,
+    mmproj: Option<PathBuf>,
 ) {
     // `--image` is a one-shot multimodal probe: load, send the bytes + prompt,
     // print the output, exit. Forces sequential mode (the scheduler does not
@@ -1659,6 +1689,9 @@ async fn cmd_run(
     // `api::AppState::launch_model`) because `gguf_path` itself is moved into
     // the loader.
     let launch_gguf_path: Option<PathBuf>;
+    // Carried out of the load block so the API can keep it as the fallback
+    // projector for a later model swap.
+    let mut api_mmproj: Option<PathBuf> = None;
     let mut engine: Option<Arc<InferenceEngine>> = None;
     let mut scheduler: Option<inference::SchedulerHandle> = None;
     let mut n_ctx_train: u32 = 0;
@@ -1769,12 +1802,19 @@ async fn cmd_run(
         // alongside the GGUF). On text-only builds the value is read but
         // ignored at InferenceConfig level; on multimodal builds it is
         // what enables `generate_multimodal`.
-        let mmproj_for_config = store
-            .mmproj_path(&model_name)
-            .or_else(|| store.mmproj_path(model)); // also try the user-typed id
+        // Order of precedence, most explicit first: what the user named, what
+        // the store recorded when the model was pulled, and finally a
+        // projector sitting next to the weights — the layout of every
+        // HuggingFace vision repo, and the case that used to be unreachable.
+        let mmproj_for_config = mmproj
+            .clone()
+            .or_else(|| store.mmproj_path(&model_name))
+            .or_else(|| store.mmproj_path(model))
+            .or_else(|| crate::models::store::mmproj_beside(&gguf_path));
         if let Some(ref p) = mmproj_for_config {
             println!("Found mmproj: {}", p.display());
         }
+        api_mmproj = mmproj_for_config.clone();
 
         let config = InferenceConfig {
             model_path: gguf_path,
@@ -2031,6 +2071,9 @@ async fn cmd_run(
     tokio::spawn(async move {
         if let Err(e) = api::serve(api::ServeConfig {
             port,
+            // `run` resolves the projector itself and hands the loaded engine
+            // over; this is only the fallback for a later swap.
+            mmproj: api_mmproj,
             model_name: Some(api_model_name),
             engine,
             scheduler,
@@ -2112,6 +2155,7 @@ async fn cmd_serve(
     ctx_checkpoints: usize,
     checkpoint_min_step: u32,
     rust_debug: bool,
+    mmproj: Option<PathBuf>,
 ) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
@@ -2135,6 +2179,7 @@ async fn cmd_serve(
 
     if let Err(e) = api::serve(api::ServeConfig {
         port,
+        mmproj,
         model_name: None,
         engine: None,
         scheduler: None,
