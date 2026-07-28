@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.46 — 2026-07-28
+## 0.6.47 — 2026-07-28
 
 ### Added
 - **A Vulkan binary, `eullm-linux-x64-vulkan`.** Until now the published GPU
@@ -23,10 +23,11 @@ something changed, less so for understanding what it means.
   machine (mesa RADV, amdvlk, NVIDIA, Intel ANV) and `libvulkan.so.1`; nothing
   is bundled, unlike the CUDA builds which ship their runtime. First community
   run: a Ryzen AI 9 HX 470 with Radeon 890M, all layers offloaded.
-- **Image and audio input now work on a build from source.** Multimodal is a
-  default feature, so `cargo build --release --features vulkan` (or cuda, or
-  rocm) gets it without asking. Every published binary already had it; only
-  hand-built ones did not.
+
+  0.6.46 announced this binary and did not ship it: the build job failed on a
+  package that does not exist on the distribution the release is built on, and
+  the release published the other nine binaries without it. This is the version
+  that actually has it.
 
 ### Fixed
 - **A model you pulled yourself now appears in the model lists.** Both
@@ -37,6 +38,16 @@ something changed, less so for understanding what it means.
   endpoint names, so one it never names cannot be selected at all. Reported by
   a user whose pulled 35B ran fine in the chat UI and could not be reached from
   the editor.
+
+## 0.6.46 — 2026-07-28
+
+### Added
+- **Image and audio input now work on a build from source.** Multimodal is a
+  default feature, so `cargo build --release --features vulkan` (or cuda, or
+  rocm) gets it without asking. Every published binary already had it; only
+  hand-built ones did not.
+
+### Fixed
 - **A build that cannot read media says so instead of ignoring it.** Attaching
   a photo to a binary compiled without multimodal support used to drop the
   image on the way in and pass the question through as plain text, so the model
