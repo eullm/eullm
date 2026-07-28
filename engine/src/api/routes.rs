@@ -868,7 +868,10 @@ async fn chat(
         return Err((
             StatusCode::NOT_IMPLEMENTED,
             Json(json!({
-                "error": "This build has no multimodal support, so the attached media cannot be                           read. The published binaries include it; a build from source needs                           `--features multimodal` (combine it with a backend, e.g.                           `--features \"vulkan,multimodal\"`)."
+                "error": "This build has no multimodal support, so the attached media cannot be read. \
+                          The published binaries include it; a build from source needs \
+                          `--features multimodal` (combine it with a backend, e.g. \
+                          `--features \"vulkan,multimodal\"`)."
             })),
         ));
     }
@@ -887,8 +890,14 @@ async fn chat(
                 return Err((
                     StatusCode::SERVICE_UNAVAILABLE,
                     Json(json!({
-                        "error": "Multimodal request but engine is in batched (text-only) mode \
-                                 — the loaded model has no mmproj projector."
+                        "error": format!(
+                            "`{}` has no multimodal projector, so it cannot read images or audio. \
+                             Either use a model that ships one — `eullm pull gemma-4-e4b` fetches \
+                             the weights and the projector together — or point at a projector you \
+                             already have with `--mmproj <path>`. A projector found next to the \
+                             weights as `mmproj*.gguf` is picked up on its own.",
+                            snap.model_name
+                        )
                     })),
                 ));
             }

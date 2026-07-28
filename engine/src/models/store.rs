@@ -72,6 +72,27 @@ pub struct ModelStore {
     root: PathBuf,
 }
 
+/// Find a multimodal projector sitting next to a GGUF file.
+///
+/// `ModelStore::mmproj_path` only looks inside the store, keyed by model id, so
+/// a model run straight from a path — `eullm run ./gemma-4-12b-Q4.gguf`, or
+/// anything pulled from a URL — could never be multimodal however many
+/// `mmproj-F16.gguf` files sat in the same folder. That is also the layout
+/// every HuggingFace vision repo ships, and what llama.cpp users expect to
+/// work.
+pub fn mmproj_beside(gguf: &Path) -> Option<PathBuf> {
+    let dir = gguf.parent()?;
+    let entries = fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name()?.to_str()?.to_ascii_lowercase();
+        if name.starts_with("mmproj") && name.ends_with(".gguf") {
+            return Some(path);
+        }
+    }
+    None
+}
+
 /// Write a file so a reader never sees it half-written.
 ///
 /// `fs::write` truncates first and writes after, so a process that dies in

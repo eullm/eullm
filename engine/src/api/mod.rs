@@ -117,6 +117,10 @@ pub struct AppState {
     /// and so the posture is logged before the first fetch rather than after.
     pub web_policy: crate::tools::guard::WebPolicy,
 
+    /// Projector to fall back on when the model being loaded declares none
+    /// of its own, from `serve --mmproj`. Normally `None`.
+    pub fallback_mmproj: Option<PathBuf>,
+
     /// Whether a request's `model` field may name an arbitrary filesystem
     /// path. Off by default — see `resolve_model`.
     pub allow_model_paths: bool,
@@ -212,7 +216,25 @@ impl AppState {
         // declares one. Presence of a projector is the signal that this is
         // a multimodal model — we then force sequential loading (next step)
         // because the continuous-batching scheduler is text-only.
-        let mmproj_path = self.store.mmproj_path(&normalized);
+        // A projector beside the weights counts too: that is how every
+        // HuggingFace vision repo is laid out, and a model resolved from a
+        // path has no store entry to declare one. `--mmproj` is the last
+        // resort, and it is logged loudly because pairing a projector with
+        // weights it was not trained on produces confident nonsense rather
+        // than an error.
+        let mmproj_path = self
+            .store
+            .mmproj_path(&normalized)
+            .or_else(|| crate::models::store::mmproj_beside(&gguf_path))
+            .or_else(|| {
+                self.fallback_mmproj.clone().inspect(|p| {
+                    tracing::warn!(
+                        "no projector of its own for {}; using --mmproj {}",
+                        crate::audit::sanitize_for_log(&normalized),
+                        p.display()
+                    );
+                })
+            });
         if let Some(ref p) = mmproj_path {
             tracing::info!("Multimodal model detected — mmproj: {}", p.display());
         }
@@ -494,6 +516,8 @@ fn normalize_model_name(name: &str) -> String {
 /// Configuration for starting the API server.
 pub struct ServeConfig {
     pub port: u16,
+    /// See `AppState::fallback_mmproj`.
+    pub mmproj: Option<PathBuf>,
     pub model_name: Option<String>,
     pub engine: Option<Arc<InferenceEngine>>,
     pub scheduler: Option<SchedulerHandle>,
@@ -639,6 +663,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let state = Arc::new(AppState {
+        fallback_mmproj: cfg.mmproj.clone(),
         slot: tokio::sync::RwLock::new(ModelSlot {
             model_name: cfg.model_name,
             engine: cfg.engine,
