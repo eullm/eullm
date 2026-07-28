@@ -584,11 +584,16 @@
       // server swaps to it on the first request. Until `downloaded` existed
       // every catalog entry was disabled, so starting with `eullm serve` and
       // an already-pulled model left the picker empty and the UI unusable.
-      // Heuristic for the loaded slot: it has no digest. Catalog entries do.
+      // `loaded` comes from the server. It replaced a heuristic — "the loaded
+      // entry is the one with no digest" — which was true only for a model
+      // started from a file path: a catalog model in the slot is answered with
+      // its catalog digest, so it read as not-downloaded, every option was
+      // disabled, and the UI said "No model loaded" while that model was
+      // loaded and answering.
       const all = data.models || [];
-      const reallyLoaded = all.filter((m) => !m.digest || m.digest === "");
-      const onDisk = all.filter((m) => m.digest && m.downloaded);
-      const catalog = all.filter((m) => m.digest && !m.downloaded);
+      const reallyLoaded = all.filter((m) => m.loaded);
+      const onDisk = all.filter((m) => !m.loaded && m.downloaded);
+      const catalog = all.filter((m) => !m.loaded && !m.downloaded);
 
       const addGroup = (label, items, disabled, text) => {
         if (!items.length) return;
@@ -864,6 +869,77 @@
   // transparently re-encode anything outside this set to PNG in-browser.
   const MTMD_SAFE_IMAGE = new Set(["image/jpeg", "image/png", "image/bmp", "image/gif"]);
 
+  // mtmd decodes audio through miniaudio, which handles wav / mp3 / flac and
+  // nothing else. A WhatsApp voice note is Ogg/Opus, so it reached the server
+  // as undecodable bytes. Browsers can decode Opus, so the same trick used for
+  // images applies: re-encode locally to something the engine reads.
+  const MTMD_SAFE_AUDIO = new Set([
+    "audio/wav",
+    "audio/x-wav",
+    "audio/wave",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/flac",
+    "audio/x-flac",
+  ]);
+
+  // 16 kHz mono is what speech encoders resample to anyway, and it keeps an
+  // uncompressed WAV small enough to base64 into a JSON body: one minute is
+  // about 1.9 MB rather than the 10 MB a 44.1 kHz stereo copy would cost.
+  const WAV_RATE = 16000;
+
+  /// Decode any audio the browser understands and re-encode it as 16-bit PCM
+  /// mono WAV. Rejects when the browser itself cannot decode the source.
+  const convertAudioToWav = async (arrayBuffer) => {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) throw new Error("no audio support");
+    const decoded = await new Ctx().decodeAudioData(arrayBuffer);
+    const frames = Math.ceil(decoded.duration * WAV_RATE);
+    const off = new OfflineAudioContext(1, frames, WAV_RATE);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    const mono = (await off.startRendering()).getChannelData(0);
+
+    const bytes = new ArrayBuffer(44 + mono.length * 2);
+    const view = new DataView(bytes);
+    const ascii = (at, s) => {
+      for (let i = 0; i < s.length; i++) view.setUint8(at + i, s.charCodeAt(i));
+    };
+    ascii(0, "RIFF");
+    view.setUint32(4, 36 + mono.length * 2, true);
+    ascii(8, "WAVEfmt ");
+    view.setUint32(16, 16, true); // PCM header size
+    view.setUint16(20, 1, true); // format: PCM
+    view.setUint16(22, 1, true); // channels
+    view.setUint32(24, WAV_RATE, true);
+    view.setUint32(28, WAV_RATE * 2, true); // byte rate
+    view.setUint16(32, 2, true); // block align
+    view.setUint16(34, 16, true); // bits per sample
+    ascii(36, "data");
+    view.setUint32(40, mono.length * 2, true);
+    for (let i = 0; i < mono.length; i++) {
+      const s = Math.max(-1, Math.min(1, mono[i]));
+      view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+
+    let binary = "";
+    const raw = new Uint8Array(bytes);
+    for (let i = 0; i < raw.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, raw.subarray(i, i + 0x8000));
+    }
+    return `data:audio/wav;base64,${btoa(binary)}`;
+  };
+
+  const fileToArrayBuffer = (file) =>
+    new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error("read failed"));
+      r.readAsArrayBuffer(file);
+    });
+
   const fileToDataUrl = (file) =>
     new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -908,6 +984,9 @@
       if (kind === "image" && !MTMD_SAFE_IMAGE.has(file.type)) {
         // WebP / AVIF / HEIC … → normalise to PNG so mtmd can decode it.
         dataUrl = await convertImageToPng(dataUrl);
+      } else if (kind === "audio" && !MTMD_SAFE_AUDIO.has(file.type)) {
+        // Ogg/Opus (WhatsApp), M4A, WebM … → 16 kHz mono WAV.
+        dataUrl = await convertAudioToWav(await fileToArrayBuffer(file));
       }
       const comma = dataUrl.indexOf(",");
       const base64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
@@ -927,8 +1006,12 @@
       els.sendBtn.disabled = !canSend();
     } catch {
       alert(
-        "Could not read this file. If it's a HEIC/HEIF photo, convert it to " +
-        "JPG or PNG first — the engine accepts jpg/png/bmp/gif/webp."
+        kind === "audio"
+          ? "Could not read this audio. The engine accepts wav, mp3 and flac; " +
+            "anything else is converted here first, and this browser could not " +
+            "decode it. Convert it yourself, e.g. ffmpeg -i in.ogg out.wav"
+          : "Could not read this file. If it's a HEIC/HEIF photo, convert it to " +
+            "JPG or PNG first — the engine accepts jpg/png/bmp/gif/webp.",
       );
       els.imageInput.value = "";
     }
