@@ -189,6 +189,7 @@ impl ModelStore {
         gguf_file: &str,
         source: &str,
         size_bytes: u64,
+        mmproj_file: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let model_dir = self.root.join(id);
         create_model_dir(&model_dir)?;
@@ -206,7 +207,7 @@ impl ModelStore {
             pulled_at: chrono::Utc::now().to_rfc3339(),
             status: "ready".into(),
             gguf_file: Some(gguf_file.to_string()),
-            mmproj_file: None,
+            mmproj_file: mmproj_file.map(String::from),
         };
 
         let manifest_path = model_dir.join("manifest.json");
@@ -520,7 +521,7 @@ mod tests {
     fn external_manifest_records_id() {
         let (store, root) = temp_store();
         store
-            .write_external_manifest("my-model", "weights.gguf", "https://x/y.gguf", 123)
+            .write_external_manifest("my-model", "weights.gguf", "https://x/y.gguf", 123, None)
             .unwrap();
         let listed = store.list().unwrap();
         assert_eq!(listed[0].id, "my-model");

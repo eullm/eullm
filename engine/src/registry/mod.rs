@@ -433,6 +433,18 @@ pub fn parse_hf_ref(s: &str) -> Option<HfRef> {
 /// for the requested quant) or sharded (`*-00001-of-0000N.gguf`); the message
 /// lists the available filenames so the caller can print it and ask the user
 /// to re-run with an explicit `:<quant>`.
+/// Whether a repo filename is a multimodal projector rather than model weights.
+///
+/// Published vision repos name it `mmproj-<something>.gguf`, sometimes with a
+/// directory prefix, which is the convention llama.cpp itself relies on.
+pub fn is_mmproj(name: &str) -> bool {
+    name.rsplit('/')
+        .next()
+        .unwrap_or(name)
+        .to_lowercase()
+        .starts_with("mmproj")
+}
+
 fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String, String> {
     if ggufs.is_empty() {
         return Err("no .gguf files found in this HuggingFace repo".to_string());
@@ -444,6 +456,22 @@ fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String
         let lower = name.to_lowercase();
         lower.contains("-of-") && lower.contains(".gguf")
     };
+
+    // A projector is a `.gguf` in the same repo but never the model, and it
+    // has to come out of the candidate set before anything else looks at it.
+    // Left in, it makes a vision repo ambiguous for a plain pull, and
+    // `:F16` on such a repo can select `mmproj-F16.gguf` as the weights,
+    // which then fails to load with an error about the file rather than
+    // about the choice. It is downloaded separately, alongside whatever
+    // model is picked.
+    let ggufs: Vec<String> = ggufs.iter().filter(|f| !is_mmproj(f)).cloned().collect();
+    let ggufs = &ggufs[..];
+    if ggufs.is_empty() {
+        return Err(
+            "this HuggingFace repo contains only a projector (mmproj), no model weights"
+                .to_string(),
+        );
+    }
 
     let candidates: Vec<&String> = match requested_quant {
         Some(q) => {
@@ -740,6 +768,50 @@ mod tests {
             "model-00003-of-00003.gguf".to_string(),
         ];
         assert!(select_gguf(&files, None).is_err());
+    }
+
+    // A vision repo carries the projector next to the weights. It is a .gguf
+    // like any other, so before it was excluded a plain pull saw two
+    // candidates and refused as ambiguous, and `:F16` on such a repo selected
+    // `mmproj-F16.gguf` as the model — which then failed to load with an
+    // error about the file rather than about the choice.
+    #[test]
+    fn a_projector_is_never_chosen_as_the_model() {
+        let files = vec![
+            "gemma-4-12b-it-Q4_K_M.gguf".to_string(),
+            "mmproj-F16.gguf".to_string(),
+        ];
+        // Without the exclusion this repo had two candidates and a plain pull
+        // could land on the projector.
+        assert_eq!(
+            select_gguf(&files, None).expect("one model, one projector"),
+            "gemma-4-12b-it-Q4_K_M.gguf"
+        );
+        // `:F16` used to match `mmproj-F16.gguf` and download it as the
+        // weights, which then failed to load with an error about the file
+        // rather than about the choice. Now it reports that no *model*
+        // matches, and lists what there is.
+        let err = select_gguf(&files, Some("F16")).expect_err("no F16 weights in this repo");
+        assert!(err.contains("no .gguf file matches quant"), "{err}");
+        assert!(
+            !err.contains("mmproj"),
+            "the projector must not be offered as an alternative: {err}"
+        );
+    }
+
+    #[test]
+    fn a_repo_with_only_a_projector_is_refused_by_name() {
+        let files = vec!["mmproj-F16.gguf".to_string()];
+        let err = select_gguf(&files, None).expect_err("no weights to pick");
+        assert!(err.contains("projector"), "unhelpful message: {err}");
+    }
+
+    #[test]
+    fn is_mmproj_matches_the_published_naming() {
+        assert!(is_mmproj("mmproj-F16.gguf"));
+        assert!(is_mmproj("MMPROJ-model-f32.gguf"));
+        assert!(is_mmproj("some/dir/mmproj-F16.gguf"));
+        assert!(!is_mmproj("gemma-4-12b-it-Q4_K_M.gguf"));
     }
 
     #[test]
