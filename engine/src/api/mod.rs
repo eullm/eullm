@@ -14,7 +14,11 @@
 mod auth;
 mod ip_allowlist;
 mod origin;
-mod routes;
+// `routes` is not part of the public API, but the terminal REPL in `main.rs`
+// reuses `routes::sequential_to_channel` so that a model without a scheduler
+// (multimodal forces `batch_size = 0`) streams through exactly the same code
+// path as an HTTP request instead of a second, divergent one.
+pub(crate) mod routes;
 
 pub use auth::Identity;
 

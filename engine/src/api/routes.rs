@@ -1502,7 +1502,10 @@ fn ndjson_stream_response(
 }
 
 /// Start sequential inference in a background thread, returning an mpsc receiver.
-fn sequential_to_channel(
+///
+/// Shared with the terminal REPL: the sequential engine and the scheduler both
+/// speak `StreamEvent`, so the chat loop does not care which one produced it.
+pub(crate) fn sequential_to_channel(
     engine: Arc<crate::inference::InferenceEngine>,
     request: GenerateRequest,
 ) -> mpsc::Receiver<StreamEvent> {

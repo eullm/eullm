@@ -2111,34 +2111,32 @@ async fn cmd_run(
         );
     }
 
-    // Clone the scheduler handle for the interactive REPL before moving into api::serve.
-    let repl_scheduler = scheduler.clone();
-    let has_backend = engine.is_some() || scheduler.is_some();
+    // Take the REPL's backend before both halves move into api::serve.
+    //
+    // The REPL used to accept only a `SchedulerHandle`, and a sequentially
+    // loaded model has none: every multimodal model, and anything run with
+    // --batch-size 0. So `--cli` and `--no-ui` on such a model printed "Type a
+    // message to chat", found no scheduler, fell out of the branch and ended
+    // `main` — killing the API server that had just been spawned. Now the REPL
+    // takes either backend and streams through the same channel, so the
+    // terminal works for exactly the set of models the API works for.
+    //
+    // Prefer the scheduler when both exist: it is what serves the API, and two
+    // decode loops over one model would contend for the same KV cache.
+    let repl_backend = match (scheduler.clone(), engine.clone()) {
+        (Some(s), _) => Some(ChatBackend::Batched(s)),
+        (None, Some(e)) => Some(ChatBackend::Sequential(e)),
+        (None, None) => None,
+    };
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
+    let repl_possible = repl_backend.is_some() && is_tty && !open_chat;
 
-    // The REPL is driven by the scheduler, and a sequentially loaded model has
-    // none: every multimodal model, and anything run with --batch-size 0. That
-    // was not accounted for, so `--cli` and `--no-ui` on such a model printed
-    // "Type a message to chat", found no scheduler to hand the REPL, fell out
-    // of the branch, and ended `main` — killing the API server that had just
-    // been spawned. The engine started and exited with no error at all.
-    let repl_possible = has_backend && is_tty && !open_chat && repl_scheduler.is_some();
-
-    // Banner must match what we're actually about to do (see REPL launch
-    // condition below: `has_backend && is_tty && !open_chat`). If the browser
-    // chat is going to take over, telling the user to "Type a message" in
-    // this terminal is a lie.
+    // Banner must match what we're actually about to do. If the browser chat
+    // is going to take over, telling the user to "Type a message" in this
+    // terminal is a lie.
     if repl_possible {
         println!("Type a message to chat, /bye to quit.\n");
     } else {
-        if has_backend && is_tty && !open_chat {
-            // Asked for the terminal, cannot have it. Say which, and why.
-            println!(
-                "Interactive chat is not available for this model: it loads in sequential mode\n\
-                 (every multimodal model does, as does --batch-size 0) and the terminal chat\n\
-                 needs the batching scheduler. The API below is fully functional."
-            );
-        }
         println!("Press Ctrl+C to stop.\n");
     }
 
@@ -2205,10 +2203,8 @@ async fn cmd_run(
     // user is chatting there — the REPL would just compete for the same model
     // on the same line discipline. Only drop into the REPL when the browser
     // was suppressed (--cli / --no-chat) or unavailable (--no-ui).
-    if repl_possible {
-        if let Some(sched) = repl_scheduler {
-            interactive_chat(sched, &model_name, ctx_size, batch_size, web).await;
-        }
+    if let Some(backend) = repl_backend.filter(|_| repl_possible) {
+        interactive_chat(backend, &model_name, ctx_size, batch_size, web).await;
     } else {
         // No REPL — wait for shutdown signal.
         // The API server handles graceful shutdown internally via SIGTERM/SIGINT.
@@ -2816,8 +2812,34 @@ struct ChatMessage {
     content: String,
 }
 
+/// Where the terminal chat gets its tokens.
+///
+/// The REPL used to take a `SchedulerHandle` and nothing else, so a model that
+/// loads sequentially — every multimodal one, and anything with
+/// `--batch-size 0` — had no terminal chat at all. Both sources emit
+/// `StreamEvent`, so the loop is identical either way and only the submission
+/// differs.
+enum ChatBackend {
+    Batched(inference::SchedulerHandle),
+    Sequential(std::sync::Arc<inference::InferenceEngine>),
+}
+
+impl ChatBackend {
+    fn submit(
+        &self,
+        request: inference::GenerateRequest,
+    ) -> tokio::sync::mpsc::Receiver<inference::StreamEvent> {
+        match self {
+            Self::Batched(s) => s.submit(request),
+            Self::Sequential(e) => {
+                crate::api::routes::sequential_to_channel(std::sync::Arc::clone(e), request)
+            }
+        }
+    }
+}
+
 async fn interactive_chat(
-    scheduler: inference::SchedulerHandle,
+    backend: ChatBackend,
     model_name: &str,
     ctx_size: u32,
     batch_size: usize,
@@ -3078,8 +3100,8 @@ async fn interactive_chat(
             ..Default::default()
         };
 
-        // Submit to scheduler and stream tokens.
-        let mut rx = scheduler.submit(request);
+        // Submit to whichever backend is loaded and stream tokens.
+        let mut rx = backend.submit(request);
         let mut response_text = String::new();
         let mut stats_line = String::new();
 
