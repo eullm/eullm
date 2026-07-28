@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.47 — 2026-07-28
+## 0.6.48 — 2026-07-28
 
 ### Added
 - **A Vulkan binary, `eullm-linux-x64-vulkan`.** Until now the published GPU
@@ -24,10 +24,14 @@ something changed, less so for understanding what it means.
   is bundled, unlike the CUDA builds which ship their runtime. First community
   run: a Ryzen AI 9 HX 470 with Radeon 890M, all layers offloaded.
 
-  0.6.46 announced this binary and did not ship it: the build job failed on a
-  package that does not exist on the distribution the release is built on, and
-  the release published the other nine binaries without it. This is the version
-  that actually has it.
+  Two releases announced this binary before one carried it. 0.6.46 failed to
+  build it, and 0.6.47 built it and then did not attach it, because the list of
+  files to publish was maintained by hand and nobody had added a line. Its
+  checksum was in `checksums.txt` both times, which is how the second one was
+  spotted. The release now publishes whatever was built rather than a list
+  someone has to remember to update.
+
+## 0.6.47 — 2026-07-28
 
 ### Added
 - **A projector next to the weights is found on its own, and `--mmproj` names

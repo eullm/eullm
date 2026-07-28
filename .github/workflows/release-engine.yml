@@ -5,12 +5,11 @@ on:
     tags:
       - "engine-v*"
       - "EuLLM-v*"
-  # Manual dispatch runs only build-arm-cix-p1 and build-vulkan (see their
-  # `if:` below) - lets
-  # that job be iterated on and re-run from the Actions tab without a real
-  # tag, without paying for the rest of the release matrix (Windows CUDA
-  # alone is a ~50 min cold build), and without ever creating a GitHub
-  # Release (the `release` job only runs on an actual tag push).
+  # Manual dispatch runs only build-arm-cix-p1 and build-vulkan, so either can
+  # be iterated on from the Actions tab without a real tag, without paying for
+  # the rest of the release matrix (Windows CUDA alone is a ~50 min cold
+  # build), and without ever creating a GitHub Release (the `release` job only
+  # runs on an actual tag push).
   workflow_dispatch: {}
 
 permissions:
@@ -1067,16 +1066,17 @@ jobs:
           # also tolerates entire upstream jobs being missing thanks to the
           # `if: !cancelled()` guard above.
           fail_on_unmatched_files: false
+          # A glob, not a hand-written list. The list was maintained by hand
+          # and v0.6.47 published nine binaries out of ten: `build-vulkan`
+          # succeeded, its artifact was downloaded, its checksum went into
+          # checksums.txt, and the file was never attached because nobody had
+          # added a line for it. `fail_on_unmatched_files: false` meant the
+          # omission was silent by construction. Every build job uploads its
+          # artifact into a directory of its own name holding exactly one
+          # file, so the glob is exactly the set that was built, and a new
+          # build job is published without anyone remembering to.
           files: |
-            artifacts/eullm-linux-x64/eullm-linux-x64
-            artifacts/eullm-linux-x64-cuda-12.8/eullm-linux-x64-cuda-12.8
-            artifacts/eullm-linux-arm64/eullm-linux-arm64
-            artifacts/eullm-linux-arm64-cuda-12.8/eullm-linux-arm64-cuda-12.8
-            artifacts/eullm-linux-arm64-cix-p1/eullm-linux-arm64-cix-p1
-            artifacts/eullm-macos-x64/eullm-macos-x64
-            artifacts/eullm-macos-arm64/eullm-macos-arm64
-            artifacts/eullm-windows-x64/eullm-windows-x64.exe
-            artifacts/eullm-windows-x64-cuda-12.8/eullm-windows-x64-cuda-12.8.zip
+            artifacts/*/*
             artifacts/checksums.txt
           body: |
             ## EULLM Engine ${{ github.ref_name }}
