@@ -915,7 +915,9 @@ xcode-select --install && brew install cmake
 ```
 
 ```bash
-git clone https://github.com/eullm/eullm.git && cd eullm
+# --recursive is required: llama.cpp is a submodule. Without it the build
+# fails on a missing llama.h. Already cloned? git submodule update --init --recursive
+git clone --recursive https://github.com/eullm/eullm.git && cd eullm
 cargo build --release
 
 # Run any GGUF model — that's it
@@ -1208,7 +1210,8 @@ Detailed documentation is available in the [`docs/`](docs/) directory:
 ### Development setup
 
 ```bash
-git clone https://github.com/eullm/eullm.git
+# --recursive fetches the llama.cpp submodule; the build needs it.
+git clone --recursive https://github.com/eullm/eullm.git
 cd eullm
 
 # Build the engine (CPU only)

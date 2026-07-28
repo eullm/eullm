@@ -240,6 +240,27 @@ fn main() {
     let target_dir = get_cargo_target_dir().unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Failed to get CARGO_MANIFEST_DIR");
     let llama_src = Path::new(&manifest_dir).join("llama.cpp");
+
+    // llama.cpp is a git submodule. A plain `git clone` leaves that directory
+    // empty, and a source archive downloaded from a release never contains it
+    // at all — GitHub's generated tarballs exclude submodules. Either way the
+    // first sign of trouble is bindgen failing on a missing `llama.h`, several
+    // minutes into a build, with a clang diagnostic that reads like a broken
+    // toolchain and sends people looking at their distribution. Checked here
+    // so the failure names its own fix.
+    if !llama_src.join("include/llama.h").is_file() {
+        panic!(
+            "llama.cpp sources are missing at {}.\n\n\
+             llama.cpp is a git submodule of this repository. Fetch it with:\n\
+             \x20   git submodule update --init --recursive\n\n\
+             (or clone with `git clone --recursive` next time). Note that the\n\
+             `Source code (zip/tar.gz)` archives on the releases page cannot\n\
+             work for this: GitHub generates them without submodule contents.\n\
+             Clone the repository, or download a prebuilt binary instead.",
+            llama_src.display()
+        );
+    }
+
     let build_shared_libs = cfg!(feature = "dynamic-link");
 
     let build_shared_libs = std::env::var("LLAMA_BUILD_SHARED_LIBS")
