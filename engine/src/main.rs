@@ -2116,13 +2116,29 @@ async fn cmd_run(
     let has_backend = engine.is_some() || scheduler.is_some();
     let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdin());
 
+    // The REPL is driven by the scheduler, and a sequentially loaded model has
+    // none: every multimodal model, and anything run with --batch-size 0. That
+    // was not accounted for, so `--cli` and `--no-ui` on such a model printed
+    // "Type a message to chat", found no scheduler to hand the REPL, fell out
+    // of the branch, and ended `main` — killing the API server that had just
+    // been spawned. The engine started and exited with no error at all.
+    let repl_possible = has_backend && is_tty && !open_chat && repl_scheduler.is_some();
+
     // Banner must match what we're actually about to do (see REPL launch
     // condition below: `has_backend && is_tty && !open_chat`). If the browser
     // chat is going to take over, telling the user to "Type a message" in
     // this terminal is a lie.
-    if has_backend && is_tty && !open_chat {
+    if repl_possible {
         println!("Type a message to chat, /bye to quit.\n");
     } else {
+        if has_backend && is_tty && !open_chat {
+            // Asked for the terminal, cannot have it. Say which, and why.
+            println!(
+                "Interactive chat is not available for this model: it loads in sequential mode\n\
+                 (every multimodal model does, as does --batch-size 0) and the terminal chat\n\
+                 needs the batching scheduler. The API below is fully functional."
+            );
+        }
         println!("Press Ctrl+C to stop.\n");
     }
 
@@ -2189,7 +2205,7 @@ async fn cmd_run(
     // user is chatting there — the REPL would just compete for the same model
     // on the same line discipline. Only drop into the REPL when the browser
     // was suppressed (--cli / --no-chat) or unavailable (--no-ui).
-    if has_backend && is_tty && !open_chat {
+    if repl_possible {
         if let Some(sched) = repl_scheduler {
             interactive_chat(sched, &model_name, ctx_size, batch_size, web).await;
         }

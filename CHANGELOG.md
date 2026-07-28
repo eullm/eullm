@@ -16,6 +16,13 @@ something changed, less so for understanding what it means.
 ## 0.6.51 — 2026-07-28
 
 ### Fixed
+- **`--cli` and `--no-ui` no longer make the engine exit immediately.** On a
+  model that loads in sequential mode — every multimodal model, and anything
+  run with `--batch-size 0` — asking to stay in the terminal printed "Type a
+  message to chat" and then quit without a word, taking the API server with it.
+  The terminal chat needs the batching scheduler, which those models do not
+  have. The engine now stays up and serves the API, and says plainly that the
+  terminal chat is unavailable for this model instead of promising it.
 - **A context that does not fit says what did not fit.** Asking for a large
   `--ctx-size` and getting `Failed to create context: null reference from
   llama.cpp` told you nothing: the window was the thing that failed, and its
