@@ -29,6 +29,14 @@ something changed, less so for understanding what it means.
   hand-built ones did not.
 
 ### Fixed
+- **A model you pulled yourself now appears in the model lists.** Both
+  `/v1/models` and `/api/tags` were assembled from the built-in catalog and
+  whatever was loaded at that moment, so a model downloaded from a URL or a
+  HuggingFace repo was invisible to them. On `/v1/models` that is the
+  difference between usable and not: a coding editor offers the models that
+  endpoint names, so one it never names cannot be selected at all. Reported by
+  a user whose pulled 35B ran fine in the chat UI and could not be reached from
+  the editor.
 - **A build that cannot read media says so instead of ignoring it.** Attaching
   a photo to a binary compiled without multimodal support used to drop the
   image on the way in and pass the question through as plain text, so the model
