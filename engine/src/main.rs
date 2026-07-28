@@ -4,6 +4,7 @@ mod chat_template;
 mod fit;
 mod gguf_patch;
 mod inference;
+mod lineedit;
 mod models;
 mod picker;
 mod registry;
@@ -17,6 +18,7 @@ use clap::{Parser, Subcommand};
 use models::{ModelStore, catalog};
 
 use crate::inference::{BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig};
+use crate::lineedit::{Line, LineReader};
 
 // Cross-platform default pidfile location. On Unix `/tmp` always exists and
 // is the canonical place; on Windows there is no `/tmp`, so we fall back to
@@ -2135,8 +2137,21 @@ async fn cmd_run(
     // is going to take over, telling the user to "Type a message" in this
     // terminal is a lie.
     if repl_possible {
-        println!("Type a message to chat, /bye to quit.\n");
+        println!("Type a message to chat. /bye or Ctrl+D to quit, Ctrl+C to discard the line.\n");
     } else {
+        // Asking for the terminal and not getting it must never be silent —
+        // that is how the --cli bug stayed invisible. Only two things can stop
+        // it now, and neither is about the model.
+        if !open_chat && !repl_possible {
+            if repl_backend.is_none() {
+                println!("No model is loaded, so there is nothing to chat with in the terminal.");
+            } else if !is_tty {
+                println!(
+                    "Standard input is not a terminal, so the terminal chat cannot run.\n\
+                     Use the API on the port below, or run this from an interactive shell."
+                );
+            }
+        }
         println!("Press Ctrl+C to stop.\n");
     }
 
@@ -2859,7 +2874,7 @@ async fn interactive_chat(
     if web_enabled {
         eprintln!("[web] enabled — fetchable: {}", web_policy.describe());
     }
-    use std::io::{BufRead, Write};
+    use std::io::Write;
 
     let short = model_name.strip_prefix("eullm/").unwrap_or(model_name);
 
@@ -2884,39 +2899,37 @@ async fn interactive_chat(
         content: "You are a helpful assistant.".into(),
     }];
 
-    let stdin = std::io::stdin();
-    let mut reader = stdin.lock();
+    let mut reader = LineReader::new();
 
     loop {
-        // Print prompt
-        print!(">>> ");
-        if std::io::stdout().flush().is_err() {
-            break;
-        }
-
-        // Read user input (supports multi-line with trailing \)
+        // Read user input (supports multi-line with trailing \). rustyline
+        // prints the prompt itself, so the fallback path does it too rather
+        // than the caller — otherwise a redrawn line would duplicate it.
         let mut input = String::new();
+        let mut prompt = ">>> ";
         loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => {
-                    // EOF (Ctrl+D)
+            match reader.read(prompt) {
+                Line::Eof => {
                     println!();
                     return;
                 }
-                Ok(_) => {
+                Line::Interrupted => {
+                    // Drop the whole entry, including any continuation lines
+                    // already accepted, and start over at the main prompt.
+                    input.clear();
+                    prompt = ">>> ";
+                }
+                Line::Text(line) => {
                     let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
                     if let Some(stripped) = trimmed.strip_suffix('\\') {
                         input.push_str(stripped);
                         input.push('\n');
-                        print!("... ");
-                        let _ = std::io::stdout().flush();
+                        prompt = "... ";
                         continue;
                     }
                     input.push_str(trimmed);
                     break;
                 }
-                Err(_) => return,
             }
         }
 
@@ -2924,6 +2937,9 @@ async fn interactive_chat(
         if input.is_empty() {
             continue;
         }
+        // Commands are recalled too: /temp 0.2 is exactly the kind of line
+        // someone types, adjusts, and types again.
+        reader.remember(&input);
 
         // Commands
         if input == "/bye" || input == "/exit" || input == "/quit" {
@@ -2935,7 +2951,7 @@ async fn interactive_chat(
             continue;
         } else if input == "/help" {
             println!("Commands:");
-            println!("  /bye              Exit the chat");
+            println!("  /bye              Exit the chat (Ctrl+D does the same)");
             println!("  /clear            Clear conversation history");
             println!(
                 "  /think            Enable reasoning (current: {})",

@@ -23,6 +23,15 @@ something changed, less so for understanding what it means.
   terminal chat could only be driven by the batching scheduler, which those
   models do not have. It now works from either backend, so the terminal chat is
   available for exactly the same models the API is.
+- **The arrow keys work in the terminal chat and in the model picker.** Both
+  prompts read the line raw, so pressing left to fix a typo printed `^[[D` on
+  screen and put it in what you sent: a bewildering "Invalid choice" at the
+  picker, and escape sequences inside the message at the `>>>` prompt. Both now
+  read through a real line editor, so left and right move the cursor, backspace
+  works anywhere in the line, and up and down recall what you typed earlier in
+  the session. That history is kept in memory only and is not written to disk.
+  Ctrl+C now discards the line being typed instead of killing the engine; Ctrl+D
+  quits, as does `/bye`.
 - **A context that does not fit says what did not fit.** Asking for a large
   `--ctx-size` and getting `Failed to create context: null reference from
   llama.cpp` told you nothing: the window was the thing that failed, and its
