@@ -25,6 +25,16 @@ something changed, less so for understanding what it means.
   says so.
 
 ### Fixed
+- **The arrow keys no longer break the model picker.** Pressing left to correct
+  a typo at the `Choice >` prompt inserted `^[[D` into the line and answered
+  "Invalid choice" for what looked blank. Those keys are now ignored. This is
+  not line editing: the cursor still cannot be moved, but a keystroke that does
+  nothing no longer breaks the input it lands in.
+- **A download no longer goes silent partway.** The projector was fetched
+  without a progress counter, so a pull sat for the best part of a minute
+  between announcing the file and finishing, with nothing on screen. It reports
+  progress like any other download, and its line is closed before the next
+  message rather than being written over.
 - **A projector is no longer mistaken for the model itself.** It is a `.gguf`
   in the same repo, so on a vision repo a plain pull saw two candidates and
   refused as ambiguous, and asking for `:F16` could download `mmproj-F16.gguf`

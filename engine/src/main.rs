@@ -960,6 +960,13 @@ fn download_progress() -> registry::ProgressCallback {
         if downloaded.saturating_sub(last) > 10_000_000 || (total > 0 && downloaded >= total) {
             last_printed.store(downloaded, Ordering::Relaxed);
             eprint!("\r  {}", format_progress(downloaded, total));
+            // Close the line at completion. Whatever is logged next — and the
+            // "no integrity digest recorded" warning always is, for an
+            // off-catalog file — otherwise lands on the same line as the
+            // progress counter and reads as one garbled sentence.
+            if total > 0 && downloaded >= total {
+                eprintln!();
+            }
             let _ = std::io::Write::flush(&mut std::io::stderr());
         }
     })
