@@ -54,6 +54,31 @@ const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Vulkan)");
 )))]
 const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
 
+/// Build the `run` command implied by a choice made in the interactive picker.
+///
+/// This was three hand-written `Commands::Run { .. }` literals, one per picker
+/// outcome, each restating all twenty-seven defaults. They were a fourth copy
+/// of the same list: a default changed in the `#[arg]` attribute stayed wrong
+/// here, silently, because nothing compares the two. Asking clap to parse
+/// `eullm run <model>` returns the same value with the defaults clap actually
+/// documents, so there is one source for them again.
+///
+/// `--fit` is the single deliberate difference. The picker only opens on an
+/// interactive terminal, so sizing GPU layers against measured free VRAM is
+/// the right behaviour there; `eullm run` keeps it opt-in because it is also
+/// what scripts call.
+fn picker_run(model: &str) -> Commands {
+    // `--` first: a model name or path beginning with a dash would otherwise
+    // be read as a flag.
+    let mut cmd = Cli::parse_from(["eullm", "run", "--", model])
+        .command
+        .expect("`eullm run <model>` always parses to a subcommand");
+    if let Commands::Run { fit, .. } = &mut cmd {
+        *fit = true;
+    }
+    cmd
+}
+
 #[derive(Parser)]
 #[command(name = "eullm")]
 #[command(about = "eullm — sovereign LLM runtime for Europe")]
@@ -64,6 +89,172 @@ struct Cli {
     /// catalog model, or paste a custom path/URL.
     #[command(subcommand)]
     command: Option<Commands>,
+}
+
+/// Flags shared by `run` and `serve`.
+///
+/// `CLAUDE.md` makes it mandatory that a flag added to `Run` is added to
+/// `Serve` in the same change, because the two field lists were maintained by
+/// hand and had already drifted in production: `cache_type_k`, `cache_type_v`
+/// and `gpu_layers` existed only on `Run`, so every model `serve` loaded was
+/// forced into fixed defaults with no way to override them. That rule is a
+/// human guard over a structural problem — it holds exactly as long as the
+/// next person remembers it.
+///
+/// Flattening one struct into both subcommands makes the divergence impossible
+/// rather than forbidden: a flag added here exists on both, with the same
+/// default and the same help text, and there is no second place to forget.
+///
+/// Two things deliberately stay out:
+///
+/// * `batch_size`, because `run` defaults to 1 and `serve` to 8. That is not
+///   drift: `run` is one interactive conversation which should get the whole
+///   context window, `serve` is a daemon fielding concurrent requests. The
+///   scheduler's own "each of the N slots gets only M tokens" warning is
+///   written against the `serve` default.
+/// * `--fit` / `--fit-strict`, which pick a layer count against measured free
+///   VRAM before the model is loaded. `serve` loads its models inside
+///   `api::swap_model`, which has no such step, so exposing the flags there
+///   would parse them and silently do nothing — worse than not offering them.
+///   Wiring auto-fit into the swap path is its own piece of work.
+#[derive(clap::Args, Debug, PartialEq)]
+struct RuntimeOpts {
+    /// Port for the API server
+    #[arg(short, long, default_value_t = 11434)]
+    port: u16,
+
+    /// Replace existing service on the port
+    #[arg(long)]
+    replace: bool,
+
+    /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
+    #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
+    gpu_layers: i32,
+
+    /// For MoE models (e.g. Qwen3-30B-A3B): keep expert tensors
+    /// (`*.ffn_(up|down|gate)_exps`) on CPU RAM while attention,
+    /// embeddings, and the KV cache stay on GPU. Only a few experts fire
+    /// per token, so this trades a small compute cost for VRAM headroom
+    /// far beyond what --gpu-layers' whole-layer offload can reach — a
+    /// 20+ GB MoE model can run mostly-GPU-speed on a 12 GB card. No
+    /// effect on dense (non-MoE) models. Combines with --gpu-layers/--fit
+    /// (which still control the non-expert tensors) and --ctx-size.
+    #[arg(long)]
+    cpu_moe: bool,
+
+    /// For MoE models: keep expert tensors on CPU RAM for only the
+    /// first N transformer layers, leaving the rest on GPU. Finer
+    /// grained than --cpu-moe — use this when the blanket flag leaves
+    /// VRAM idle (all experts to CPU) but the model doesn't fully fit
+    /// with --gpu-layers alone. Mutually exclusive with --cpu-moe.
+    #[arg(long, default_value_t = 0)]
+    n_cpu_moe: u32,
+
+    /// Recurrent-state rollback window for hybrid/recurrent
+    /// architectures (Mamba/Gated-DeltaNet-style SSM layers, e.g.
+    /// Qwen3.5/3.6's hybrid attention+SSM design). 0 (default, strongly
+    /// recommended) leaves it off. NOT a conversation/KV-cache-reuse
+    /// knob: upstream llama.cpp reserves n_rs_seq for bounded
+    /// speculative-decoding draft-token rollback and hard-zeroes it
+    /// outside that path (`cparams_dft.n_rs_seq = 0`); it is not what
+    /// the official server uses for cross-turn prompt caching on these
+    /// architectures (that's the separate, bounded `--ctx-checkpoints`
+    /// snapshot mechanism). Every recurrent-state tensor scales by
+    /// `(1 + N)`, so nonzero values can multiply resident memory by
+    /// tens of GB and are not yet validated upstream past a small
+    /// synthetic test model. On hybrid/recurrent architectures without
+    /// this set, expect KV-cache prefix reuse to fall back to a full
+    /// re-prefill on every turn — this is a known, still-open upstream
+    /// limitation (llama.cpp's own server logs the identical
+    /// "forcing full prompt re-processing due to lack of cache data
+    /// (likely due to SWA or hybrid/recurrent memory)" fallback), not
+    /// an eullm-specific gap.
+    #[arg(long, default_value_t = 0)]
+    rs_seq: u32,
+
+    /// Max full-sequence-state checkpoints kept for prompt-prefix
+    /// restore (bounded alternative to --rs-seq for hybrid/recurrent
+    /// architectures — see the README's "--ctx-checkpoints" section).
+    /// 0 (default) disables checkpointing: no snapshot is ever taken,
+    /// matching pre-checkpoint behavior exactly. Mirrors llama.cpp
+    /// server's flag of the same name (default there: 32); kept off
+    /// here since each checkpoint costs one sequence's full state
+    /// size. Only useful together with continuous batching
+    /// (--batch-size > 0, the default for `run`).
+    #[arg(long, default_value_t = 0)]
+    ctx_checkpoints: usize,
+
+    /// Minimum new tokens since the closest existing checkpoint of the
+    /// same conversation before taking another one. Mirrors llama.cpp
+    /// server's `--checkpoint-min-step` (default there: 8192). Only
+    /// consulted when --ctx-checkpoints > 0.
+    #[arg(long, default_value_t = 8192)]
+    checkpoint_min_step: u32,
+
+    /// Context window size
+    #[arg(short, long, default_value_t = 4096)]
+    ctx_size: u32,
+
+    /// Number of CPU threads (default: all available)
+    #[arg(short, long)]
+    threads: Option<u32>,
+
+    /// Disable flash attention (enabled by default for faster inference)
+    #[arg(long)]
+    no_flash_attn: bool,
+
+    /// Prompt processing batch size (tokens per eval during prefill)
+    #[arg(long, default_value_t = 2048)]
+    n_batch: u32,
+
+    /// KV cache type for keys. Options: f16 (default, best GPU compat), q8_0, q4_0
+    #[arg(long, default_value = "f16")]
+    cache_type_k: String,
+
+    /// KV cache type for values. Options: f16 (default, best GPU compat), q8_0, q4_0
+    #[arg(long, default_value = "f16")]
+    cache_type_v: String,
+
+    /// Enable transparent web browsing: URLs in user messages are fetched
+    /// and their content is injected into the prompt before inference.
+    /// Dynamic budget: available context = ctx_size - prompt - 512 reserve.
+    #[arg(long)]
+    web: bool,
+
+    /// Port for the embedded chat UI (separate from the API port so
+    /// the API surface on --port stays pure). Default 11435.
+    #[arg(long, default_value_t = 11435)]
+    ui_port: u16,
+
+    /// Run as a background daemon (writes PID to --pidfile)
+    #[arg(long)]
+    daemon: bool,
+
+    /// PID file path (used with --daemon)
+    #[arg(long, default_value = DEFAULT_PIDFILE)]
+    pidfile: String,
+
+    /// Enable extra internal diagnostics for the Rust engine layer. Off
+    /// by default (zero added per-token cost, matches upstream
+    /// llama.cpp). Today this enables a NaN/Inf scan of every generated
+    /// token's logits before sampling — added to help diagnose garbage
+    /// output (issue #140) — at the cost of one extra linear scan over
+    /// the vocab per token. Not a general log-level flag; use RUST_LOG
+    /// for that.
+    #[arg(long)]
+    rust_debug: bool,
+
+    /// Path to a multimodal projector (mmproj GGUF) for this model.
+    ///
+    /// Normally unnecessary: a model pulled from the catalog gets its
+    /// projector alongside the weights, and one sitting next to the GGUF
+    /// as `mmproj*.gguf` is picked up on its own. Needed when the two
+    /// live apart, which is common for a model assembled by hand from a
+    /// HuggingFace repo. A projector belongs to the model it was trained
+    /// with: pairing it with different weights produces confident
+    /// nonsense rather than an error.
+    #[arg(long, value_name = "PATH")]
+    mmproj: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -86,17 +277,8 @@ enum Commands {
         /// HuggingFace repo shorthand (`hf.co/<owner>/<repo>[:<quant>]`)
         model: Option<String>,
 
-        /// Port for the API server
-        #[arg(short, long, default_value_t = 11434)]
-        port: u16,
-
-        /// Replace existing service on the port
-        #[arg(long)]
-        replace: bool,
-
-        /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
-        #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
-        gpu_layers: i32,
+        #[command(flatten)]
+        opts: RuntimeOpts,
 
         /// Auto-fit GPU layers to available VRAM (CUDA builds only). Probes
         /// free VRAM and the model's layer count, then offloads as many layers
@@ -110,74 +292,6 @@ enum Commands {
         #[arg(long)]
         fit_strict: bool,
 
-        /// For MoE models (e.g. Qwen3-30B-A3B): keep expert tensors
-        /// (`*.ffn_(up|down|gate)_exps`) on CPU RAM while attention,
-        /// embeddings, and the KV cache stay on GPU. Only a few experts fire
-        /// per token, so this trades a small compute cost for VRAM headroom
-        /// far beyond what --gpu-layers' whole-layer offload can reach — a
-        /// 20+ GB MoE model can run mostly-GPU-speed on a 12 GB card. No
-        /// effect on dense (non-MoE) models. Combines with --gpu-layers/--fit
-        /// (which still control the non-expert tensors) and --ctx-size.
-        #[arg(long)]
-        cpu_moe: bool,
-
-        /// For MoE models: keep expert tensors on CPU RAM for only the
-        /// first N transformer layers, leaving the rest on GPU. Finer
-        /// grained than --cpu-moe — use this when the blanket flag leaves
-        /// VRAM idle (all experts to CPU) but the model doesn't fully fit
-        /// with --gpu-layers alone. Mutually exclusive with --cpu-moe.
-        #[arg(long, default_value_t = 0)]
-        n_cpu_moe: u32,
-
-        /// Recurrent-state rollback window for hybrid/recurrent
-        /// architectures (Mamba/Gated-DeltaNet-style SSM layers, e.g.
-        /// Qwen3.5/3.6's hybrid attention+SSM design). 0 (default, strongly
-        /// recommended) leaves it off. NOT a conversation/KV-cache-reuse
-        /// knob: upstream llama.cpp reserves n_rs_seq for bounded
-        /// speculative-decoding draft-token rollback and hard-zeroes it
-        /// outside that path (`cparams_dft.n_rs_seq = 0`); it is not what
-        /// the official server uses for cross-turn prompt caching on these
-        /// architectures (that's the separate, bounded `--ctx-checkpoints`
-        /// snapshot mechanism). Every recurrent-state tensor scales by
-        /// `(1 + N)`, so nonzero values can multiply resident memory by
-        /// tens of GB and are not yet validated upstream past a small
-        /// synthetic test model. On hybrid/recurrent architectures without
-        /// this set, expect KV-cache prefix reuse to fall back to a full
-        /// re-prefill on every turn — this is a known, still-open upstream
-        /// limitation (llama.cpp's own server logs the identical
-        /// "forcing full prompt re-processing due to lack of cache data
-        /// (likely due to SWA or hybrid/recurrent memory)" fallback), not
-        /// an eullm-specific gap.
-        #[arg(long, default_value_t = 0)]
-        rs_seq: u32,
-
-        /// Max full-sequence-state checkpoints kept for prompt-prefix
-        /// restore (bounded alternative to --rs-seq for hybrid/recurrent
-        /// architectures — see the README's "--ctx-checkpoints" section).
-        /// 0 (default) disables checkpointing: no snapshot is ever taken,
-        /// matching pre-checkpoint behavior exactly. Mirrors llama.cpp
-        /// server's flag of the same name (default there: 32); kept off
-        /// here since each checkpoint costs one sequence's full state
-        /// size. Only useful together with continuous batching
-        /// (--batch-size > 0, the default for `run`).
-        #[arg(long, default_value_t = 0)]
-        ctx_checkpoints: usize,
-
-        /// Minimum new tokens since the closest existing checkpoint of the
-        /// same conversation before taking another one. Mirrors llama.cpp
-        /// server's `--checkpoint-min-step` (default there: 8192). Only
-        /// consulted when --ctx-checkpoints > 0.
-        #[arg(long, default_value_t = 8192)]
-        checkpoint_min_step: u32,
-
-        /// Context window size
-        #[arg(short, long, default_value_t = 4096)]
-        ctx_size: u32,
-
-        /// Number of CPU threads (default: all available)
-        #[arg(short, long)]
-        threads: Option<u32>,
-
         /// Maximum concurrent requests served by the continuous-batching scheduler.
         ///
         /// `--ctx-size` is split evenly across these slots (so per-sequence context
@@ -186,28 +300,6 @@ enum Commands {
         /// a backend for multiple simultaneous users.
         #[arg(long, default_value_t = 1)]
         batch_size: usize,
-
-        /// Disable flash attention (enabled by default for faster inference)
-        #[arg(long)]
-        no_flash_attn: bool,
-
-        /// Prompt processing batch size (tokens per eval during prefill)
-        #[arg(long, default_value_t = 2048)]
-        n_batch: u32,
-
-        /// KV cache type for keys. Options: f16 (default, best GPU compat), q8_0, q4_0
-        #[arg(long, default_value = "f16")]
-        cache_type_k: String,
-
-        /// KV cache type for values. Options: f16 (default, best GPU compat), q8_0, q4_0
-        #[arg(long, default_value = "f16")]
-        cache_type_v: String,
-
-        /// Enable transparent web browsing: URLs in user messages are fetched
-        /// and their content is injected into the prompt before inference.
-        /// Dynamic budget: available context = ctx_size - prompt - 512 reserve.
-        #[arg(long)]
-        web: bool,
 
         /// Disable the embedded chat UI (otherwise served on --ui-port).
         /// Use this for headless / backend / RAG deployments where you only
@@ -221,19 +313,6 @@ enum Commands {
         #[arg(long, visible_alias = "no-chat")]
         cli: bool,
 
-        /// Port for the embedded chat UI (separate from the API port so
-        /// the API surface on --port stays pure). Default 11435.
-        #[arg(long, default_value_t = 11435)]
-        ui_port: u16,
-
-        /// Run as a background daemon (writes PID to --pidfile)
-        #[arg(long)]
-        daemon: bool,
-
-        /// PID file path (used with --daemon)
-        #[arg(long, default_value = DEFAULT_PIDFILE)]
-        pidfile: String,
-
         /// (Multimodal MVP, --features multimodal builds only.) Path to an
         /// image or audio file to send together with the first prompt.
         /// Triggers the multimodal inference path (mtmd) which requires the
@@ -242,28 +321,6 @@ enum Commands {
         /// (web chat / `/api/chat` `images`); this flag is the CLI one-shot.
         #[arg(long, value_name = "PATH")]
         image: Option<PathBuf>,
-
-        /// Enable extra internal diagnostics for the Rust engine layer. Off
-        /// by default (zero added per-token cost, matches upstream
-        /// llama.cpp). Today this enables a NaN/Inf scan of every generated
-        /// token's logits before sampling — added to help diagnose garbage
-        /// output (issue #140) — at the cost of one extra linear scan over
-        /// the vocab per token. Not a general log-level flag; use RUST_LOG
-        /// for that.
-        #[arg(long)]
-        rust_debug: bool,
-
-        /// Path to a multimodal projector (mmproj GGUF) for this model.
-        ///
-        /// Normally unnecessary: a model pulled from the catalog gets its
-        /// projector alongside the weights, and one sitting next to the GGUF
-        /// as `mmproj*.gguf` is picked up on its own. Needed when the two
-        /// live apart, which is common for a model assembled by hand from a
-        /// HuggingFace repo. A projector belongs to the model it was trained
-        /// with: pairing it with different weights produces confident
-        /// nonsense rather than an error.
-        #[arg(long, value_name = "PATH")]
-        mmproj: Option<PathBuf>,
     },
     /// List locally available models
     List,
@@ -288,140 +345,17 @@ enum Commands {
     },
     /// Start the API server without loading a model
     Serve {
-        /// Port for the API server
-        #[arg(short, long, default_value_t = 11434)]
-        port: u16,
-
-        /// Replace existing service on the port
-        #[arg(long)]
-        replace: bool,
+        #[command(flatten)]
+        opts: RuntimeOpts,
 
         /// Enable continuous batching with N max concurrent requests (0 = sequential)
         #[arg(long, default_value_t = 8)]
         batch_size: usize,
 
-        /// Number of GPU layers to offload (-1 = all, 0 = CPU only). Applied
-        /// to every model this server loads or swaps to. See `eullm run
-        /// --help` for the full rationale.
-        #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
-        gpu_layers: i32,
-
-        /// Context window size. Applied to every model this server loads or
-        /// swaps to (a request's `ctx_size` field overrides it for that
-        /// swap). See `eullm run --help` for the full rationale.
-        #[arg(short, long, default_value_t = 4096)]
-        ctx_size: u32,
-
-        /// Number of CPU threads (default: all available). Applied to every
-        /// model this server loads or swaps to.
-        #[arg(short, long)]
-        threads: Option<u32>,
-
-        /// Disable flash attention (enabled by default). Applied to every
-        /// model this server loads or swaps to.
-        #[arg(long)]
-        no_flash_attn: bool,
-
-        /// Prompt processing batch size (tokens per eval during prefill).
-        /// Applied to every model this server loads or swaps to.
-        #[arg(long, default_value_t = 2048)]
-        n_batch: u32,
-
-        /// KV cache type for keys. Options: f16 (default, best quality and
-        /// GPU compat), f32, q8_0, q4_0, q4_1, q5_0, q5_1. Applied to every
-        /// model this server loads or swaps to.
-        ///
-        /// Changed to f16 in v0.6.36. `serve` used to default to q8_0 keys
-        /// and q4_0 values while `run` defaulted to f16/f16 — so the same
-        /// model gave different output quality depending on which command
-        /// started it, silently, and nothing in the output said so. A
-        /// four-bit value cache is aggressive for Qwen3 in particular, and
-        /// external testing on issue #140 saw degraded generations with
-        /// exactly that setting. Quantizing the KV cache is a real and useful
-        /// trade at long context, but it has to be a choice the operator
-        /// makes, not one a command name makes for them.
-        #[arg(long, default_value = "f16")]
-        cache_type_k: String,
-
-        /// KV cache type for values. Options: f16 (default, best quality and
-        /// GPU compat), f32, q8_0, q4_0, q4_1, q5_0, q5_1. Applied to every
-        /// model this server loads or swaps to. See `--cache-type-k` for why
-        /// this defaults to f16 since v0.6.36.
-        #[arg(long, default_value = "f16")]
-        cache_type_v: String,
-
-        /// Enable transparent web browsing: URLs in user messages are
-        /// fetched and their content is injected into the prompt before
-        /// inference. Applied to every model this server loads or swaps to.
-        #[arg(long)]
-        web: bool,
-
-        /// For MoE models: keep expert tensors on CPU RAM, attention +
-        /// embeddings + KV cache on GPU. Applied to every model this server
-        /// loads or swaps to. See `eullm run --help` for the full rationale.
-        #[arg(long)]
-        cpu_moe: bool,
-
-        /// For MoE models: keep expert tensors on CPU RAM for only the
-        /// first N transformer layers, leaving the rest on GPU. Applied to
-        /// every model this server loads or swaps to. Mutually exclusive
-        /// with --cpu-moe. See `eullm run --help` for the full rationale.
-        #[arg(long, default_value_t = 0)]
-        n_cpu_moe: u32,
-
-        /// Recurrent-state rollback window for hybrid/recurrent
-        /// architectures. 0 (default) strongly recommended — this is a
-        /// speculative-decoding rollback primitive upstream, not a
-        /// conversation-caching one. Applied to every model this server
-        /// loads or swaps to. See `eullm run --help` for the full rationale.
-        #[arg(long, default_value_t = 0)]
-        rs_seq: u32,
-
-        /// Max full-sequence-state checkpoints kept for prompt-prefix
-        /// restore. Applied to every model this server loads or swaps to.
-        /// See `eullm run --help` for the full rationale.
-        #[arg(long, default_value_t = 0)]
-        ctx_checkpoints: usize,
-
-        /// Minimum new tokens since the closest existing checkpoint before
-        /// taking another one. See `eullm run --help` for the full rationale.
-        #[arg(long, default_value_t = 8192)]
-        checkpoint_min_step: u32,
-
         /// Enable the embedded chat UI (off by default for headless serve).
         /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
         #[arg(long)]
         ui: bool,
-
-        /// Port for the embedded chat UI when --ui is set. Default 11435.
-        #[arg(long, default_value_t = 11435)]
-        ui_port: u16,
-
-        /// Run as a background daemon (writes PID to --pidfile)
-        #[arg(long)]
-        daemon: bool,
-
-        /// PID file path (used with --daemon)
-        #[arg(long, default_value = DEFAULT_PIDFILE)]
-        pidfile: String,
-
-        /// Enable extra internal diagnostics for the Rust engine layer.
-        /// Applied to every model this server loads or swaps to. Off by
-        /// default (zero added per-token cost, matches upstream llama.cpp).
-        /// See `eullm run --help` for the full rationale.
-        #[arg(long)]
-        rust_debug: bool,
-
-        /// Fallback multimodal projector (mmproj GGUF) for models that do not
-        /// carry one of their own.
-        ///
-        /// Only used when the model being loaded has no projector in the
-        /// store and none beside its weights. A projector belongs to the
-        /// model it was trained with, so on a server that swaps between
-        /// models this is a last resort for one you know needs it, not a
-        /// default to leave on — the pairing is logged whenever it applies.
-        #[arg(long, value_name = "PATH")]
-        mmproj: Option<PathBuf>,
     },
     /// Unload the currently loaded model from a running eullm server,
     /// freeing its VRAM — without restarting the server.
@@ -570,64 +504,8 @@ async fn main() {
         // opt-in): a user choosing a model from the menu gets GPU layers
         // auto-sized to free VRAM instead of an out-of-memory abort.
         None => match picker::pick(&store).await {
-            Some(picker::Picked::Local(path)) => Commands::Run {
-                model: Some(path.to_string_lossy().into_owned()),
-                port: 11434,
-                replace: false,
-                gpu_layers: -1,
-                fit: true,
-                fit_strict: false,
-                cpu_moe: false,
-                n_cpu_moe: 0,
-                rs_seq: 0,
-                ctx_checkpoints: 0,
-                checkpoint_min_step: 8192,
-                ctx_size: 4096,
-                threads: None,
-                batch_size: 1,
-                no_flash_attn: false,
-                n_batch: 2048,
-                cache_type_k: "f16".into(),
-                cache_type_v: "f16".into(),
-                web: false,
-                no_ui: false,
-                cli: false,
-                ui_port: 11435,
-                daemon: false,
-                pidfile: DEFAULT_PIDFILE.into(),
-                image: None,
-                rust_debug: false,
-                mmproj: None,
-            },
-            Some(picker::Picked::Catalog(entry)) => Commands::Run {
-                model: Some(entry.id.clone()),
-                port: 11434,
-                replace: false,
-                gpu_layers: -1,
-                fit: true,
-                fit_strict: false,
-                cpu_moe: false,
-                n_cpu_moe: 0,
-                rs_seq: 0,
-                ctx_checkpoints: 0,
-                checkpoint_min_step: 8192,
-                ctx_size: 4096,
-                threads: None,
-                batch_size: 1,
-                no_flash_attn: false,
-                n_batch: 2048,
-                cache_type_k: "f16".into(),
-                cache_type_v: "f16".into(),
-                web: false,
-                no_ui: false,
-                cli: false,
-                ui_port: 11435,
-                daemon: false,
-                pidfile: DEFAULT_PIDFILE.into(),
-                image: None,
-                rust_debug: false,
-                mmproj: None,
-            },
+            Some(picker::Picked::Local(path)) => picker_run(&path.to_string_lossy()),
+            Some(picker::Picked::Catalog(entry)) => picker_run(&entry.id),
             Some(picker::Picked::Url(_url)) => {
                 eprintln!(
                     "URL launch from picker not yet supported. \
@@ -658,33 +536,39 @@ async fn main() {
         Commands::Pull { model } => cmd_pull_maybe(&store, model.as_deref()).await,
         Commands::Run {
             model,
-            port,
-            replace,
-            gpu_layers,
             fit,
             fit_strict,
-            cpu_moe,
-            n_cpu_moe,
-            rs_seq,
-            ctx_checkpoints,
-            checkpoint_min_step,
-            ctx_size,
-            threads,
             batch_size,
-            no_flash_attn,
-            n_batch,
-            cache_type_k,
-            cache_type_v,
-            web,
             no_ui,
             cli,
-            ui_port,
-            daemon,
-            pidfile,
             image,
-            rust_debug,
-            mmproj,
+            opts,
         } => {
+            // One `let` re-binds every shared flag under the name the body
+            // already uses, so extracting `RuntimeOpts` cost nothing below
+            // this line.
+            let RuntimeOpts {
+                port,
+                replace,
+                gpu_layers,
+                cpu_moe,
+                n_cpu_moe,
+                rs_seq,
+                ctx_checkpoints,
+                checkpoint_min_step,
+                ctx_size,
+                threads,
+                no_flash_attn,
+                n_batch,
+                cache_type_k,
+                cache_type_v,
+                web,
+                ui_port,
+                daemon,
+                pidfile,
+                rust_debug,
+                mmproj,
+            } = opts;
             // `eullm run` with no model → picker, dispatch back through the same Run.
             let model = match model {
                 Some(m) => m,
@@ -780,29 +664,35 @@ async fn main() {
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
         Commands::Serve {
-            port,
-            replace,
             batch_size,
-            gpu_layers,
-            ctx_size,
-            threads,
-            no_flash_attn,
-            n_batch,
-            cache_type_k,
-            cache_type_v,
-            web,
-            cpu_moe,
-            n_cpu_moe,
-            rs_seq,
-            ctx_checkpoints,
-            checkpoint_min_step,
             ui,
-            ui_port,
-            daemon,
-            pidfile,
-            rust_debug,
-            mmproj,
+            opts,
         } => {
+            // One `let` re-binds every shared flag under the name the body
+            // already uses, so extracting `RuntimeOpts` cost nothing below
+            // this line.
+            let RuntimeOpts {
+                port,
+                replace,
+                gpu_layers,
+                cpu_moe,
+                n_cpu_moe,
+                rs_seq,
+                ctx_checkpoints,
+                checkpoint_min_step,
+                ctx_size,
+                threads,
+                no_flash_attn,
+                n_batch,
+                cache_type_k,
+                cache_type_v,
+                web,
+                ui_port,
+                daemon,
+                pidfile,
+                rust_debug,
+                mmproj,
+            } = opts;
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
@@ -3416,24 +3306,56 @@ mod cli_default_parity_tests {
     use super::*;
     use clap::Parser;
 
-    /// The KV cache defaults of `run` and `serve`.
-    fn kv_defaults(argv: &[&str]) -> (String, String) {
+    /// The shared runtime flags as `run` or `serve` parsed them.
+    ///
+    /// Both subcommands now flatten the same `RuntimeOpts`, so this cannot see
+    /// two different field sets any more. The tests below are kept regardless:
+    /// they assert the *values* a user gets, which is what the divergences they
+    /// were written for actually broke, and they would still catch someone
+    /// pulling a flag back out of the shared struct.
+    fn runtime_opts(argv: &[&str]) -> RuntimeOpts {
         match Cli::parse_from(argv).command.expect("subcommand") {
-            Commands::Run {
-                cache_type_k,
-                cache_type_v,
-                ..
-            }
-            | Commands::Serve {
-                cache_type_k,
-                cache_type_v,
-                ..
-            } => (cache_type_k, cache_type_v),
+            Commands::Run { opts, .. } | Commands::Serve { opts, .. } => opts,
             other => panic!(
                 "unexpected subcommand: {:?}",
                 std::mem::discriminant(&other)
             ),
         }
+    }
+
+    /// The KV cache defaults of `run` and `serve`.
+    fn kv_defaults(argv: &[&str]) -> (String, String) {
+        let o = runtime_opts(argv);
+        (o.cache_type_k, o.cache_type_v)
+    }
+
+    #[test]
+    fn run_and_serve_share_every_runtime_flag() {
+        // One assertion covering all twenty shared defaults at once. Since
+        // both subcommands flatten the same struct this can no longer fail by
+        // drift — which is the point of H3-H — but it fails loudly if someone
+        // pulls a flag back out into one variant, and it is the shortest
+        // statement of the property the mandatory parity rule in `CLAUDE.md`
+        // is trying to express.
+        assert_eq!(
+            runtime_opts(&["eullm", "run", "some-model"]),
+            runtime_opts(&["eullm", "serve"]),
+            "run and serve must agree on every shared runtime flag"
+        );
+    }
+
+    #[test]
+    fn a_shared_flag_parses_the_same_on_both_commands() {
+        // Defaults agreeing is not the same as the flags existing on both.
+        // `--cache-type-k`, `--cache-type-v` and `--gpu-layers` were once
+        // accepted by `run` and rejected by `serve`, so a `serve` deployment
+        // had no way to override them at all.
+        let flags = ["--gpu-layers", "20", "--ctx-size", "8192", "--cpu-moe"];
+        let mut run_argv = vec!["eullm", "run", "some-model"];
+        run_argv.extend_from_slice(&flags);
+        let mut serve_argv = vec!["eullm", "serve"];
+        serve_argv.extend_from_slice(&flags);
+        assert_eq!(runtime_opts(&run_argv), runtime_opts(&serve_argv));
     }
 
     #[test]
@@ -3475,20 +3397,8 @@ mod cli_default_parity_tests {
     fn run_and_serve_agree_on_context_size_too() {
         // Same class of divergence, checked while we are here: a default that
         // differs between the two commands is invisible to whoever hits it.
-        let run = match Cli::parse_from(["eullm", "run", "some-model"])
-            .command
-            .expect("subcommand")
-        {
-            Commands::Run { ctx_size, .. } => ctx_size,
-            _ => unreachable!(),
-        };
-        let serve = match Cli::parse_from(["eullm", "serve"])
-            .command
-            .expect("subcommand")
-        {
-            Commands::Serve { ctx_size, .. } => ctx_size,
-            _ => unreachable!(),
-        };
+        let run = runtime_opts(&["eullm", "run", "some-model"]).ctx_size;
+        let serve = runtime_opts(&["eullm", "serve"]).ctx_size;
         assert_eq!(
             run, serve,
             "run and serve must agree on the default context"

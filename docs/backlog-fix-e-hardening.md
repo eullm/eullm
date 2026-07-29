@@ -1481,7 +1481,40 @@ diligenza manuale.
   orfana non verrà notata: rimuovere il ramo e togliere la soppressione globale,
   riabilitandola solo con `#[allow]` puntuali dove serve davvero.
 
-- [ ] **H3-H · Condensare le opzioni di runtime in una struct condivisa** *(P2)*
+- [x] **H3-H · Condensare le opzioni di runtime in una struct condivisa** *(P2)*
+  **Chiusa il 29 luglio 2026.** `RuntimeOpts` con `#[derive(clap::Args)]`,
+  flattenata in `Run` e in `Serve`: 20 flag condivisi dichiarati una volta sola.
+  Ogni braccio del match fa un `let RuntimeOpts { .. } = opts;` che ri-lega i
+  nomi che il corpo già usava, quindi sotto quella riga non è cambiato niente.
+
+  Due campi restano fuori, entrambi per un motivo, non per dimenticanza:
+  `batch_size`, perché 1 su `run` e 8 su `serve` non è deriva ma la differenza
+  tra una chat interattiva che deve avere tutto il contesto e un demone che
+  serve richieste concorrenti — il warning «each of the N slots gets only M
+  tokens» dello scheduler è scritto contro il default di `serve`; e
+  `--fit`/`--fit-strict`, che scelgono il numero di layer contro la VRAM libera
+  *prima* del load, mentre `serve` carica dentro `api::swap_model` che non ha
+  quel passaggio. Esporli lì significherebbe accettarli e non fare niente, che
+  è peggio che non offrirli: cablare l'auto-fit nello swap è lavoro a sé.
+
+  Effetto collaterale rimosso nello stesso passaggio: i tre `Commands::Run { }`
+  scritti a mano per gli esiti del picker, che ripetevano tutti i 27 default a
+  mano — una quarta copia della stessa lista, che un default cambiato
+  nell'attributo `#[arg]` avrebbe lasciato sbagliata in silenzio. Ora è
+  `picker_run()`, che chiede i default a clap parsando `eullm run -- <model>`.
+  Verificato che i 25 valori dei literal coincidevano con i default di clap,
+  quindi la rimozione non cambia comportamento.
+
+  Due test nuovi: uno confronta l'intera `RuntimeOpts` fra i due comandi, uno
+  passa gli stessi flag a entrambi e confronta il risultato. Il `--help` reale
+  dei due comandi differisce solo per `--cli`, `--fit`, `--fit-strict`,
+  `--image`, `--no-ui` (run) e `--ui` (serve).
+
+  **La regola di parità obbligatoria nel `CLAUDE.md` è ora superflua per i
+  campi in `RuntimeOpts`**, che è quello che l'item chiedeva: la divergenza è
+  impossibile per costruzione invece che vietata per convenzione. Va riscritta
+  per dire questo, e per coprire il caso che resta scoperto — un campo tenuto
+  deliberatamente fuori dalla struct.
   `main.rs` è 3.178 righe e i 22 campi di `Commands::Run` sono replicati a mano tre volte
   (`main.rs:540-595, 624-651`): aggiungere una flag richiede quattro modifiche coordinate.
   Il `CLAUDE.md` documenta questo esatto errore come già avvenuto in produzione
