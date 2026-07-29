@@ -126,6 +126,27 @@ artifact directories, so it listed the missing binary both times. When a
 release looks wrong, diffing the checksum file against the attached assets
 answers "was it built?" and "was it published?" separately.
 
+### Versions go in steps of ten, and releases accumulate (from 0.6.52 onwards)
+
+The next release after 0.6.52 is 0.6.60, then 0.6.70, 0.6.80. Not every fix and
+not every feature gets a release: work accumulates on `main` and a build goes
+out when there is enough in it to be worth someone's download.
+
+On 28 July 2026 nine releases shipped in one day, 0.6.42 through 0.6.51. Three
+of them existed only to fix the release mechanics of the previous one, and
+testers were re-downloading a 900 MB CUDA binary several times an afternoon.
+
+Two consequences:
+
+- `engine/Cargo.toml` is not bumped until the release commit. During the
+  accumulation window `main` stays on the last published version, so a build
+  from `main` reports a version that exists and can be downloaded.
+- Changelog entries are written as the work lands, under `## Unreleased`. The
+  bump commit renames that heading to the version and adds the date.
+
+The step of ten leaves room for a hotfix in between (0.6.61) without disturbing
+the sequence. After 0.6.90, decide then between 0.6.100 and moving to 0.7.0.
+
 ### Every release updates `CHANGELOG.md` (MANDATORY)
 
 Before pushing a `EuLLM-v*` tag, add the version's section to `CHANGELOG.md`.
