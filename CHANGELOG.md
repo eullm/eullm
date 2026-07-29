@@ -15,6 +15,21 @@ something changed, less so for understanding what it means.
 
 ## Unreleased
 
+### Changed
+- **`eullm serve` now defaults to one request at a time, not eight.**
+  `--ctx-size` is the total KV budget and is split evenly across batch slots,
+  so the old default of 8 gave each request an eighth of the window: with the
+  4096 default context, 512 tokens. A reasoning model spends that before it
+  finishes thinking, so the answer stopped mid-sentence and came back as
+  `done_reason="length"` — with nothing pointing at a flag, because the
+  operator had never set one. `run` already defaulted to 1 and now `serve` does
+  too.
+
+  **If you serve concurrent clients, set `--batch-size` explicitly**, and raise
+  `--ctx-size` with it: `--batch-size 8 --ctx-size 32768` keeps the same 4096
+  tokens per slot the old default only appeared to give you. Requests beyond
+  the slot count queue rather than fail.
+
 ### Fixed
 - **`eullm serve` now prints the same startup diagnostics as `eullm run`.**
   `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache` and

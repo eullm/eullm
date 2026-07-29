@@ -1487,15 +1487,21 @@ diligenza manuale.
   Ogni braccio del match fa un `let RuntimeOpts { .. } = opts;` che ri-lega i
   nomi che il corpo già usava, quindi sotto quella riga non è cambiato niente.
 
-  Due campi restano fuori, entrambi per un motivo, non per dimenticanza:
-  `batch_size`, perché 1 su `run` e 8 su `serve` non è deriva ma la differenza
-  tra una chat interattiva che deve avere tutto il contesto e un demone che
-  serve richieste concorrenti — il warning «each of the N slots gets only M
-  tokens» dello scheduler è scritto contro il default di `serve`; e
-  `--fit`/`--fit-strict`, che scelgono il numero di layer contro la VRAM libera
-  *prima* del load, mentre `serve` carica dentro `api::swap_model` che non ha
-  quel passaggio. Esporli lì significherebbe accettarli e non fare niente, che
-  è peggio che non offrirli: cablare l'auto-fit nello swap è lavoro a sé.
+  Sono 21 flag, non 20: la prima stesura teneva `batch_size` fuori trattando la
+  differenza 1/8 come voluta. Non lo è. Chi avvia `serve` senza pensarci si
+  ritrova la KV divisa per otto — 512 token per richiesta col contesto di
+  default — e lo scopre da una risposta troncata a metà, riportata come
+  `done_reason="length"`, che non punta a nessuna flag perché nessuna flag è
+  stata passata. Il default è 1 su entrambi i comandi e la concorrenza si
+  chiede. Il warning dello scheduler resta: scegliere 8 senza alzare
+  `--ctx-size` produce esattamente lo stesso troncamento, solo che ora è una
+  scelta.
+
+  Restano fuori `--fit`/`--fit-strict`, che scelgono il numero di layer contro
+  la VRAM libera *prima* del load, mentre `serve` carica dentro
+  `api::swap_model` che non ha quel passaggio. Esporli lì significherebbe
+  accettarli e non fare niente, che è peggio che non offrirli: cablare
+  l'auto-fit nello swap è lavoro a sé.
 
   Effetto collaterale rimosso nello stesso passaggio: i tre `Commands::Run { }`
   scritti a mano per gli esiti del picker, che ripetevano tutti i 27 default a

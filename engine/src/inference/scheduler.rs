@@ -715,10 +715,16 @@ fn run_scheduler_loop(
     );
     // `--ctx-size` is the *total* KV budget and every slot gets an equal share,
     // so raising `--batch-size` silently shrinks what each request can hold.
-    // With the `serve` defaults (8 slots, 4096 total) that is 512 tokens per
-    // request, which a reasoning model spends before it finishes thinking — and
-    // the answer then stops mid-sentence. Say so, with the two numbers that fix
-    // it, rather than letting it be discovered from truncated output.
+    // `serve` used to default to 8 slots against the 4096 default context,
+    // which is 512 tokens per request — a reasoning model spends that before it
+    // finishes thinking, and the answer then stops mid-sentence and is reported
+    // as `done_reason="length"`. Nothing in that points back at a flag the
+    // operator never set, so the default is now 1 on both commands and the
+    // concurrency has to be asked for.
+    //
+    // This warning still matters: the number is now deliberate, but choosing 8
+    // without also raising `--ctx-size` produces exactly the same truncation.
+    // Say so, with the two numbers that fix it.
     if per_seq_ctx < MIN_COMFORTABLE_SEQ_CTX && sched_config.max_batch_size > 1 {
         tracing::warn!(
             "Each of the {} slots gets only {} tokens of context ({} total ÷ {} slots). \

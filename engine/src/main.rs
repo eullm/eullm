@@ -195,6 +195,23 @@ struct RuntimeOpts {
     #[arg(short, long, default_value_t = 4096)]
     ctx_size: u32,
 
+    /// Maximum concurrent requests served by the continuous-batching scheduler.
+    ///
+    /// `--ctx-size` is the *total* KV budget and is split evenly across these
+    /// slots, so per-sequence context is `ctx_size / batch_size`. One slot is
+    /// therefore the only default that cannot surprise anyone: the request
+    /// gets the whole window that was asked for.
+    ///
+    /// `serve` used to default to 8. With the 4096 default context that is 512
+    /// tokens per request — which a reasoning model spends before it finishes
+    /// thinking, so the answer stops mid-sentence and is reported as
+    /// `done_reason="length"`. Nothing about that points back at a flag nobody
+    /// set. Concurrency is worth having and worth asking for: raise this to
+    /// 4–16 when using the engine as a backend for simultaneous users, and
+    /// raise `--ctx-size` with it.
+    #[arg(long, default_value_t = 1)]
+    batch_size: usize,
+
     /// Number of CPU threads (default: all available)
     #[arg(short, long)]
     threads: Option<u32>,
@@ -292,15 +309,6 @@ enum Commands {
         #[arg(long)]
         fit_strict: bool,
 
-        /// Maximum concurrent requests served by the continuous-batching scheduler.
-        ///
-        /// `--ctx-size` is split evenly across these slots (so per-sequence context
-        /// = ctx_size / batch_size). Default 1 in interactive `run` mode means each
-        /// chat gets the full context; raise to 4–16 if you're using this engine as
-        /// a backend for multiple simultaneous users.
-        #[arg(long, default_value_t = 1)]
-        batch_size: usize,
-
         /// Disable the embedded chat UI (otherwise served on --ui-port).
         /// Use this for headless / backend / RAG deployments where you only
         /// want the OpenAI/Ollama API surface exposed.
@@ -347,10 +355,6 @@ enum Commands {
     Serve {
         #[command(flatten)]
         opts: RuntimeOpts,
-
-        /// Enable continuous batching with N max concurrent requests (0 = sequential)
-        #[arg(long, default_value_t = 8)]
-        batch_size: usize,
 
         /// Enable the embedded chat UI (off by default for headless serve).
         /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
@@ -538,7 +542,6 @@ async fn main() {
             model,
             fit,
             fit_strict,
-            batch_size,
             no_ui,
             cli,
             image,
@@ -549,6 +552,7 @@ async fn main() {
             // this line.
             let RuntimeOpts {
                 port,
+                batch_size,
                 replace,
                 gpu_layers,
                 cpu_moe,
@@ -663,16 +667,13 @@ async fn main() {
         Commands::List => cmd_list(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve {
-            batch_size,
-            ui,
-            opts,
-        } => {
+        Commands::Serve { ui, opts } => {
             // One `let` re-binds every shared flag under the name the body
             // already uses, so extracting `RuntimeOpts` cost nothing below
             // this line.
             let RuntimeOpts {
                 port,
+                batch_size,
                 replace,
                 gpu_layers,
                 cpu_moe,
