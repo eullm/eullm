@@ -931,8 +931,19 @@ esterni non si fidano dei valori che leggono.
   sequenze concorrenti nello smoke test, che è il percorso multi-sequenza dove
   un indice sbagliato si vedrebbe.
 
-- [ ] **H2-S · L'unico artefatto della matrice compilato per un'architettura che
+- [x] **H2-S · L'unico artefatto della matrice compilato per un'architettura che
   il runner non ha** *(P1)*
+  **Chiusa il 29 luglio 2026.** Le due macchine di Peter funzionano: la tabella
+  della issue #140 riporta `eullm-macos-x64` come *Tested (community)* con il
+  mac mini 2018 i7-8700B a 54 tok/s e il MacBook Pro 15" i9-8950HK a 41 tok/s.
+  Il merito è quasi certamente di **H2-T** (il binario caricava 29 layer su GPU
+  via Metal mentre dichiarava CPU), chiusa in 0.6.39 una release dopo il cambio
+  di runner. Le due modifiche non sono separabili dai dati raccolti, perché
+  nessuno ha provato la 0.6.38 da sola, e isolarle costerebbe a un tester il
+  download di una release vecchia per un'informazione che non cambia nulla:
+  `macos-15-intel` resta comunque, perché è quello che usa llama.cpp a monte e
+  perché toglie una classe di confusione host/target, non perché sia
+  dimostrato che servisse.
   Prima di questo punto ci sono tre giorni di ipotesi sul NaN degli Intel Mac
   senza aver mai guardato né l'issue tracker di llama.cpp né come llama.cpp
   stesso pubblica il proprio binario macOS x64. Errore di metodo, non di stile:
@@ -1387,7 +1398,30 @@ diligenza manuale.
   da cui si è mai dipeso. Estendere lo step di verifica: oltre al confronto delle SHA,
   controllare che il commit del submodule sia ancora raggiungibile sul mirror.
 
-- [ ] **H3-C · Controlli automatici su dipendenze e licenze** *(P1)*
+- [x] **H3-C · Controlli automatici su dipendenze e licenze** *(P1)*
+  **Chiusa il 29 luglio 2026.** `deny.toml` alla radice del workspace e job
+  `deps` in `ci.yml` (`cargo deny check advisories bans licenses sources`),
+  fuori dal filtro `changes` perché una dipendenza diventa vulnerabile senza
+  che nessuno tocchi il repository. L'allowlist delle licenze è generata dalle
+  licenze realmente presenti, non da un template, ed è per costruzione: quello
+  che non è elencato fallisce. MPL-2.0 e LGPL sono assenti di proposito.
+  `pip-audit` bloccante sul job Forge.
+
+  Il primo run ha trovato **due vulnerabilità reali**, entrambe corrette nello
+  stesso passaggio: `rustls-webpki` 0.103.10 (RUSTSEC-2026-0104, panic
+  raggiungibile nel parsing delle CRL prima della verifica della firma) e
+  `crossbeam-epoch` 0.9.18 (RUSTSEC-2026-0204, dereferenziazione di puntatore
+  non valido), la seconda attraverso `llguidance` → `llama-cpp-2`.
+
+  `all-features = true` non è opzionale: `MIT-0` entra da `llguidance` dietro
+  una feature di `llama-cpp-2` e senza quel flag il crate non è nemmeno nel
+  grafo, quindi una policy costruita sul default avrebbe avuto un buco.
+
+  `nvidia-modelopt` è **rimosso**: dichiarato nell'extra `[distill]` di
+  `forge/pyproject.toml`, sotto licenza NVIDIA e non Apache-2.0, e importato da
+  zero righe di codice. Distillazione e pruning sono implementati su torch e
+  transformers. Una dipendenza non usata con licenza non permissiva è solo un
+  rischio senza contropartita.
   Nessun `cargo audit`, `cargo deny` o `pip-audit` gira in CI, e nulla verifica
   automaticamente la regola dichiarata obbligatoria di non introdurre dipendenze copyleft.
   Lo stato attuale è buono per diligenza manuale — le versioni bloccate in `Cargo.lock`

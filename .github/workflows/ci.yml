@@ -111,6 +111,29 @@ jobs:
             forge:
               - 'forge/**'
 
+  # ── Dependency, licence and advisory policy ──────────────────────────
+  # Runs on every push, not behind the `changes` filter: a dependency can
+  # become vulnerable without anyone touching this repository, so this job has
+  # to run when nothing changed as much as when something did.
+  #
+  # `CLAUDE.md` forbids copyleft dependencies and requires Apache-2.0
+  # compatibility. That rule was enforced by manual diligence until this job
+  # existed — it held, but only for as long as somebody remembered to look.
+  # The policy lives in `deny.toml`; adding a crate whose licence is not on the
+  # allow-list fails here rather than being discovered at a licence review.
+  deps:
+    name: Dependencies (licences + advisories)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+        # No submodules: cargo-deny reads manifests, never the C++ source, and
+        # the llama.cpp checkout is over a gigabyte.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          # One workspace at the repository root covers engine, hub and the
+          # vendored llama-cpp-rs crates.
+          command: check advisories bans licenses sources
+
   # ── Engine ───────────────────────────────────────────────────────────
   engine:
     name: Engine (build + test)
@@ -202,6 +225,19 @@ jobs:
       - name: Test
         working-directory: forge
         run: pytest -v
+      - name: Audit dependencies
+        working-directory: forge
+        # The Python counterpart of the `deps` job. It is blocking on purpose:
+        # a check that cannot fail reports nothing.
+        #
+        # A new advisory published upstream will turn this red without anything
+        # in this repository having changed. When that happens the fix is to
+        # upgrade the pinned floor in `pyproject.toml`, or — when no fixed
+        # release exists yet — to add `--ignore-vuln <ID>` here with the reason
+        # and the date, so it is reviewed later instead of disappearing.
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit --strict --desc
 
   # ── Windows installer pre-flight (FAST, <2 min, runs on every push) ──
   # Installer preflight removed in v0.5.7 alongside the installer build

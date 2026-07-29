@@ -36,9 +36,15 @@ dev = [
     "pytest-cov>=5.0",
     "ruff>=0.4",
 ]
-distill = [
-    "nvidia-modelopt[torch]>=0.11",
-]
+# `distill` intentionally has no extra packages. It carried
+# `nvidia-modelopt[torch]`, which is distributed under NVIDIA's own licence
+# rather than Apache-2.0 and was imported by nothing: the distillation and
+# pruning stages are implemented in `distill.py` and `pruning.py` against torch
+# and transformers directly. An unused dependency with a non-permissive licence
+# is a liability with no upside, so it is gone. The extra itself stays so
+# `pip install eullm-forge[distill]` keeps working, and so there is somewhere
+# obvious to put a real distillation-only dependency when one appears.
+distill = []
 datasets-browser = [
     "playwright>=1.40",
 ]

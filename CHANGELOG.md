@@ -13,6 +13,20 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Fixed
+- **Two security advisories in the dependency tree, both now closed.**
+  `rustls-webpki` could panic while parsing a certificate revocation list, on a
+  path reached *before* the CRL's signature is verified (RUSTSEC-2026-0104), and
+  `crossbeam-epoch` dereferenced an invalid pointer when formatting a null
+  atomic pointer (RUSTSEC-2026-0204). Both arrive through dependencies rather
+  than our own code — the first through the HTTPS client used for model
+  downloads, the second through llama.cpp's Rust bindings — and both are fixed
+  by the updated versions in this release. Neither is known to be triggerable
+  by anything eullm does, and they were found by a check that did not exist
+  before this release rather than by a report.
+
 ## 0.6.52 — 2026-07-28
 
 ### Fixed
