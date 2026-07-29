@@ -931,8 +931,19 @@ esterni non si fidano dei valori che leggono.
   sequenze concorrenti nello smoke test, che è il percorso multi-sequenza dove
   un indice sbagliato si vedrebbe.
 
-- [ ] **H2-S · L'unico artefatto della matrice compilato per un'architettura che
+- [x] **H2-S · L'unico artefatto della matrice compilato per un'architettura che
   il runner non ha** *(P1)*
+  **Chiusa il 29 luglio 2026.** Le due macchine di Peter funzionano: la tabella
+  della issue #140 riporta `eullm-macos-x64` come *Tested (community)* con il
+  mac mini 2018 i7-8700B a 54 tok/s e il MacBook Pro 15" i9-8950HK a 41 tok/s.
+  Il merito è quasi certamente di **H2-T** (il binario caricava 29 layer su GPU
+  via Metal mentre dichiarava CPU), chiusa in 0.6.39 una release dopo il cambio
+  di runner. Le due modifiche non sono separabili dai dati raccolti, perché
+  nessuno ha provato la 0.6.38 da sola, e isolarle costerebbe a un tester il
+  download di una release vecchia per un'informazione che non cambia nulla:
+  `macos-15-intel` resta comunque, perché è quello che usa llama.cpp a monte e
+  perché toglie una classe di confusione host/target, non perché sia
+  dimostrato che servisse.
   Prima di questo punto ci sono tre giorni di ipotesi sul NaN degli Intel Mac
   senza aver mai guardato né l'issue tracker di llama.cpp né come llama.cpp
   stesso pubblica il proprio binario macOS x64. Errore di metodo, non di stile:
@@ -1387,7 +1398,30 @@ diligenza manuale.
   da cui si è mai dipeso. Estendere lo step di verifica: oltre al confronto delle SHA,
   controllare che il commit del submodule sia ancora raggiungibile sul mirror.
 
-- [ ] **H3-C · Controlli automatici su dipendenze e licenze** *(P1)*
+- [x] **H3-C · Controlli automatici su dipendenze e licenze** *(P1)*
+  **Chiusa il 29 luglio 2026.** `deny.toml` alla radice del workspace e job
+  `deps` in `ci.yml` (`cargo deny check advisories bans licenses sources`),
+  fuori dal filtro `changes` perché una dipendenza diventa vulnerabile senza
+  che nessuno tocchi il repository. L'allowlist delle licenze è generata dalle
+  licenze realmente presenti, non da un template, ed è per costruzione: quello
+  che non è elencato fallisce. MPL-2.0 e LGPL sono assenti di proposito.
+  `pip-audit` bloccante sul job Forge.
+
+  Il primo run ha trovato **due vulnerabilità reali**, entrambe corrette nello
+  stesso passaggio: `rustls-webpki` 0.103.10 (RUSTSEC-2026-0104, panic
+  raggiungibile nel parsing delle CRL prima della verifica della firma) e
+  `crossbeam-epoch` 0.9.18 (RUSTSEC-2026-0204, dereferenziazione di puntatore
+  non valido), la seconda attraverso `llguidance` → `llama-cpp-2`.
+
+  `all-features = true` non è opzionale: `MIT-0` entra da `llguidance` dietro
+  una feature di `llama-cpp-2` e senza quel flag il crate non è nemmeno nel
+  grafo, quindi una policy costruita sul default avrebbe avuto un buco.
+
+  `nvidia-modelopt` è **rimosso**: dichiarato nell'extra `[distill]` di
+  `forge/pyproject.toml`, sotto licenza NVIDIA e non Apache-2.0, e importato da
+  zero righe di codice. Distillazione e pruning sono implementati su torch e
+  transformers. Una dipendenza non usata con licenza non permissiva è solo un
+  rischio senza contropartita.
   Nessun `cargo audit`, `cargo deny` o `pip-audit` gira in CI, e nulla verifica
   automaticamente la regola dichiarata obbligatoria di non introdurre dipendenze copyleft.
   Lo stato attuale è buono per diligenza manuale — le versioni bloccate in `Cargo.lock`
@@ -1427,7 +1461,18 @@ diligenza manuale.
   forma di JSON/SSE/NDJSON. È il complemento naturale dei golden test già previsti da
   `0.8-D`, e va introdotto prima di quelli perché non richiede di toccare nessuna route.
 
-- [ ] **H3-G · Rimuovere il codice morto e togliere `-A dead-code`** *(P2)*
+- [x] **H3-G · Rimuovere il codice morto e togliere `-A dead-code`** *(P2)*
+  **Chiusa il 29 luglio 2026.** Ramo rimosso (45 righe) e clippy gira senza
+  soppressioni: via sia `-A dead-code` sia `-A unused-imports`, perché nessuna
+  delle due era più necessaria. La variante `KvCacheType::Unknown` resta perché
+  appartiene al crate `llama-cpp-2` vendored, non a noi; nostro era solo il
+  ramo che la gestiva. I tre lettori dell'audit trail senza chiamante hanno un
+  `#[allow(dead_code)]` puntuale che nomina H3-J.
+
+  Ha ripagato nello stesso commit: togliere la soppressione ha fatto emergere
+  una variabile resa morta dal refactor del banner di H3-N, scritta pochi
+  minuti prima. È esattamente il caso che l'item descriveva — non il peso del
+  codice morto, ma il fatto che il prossimo orfano non si sarebbe notato.
   Il ramo di fallback "mixed TQ" (`scheduler.rs:694-751`, ~55 righe) opera su
   `KvCacheType::Unknown(k)` con `k != v`, una condizione che `parse_cache_type`
   (`inference/mod.rs:277-290`) non può produrre: è residuo dell'integrazione TurboQuant
@@ -1436,7 +1481,46 @@ diligenza manuale.
   orfana non verrà notata: rimuovere il ramo e togliere la soppressione globale,
   riabilitandola solo con `#[allow]` puntuali dove serve davvero.
 
-- [ ] **H3-H · Condensare le opzioni di runtime in una struct condivisa** *(P2)*
+- [x] **H3-H · Condensare le opzioni di runtime in una struct condivisa** *(P2)*
+  **Chiusa il 29 luglio 2026.** `RuntimeOpts` con `#[derive(clap::Args)]`,
+  flattenata in `Run` e in `Serve`: 20 flag condivisi dichiarati una volta sola.
+  Ogni braccio del match fa un `let RuntimeOpts { .. } = opts;` che ri-lega i
+  nomi che il corpo già usava, quindi sotto quella riga non è cambiato niente.
+
+  Sono 21 flag, non 20: la prima stesura teneva `batch_size` fuori trattando la
+  differenza 1/8 come voluta. Non lo è. Chi avvia `serve` senza pensarci si
+  ritrova la KV divisa per otto — 512 token per richiesta col contesto di
+  default — e lo scopre da una risposta troncata a metà, riportata come
+  `done_reason="length"`, che non punta a nessuna flag perché nessuna flag è
+  stata passata. Il default è 1 su entrambi i comandi e la concorrenza si
+  chiede. Il warning dello scheduler resta: scegliere 8 senza alzare
+  `--ctx-size` produce esattamente lo stesso troncamento, solo che ora è una
+  scelta.
+
+  Restano fuori `--fit`/`--fit-strict`, che scelgono il numero di layer contro
+  la VRAM libera *prima* del load, mentre `serve` carica dentro
+  `api::swap_model` che non ha quel passaggio. Esporli lì significherebbe
+  accettarli e non fare niente, che è peggio che non offrirli: cablare
+  l'auto-fit nello swap è lavoro a sé.
+
+  Effetto collaterale rimosso nello stesso passaggio: i tre `Commands::Run { }`
+  scritti a mano per gli esiti del picker, che ripetevano tutti i 27 default a
+  mano — una quarta copia della stessa lista, che un default cambiato
+  nell'attributo `#[arg]` avrebbe lasciato sbagliata in silenzio. Ora è
+  `picker_run()`, che chiede i default a clap parsando `eullm run -- <model>`.
+  Verificato che i 25 valori dei literal coincidevano con i default di clap,
+  quindi la rimozione non cambia comportamento.
+
+  Due test nuovi: uno confronta l'intera `RuntimeOpts` fra i due comandi, uno
+  passa gli stessi flag a entrambi e confronta il risultato. Il `--help` reale
+  dei due comandi differisce solo per `--cli`, `--fit`, `--fit-strict`,
+  `--image`, `--no-ui` (run) e `--ui` (serve).
+
+  **La regola di parità obbligatoria nel `CLAUDE.md` è ora superflua per i
+  campi in `RuntimeOpts`**, che è quello che l'item chiedeva: la divergenza è
+  impossibile per costruzione invece che vietata per convenzione. Va riscritta
+  per dire questo, e per coprire il caso che resta scoperto — un campo tenuto
+  deliberatamente fuori dalla struct.
   `main.rs` è 3.178 righe e i 22 campi di `Commands::Run` sono replicati a mano tre volte
   (`main.rs:540-595, 624-651`): aggiungere una flag richiede quattro modifiche coordinate.
   Il `CLAUDE.md` documenta questo esatto errore come già avvenuto in produzione
@@ -1564,7 +1648,15 @@ diligenza manuale.
   questo glob. Nessuna delle tre è stata trovata da una revisione: tutte e tre
   guardando cosa conteneva davvero il tag prima di scrivere "fixed in vX".
 
-- [ ] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
+- [x] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
+  **Chiusa il 29 luglio 2026.** Banner estratto in `src/banner.rs`
+  (`ModelBanner`), chiamato da `cmd_run` allo startup e da `api::swap_model`
+  dopo ogni caricamento riuscito. `serve` parte senza modello, quindi stampa
+  subito gli endpoint e il blocco diagnostico a ogni load: uno swap è raro e
+  costoso e può cambiare `ctx_size` e i tipi di KV, quindi ristampare vale più
+  delle righe che costa. `ModelReadyInfo` ha ora `Default`, e lo zero è letto
+  come «non noto»: il banner omette la riga KV e l'hint sul contesto
+  addestrato invece di stampare uno 0 che sembra un dato.
   Il banner con `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache`
   e `Threads` è stampato solo da `cmd_run` (`main.rs:1823-1882`); `cmd_serve`
   stampa sei righe e nessuna di queste. La riga `CPU features` è stata aggiunta

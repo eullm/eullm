@@ -13,6 +13,48 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.60 — 2026-07-29
+
+*Currently published only as the pre-release `EuLLM-v0.6.60-rc1`, so the
+`--batch-size` default change below can be checked against a real workload
+before it becomes the version people upgrade to by default.*
+
+### Changed
+- **`eullm serve` now defaults to one request at a time, not eight.**
+  `--ctx-size` is the total KV budget and is split evenly across batch slots,
+  so the old default of 8 gave each request an eighth of the window: with the
+  4096 default context, 512 tokens. A reasoning model spends that before it
+  finishes thinking, so the answer stopped mid-sentence and came back as
+  `done_reason="length"` — with nothing pointing at a flag, because the
+  operator had never set one. `run` already defaulted to 1 and now `serve` does
+  too.
+
+  **If you serve concurrent clients, set `--batch-size` explicitly**, and raise
+  `--ctx-size` with it: `--batch-size 8 --ctx-size 32768` keeps the same 4096
+  tokens per slot the old default only appeared to give you. Requests beyond
+  the slot count queue rather than fail.
+
+### Fixed
+- **`eullm serve` now prints the same startup diagnostics as `eullm run`.**
+  `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache` and
+  `Threads` were printed by `run` alone, so anyone driving the engine as a
+  daemon — every automated harness, and everyone using it as a backend behind
+  an editor or a UI — never saw which backend actually initialised or how many
+  layers were offloaded. Those are the lines that diagnose a wrong-looking
+  result, and the people who could not see them are the ones best placed to
+  report one. `serve` starts without a model, so it prints them after each
+  model load rather than at startup.
+- **Two security advisories in the dependency tree, both now closed.**
+  `rustls-webpki` could panic while parsing a certificate revocation list, on a
+  path reached *before* the CRL's signature is verified (RUSTSEC-2026-0104), and
+  `crossbeam-epoch` dereferenced an invalid pointer when formatting a null
+  atomic pointer (RUSTSEC-2026-0204). Both arrive through dependencies rather
+  than our own code — the first through the HTTPS client used for model
+  downloads, the second through llama.cpp's Rust bindings — and both are fixed
+  by the updated versions in this release. Neither is known to be triggerable
+  by anything eullm does, and they were found by a check that did not exist
+  before this release rather than by a report.
+
 ## 0.6.52 — 2026-07-28
 
 ### Fixed

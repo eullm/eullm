@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.6.52"
+version = "0.6.60-rc1"
 edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "Apache-2.0"

@@ -18,9 +18,9 @@
 - **Always check latest versions**: When adding or updating any dependency (Rust crates, Python packages, GitHub Actions), look up the current latest stable version online and use that. Never guess or copy version numbers from memory — they go stale quickly.
 - **Where configuration lives (MANDATORY)**: two channels, and the choice is not
   a matter of taste.
-  - **Model and inference configuration → CLI flags**, subject to the `run`/`serve`
-    parity rule below. GPU layers, context size, KV cache types, batch size,
-    flash attention, MoE offload, checkpoints.
+  - **Model and inference configuration → CLI flags**, declared once in
+    `RuntimeOpts` (see below). GPU layers, context size, KV cache types, batch
+    size, flash attention, MoE offload, checkpoints.
   - **Perimeter and policy configuration → environment variables** (`EULLM_*`),
     read from the process environment first and the `.env` file second, with the
     effective source logged at startup. `EULLM_API_KEYS`, `EULLM_API_KEYS_FILE`,
@@ -32,11 +32,10 @@
   command line is visible in `ps` to every local user on the box; every
   non-interactive deployment (`docker run -e`, a compose `environment:` block, a
   systemd `Environment=`) configures the environment and not argv; and a
-  perimeter setting added as a CLI flag has to be added to *both* `run` and
-  `serve` and wired through `ServeConfig`, which is exactly the mechanism that
-  produced the `cache_type_k`/`gpu_layers` divergence described below. An
-  environment variable read inside `api::serve` is read once, by both commands,
-  and cannot diverge.
+  perimeter setting added as a CLI flag still has to be wired through
+  `ServeConfig` by hand, which is the half of the old divergence that
+  `RuntimeOpts` does not fix. An environment variable read inside `api::serve`
+  is read once, by both commands, and has nothing to wire.
 
   When adding a perimeter setting: put the resolution in a pure `resolve()`
   function so precedence is testable **without mutating process environment
@@ -49,7 +48,42 @@
   gets it silently disabled is worse off than someone whose process refused to
   start.
 
-- **`eullm run` / `eullm serve` CLI flag parity (MANDATORY)**: any CLI flag added to `Commands::Run` (model-loading/inference config: GPU layers, context size, KV cache type, batch size, flash attention, etc.) MUST be added to `Commands::Serve` in the same PR, wired as the server's launch-time baseline for whatever model it loads/swaps to. `serve` is a headless daemon driven by per-request `model` fields — it must never hardcode a config option that `run` exposes. Found and fixed as a real bug (not by design) in July 2026: `cache_type_k`/`cache_type_v`/`gpu_layers` and others existed only on `Run`, silently forcing every model `serve` loaded into fixed defaults with no override. Where a per-request override already exists for a field (e.g. `ctx_size`, `batch_size` via `override_*.unwrap_or(self.*)` in `api/mod.rs`), extend that same pattern to new fields rather than only adding a launch-time flag — validate/clamp any override that arrives in a request body.
+- **One `RuntimeOpts`, flattened into `run` and `serve`**: the 21 flags the two
+  commands share are declared once, in a `#[derive(clap::Args)] struct
+  RuntimeOpts` that both subcommands take via `#[command(flatten)]`. **Add a
+  model-loading or inference flag there and it exists on both, with the same
+  default and the same help text.** There is no second list to keep in step.
+
+  This replaces a mandatory parity rule that said "any flag added to
+  `Commands::Run` MUST be added to `Commands::Serve` in the same PR". The rule
+  existed because the two lists had already drifted in production:
+  `cache_type_k`, `cache_type_v` and `gpu_layers` were on `Run` only, so every
+  model `serve` loaded was forced into fixed defaults with no override. A rule
+  holds for as long as the next person remembers it; the struct holds always.
+
+  Two things the struct does **not** do, and they are where the remaining care
+  is needed:
+
+  - **A flag deliberately kept out needs its reason written next to it**, and
+    both paths wired by hand. Today that is `--fit`/`--fit-strict` alone: they
+    size the offload against measured free VRAM *before* the load, and `serve`
+    loads inside `api::swap_model`, which has no such step. Offering them there
+    would parse them and do nothing, which is worse than not offering them.
+  - **A shared flag still has to reach the model `serve` loads**, through
+    `ServeConfig` and into `api::swap_model`. Parsing it is not honouring it.
+    Where a per-request override exists (`ctx_size`, `batch_size` via
+    `override_*.unwrap_or(self.*)` in `api/mod.rs`), extend that same pattern to
+    new fields rather than only adding a launch-time flag — and validate or
+    clamp anything that arrives in a request body.
+
+  **A default that silently divides a shared resource is not a default.**
+  `serve` defaulted to `--batch-size 8` while `run` defaulted to 1, and that
+  looked like a reasonable difference between a daemon and a chat. It was not:
+  `--ctx-size` is the *total* KV budget split evenly across slots, so eight
+  slots gave each request 512 tokens of the 4096 default. Answers stopped
+  mid-sentence and came back as `done_reason="length"`, pointing at no flag,
+  because the operator had set none. Both default to 1 now and concurrency is
+  asked for.
 
 ## CI/CD Rules (MANDATORY — do not remove or simplify)
 

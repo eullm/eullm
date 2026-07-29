@@ -264,6 +264,13 @@ impl SchedulerHandle {
 }
 
 /// Info reported by the scheduler after model load.
+///
+/// `Default` is all zeroes, which the banner treats as "not known": it omits
+/// the KV memory line and the trained-context hint rather than printing a
+/// confident 0. That is the right reading when a load path could not produce
+/// the estimate, and it is why this is a `Default` rather than an `Option`
+/// threaded through every field.
+#[derive(Default)]
 pub struct ModelReadyInfo {
     /// KV cache key memory estimate in MiB.
     pub kv_k_mib: f64,
@@ -708,10 +715,16 @@ fn run_scheduler_loop(
     );
     // `--ctx-size` is the *total* KV budget and every slot gets an equal share,
     // so raising `--batch-size` silently shrinks what each request can hold.
-    // With the `serve` defaults (8 slots, 4096 total) that is 512 tokens per
-    // request, which a reasoning model spends before it finishes thinking — and
-    // the answer then stops mid-sentence. Say so, with the two numbers that fix
-    // it, rather than letting it be discovered from truncated output.
+    // `serve` used to default to 8 slots against the 4096 default context,
+    // which is 512 tokens per request — a reasoning model spends that before it
+    // finishes thinking, and the answer then stops mid-sentence and is reported
+    // as `done_reason="length"`. Nothing in that points back at a flag the
+    // operator never set, so the default is now 1 on both commands and the
+    // concurrency has to be asked for.
+    //
+    // This warning still matters: the number is now deliberate, but choosing 8
+    // without also raising `--ctx-size` produces exactly the same truncation.
+    // Say so, with the two numbers that fix it.
     if per_seq_ctx < MIN_COMFORTABLE_SEQ_CTX && sched_config.max_batch_size > 1 {
         tracing::warn!(
             "Each of the {} slots gets only {} tokens of context ({} total ÷ {} slots). \
@@ -729,12 +742,6 @@ fn run_scheduler_loop(
     let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
         || config.cache_type_v != super::KvCacheType::F16;
 
-    // Mixed unknown KV types (carry-through to raw GGML IDs) — fallback logic.
-    let has_mixed_tq = matches!(
-        (&config.cache_type_k, &config.cache_type_v),
-        (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v)) if k != v
-    );
-
     let ctx_params = super::build_ctx_params(&config, ctx_size)
         .with_n_seq_max(sched_config.max_batch_size as u32);
 
@@ -744,51 +751,11 @@ fn run_scheduler_loop(
             // Build a hint suggesting smaller ctx-size values to try.
             let hint = ctx_oom_hint(total_ctx);
             if has_quantized_cache {
-                if has_mixed_tq {
-                    // Mixed TQ fallback: try the heavier (more precise) type for both.
-                    let heavier =
-                        if let (super::KvCacheType::Unknown(k), super::KvCacheType::Unknown(v)) =
-                            (config.cache_type_k, config.cache_type_v)
-                        {
-                            if k >= v {
-                                config.cache_type_k
-                            } else {
-                                config.cache_type_v
-                            }
-                        } else {
-                            config.cache_type_k
-                        };
-                    let name = super::cache_type_display(&heavier);
-                    eprintln!("[EULLM] Mixed TQ failed — trying {name}/{name}...");
-
-                    let ctx_params =
-                        super::build_ctx_params_with_cache(&config, ctx_size, heavier, heavier)
-                            .with_n_seq_max(sched_config.max_batch_size as u32);
-
-                    match model.new_context(&backend, ctx_params) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            eprintln!("[EULLM] {name} also failed — falling back to F16/F16");
-                            let ctx_params = super::build_ctx_params_with_cache(
-                                &config,
-                                ctx_size,
-                                super::KvCacheType::F16,
-                                super::KvCacheType::F16,
-                            )
-                            .with_n_seq_max(sched_config.max_batch_size as u32);
-                            match model.new_context(&backend, ctx_params) {
-                                Ok(c) => c,
-                                Err(e3) => {
-                                    let msg = format!(
-                                        "Context allocation failed (likely out of VRAM): {e3}\n{hint}"
-                                    );
-                                    let _ = ready_tx.send(Err(msg.clone()));
-                                    return Err(msg.into());
-                                }
-                            }
-                        }
-                    }
-                } else {
+                // A quantized KV cache the driver would not allocate: retry
+                // once at F16/F16, which always fits where the quantized form
+                // did not, and say so rather than failing with the user's flags
+                // still on screen as if they had been honoured.
+                {
                     eprintln!(
                         "[EULLM] KV cache fallback: {:?}/{:?} → F16/F16",
                         config.cache_type_k, config.cache_type_v,

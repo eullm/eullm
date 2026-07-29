@@ -1,0 +1,73 @@
+# cargo-deny — dependency, licence and advisory policy for the Rust workspace.
+#
+# `CLAUDE.md` states that no GPL, AGPL or other copyleft dependency may enter
+# the tree, and that everything must be Apache-2.0 compatible. Until this file
+# existed that rule was enforced by whoever remembered to check, which worked
+# only as long as somebody remembered. The allow-list below inverts it: a
+# licence that is not named here fails the build, so a new dependency has to be
+# looked at rather than merely noticed.
+#
+# The list was generated from the licences actually present in the tree, not
+# from a template, so a failure here means something genuinely new arrived.
+#
+# Run locally with:  cargo deny check
+
+[graph]
+# Check every platform, not just the host: we publish Windows, macOS and Linux
+# binaries, and the Windows-only crates (clipboard-win, error-code) would be
+# invisible from a Linux runner.
+all-features = true
+
+[advisories]
+version = 2
+# No blanket ignores. An advisory that cannot be fixed today gets its own line
+# here with the reason and the date, so it is reviewed rather than forgotten.
+ignore = []
+
+[licenses]
+version = 2
+# Permissive only. Every entry is Apache-2.0 compatible and none is copyleft,
+# not even weakly: MPL-2.0 and LGPL are deliberately absent, so a crate that
+# offers only those fails instead of slipping in.
+allow = [
+    "Apache-2.0",
+    "MIT",
+    # MIT No Attribution — MIT without the notice requirement, so strictly more
+    # permissive. Reaches us through llguidance's URI parsing, behind one of
+    # llama-cpp-2's features, which is why `all-features` above is not optional:
+    # without it this crate is not even in the graph.
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    # Unicode character data (unicode-ident and the unicode-* crates).
+    "Unicode-3.0",
+    # Boost Software License, permissive, no attribution in binaries.
+    # Reaches us through ryu, and through rustyline's Windows clipboard path.
+    "BSL-1.0",
+    # Community Data License Agreement, Permissive 2.0 — a *data* licence, used
+    # by webpki-roots for the Mozilla CA root store. No copyleft, no source
+    # obligation; it is here because the payload is a dataset, not code.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.8
+
+# r-efi offers "MIT OR Apache-2.0 OR LGPL-2.1-or-later". The LGPL arm is one
+# choice among three and we take a permissive one, which the allow-list above
+# already expresses. Recorded here so nobody reads "LGPL" in a dependency
+# listing and thinks the rule was broken.
+
+[bans]
+# Duplicate versions are noise in a tree this size and say nothing about
+# licence or security, which is what this file is for.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# The llama.cpp side is vendored as path dependencies plus a pinned submodule,
+# so nothing is pulled from a git dependency at build time.
+allow-git = []

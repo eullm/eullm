@@ -310,7 +310,7 @@ impl AppState {
         let checkpoint_min_step_for_swap = self.checkpoint_min_step;
         let rust_debug_for_swap = self.rust_debug;
 
-        let (new_engine, new_scheduler) = tokio::task::spawn_blocking(move || {
+        let (new_engine, new_scheduler, ready_info) = tokio::task::spawn_blocking(move || {
             if batch_size > 0 {
                 let sched_config = SchedulerConfig {
                     max_batch_size: batch_size,
@@ -321,12 +321,18 @@ impl AppState {
                 };
                 let sched = BatchScheduler::new(config, sched_config);
                 match sched.start() {
-                    Ok((handle, _model_info)) => Ok((None, Some(handle))),
+                    Ok((handle, model_info)) => Ok((None, Some(handle), Some(model_info))),
                     Err(e) => Err(format!("Failed to start scheduler: {e}")),
                 }
             } else {
                 match InferenceEngine::load(config) {
-                    Ok(eng) => Ok((Some(Arc::new(eng)), None)),
+                    Ok(eng) => {
+                        // Read it here, on the blocking thread that already
+                        // owns the model, rather than after the move into the
+                        // slot: the estimate needs the model's own metadata.
+                        let info = eng.ready_info();
+                        Ok((Some(Arc::new(eng)), None, Some(info)))
+                    }
                     Err(e) => Err(format!("Failed to load model: {e}")),
                 }
             }
@@ -346,6 +352,40 @@ impl AppState {
             "Model swap complete → {} (batch_size={batch_size})",
             crate::audit::sanitize_for_log(&model_name)
         );
+
+        // The diagnostic banner `run` prints at startup. `serve` starts with no
+        // model, so this is the only place it can be emitted — and until it was
+        // here, anyone driving the engine as a daemon never saw which backend
+        // actually initialised, how many layers were offloaded, or what the KV
+        // cache costs. That is the audience least able to guess and most likely
+        // to be filing a report. See `crate::banner`.
+        let info = ready_info.unwrap_or_default();
+        crate::banner::ModelBanner {
+            model_name: model_name
+                .strip_prefix("eullm/")
+                .unwrap_or(&model_name)
+                .to_string(),
+            gpu_layers: self.gpu_layers,
+            cpu_moe: self.cpu_moe,
+            n_cpu_moe: self.n_cpu_moe,
+            rs_seq: self.rs_seq,
+            ctx_checkpoints: self.ctx_checkpoints,
+            checkpoint_min_step: self.checkpoint_min_step,
+            batch_size,
+            ctx_size: override_ctx_size.unwrap_or(self.ctx_size),
+            n_ctx_train: info.n_ctx_train,
+            flash_attn: self.flash_attn,
+            cache_type_k,
+            cache_type_v,
+            kv_k_mib: info.kv_k_mib,
+            kv_v_mib: info.kv_v_mib,
+            web: self.web_enabled,
+            threads: self.threads,
+            n_batch: self.n_batch,
+            rust_debug: self.rust_debug,
+        }
+        .print();
+
         Ok(())
     }
 
