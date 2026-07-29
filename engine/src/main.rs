@@ -1,5 +1,6 @@
 mod api;
 mod audit;
+mod banner;
 mod chat_template;
 mod fit;
 mod gguf_patch;
@@ -1965,11 +1966,6 @@ async fn cmd_run(
     }
 
     let short = model_name.strip_prefix("eullm/").unwrap_or(&model_name);
-    let mode = if scheduler.is_some() {
-        format!("continuous batching (max {batch_size} concurrent)")
-    } else {
-        "sequential".to_string()
-    };
 
     println!();
     println!("eullm ready.  [v{}]", env!("CARGO_PKG_VERSION"));
@@ -1978,112 +1974,31 @@ async fn cmd_run(
     if let Some(p) = ui_port {
         println!("  Chat UI:       http://localhost:{p}/");
     }
-    println!("  Model:         {short}");
     if engine.is_some() || scheduler.is_some() {
-        let gpu_backend = if cfg!(feature = "cuda") {
-            "CUDA"
-        } else if cfg!(feature = "rocm") {
-            "ROCm"
-        } else if cfg!(feature = "vulkan") {
-            "Vulkan"
-        } else if cfg!(feature = "metal") {
-            "Metal"
-        } else {
-            "none (CPU only!)"
-        };
-        println!("  GPU backend:   {gpu_backend}");
-        println!("  CPU features:  {}", inference::cpu_features_summary());
-        if rust_debug {
-            println!(
-                "  Rust debug:    enabled (NaN/Inf logit check active — extra per-token cost)"
-            );
+        crate::banner::ModelBanner {
+            model_name: short.to_string(),
+            gpu_layers,
+            cpu_moe,
+            n_cpu_moe,
+            rs_seq,
+            ctx_checkpoints,
+            checkpoint_min_step,
+            batch_size,
+            ctx_size,
+            n_ctx_train,
+            flash_attn,
+            cache_type_k,
+            cache_type_v,
+            kv_k_mib,
+            kv_v_mib,
+            web,
+            threads: resolved_threads,
+            n_batch,
+            rust_debug,
         }
-        println!(
-            "  GPU layers:    {}",
-            // Report what will actually be requested, not what was asked for.
-            // A binary with no GPU backend offloads nothing (see
-            // inference::check_gpu_support), and printing "all" here was the
-            // same species of untruth as the warning box that said "all
-            // inference will run on CPU" while 29 layers went to a Metal
-            // device — issue #140.
-            if !inference::has_gpu_backend() {
-                "0 (no GPU backend compiled into this binary)".to_string()
-            } else if gpu_layers < 0 {
-                "all".to_string()
-            } else {
-                gpu_layers.to_string()
-            }
-        );
-        if cpu_moe {
-            println!("  CPU MoE:       enabled (expert tensors on CPU RAM)");
-        } else if n_cpu_moe > 0 {
-            println!("  CPU MoE:       first {n_cpu_moe} layers (expert tensors on CPU RAM)");
-        }
-        if rs_seq > 0 {
-            println!(
-                "  RS rollback:   {rs_seq} (recurrent-state window for hybrid/SSM architectures)"
-            );
-        }
-        if ctx_checkpoints > 0 {
-            println!(
-                "  Checkpoints:   {ctx_checkpoints} max, every {checkpoint_min_step}+ new tokens (prompt-prefix restore)"
-            );
-        }
-        if batch_size > 0 {
-            let per_seq = ctx_size / batch_size as u32;
-            println!(
-                "  Context:       {ctx_size} total ({per_seq} per sequence × {batch_size} slots)"
-            );
-            // The continuous-batching scheduler splits ctx_size evenly across
-            // slots, so a single conversation that builds up history can only
-            // use ctx_size / batch_size tokens before hitting "does not fit".
-            // Warn early when the per-sequence window is small enough to
-            // surprise interactive REPL users.
-            if batch_size > 1 && per_seq < 8192 {
-                println!(
-                    "  ⚠ per-sequence context is only {per_seq} tokens — long histories will fail."
-                );
-                let one_slot = ctx_size;
-                let target_per_slot = 32768u32;
-                let target_total = target_per_slot.saturating_mul(batch_size as u32);
-                println!("    For single-chat use:   --batch-size 1   (full {one_slot} tokens)");
-                println!(
-                    "    For 32k per slot:      --ctx-size {target_total}   (= 32768 × {batch_size} slots)"
-                );
-            }
-        } else {
-            println!("  Context:       {ctx_size}");
-        }
-        // A window far below what the model was trained for is a silent
-        // downgrade: the model still answers, just with far less history than
-        // it can hold, and nothing on screen connects that to a flag. Reported
-        // by a user whose editor plugin needed more than the 4096 default
-        // (issue #286). Half is the threshold because a deliberate reduction
-        // for memory is normal and should not be nagged at.
-        if n_ctx_train > 0 && ctx_size < n_ctx_train / 2 {
-            println!(
-                "    this model was trained for {n_ctx_train} — raise it with --ctx-size (costs KV memory)"
-            );
-        }
-        println!(
-            "  Flash attn:    {} (auto-detect)",
-            if flash_attn { "enabled" } else { "disabled" }
-        );
-        let k_name = inference::cache_type_display(&cache_type_k);
-        let v_name = inference::cache_type_display(&cache_type_v);
-        println!("  KV cache:      K={k_name} V={v_name}");
-        if kv_k_mib > 0.0 || kv_v_mib > 0.0 {
-            println!(
-                "  KV memory:     K={:.0} MiB, V={:.0} MiB",
-                kv_k_mib, kv_v_mib
-            );
-        }
-        if web {
-            println!("  Web browsing:  enabled (URLs in messages are fetched and injected)");
-        }
-        println!("  Threads:       {resolved_threads}");
-        println!("  Batch (prefill): {n_batch}");
-        println!("  Mode:          {mode}");
+        .print();
+    } else {
+        println!("  Model:         {short}");
     }
     println!();
 

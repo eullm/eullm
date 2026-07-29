@@ -16,6 +16,15 @@ something changed, less so for understanding what it means.
 ## Unreleased
 
 ### Fixed
+- **`eullm serve` now prints the same startup diagnostics as `eullm run`.**
+  `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache` and
+  `Threads` were printed by `run` alone, so anyone driving the engine as a
+  daemon — every automated harness, and everyone using it as a backend behind
+  an editor or a UI — never saw which backend actually initialised or how many
+  layers were offloaded. Those are the lines that diagnose a wrong-looking
+  result, and the people who could not see them are the ones best placed to
+  report one. `serve` starts without a model, so it prints them after each
+  model load rather than at startup.
 - **Two security advisories in the dependency tree, both now closed.**
   `rustls-webpki` could panic while parsing a certificate revocation list, on a
   path reached *before* the CRL's signature is verified (RUSTSEC-2026-0104), and

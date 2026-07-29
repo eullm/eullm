@@ -80,6 +80,12 @@ impl AuditLogger {
     }
 
     /// Create a logger writing to a custom path.
+    // Readers for the audit trail, kept without a caller on purpose: the AI Act
+    // story needs a way to inspect what was logged, and H3-J in the hardening
+    // backlog is the item that will give them one. Named individually rather
+    // than covered by clippy's global `-A dead-code`, which is now off, so the
+    // next orphan is a build failure instead of a line nobody reads.
+    #[allow(dead_code)]
     pub fn with_path(log_path: PathBuf) -> Self {
         Self { log_path }
     }
@@ -205,6 +211,7 @@ impl AuditLogger {
     }
 
     /// Read all audit entries from the log file.
+    #[allow(dead_code)]
     pub fn read_all(&self) -> Result<Vec<AuditEntry>, Box<dyn std::error::Error>> {
         if !self.log_path.exists() {
             return Ok(vec![]);
@@ -221,6 +228,7 @@ impl AuditLogger {
     }
 
     /// Count total audit entries without loading them all into memory.
+    #[allow(dead_code)]
     pub fn count(&self) -> Result<u64, Box<dyn std::error::Error>> {
         if !self.log_path.exists() {
             return Ok(0);

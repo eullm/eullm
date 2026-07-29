@@ -197,7 +197,7 @@ pub(crate) fn random_seed_fallback(fallback: u32) -> u32 {
         .unwrap_or(fallback)
 }
 
-pub use scheduler::{BatchScheduler, ModelReadyInfo, SchedulerConfig, SchedulerHandle};
+pub use scheduler::{BatchScheduler, SchedulerConfig, SchedulerHandle};
 
 /// Configuration for the inference engine.
 #[derive(Debug, Clone)]

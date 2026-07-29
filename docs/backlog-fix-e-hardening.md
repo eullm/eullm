@@ -1461,7 +1461,18 @@ diligenza manuale.
   forma di JSON/SSE/NDJSON. È il complemento naturale dei golden test già previsti da
   `0.8-D`, e va introdotto prima di quelli perché non richiede di toccare nessuna route.
 
-- [ ] **H3-G · Rimuovere il codice morto e togliere `-A dead-code`** *(P2)*
+- [x] **H3-G · Rimuovere il codice morto e togliere `-A dead-code`** *(P2)*
+  **Chiusa il 29 luglio 2026.** Ramo rimosso (45 righe) e clippy gira senza
+  soppressioni: via sia `-A dead-code` sia `-A unused-imports`, perché nessuna
+  delle due era più necessaria. La variante `KvCacheType::Unknown` resta perché
+  appartiene al crate `llama-cpp-2` vendored, non a noi; nostro era solo il
+  ramo che la gestiva. I tre lettori dell'audit trail senza chiamante hanno un
+  `#[allow(dead_code)]` puntuale che nomina H3-J.
+
+  Ha ripagato nello stesso commit: togliere la soppressione ha fatto emergere
+  una variabile resa morta dal refactor del banner di H3-N, scritta pochi
+  minuti prima. È esattamente il caso che l'item descriveva — non il peso del
+  codice morto, ma il fatto che il prossimo orfano non si sarebbe notato.
   Il ramo di fallback "mixed TQ" (`scheduler.rs:694-751`, ~55 righe) opera su
   `KvCacheType::Unknown(k)` con `k != v`, una condizione che `parse_cache_type`
   (`inference/mod.rs:277-290`) non può produrre: è residuo dell'integrazione TurboQuant
@@ -1598,7 +1609,15 @@ diligenza manuale.
   questo glob. Nessuna delle tre è stata trovata da una revisione: tutte e tre
   guardando cosa conteneva davvero il tag prima di scrivere "fixed in vX".
 
-- [ ] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
+- [x] **H3-N · Le diagnostiche di piattaforma mancano su `eullm serve`** *(P2)*
+  **Chiusa il 29 luglio 2026.** Banner estratto in `src/banner.rs`
+  (`ModelBanner`), chiamato da `cmd_run` allo startup e da `api::swap_model`
+  dopo ogni caricamento riuscito. `serve` parte senza modello, quindi stampa
+  subito gli endpoint e il blocco diagnostico a ogni load: uno swap è raro e
+  costoso e può cambiare `ctx_size` e i tipi di KV, quindi ristampare vale più
+  delle righe che costa. `ModelReadyInfo` ha ora `Default`, e lo zero è letto
+  come «non noto»: il banner omette la riga KV e l'hint sul contesto
+  addestrato invece di stampare uno 0 che sembra un dato.
   Il banner con `GPU backend`, `CPU features`, `GPU layers`, `Context`, `KV cache`
   e `Threads` è stampato solo da `cmd_run` (`main.rs:1823-1882`); `cmd_serve`
   stampa sei righe e nessuna di queste. La riga `CPU features` è stata aggiunta
