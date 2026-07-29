@@ -246,9 +246,20 @@ jobs:
         # upgrade the pinned floor in `pyproject.toml`, or — when no fixed
         # release exists yet — to add `--ignore-vuln <ID>` here with the reason
         # and the date, so it is reviewed later instead of disappearing.
+        #
+        # Not `--strict`. That flag fails the audit when *any* package cannot be
+        # collected, and `pip install -e .` puts `eullm-forge` itself in the
+        # environment — a package that is not on PyPI and never will be. The
+        # first run failed on exactly that, with "Dependency not found on PyPI",
+        # which is a true statement about our own source tree and not a finding.
+        # `--skip-editable` does not rescue it: measured, a deliberately skipped
+        # package still fails `--strict`. Dropping `--strict` costs nothing that
+        # matters here — a vulnerability in a real dependency still exits
+        # non-zero — and only means an unauditable package is reported instead
+        # of fatal.
         run: |
           pip install pip-audit==2.10.1
-          pip-audit --strict --desc
+          pip-audit --desc --skip-editable
 
   # ── Windows installer pre-flight (FAST, <2 min, runs on every push) ──
   # Installer preflight removed in v0.5.7 alongside the installer build
