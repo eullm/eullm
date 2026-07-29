@@ -229,7 +229,15 @@ jobs:
           restore-keys: pip-forge-
       - name: Install
         working-directory: forge
-        run: pip install -e ".[dev]"
+        # setuptools upgraded explicitly: the runner image ships one old enough
+        # to carry PYSEC-2026-3447 (MANIFEST.in exclusions can miss non-ASCII
+        # filenames on macOS, fixed in 83.0.0), and the audit step below scans
+        # the whole environment, tooling included. Upgrading is strictly better
+        # than ignoring the advisory: the audit stays meaningful and the build
+        # tool is current.
+        run: |
+          pip install --upgrade pip setuptools
+          pip install -e ".[dev]"
       - name: Lint
         working-directory: forge
         run: ruff check eullm_forge/
