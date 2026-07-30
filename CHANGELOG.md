@@ -13,7 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.6.70 — 2026-07-30
+
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc1`: the fix below
+cannot be verified without running an R1 model, and that needs a binary. More
+may accumulate under this version before the final release.*
 
 ### Fixed
 - **DeepSeek R1 models answer instead of declining the turn.** R1 and its
