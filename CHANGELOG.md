@@ -15,9 +15,8 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-07-30
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc1`: the fix below
-cannot be verified without running an R1 model, and that needs a binary. More
-may accumulate under this version before the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc2`. More is expected
+under this version before the final release.*
 
 ### Fixed
 - **A model whose manifest is missing no longer disappears from `eullm list`
