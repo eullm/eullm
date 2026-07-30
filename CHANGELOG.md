@@ -13,11 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.60 — 2026-07-29
-
-*Currently published only as the pre-release `EuLLM-v0.6.60-rc1`, so the
-`--batch-size` default change below can be checked against a real workload
-before it becomes the version people upgrade to by default.*
+## 0.6.60 — 2026-07-30
 
 ### Changed
 - **`eullm serve` now defaults to one request at a time, not eight.**
