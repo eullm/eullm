@@ -19,6 +19,12 @@ something changed, less so for understanding what it means.
 under this version before the final release.*
 
 ### Fixed
+- **The name `eullm list` shows is always a name you can run.** It printed the
+  `id` recorded inside each manifest, which is not necessarily the directory
+  the model lives in, so two models could be listed under the same name and
+  only one of them could be reached by it. A store with `gemma-4-e4b` listed
+  twice is what turned this up. The listing now shows the directory, which is
+  the only string `run`, `rm` and `show` can resolve.
 - **A model whose manifest is missing no longer disappears from `eullm list`
   without a word.** The listing counted a directory only when it held a
   readable `manifest.json`, and skipped everything else in silence, so an
