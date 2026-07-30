@@ -327,6 +327,54 @@ impl ModelStore {
         self.gguf_path(id).is_some()
     }
 
+    /// Directories that hold weights but produced no entry in `list()`.
+    ///
+    /// `list()` counts a directory only when it contains a `manifest.json`
+    /// that parses. Anything else is skipped, and until this existed it was
+    /// skipped in silence: a model with its weights on disk simply stopped
+    /// appearing, with nothing on screen connecting the absence to a cause.
+    /// A missing manifest is not exotic — an interrupted pull, a restored
+    /// backup, a directory copied by hand from another machine.
+    ///
+    /// Only directories that actually contain a `.gguf` are reported, so an
+    /// unrelated folder in the store root does not become a warning.
+    ///
+    /// Returns `(directory name, why it was skipped)`.
+    pub fn unlisted(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return out;
+        };
+        for entry in entries.flatten() {
+            if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                continue;
+            }
+            let dir = entry.path();
+            let holds_weights = fs::read_dir(&dir).is_ok_and(|mut it| {
+                it.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|ext| ext == "gguf")))
+            });
+            if !holds_weights {
+                continue;
+            }
+            let manifest = dir.join("manifest.json");
+            let reason = if !manifest.exists() {
+                "no manifest.json".to_string()
+            } else {
+                match fs::read_to_string(&manifest) {
+                    Err(e) => format!("manifest.json cannot be read: {e}"),
+                    Ok(data) => match serde_json::from_str::<ModelManifest>(&data) {
+                        // Listed normally — nothing to report.
+                        Ok(_) => continue,
+                        Err(e) => format!("manifest.json is malformed: {e}"),
+                    },
+                }
+            };
+            out.push((entry.file_name().to_string_lossy().into_owned(), reason));
+        }
+        out.sort();
+        out
+    }
+
     /// List all locally available models.
     pub fn list(&self) -> Result<Vec<ModelManifest>, Box<dyn std::error::Error>> {
         let mut models = Vec::new();
@@ -488,6 +536,82 @@ fn dir_size(path: &std::path::Path) -> Result<u64, Box<dyn std::error::Error>> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod unlisted_tests {
+    use super::*;
+
+    fn tmp(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("eullm-unlisted-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).expect("tmp dir");
+        d
+    }
+
+    fn weights(dir: &Path, name: &str) -> PathBuf {
+        let d = dir.join(name);
+        fs::create_dir_all(&d).expect("model dir");
+        fs::write(d.join("model.gguf"), b"weights").expect("weights");
+        d
+    }
+
+    // The case that prompted this: weights present, manifest gone. Before,
+    // `list()` skipped the directory in silence and the model simply was not
+    // there any more, with nothing saying why.
+    #[test]
+    fn a_model_without_a_manifest_is_reported_rather_than_vanishing() {
+        let root = tmp("no-manifest");
+        weights(&root, "orphaned-model");
+        let store = ModelStore::at(root.clone());
+
+        assert!(store.list().expect("list").is_empty());
+        let unlisted = store.unlisted();
+        assert_eq!(unlisted.len(), 1);
+        assert_eq!(unlisted[0].0, "orphaned-model");
+        assert!(
+            unlisted[0].1.contains("no manifest.json"),
+            "{:?}",
+            unlisted[0]
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_malformed_manifest_says_so_instead_of_being_skipped_quietly() {
+        let root = tmp("malformed");
+        let d = weights(&root, "half-written");
+        fs::write(d.join("manifest.json"), "{\"id\": \"half-written\",").expect("truncated");
+        let store = ModelStore::at(root.clone());
+
+        assert!(store.list().expect("list").is_empty());
+        let unlisted = store.unlisted();
+        assert_eq!(unlisted.len(), 1);
+        assert!(unlisted[0].1.contains("malformed"), "{:?}", unlisted[0]);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A model that lists correctly must not also be reported as broken, and a
+    // directory with no weights in it is not a model at all: neither belongs
+    // in a warning the user is meant to act on.
+    #[test]
+    fn nothing_is_reported_when_there_is_nothing_wrong() {
+        let root = tmp("healthy");
+        let d = weights(&root, "good-model");
+        let manifest = serde_json::json!({
+            "id": "good-model", "name": "good-model", "description": "",
+            "languages": [], "base": "", "vram_gb": 1, "size_bytes": 7,
+            "license": "Apache-2.0", "digest": "", "pulled_at": "", "status": "ready",
+            "gguf_file": "model.gguf",
+        });
+        fs::write(d.join("manifest.json"), manifest.to_string()).expect("manifest");
+        fs::create_dir_all(root.join("not-a-model")).expect("stray dir");
+        let store = ModelStore::at(root.clone());
+
+        assert_eq!(store.list().expect("list").len(), 1);
+        assert!(store.unlisted().is_empty());
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]

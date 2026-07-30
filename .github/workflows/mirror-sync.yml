@@ -9,6 +9,19 @@ name: Mirror sync — EU durability mirrors
 # version we have ever depended on remains pinnable from our mirrors.
 # Feature branches and PR refs are intentionally NOT mirrored.
 #
+# That immutability used to be a claim rather than a mechanism. The sync ran
+# `git push --force ... master --tags`, and `--force` applies to every ref in
+# the invocation, tags included: a tag rewritten upstream was overwritten here
+# within 24 hours. Worse, nothing protected the commit we actually depend on.
+# If upstream rebases its branch, the force-push orphans the pinned submodule
+# commit and garbage collection may remove it — precisely the loss this mirror
+# exists to prevent.
+#
+# So: `--force` reaches the branch alone, tags are pushed without it (an
+# upstream tag that moved is reported and *not* propagated), and the pinned
+# submodule commit is written to `refs/eullm/pinned/<sha>`, which is a ref no
+# branch update can orphan.
+#
 # Requires a fine-grained PAT saved as repo secret `EU_MIRROR_TOKEN` with
 # Contents:write on eullm/llama.cpp and eullm/llama-cpp-rs.
 
@@ -25,16 +38,45 @@ jobs:
     name: Sync eullm/llama.cpp
     runs-on: ubuntu-latest
     steps:
+      # Needed to read the submodule commit this repository pins, so it can be
+      # anchored on the mirror below.
+      - uses: actions/checkout@v5
+
       - name: Push master + tags from upstream
         env:
           TOKEN: ${{ secrets.EU_MIRROR_TOKEN }}
         run: |
           set -euo pipefail
+          PINNED=$(git ls-tree HEAD engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp | awk '{print $3}')
+          if [ -z "$PINNED" ]; then
+            echo "::error::could not read the pinned llama.cpp submodule commit"
+            exit 1
+          fi
+          echo "Pinned submodule commit: $PINNED"
+
           git clone --bare https://github.com/ggml-org/llama.cpp.git upstream.git
           cd upstream.git
-          git push --force \
-            "https://x-access-token:${TOKEN}@github.com/eullm/llama.cpp.git" \
-            master --tags
+          MIRROR="https://x-access-token:${TOKEN}@github.com/eullm/llama.cpp.git"
+
+          # The branch is a moving pointer and is meant to be forced.
+          git push --force "$MIRROR" master
+
+          # Tags are not. Without --force a tag that moved upstream is
+          # rejected, which is the outcome we want: the mirror keeps the
+          # object our lockfile refers to. Report it rather than failing the
+          # job, because the other tags in the same push did land.
+          if ! git push "$MIRROR" --tags; then
+            echo "::warning::at least one upstream tag has moved; the mirror kept its own copy, which is the point of the mirror"
+          fi
+
+          # Anchor the commit we depend on under a ref of our own. A branch
+          # force-push cannot orphan it, so garbage collection cannot take it.
+          # Idempotent: the ref is content-addressed by the SHA it names.
+          if git cat-file -e "${PINNED}^{commit}" 2>/dev/null; then
+            git push "$MIRROR" "${PINNED}:refs/eullm/pinned/${PINNED}"
+          else
+            echo "::warning::pinned commit $PINNED is not in the upstream clone; it may already have been rebased away upstream. The mirror keeps whatever it already had."
+          fi
 
       - name: Verify mirror matches upstream
         run: |
@@ -54,6 +96,16 @@ jobs:
           if [ "$MIRROR_TAGS" -lt "$UPSTREAM_TAGS" ]; then
             echo "::warning::Mirror has fewer tags than upstream ($MIRROR_TAGS < $UPSTREAM_TAGS)"
           fi
+
+          # Comparing SHAs says the branch arrived. It says nothing about the
+          # commit we actually build from, which is the only object whose loss
+          # would matter. Check it is still reachable on the mirror.
+          PINNED=$(git ls-tree HEAD engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp | awk '{print $3}')
+          if ! git ls-remote https://github.com/eullm/llama.cpp.git "refs/eullm/pinned/${PINNED}" | grep -q .; then
+            echo "::error::the pinned submodule commit $PINNED has no anchor ref on the mirror; a future upstream rebase could make it unreachable"
+            exit 1
+          fi
+          echo "Pinned commit $PINNED is anchored on the mirror"
           echo "Sync verified"
 
   sync-llama-cpp-rs:
@@ -67,9 +119,20 @@ jobs:
           set -euo pipefail
           git clone --bare https://github.com/utilityai/llama-cpp-rs.git upstream.git
           cd upstream.git
-          git push --force \
-            "https://x-access-token:${TOKEN}@github.com/eullm/llama-cpp-rs.git" \
-            main --tags
+          MIRROR="https://x-access-token:${TOKEN}@github.com/eullm/llama-cpp-rs.git"
+
+          git push --force "$MIRROR" main
+
+          # See the llama.cpp job: tags are pushed without --force so an
+          # upstream rewrite is reported instead of mirrored.
+          if ! git push "$MIRROR" --tags; then
+            echo "::warning::at least one upstream tag has moved; the mirror kept its own copy"
+          fi
+
+          # No pinned-ref anchor here: llama-cpp-rs is vendored into
+          # engine/vendor as source, not carried as a submodule, so this
+          # repository holds no gitlink to anchor. The mirror exists for
+          # provenance and for the day the vendored copy needs refreshing.
 
       - name: Verify mirror matches upstream
         run: |

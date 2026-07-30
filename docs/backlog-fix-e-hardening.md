@@ -1386,7 +1386,28 @@ diligenza manuale.
   lint preesistenti in `inference/mod.rs:867` e `:1578`, in codice mai passato
   sotto lint. Vanno sistemati prima di poter alzare anche clippy alla feature.
 
-- [ ] **H3-B · Il mirror non deve poter sovrascrivere i tag** *(P1)*
+- [x] **H3-B · Il mirror non deve poter sovrascrivere i tag** *(P1)*
+  **Chiusa il 30 luglio 2026.** Il push è spezzato in due: `--force` va sul
+  solo `master`/`main`, i tag vanno senza. Un tag riscritto a monte viene
+  quindi **rifiutato**, che è l'esito voluto — il mirror conserva l'oggetto a
+  cui il nostro lockfile si riferisce — e la cosa è segnalata con un warning
+  invece di far fallire il job, perché gli altri tag della stessa invocazione
+  sono arrivati.
+
+  Il commit pinnato del submodule è ancorato sotto `refs/eullm/pinned/<sha>`,
+  letto dal gitlink di questo repository. Un force-push del branch non può
+  orfanare un ref che non è quel branch, quindi la garbage collection non se
+  lo può prendere. L'operazione è idempotente: il ref è indirizzato dallo SHA
+  che nomina.
+
+  Lo step di verifica non si limita più a confrontare le SHA del branch, che
+  dice solo che il branch è arrivato e niente sull'unico oggetto la cui
+  perdita conterebbe: ora controlla che l'ancora del commit pinnato esista sul
+  mirror, e **fallisce** se non c'è.
+
+  Su `llama-cpp-rs` c'è lo stesso trattamento dei tag ma nessuna ancora:
+  è vendorizzato come sorgente sotto `engine/vendor`, non è un submodule,
+  quindi non esiste un gitlink da ancorare.
   `mirror-sync.yml:9-11` dichiara che i tag sono immutabili e che ogni versione da cui si è
   dipeso resta pinnabile anche se l'upstream sparisce. Il comando che lo implementa è
   `git push --force … master --tags` (`:35-37, 76-78`), e `--force` si applica a tutti i ref
