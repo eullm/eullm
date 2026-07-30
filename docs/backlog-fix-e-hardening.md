@@ -1453,7 +1453,34 @@ diligenza manuale.
   c'è nulla da attestare. Aggiungere un lockfile (`uv.lock` o `requirements.lock` generato
   da `pip-compile`), limiti superiori sulle major, e l'hash del wheel spaCy.
 
-- [ ] **H3-F · Test di integrazione HTTP** *(P2)*
+- [x] **H3-F · Test di integrazione HTTP** *(P2)*
+  **Chiusa il 30 luglio 2026.** `api::http_tests`: il router viene avviato su
+  `127.0.0.1:0` e i test parlano HTTP vero attraverso l'intera pila di
+  middleware, non chiamano gli handler. La differenza non è di stile:
+  l'allowlist legge l'indirizzo del peer, e un handler testato in isolamento
+  non ce l'ha. Porta effimera perché girano in parallelo a tutto il resto
+  della suite.
+
+  Quattro test, tutti su comportamento che si è rotto davvero: `/api/tags` e
+  `/v1/models` devono elencare un modello che sta nello store e non è
+  caricato (la forma esatta della #294 — un modello che `/v1/models` non
+  nomina non è selezionabile da un editor, per quanto giri bene); un nome di
+  modello sbagliato deve tornare un errore che lo nomina e non un 500; e
+  `/api/version` deve rispondere con lo slot vuoto, che è come `serve` parte
+  sempre.
+
+  Nessun modello caricato di proposito: l'inferenza richiede un GGUF che la
+  CI non può scaricare a ogni push, e gli endpoint che rispondono senza sono
+  esattamente quelli che si sono rotti. `ModelStore::at()` è nuova e sotto
+  `#[cfg(test)]`: passare da `default_store()` significherebbe leggere
+  `EULLM_MODELS_DIR` e `HOME`, e impostarli da un test corre contro ogni
+  altro test del binario.
+
+  Movente registrato per intero: tre difetti trovati a mano in due giorni
+  vivevano tutti sul percorso `serve` — gli elenchi che ignoravano lo store,
+  il banner diagnostico mai stampato, e un'intera famiglia di modelli che non
+  rispondeva. Duecentodiciassette test verdi non avevano niente da dire su
+  nessuno dei tre.
   Nessun test tocca `axum`, e `assert_cmd`/`predicates` sono in dev-dependencies
   (`engine/Cargo.toml:58-60`) senza alcun test che li usi. Le voci H0-A, H1-E e la forma
   delle risposte sono tutte verificabili con `tower::ServiceExt::oneshot` sul `Router`,

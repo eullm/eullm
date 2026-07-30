@@ -137,6 +137,18 @@ impl ModelStore {
         Ok(Self { root })
     }
 
+    /// Create a store rooted at an explicit directory.
+    ///
+    /// `#[cfg(test)]` because that is the only caller: production always goes
+    /// through `default_store()`. Tests must not, because it reads
+    /// `EULLM_MODELS_DIR` and `HOME`, and setting either from a test races
+    /// every other test in the binary — the same rule `CLAUDE.md` states for
+    /// perimeter settings, for the same reason.
+    #[cfg(test)]
+    pub fn at(root: PathBuf) -> Self {
+        Self { root }
+    }
+
     /// Write a manifest to disk for a pulled model.
     ///
     /// The on-disk directory is keyed by the catalog `id` (filesystem-safe,
