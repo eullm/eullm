@@ -1329,11 +1329,33 @@ async fn download_mmproj(
     }
 }
 
+/// Report model directories that hold weights but that `list()` could not
+/// read, so they do not vanish from the listing without explanation.
+///
+/// Printed after the table rather than mixed into it: these are not usable
+/// models, and putting them in the same list would suggest they can be run.
+fn print_unlisted(store: &ModelStore) {
+    let unlisted = store.unlisted();
+    if unlisted.is_empty() {
+        return;
+    }
+    println!("\nNot listed above — weights on disk, manifest unusable:");
+    for (name, reason) in &unlisted {
+        println!("  {name:<24} {reason}");
+    }
+    println!(
+        "\n  Repair with `eullm pull <name>` (re-downloads and rewrites the manifest),\n           or run the file directly: `eullm run <path-to-the-.gguf>`."
+    );
+}
+
 fn cmd_list(store: &ModelStore) {
     match store.list() {
         Ok(models) if models.is_empty() => {
             let (root, source) = store.root_with_source();
             println!("No models installed in {} [{}].", root.display(), source);
+            // Before the catalog: "nothing installed" is misleading when a
+            // model's weights are right there and only its manifest is gone.
+            print_unlisted(store);
             println!("\nAvailable models in EU catalog:");
             for entry in catalog::EU_CATALOG.iter() {
                 println!(
@@ -1391,6 +1413,7 @@ fn cmd_list(store: &ModelStore) {
                     })
                     .unwrap_or("<NAME>")
             );
+            print_unlisted(store);
         }
         Err(e) => {
             eprintln!("Error listing models: {e}");

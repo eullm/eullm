@@ -1098,3 +1098,229 @@ fn ui_router(state: Arc<AppState>) -> Router {
         ))
         .with_state(state)
 }
+
+#[cfg(test)]
+mod http_tests {
+    //! End-to-end tests over a real listener.
+    //!
+    //! Every unit test in this crate exercises a function; none of them ever
+    //! sent an HTTP request. That gap is not theoretical. Three defects found
+    //! by hand in two days lived entirely on the `serve` path: the model lists
+    //! ignored the store so a pulled model could not be selected from an
+    //! editor, the diagnostic banner was never printed, and a whole family of
+    //! models answered nothing at all. A suite of 217 green tests had nothing
+    //! to say about any of them.
+    //!
+    //! These bind an ephemeral port and speak real HTTP through the real
+    //! middleware stack, because that is where the behaviour lives: the
+    //! allowlist reads a peer address, and a handler tested in isolation never
+    //! has one.
+    //!
+    //! Deliberately no model is loaded. Inference needs a GGUF that CI cannot
+    //! download on every push, and the endpoints that answer without one are
+    //! exactly the ones that broke.
+
+    use super::*;
+    use std::net::SocketAddr;
+
+    /// A store directory with one model in it, laid out the way a pull leaves
+    /// it: a directory named after the id, a manifest, and the weights.
+    fn store_with_one_model(dir: &std::path::Path, id: &str) -> ModelStore {
+        let model_dir = dir.join(id);
+        std::fs::create_dir_all(&model_dir).expect("model dir");
+        std::fs::write(model_dir.join("model.gguf"), b"not a real gguf").expect("weights");
+        let manifest = serde_json::json!({
+            "id": id,
+            "name": id,
+            "description": "test fixture",
+            "languages": ["en"],
+            "base": "test",
+            "vram_gb": 1,
+            "size_bytes": 15,
+            "license": "Apache-2.0",
+            "digest": "sha256:0",
+            "pulled_at": "2026-07-30T00:00:00Z",
+            "status": "ready",
+            "gguf_file": "model.gguf",
+        });
+        std::fs::write(
+            model_dir.join("manifest.json"),
+            serde_json::to_string(&manifest).expect("manifest json"),
+        )
+        .expect("manifest");
+        ModelStore::at(dir.to_path_buf())
+    }
+
+    /// Start the API on 127.0.0.1:0 and return its base URL.
+    ///
+    /// Port 0 rather than a fixed one: these run in parallel with every other
+    /// test in the binary, and a hardcoded port makes the suite fail depending
+    /// on what else is listening on the machine.
+    async fn spawn(store: ModelStore) -> String {
+        // A path that does not exist, so the perimeter types fall back to
+        // their defaults instead of reading a developer's real `.env`.
+        let absent = std::path::Path::new("/nonexistent/eullm-test/.env");
+        let state = Arc::new(AppState {
+            fallback_mmproj: None,
+            slot: tokio::sync::RwLock::new(ModelSlot {
+                model_name: None,
+                engine: None,
+                scheduler: None,
+            }),
+            swap_lock: tokio::sync::Mutex::new(()),
+            gpu_layers: 0,
+            ctx_size: 4096,
+            threads: 1,
+            flash_attn: false,
+            n_batch: 512,
+            cache_type_k: crate::inference::KvCacheType::F16,
+            cache_type_v: crate::inference::KvCacheType::F16,
+            batch_size: 1,
+            cpu_moe: false,
+            n_cpu_moe: 0,
+            rs_seq: 0,
+            ctx_checkpoints: 0,
+            checkpoint_min_step: 8192,
+            rust_debug: false,
+            web_enabled: false,
+            api_port: 0,
+            store,
+            ip_allowlist: ip_allowlist::IpAllowlist::load(absent),
+            api_keys: Arc::new(auth::ApiKeys::load(absent).expect("no keys configured")),
+            allowed_origins: origin::AllowedOrigins::load(absent),
+            web_policy: crate::tools::guard::WebPolicy::from_env(),
+            allow_model_paths: false,
+            launch_model: None,
+        });
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let app = api_router(state);
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        format!("http://{addr}")
+    }
+
+    async fn get_json(url: &str) -> (reqwest::StatusCode, serde_json::Value) {
+        let r = reqwest::get(url).await.expect("request");
+        let status = r.status();
+        let body = r.json().await.unwrap_or(serde_json::Value::Null);
+        (status, body)
+    }
+
+    async fn post_json(url: &str, body: serde_json::Value) -> (reqwest::StatusCode, String) {
+        let r = reqwest::Client::new()
+            .post(url)
+            .json(&body)
+            .send()
+            .await
+            .expect("request");
+        let status = r.status();
+        (status, r.text().await.unwrap_or_default())
+    }
+
+    #[tokio::test]
+    async fn api_tags_lists_a_model_that_is_on_disk_but_not_loaded() {
+        // The shape of the bug reported in #294: both model lists were built
+        // from the built-in catalog plus whatever happened to be loaded, so a
+        // model pulled from a URL or a HuggingFace repo was invisible to them
+        // even though it was sitting in the store, ready to run.
+        let tmp = std::env::temp_dir().join(format!("eullm-tags-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        let (status, body) = get_json(&format!("{base}/api/tags")).await;
+        assert_eq!(status, 200);
+        let names: Vec<String> = body["models"]
+            .as_array()
+            .expect("models array")
+            .iter()
+            .filter_map(|m| m["name"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            names.iter().any(|n| n.contains("a-pulled-model")),
+            "a model in the store must appear in /api/tags, got {names:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn openai_models_lists_a_model_that_is_on_disk_but_not_loaded() {
+        // This endpoint is the one that decides whether a model can be picked
+        // at all: a coding editor offers what `/v1/models` names, so a model
+        // it never names cannot be selected, however well it runs elsewhere.
+        let tmp = std::env::temp_dir().join(format!("eullm-v1models-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        let (status, body) = get_json(&format!("{base}/v1/models")).await;
+        assert_eq!(status, 200);
+        let ids: Vec<String> = body["data"]
+            .as_array()
+            .expect("data array")
+            .iter()
+            .filter_map(|m| m["id"].as_str().map(str::to_string))
+            .collect();
+        assert!(
+            ids.iter().any(|i| i.contains("a-pulled-model")),
+            "a model in the store must appear in /v1/models, got {ids:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_model_is_refused_by_name_and_not_with_a_500() {
+        // A wrong model name is a client mistake and must read like one. The
+        // failure mode worth pinning is a panic or a bare 500, which tells the
+        // caller nothing and looks like the server is broken.
+        let tmp = std::env::temp_dir().join(format!("eullm-unknown-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        let (status, body) = post_json(
+            &format!("{base}/api/chat"),
+            serde_json::json!({
+                "model": "this-model-does-not-exist",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": false,
+            }),
+        )
+        .await;
+        assert!(
+            status.is_client_error() || status == 503,
+            "expected a client error or 503, got {status}"
+        );
+        assert!(
+            body.contains("this-model-does-not-exist"),
+            "the refusal must name the model the caller asked for, got: {body}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn the_version_endpoint_answers_without_a_model() {
+        // `serve` starts with an empty slot, and a client probing whether the
+        // server is up must get an answer before any model exists.
+        let tmp = std::env::temp_dir().join(format!("eullm-version-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        let (status, body) = get_json(&format!("{base}/api/version")).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            body["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "/api/version must report the crate version"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+}

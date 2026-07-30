@@ -1386,7 +1386,28 @@ diligenza manuale.
   lint preesistenti in `inference/mod.rs:867` e `:1578`, in codice mai passato
   sotto lint. Vanno sistemati prima di poter alzare anche clippy alla feature.
 
-- [ ] **H3-B · Il mirror non deve poter sovrascrivere i tag** *(P1)*
+- [x] **H3-B · Il mirror non deve poter sovrascrivere i tag** *(P1)*
+  **Chiusa il 30 luglio 2026.** Il push è spezzato in due: `--force` va sul
+  solo `master`/`main`, i tag vanno senza. Un tag riscritto a monte viene
+  quindi **rifiutato**, che è l'esito voluto — il mirror conserva l'oggetto a
+  cui il nostro lockfile si riferisce — e la cosa è segnalata con un warning
+  invece di far fallire il job, perché gli altri tag della stessa invocazione
+  sono arrivati.
+
+  Il commit pinnato del submodule è ancorato sotto `refs/eullm/pinned/<sha>`,
+  letto dal gitlink di questo repository. Un force-push del branch non può
+  orfanare un ref che non è quel branch, quindi la garbage collection non se
+  lo può prendere. L'operazione è idempotente: il ref è indirizzato dallo SHA
+  che nomina.
+
+  Lo step di verifica non si limita più a confrontare le SHA del branch, che
+  dice solo che il branch è arrivato e niente sull'unico oggetto la cui
+  perdita conterebbe: ora controlla che l'ancora del commit pinnato esista sul
+  mirror, e **fallisce** se non c'è.
+
+  Su `llama-cpp-rs` c'è lo stesso trattamento dei tag ma nessuna ancora:
+  è vendorizzato come sorgente sotto `engine/vendor`, non è un submodule,
+  quindi non esiste un gitlink da ancorare.
   `mirror-sync.yml:9-11` dichiara che i tag sono immutabili e che ogni versione da cui si è
   dipeso resta pinnabile anche se l'upstream sparisce. Il comando che lo implementa è
   `git push --force … master --tags` (`:35-37, 76-78`), e `--force` si applica a tutti i ref
@@ -1453,7 +1474,34 @@ diligenza manuale.
   c'è nulla da attestare. Aggiungere un lockfile (`uv.lock` o `requirements.lock` generato
   da `pip-compile`), limiti superiori sulle major, e l'hash del wheel spaCy.
 
-- [ ] **H3-F · Test di integrazione HTTP** *(P2)*
+- [x] **H3-F · Test di integrazione HTTP** *(P2)*
+  **Chiusa il 30 luglio 2026.** `api::http_tests`: il router viene avviato su
+  `127.0.0.1:0` e i test parlano HTTP vero attraverso l'intera pila di
+  middleware, non chiamano gli handler. La differenza non è di stile:
+  l'allowlist legge l'indirizzo del peer, e un handler testato in isolamento
+  non ce l'ha. Porta effimera perché girano in parallelo a tutto il resto
+  della suite.
+
+  Quattro test, tutti su comportamento che si è rotto davvero: `/api/tags` e
+  `/v1/models` devono elencare un modello che sta nello store e non è
+  caricato (la forma esatta della #294 — un modello che `/v1/models` non
+  nomina non è selezionabile da un editor, per quanto giri bene); un nome di
+  modello sbagliato deve tornare un errore che lo nomina e non un 500; e
+  `/api/version` deve rispondere con lo slot vuoto, che è come `serve` parte
+  sempre.
+
+  Nessun modello caricato di proposito: l'inferenza richiede un GGUF che la
+  CI non può scaricare a ogni push, e gli endpoint che rispondono senza sono
+  esattamente quelli che si sono rotti. `ModelStore::at()` è nuova e sotto
+  `#[cfg(test)]`: passare da `default_store()` significherebbe leggere
+  `EULLM_MODELS_DIR` e `HOME`, e impostarli da un test corre contro ogni
+  altro test del binario.
+
+  Movente registrato per intero: tre difetti trovati a mano in due giorni
+  vivevano tutti sul percorso `serve` — gli elenchi che ignoravano lo store,
+  il banner diagnostico mai stampato, e un'intera famiglia di modelli che non
+  rispondeva. Duecentodiciassette test verdi non avevano niente da dire su
+  nessuno dei tre.
   Nessun test tocca `axum`, e `assert_cmd`/`predicates` sono in dev-dependencies
   (`engine/Cargo.toml:58-60`) senza alcun test che li usi. Le voci H0-A, H1-E e la forma
   delle risposte sono tutte verificabili con `tower::ServiceExt::oneshot` sul `Router`,

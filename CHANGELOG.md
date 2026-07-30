@@ -15,11 +15,16 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-07-30
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc1`: the fix below
-cannot be verified without running an R1 model, and that needs a binary. More
-may accumulate under this version before the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc2`. More is expected
+under this version before the final release.*
 
 ### Fixed
+- **A model whose manifest is missing no longer disappears from `eullm list`
+  without a word.** The listing counted a directory only when it held a
+  readable `manifest.json`, and skipped everything else in silence, so an
+  interrupted pull or a directory copied from another machine left weights on
+  disk and nothing on screen. Those directories are now reported under the
+  table, with the reason and how to repair them.
 - **DeepSeek R1 models answer instead of declining the turn.** R1 and its
   distills are trained on DeepSeek's own chat format, and eullm was falling
   back to ChatML for them. The result was not a worse answer but none:
