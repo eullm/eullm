@@ -13,6 +13,20 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Fixed
+- **DeepSeek R1 models answer instead of declining the turn.** R1 and its
+  distills are trained on DeepSeek's own chat format, and eullm was falling
+  back to ChatML for them. The result was not a worse answer but none:
+  `deepseek-r1-distill-14b` replied with an empty think block and end-of-turn —
+  six tokens, empty content — deterministically, on every request, over the API
+  and in the terminal chat alike. They now get the DeepSeek template
+  (`<｜User｜>` / `<｜Assistant｜>`), matching Ollama's behaviour for the same
+  models, and previous turns' reasoning is stripped from the history exactly as
+  DeepSeek's own template does, so long chats do not re-feed thought that the
+  model was trained never to see.
+
 ## 0.6.60 — 2026-07-30
 
 ### Changed

@@ -27,6 +27,21 @@ pub enum ChatTemplate {
     /// Legacy Llama 2 [INST] format.
     /// Used by: Llama-2, CodeLlama (older checkpoints)
     Llama2,
+
+    /// DeepSeek R1: `<｜User｜>content<｜Assistant｜>content<｜end▁of▁sentence｜>`,
+    /// system prompt rendered bare before the first user turn. The delimiter
+    /// characters are the fullwidth bars U+FF5C and the low line U+2581, not
+    /// ASCII pipes — they are dedicated tokens in the R1 tokenizer and any
+    /// ASCII approximation is just text.
+    /// Used by: DeepSeek-R1 and its distills (Qwen/Llama based).
+    ///
+    /// These models are trained on this format and only this format. The
+    /// ChatML fallback used to catch them, and the result was not degraded
+    /// output but none: on a real request the model answered `<think>\n\n
+    /// </think>\n\n` plus end-of-sentence — six tokens, empty visible
+    /// content — deterministically. An off-distribution prompt does not make
+    /// an R1 a little worse, it makes it decline the turn.
+    DeepSeekR1,
 }
 
 impl ChatTemplate {
@@ -42,6 +57,12 @@ impl ChatTemplate {
             && !lower.contains("llama3")
         {
             return Self::Llama2;
+        }
+        if lower.contains("deepseek-r1")
+            || lower.contains("deepseek_r1")
+            || lower.contains("r1-distill")
+        {
+            return Self::DeepSeekR1;
         }
         Self::ChatML
     }
@@ -66,6 +87,13 @@ impl ChatTemplate {
                 "</start_of_turn>".into(),
             ],
             Self::Llama2 => vec!["[/INST]".into(), "</s>".into()],
+            // The end-of-sentence spelling is the model's real EOG token, so
+            // llama.cpp normally ends the turn before this string ever
+            // matches. It is listed anyway for the same reason as Gemma's
+            // closing tags: a model that writes it as plain text mid-stream
+            // must still stop, and the hold-back buffer keeps it out of the
+            // reply either way.
+            Self::DeepSeekR1 => vec!["<｜end▁of▁sentence｜>".into()],
         }
     }
 
@@ -92,6 +120,7 @@ impl ChatTemplate {
             Self::ChatML => self.build_chatml(messages, think),
             Self::Gemma => self.build_gemma(messages),
             Self::Llama2 => self.build_llama2(messages),
+            Self::DeepSeekR1 => self.build_deepseek_r1(messages),
         }
     }
 
@@ -120,7 +149,11 @@ impl ChatTemplate {
     pub fn think_suppression_prefix(&self) -> &'static str {
         match self {
             Self::ChatML => "<think>\n\n</think>\n\n",
-            Self::Gemma | Self::Llama2 => "",
+            // R1-family models are always-reasoning: they never learned to
+            // read a pre-closed think block as anything but malformed input,
+            // so there is nothing to inject. The REPL already carries this
+            // exact exception for them.
+            Self::Gemma | Self::Llama2 | Self::DeepSeekR1 => "",
         }
     }
 
@@ -139,6 +172,53 @@ impl ChatTemplate {
         if !think {
             out.push_str(self.think_suppression_prefix());
         }
+        out
+    }
+
+    // ── DeepSeek R1 ─────────────────────────────────────────────────────────
+
+    /// Official template (tokenizer_config.json of DeepSeek-R1-Distill-*):
+    /// BOS, the system prompt bare, then `<｜User｜>content` /
+    /// `<｜Assistant｜>content<｜end▁of▁sentence｜>` pairs, and the
+    /// generation prompt `<｜Assistant｜>`.
+    ///
+    /// Two deliberate deviations from the letter of that file:
+    ///
+    /// - No `<｜begin▁of▁sentence｜>`: the engine tokenizes non-raw prompts
+    ///   with `AddBos::Always`, so writing it here would double it.
+    /// - No forced `<think>\n` after the final `<｜Assistant｜>`. DeepSeek's
+    ///   template appends it so the model cannot skip reasoning; Ollama's
+    ///   does not, and the model then emits `<think>` itself as its first
+    ///   tokens. Following Ollama keeps the opening tag in the *output*,
+    ///   which is what every client that renders reasoning sections keys on —
+    ///   an answer that starts mid-think with no opening tag would read as
+    ///   the model leaking its reasoning as plain text.
+    ///
+    /// Assistant history is stripped to the text after `</think>`, exactly as
+    /// the official template does: re-feeding a previous turn's reasoning
+    /// wastes context and the model was trained not to see it.
+    fn build_deepseek_r1(&self, messages: &[(&str, &str)]) -> String {
+        let mut out = String::new();
+        for (role, content) in messages {
+            match *role {
+                "system" => {
+                    out.push_str(content);
+                }
+                "assistant" => {
+                    let visible = content
+                        .rsplit_once("</think>")
+                        .map_or(*content, |(_, after)| after);
+                    out.push_str("<｜Assistant｜>");
+                    out.push_str(visible.trim_start());
+                    out.push_str("<｜end▁of▁sentence｜>");
+                }
+                _ => {
+                    out.push_str("<｜User｜>");
+                    out.push_str(content);
+                }
+            }
+        }
+        out.push_str("<｜Assistant｜>");
         out
     }
 
@@ -247,6 +327,68 @@ mod tests {
         assert_eq!(
             ChatTemplate::detect("phi-3-mini.gguf"),
             ChatTemplate::ChatML
+        );
+    }
+
+    #[test]
+    fn r1_distills_get_the_deepseek_template_not_chatml() {
+        // The store id of the model this was found on. ChatML was the
+        // fallback, and on this family it produced an empty answer in six
+        // tokens, deterministically.
+        assert_eq!(
+            ChatTemplate::detect("deepseek-r1-distill-14b"),
+            ChatTemplate::DeepSeekR1
+        );
+        assert_eq!(
+            ChatTemplate::detect("DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf"),
+            ChatTemplate::DeepSeekR1
+        );
+        // QwQ reasons too but is ChatML-trained: must not be caught.
+        assert_eq!(ChatTemplate::detect("qwq-32b"), ChatTemplate::ChatML);
+    }
+
+    #[test]
+    fn deepseek_prompt_has_the_shape_the_model_was_trained_on() {
+        let msgs = vec![
+            ("system", "Sei un assistente."),
+            ("user", "ciao"),
+            ("assistant", "salve"),
+            ("user", "come va?"),
+        ];
+        let p = ChatTemplate::DeepSeekR1.build_prompt(&msgs, true);
+        assert_eq!(
+            p,
+            "Sei un assistente.<｜User｜>ciao<｜Assistant｜>salve<｜end▁of▁sentence｜><｜User｜>come va?<｜Assistant｜>"
+        );
+        // No BOS in the text: the engine adds it at tokenization
+        // (AddBos::Always), and a doubled BOS is exactly the class of
+        // off-by-one this template exists to end.
+        assert!(!p.contains("begin▁of▁sentence"));
+    }
+
+    #[test]
+    fn deepseek_history_drops_the_reasoning_like_the_official_template() {
+        // tokenizer_config.json: {% if '</think>' in content %}
+        //   {% set content = content.split('</think>')[-1] %}
+        let msgs = vec![
+            ("user", "2+2?"),
+            ("assistant", "<think>\nlet me count\n</think>\n\n4"),
+            ("user", "e 3+3?"),
+        ];
+        let p = ChatTemplate::DeepSeekR1.build_prompt(&msgs, true);
+        assert!(p.contains("<｜Assistant｜>4<｜end▁of▁sentence｜>"));
+        assert!(!p.contains("let me count"));
+    }
+
+    #[test]
+    fn deepseek_think_toggle_injects_nothing() {
+        // R1-family models are always-reasoning: a pre-closed empty think
+        // block is malformed input to them, not a switch. think=false must
+        // therefore change nothing in the prompt.
+        let msgs = vec![("user", "ciao")];
+        assert_eq!(
+            ChatTemplate::DeepSeekR1.build_prompt(&msgs, false),
+            ChatTemplate::DeepSeekR1.build_prompt(&msgs, true)
         );
     }
 
