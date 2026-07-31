@@ -1749,6 +1749,44 @@ diligenza manuale.
   compili pulito sul nostro commit pinnato è il primo passo, non tutto il
   lavoro insieme.
 
+- [ ] **H3-P · Aggiornare `llama.cpp` richiede aggiornare anche `llama-cpp-rs` —
+  provato, non solo temuto** *(P2)*
+  Tentativo reale il 31 luglio 2026: spostare il pin del submodule da
+  `9e3b928` (7 giugno) a `5f55650` (30 luglio, tag `b10200` del nostro mirror
+  `eullm/llama.cpp`) fa fallire `cargo build` **subito**, con 9 errori, prima
+  di qualunque test runtime. Tre cambi reali nell'API C, tutti verificabili:
+  `llama_model_params` non ha più i campi `use_mlock`/`use_mmap` (sostituiti da
+  `load_mode` — combacia con il commit a monte *"args: refactor mlock/mmap/
+  directio into load-mode (#20834)"*, 23 luglio); `mtmd_input_text` ora
+  richiede un campo `text_len` che prima non esisteva; una funzione mtmd che
+  restituiva un puntatore grezzo ora restituisce una struct wrapper in stile
+  RAII (`mtmd_helper_bitmap_wrapper`).
+
+  Nessuno di questi tre è colpa nostra: sono nel wrapper Rust vendorizzato
+  (`llama-cpp-2`/`llama-cpp-sys-2`, pinnato a monte a `utilityai/llama-cpp-rs
+  main @ 8625c7c4`), che non conosce ancora la forma nuova delle API C++.
+  `llama-cpp-rs` **non è un submodule** in questo repository — è vendorizzato
+  come sorgente copiata direttamente (`Cargo.toml:6`), quindi aggiornarlo non
+  è spostare un pin, è ri-vendorizzare l'intero albero da un commit più
+  recente del mirror `eullm/llama-cpp-rs` che sappia già parlare con l'API
+  nuova di `llama.cpp`.
+
+  **Il pin è tornato a `9e3b928` nello stesso momento in cui l'errore è
+  comparso** — fallire in compilazione locale, gratis, prima di aprire una
+  pre-release, è esattamente il tipo di fallimento rumoroso che vogliamo.
+  Nessuna rc uscita, nessun tempo di CI speso.
+
+  Il bump vero, quando qualcuno vorrà farlo, è un lavoro a due mani coordinate:
+  aggiornare `llama.cpp` **e** ri-vendorizzare `llama-cpp-rs` nello stesso
+  passaggio, poi far ripartire da zero la validazione di ogni fix scritto
+  contro il comportamento osservato della versione vecchia — la correzione
+  KV di Gemma 4 (`correct_kv_cache_for_model`), la stima `estimate_kv_memory`,
+  la prova al caricamento (`probe_and_shrink_context`), il template DeepSeek —
+  perché tutti e quattro assumono un comportamento a monte che potrebbe non
+  essere più vero. Non è una cosa da fare per chiudere un'ipotesi di debug;
+  è un pezzo di lavoro suo, con una sessione di validazione dedicata quanto
+  quella di oggi sul batch e su DeepSeek.
+
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
