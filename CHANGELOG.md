@@ -19,6 +19,12 @@ something changed, less so for understanding what it means.
 under this version before the final release.*
 
 ### Fixed
+- **The startup banner no longer claims continuous batching on a model running
+  sequentially.** A multimodal model forces the sequential engine, and the log
+  said so, but the banner two lines below still printed `Mode: continuous
+  batching` — the corrected value never left the block that computed it. The
+  same stale number was handed to the API server, so it believed it had a
+  batching scheduler that did not exist.
 - **The name `eullm list` shows is always a name you can run.** It printed the
   `id` recorded inside each manifest, which is not necessarily the directory
   the model lives in. A manifest edited by hand, or copied from another model,

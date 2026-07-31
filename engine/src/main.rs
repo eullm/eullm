@@ -1746,6 +1746,15 @@ async fn cmd_run(
         store.gguf_path(model)
     };
 
+    // The batch size actually used, which is not always the one asked for: a
+    // multimodal model forces the sequential engine below. This has to outlive
+    // the block, because both the startup banner and `ServeConfig` are built
+    // outside it — and until it did, a multimodal model printed
+    // "Multimodal model — falling back to sequential mode (batch_size=0)" and
+    // then a banner saying "continuous batching", while the API server was told
+    // it had a scheduler it did not have.
+    let mut batch_size = batch_size;
+
     if let Some(gguf_path) = gguf_path {
         model_name = canonical_name.clone();
         launch_gguf_path = Some(gguf_path.clone());
@@ -1819,14 +1828,12 @@ async fn cmd_run(
         // `/api/chat` requests carrying `images` reach `generate_multimodal`.
         // Force batch_size=0 when an mmproj is present (vision is single-user
         // interactive — losing batching here is not a practical regression).
-        let batch_size = if mmproj_for_config.is_some() {
+        if mmproj_for_config.is_some() {
             if batch_size > 0 {
                 println!("Multimodal model — falling back to sequential mode (batch_size=0).");
             }
-            0
-        } else {
-            batch_size
-        };
+            batch_size = 0;
+        }
 
         if batch_size > 0 {
             // ── Continuous batching mode ────────────────────────────
