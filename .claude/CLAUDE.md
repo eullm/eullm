@@ -85,6 +85,49 @@
   because the operator had set none. Both default to 1 now and concurrency is
   asked for.
 
+## Keeping llama.cpp Current (MANDATORY)
+
+Falling behind on llama.cpp means falling behind on every new model
+architecture, quantization scheme, and performance fix it ships — a
+competitor building on stock llama.cpp or Ollama gets those on day one; we
+only do if `llama.cpp` (the `engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp`
+git submodule) and `llama-cpp-rs` (`engine/vendor/llama-cpp-rs`, vendored
+source, **not** a submodule) are kept moving together. Proven on 2026-07-31,
+not just feared: bumping the submodule pin alone from a commit 1.5 months
+old to the latest tag broke `cargo build` immediately, on 3 real C-API
+changes (`use_mlock`/`use_mmap` fields replaced by `load_mode`,
+`mtmd_input_text` needing a new `text_len`, an mtmd helper's return type
+changed to `mtmd_helper_bitmap_wrapper`) — full details in backlog item H3-R.
+
+- **Check upstream at least once a week.** Compare our submodule pin against
+  the latest `bNNNNN` tag on `ggml-org/llama.cpp` — sort tag numbers
+  numerically, not as strings (`b9999` sorts before `b10200` lexicographically
+  despite being six weeks older). Also check whether `utilityai/llama-cpp-rs`
+  (mirrored at `eullm/llama-cpp-rs`) has moved to track the newer API.
+- **Bump often, in small steps — never let a gap turn into one big jump.** A
+  one-week-old diff is a handful of API changes to read through; a six-week
+  gap forces understanding months of upstream evolution at once, under
+  release pressure, which is exactly when radical, ill-fitting code changes
+  get made. Small frequent bumps also keep our own fixes
+  (`estimate_kv_memory`, `probe_and_shrink_context`,
+  `correct_kv_cache_for_model`, the DeepSeek chat template) validated against
+  upstream's *current* behavior instead of a stale one.
+- **Both repos move in the same change.** Bumping only the submodule pin is
+  not a valid intermediate state — it does not compile. Re-vendoring
+  `llama-cpp-rs` means copying its updated source into
+  `engine/vendor/llama-cpp-rs/`, not editing a version string.
+- **Validate every bump on real hardware before it lands**, not just on a
+  green `cargo build`: reload every locally available model family at least
+  once, including a multimodal one and the DeepSeek reasoning template — a
+  clean compile does not prove KV-cache sizing or template behavior didn't
+  silently shift upstream.
+- **A failed bump attempt is cheap, not wasted, when caught at compile time.**
+  Catching a breaking API change at local `cargo build`, before opening a PR
+  or spending CI/GPU time, is the right place to catch it. Revert the pin,
+  log exactly what broke (see H3-R for the format), and try again the
+  following week — a failed attempt is a reason to fix the wrapper next time,
+  never a reason to stop trying.
+
 ## CI/CD Rules (MANDATORY — do not remove or simplify)
 
 The GitHub Actions workflows have been carefully optimized. **Do not remove caching steps.**
