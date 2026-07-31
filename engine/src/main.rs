@@ -1635,7 +1635,7 @@ async fn cmd_run(
     rs_seq: u32,
     ctx_checkpoints: usize,
     checkpoint_min_step: u32,
-    ctx_size: u32,
+    mut ctx_size: u32,
     threads: Option<u32>,
     batch_size: usize,
     flash_attn: bool,
@@ -1866,6 +1866,14 @@ async fn cmd_run(
                     n_ctx_train = info.n_ctx_train;
                     kv_k_mib = info.kv_k_mib;
                     kv_v_mib = info.kv_v_mib;
+                    // May be smaller than what was passed in: `load()` shrinks
+                    // it automatically when the requested size does not fit
+                    // (see `InferenceEngine::probe_and_shrink_context`). The
+                    // banner has to show what actually loaded, not what was
+                    // asked for — otherwise it states a KV cost that belongs
+                    // to a different context size than the one printed next
+                    // to it.
+                    ctx_size = eng.context_size();
                     engine = Some(Arc::new(eng));
                     println!("Model loaded (sequential mode).");
                 }

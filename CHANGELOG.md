@@ -19,6 +19,22 @@ something changed, less so for understanding what it means.
 under this version before the final release.*
 
 ### Fixed
+- **A context that will not fit is caught at load, and shrunk automatically
+  instead of failing on the first message.** The sequential engine — every
+  multimodal model, and anything run with `--batch-size 0` — creates its
+  context on the first request rather than at load, so an oversized
+  `--ctx-size` printed "Model loaded successfully" and only failed once a chat
+  message actually asked for the KV cache. Found running a 12B Q8 vision model
+  plus its projector on a 16 GB card: `--ctx-size 4096` loaded clean and then
+  refused every message, and `--cache-type-k/-v q8_0` did nothing about it —
+  Gemma 4's mixed sliding-window architecture forces f16 regardless of what is
+  asked for, so that flag was never the lever here. The context is now proven
+  by allocating it once during load; a size that does not fit is halved and
+  retried until one does, with the reduction and the KV cost printed plainly,
+  or the load fails outright if even a 512-token window will not fit. The
+  startup banner reports the size actually used, not the one that was asked
+  for, so the two numbers it prints — context and KV memory — always describe
+  the same load.
 - **The startup banner no longer claims continuous batching on a model running
   sequentially.** A multimodal model forces the sequential engine, and the log
   said so, but the banner two lines below still printed `Mode: continuous

@@ -903,8 +903,22 @@ impl InferenceEngine {
         )
     }
 
+    /// The context size this engine actually loaded with.
+    ///
+    /// May be smaller than what was requested: `load()` shrinks it when the
+    /// requested size does not fit (see `probe_and_shrink_context`). Callers
+    /// that report the context size to a user — the startup banner, in
+    /// particular — must read it from here rather than from the flag that was
+    /// passed in, or they state a KV cost that belongs to a different size
+    /// than the one printed next to it.
+    pub fn context_size(&self) -> u32 {
+        self.config.context_size
+    }
+
     /// Load a GGUF model and prepare the inference engine.
-    pub fn load(config: InferenceConfig) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn load(
+        mut config: InferenceConfig,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if !config.model_path.exists() {
             return Err(format!("Model file not found: {}", config.model_path.display()).into());
         }
@@ -960,6 +974,22 @@ impl InferenceEngine {
         #[cfg(feature = "multimodal")]
         let mtmd_ctx = Self::init_mtmd_optional(&config, &model)?;
 
+        // Prove the configured context actually allocates before declaring the
+        // load successful, and shrink it automatically if it does not.
+        //
+        // Every generate call below builds its own context from scratch (see
+        // `generate`/`generate_streaming`/`generate_multimodal`), which used to
+        // mean an oversized `--ctx-size` loaded the weights fine and only
+        // failed on the *first request* — with an error naming the KV cost,
+        // which is correct but arrives after the model already announced
+        // "Model loaded successfully" and, over the API, after a client has
+        // been told the same thing. Run after `init_mtmd_optional` so the
+        // probe sees VRAM the way it will really be spent: a projector already
+        // resident, exactly as in the report this was written against (a 12B
+        // Q8 model plus its vision/audio projector on a 16 GB card, where the
+        // text context was the thing that did not fit).
+        config.context_size = Self::probe_and_shrink_context(&backend, &model, &config)?;
+
         Ok(Self {
             backend,
             model,
@@ -968,6 +998,85 @@ impl InferenceEngine {
             #[cfg(feature = "multimodal")]
             mtmd_ctx,
         })
+    }
+
+    /// Find the largest context size at or below `config.context_size` that
+    /// this model can actually allocate on this GPU, right now, halving until
+    /// one fits or a floor is reached.
+    ///
+    /// Each attempt is a real `new_context` call, immediately dropped — the
+    /// only reliable test. The KV cost is not one formula across every
+    /// architecture (Gemma 4's mixed sliding-window layers use two different
+    /// window sizes internally), so estimating instead of trying would just
+    /// move the discovery to a different wrong place, which is exactly what
+    /// happened testing this by hand: `--ctx-size 4096` failed, `2048` worked,
+    /// found by guessing rather than being told.
+    ///
+    /// Returns the size actually loaded with, so every later call — which
+    /// builds its own context from `config.context_size` — uses a size already
+    /// proven to fit rather than repeating the same failing allocation.
+    /// Errors only when even the floor does not fit: that is a real "this
+    /// model cannot run here", not a size to silently accept.
+    fn probe_and_shrink_context(
+        backend: &LlamaBackend,
+        model: &LlamaModel,
+        config: &InferenceConfig,
+    ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+        const FLOOR: u32 = 512;
+        // 0 means "use the default", matching the fallback every generate
+        // call already applies — not a signal to clamp upward. An explicit
+        // request below FLOOR is respected as the starting point and simply
+        // fails outright if it does not fit, rather than being silently
+        // raised.
+        let requested = if config.context_size == 0 {
+            4096
+        } else {
+            config.context_size
+        };
+        let mut candidate = requested;
+
+        loop {
+            let ctx_size = NonZeroU32::new(candidate).expect(
+                "candidate is never 0: it starts at `requested` (already normalized away \
+                 from 0 above) and is only ever produced by `candidate / 2`, floored at \
+                 FLOOR which is nonzero",
+            );
+            match model.new_context(backend, build_ctx_params(config, ctx_size)) {
+                Ok(ctx) => {
+                    drop(ctx); // probing fit, not keeping it — see the load()-site comment
+                    if candidate < requested {
+                        let info = scheduler::estimate_kv_memory(
+                            model,
+                            u64::from(requested),
+                            &config.cache_type_k,
+                            &config.cache_type_v,
+                        );
+                        let kv_mib = info.kv_k_mib + info.kv_v_mib;
+                        let msg = format!(
+                            "--ctx-size {requested} does not fit here (its KV cache alone \
+                             needs about {kv_mib:.0} MiB); reduced automatically to \
+                             {candidate}, which does. Pass --ctx-size {candidate} yourself \
+                             to silence this, or free up VRAM to keep {requested}."
+                        );
+                        tracing::warn!("{msg}");
+                        eprintln!("[EULLM] {msg}");
+                    }
+                    return Ok(candidate);
+                }
+                Err(e) if candidate <= FLOOR => {
+                    let info = scheduler::estimate_kv_memory(
+                        model,
+                        u64::from(candidate),
+                        &config.cache_type_k,
+                        &config.cache_type_v,
+                    );
+                    return Err(
+                        context_alloc_error(&e, candidate, info.kv_k_mib + info.kv_v_mib).into(),
+                    );
+                }
+                Err(_) => candidate = (candidate / 2).max(FLOOR),
+            }
+        }
     }
 
     /// Attempt to load the multimodal projector if the config has one and the
