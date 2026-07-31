@@ -1718,7 +1718,7 @@ diligenza manuale.
   chiamarla da entrambi i comandi, emettendola dopo il primo caricamento del
   modello nel caso di `serve` (che parte senza modello).
 
-- [ ] **H3-O · Backend GPU caricati a runtime invece che compilati nel binario** *(nice to have)*
+- [ ] **H3-S · Backend GPU caricati a runtime invece che compilati nel binario** *(nice to have)*
   Oggi pubblichiamo binari separati per backend (CPU, CUDA, Vulkan) e, dentro
   quello CUDA, tre architetture compilate insieme nello stesso file (`sm_86`,
   `sm_89`, `sm_120` — Ampere/Ada/Blackwell), il che lo porta a ~900 MB. Un
@@ -1749,43 +1749,63 @@ diligenza manuale.
   compili pulito sul nostro commit pinnato è il primo passo, non tutto il
   lavoro insieme.
 
-- [ ] **H3-P · Aggiornare `llama.cpp` richiede aggiornare anche `llama-cpp-rs` —
-  provato, non solo temuto** *(P2)*
-  Tentativo reale il 31 luglio 2026: spostare il pin del submodule da
-  `9e3b928` (7 giugno) a `5f55650` (30 luglio, tag `b10200` del nostro mirror
-  `eullm/llama.cpp`) fa fallire `cargo build` **subito**, con 9 errori, prima
-  di qualunque test runtime. Tre cambi reali nell'API C, tutti verificabili:
-  `llama_model_params` non ha più i campi `use_mlock`/`use_mmap` (sostituiti da
-  `load_mode` — combacia con il commit a monte *"args: refactor mlock/mmap/
+- [ ] **H3-R · Bump di `llama.cpp` a `b10200`: portati i 3 cambi API a mano,
+  in attesa di validazione su hardware reale** *(P2)*
+  Primo tentativo (31 luglio 2026, mattina): spostare il solo pin del
+  submodule da `9e3b928` (7 giugno) a `5f55650` (30 luglio, tag `b10200`)
+  fa fallire `cargo build` subito, con 9 errori — tre cambi reali nell'API C:
+  `llama_model_params` non ha più i campi `use_mlock`/`use_mmap` (sostituiti
+  da un enum unico `load_mode`, commit a monte *"args: refactor mlock/mmap/
   directio into load-mode (#20834)"*, 23 luglio); `mtmd_input_text` ora
-  richiede un campo `text_len` che prima non esisteva; una funzione mtmd che
-  restituiva un puntatore grezzo ora restituisce una struct wrapper in stile
-  RAII (`mtmd_helper_bitmap_wrapper`).
+  richiede un campo `text_len`; l'helper che caricava un bitmap da file/buffer
+  restituiva un puntatore grezzo, ora restituisce una struct wrapper in stile
+  RAII (`mtmd_helper_bitmap_wrapper`, con un campo `video_ctx` per un supporto
+  video che il nostro build non compila). Il pin è stato riportato a `9e3b928`
+  nello stesso momento, e il tentativo è stato loggato senza altre azioni.
 
-  Nessuno di questi tre è colpa nostra: sono nel wrapper Rust vendorizzato
-  (`llama-cpp-2`/`llama-cpp-sys-2`, pinnato a monte a `utilityai/llama-cpp-rs
-  main @ 8625c7c4`), che non conosce ancora la forma nuova delle API C++.
-  `llama-cpp-rs` **non è un submodule** in questo repository — è vendorizzato
-  come sorgente copiata direttamente (`Cargo.toml:6`), quindi aggiornarlo non
-  è spostare un pin, è ri-vendorizzare l'intero albero da un commit più
-  recente del mirror `eullm/llama-cpp-rs` che sappia già parlare con l'API
-  nuova di `llama.cpp`.
+  **Verifica che ha cambiato il piano**: clonando `eullm/llama-cpp-rs` per
+  vedere se una versione più recente del wrapper già parlava con l'API nuova,
+  il pin del submodule `llama.cpp` sul `main` di quel repository (commit
+  `918853e`, 28 luglio) risulta **ancora fermo a `9e3b928`** — lo stesso
+  identico commit da cui EuLLM è partito. `utilityai/llama-cpp-rs` non ha
+  ancora bumpato oltre il nostro pin. Non esiste quindi, oggi, nessun commit
+  upstream da cui ri-vendorizzare che risolva il problema: aspettare non
+  avrebbe funzionato, e "ri-vendorizzare" nel senso stretto (copiare un
+  albero più recente) non era un'opzione disponibile.
 
-  **Il pin è tornato a `9e3b928` nello stesso momento in cui l'errore è
-  comparso** — fallire in compilazione locale, gratis, prima di aprire una
-  pre-release, è esattamente il tipo di fallimento rumoroso che vogliamo.
-  Nessuna rc uscita, nessun tempo di CI speso.
+  **Quello che si è fatto invece**, lo stesso giorno, senza fretta essendo la
+  release attuale stabile: portare a mano i 3 cambi nel nostro `llama-cpp-2`
+  vendorizzato, restando sulla stessa base upstream (`utilityai/llama-cpp-rs
+  main @ 8625c7c4`) con patch locali documentate inline (vedi il commento in
+  cima a `llama-cpp-2/Cargo.toml`):
+  - `model/params.rs`: `use_mmap()`/`use_mlock()`/`with_use_mmap()`/
+    `with_use_mlock()` ora leggono/scrivono `load_mode` tramite una funzione
+    `load_mode_from_flags`, mantenendo l'API pubblica (le due flag booleane)
+    identica a prima — i default restano `use_mmap=true`, `use_mlock=false`
+    (`LLAMA_LOAD_MODE_MMAP`, verificato contro `llama_model_default_params()`
+    a monte).
+  - `mtmd.rs`, `tokenize()`: aggiunto `text_len: text_cstring.as_bytes().len()`
+    al costruttore di `mtmd_input_text`.
+  - `mtmd.rs`, `MtmdBitmap::from_file`/`from_buffer`: il valore di ritorno
+    diventa `mtmd_helper_bitmap_wrapper`; si estrae `.bitmap` (il campo
+    `.video_ctx` è sempre nullo, dato che `MTMD_VIDEO` non è definito nel
+    nostro `build.rs`, quindi va ignorato senza perdita di comportamento).
 
-  Il bump vero, quando qualcuno vorrà farlo, è un lavoro a due mani coordinate:
-  aggiornare `llama.cpp` **e** ri-vendorizzare `llama-cpp-rs` nello stesso
-  passaggio, poi far ripartire da zero la validazione di ogni fix scritto
-  contro il comportamento osservato della versione vecchia — la correzione
-  KV di Gemma 4 (`correct_kv_cache_for_model`), la stima `estimate_kv_memory`,
-  la prova al caricamento (`probe_and_shrink_context`), il template DeepSeek —
-  perché tutti e quattro assumono un comportamento a monte che potrebbe non
-  essere più vero. Non è una cosa da fare per chiudere un'ipotesi di debug;
-  è un pezzo di lavoro suo, con una sessione di validazione dedicata quanto
-  quella di oggi sul batch e su DeepSeek.
+  Il pin del submodule è ora a `5f55650` (`b10200`). Validato finora, in
+  locale, senza GPU disponibile in questo ambiente: `cargo build` e
+  `cargo clippy` puliti sia con `--features multimodal` che con
+  `--no-default-features`; le 50 doctest di `llama-cpp-2` passano, incluse
+  quelle che affermano esplicitamente i default di `use_mmap`/`use_mlock`;
+  le 225 unit test di `eullm-engine` passano.
+
+  **Non ancora fatto, ed è la condizione per far uscire una rc**: la
+  validazione su hardware reale richiesta dalla regola appena scritta in
+  CLAUDE.md — ricaricare ogni famiglia di modelli locale, incluso un
+  multimodale e il template di ragionamento DeepSeek, per verificare che il
+  sizing della KV cache (`estimate_kv_memory`, `probe_and_shrink_context`,
+  `correct_kv_cache_for_model`) e i template di chat si comportino ancora
+  come atteso contro il comportamento reale di `b10200`, non solo contro
+  quello di `9e3b928` su cui erano stati scritti e validati.
 
 ---
 

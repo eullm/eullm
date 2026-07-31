@@ -1,3 +1,13 @@
+# Vendored at utilityai/llama-cpp-rs main @ 8625c7c4, with local patches on top
+# to track the llama.cpp submodule pin past what upstream itself has bumped to
+# (see H3-P in docs/backlog-fix-e-hardening.md): as of 2026-07-31 upstream's own
+# `main` still pins llama.cpp at the same commit EuLLM started from, so there is
+# no newer upstream commit to re-vendor from yet. The three local patches, both
+# in this file's `model/params.rs` and in `mtmd.rs`, port the crate onto
+# llama.cpp's `load_mode` enum (replacing the removed `use_mlock`/`use_mmap`
+# fields), `mtmd_input_text.text_len`, and the `mtmd_helper_bitmap_wrapper`
+# return type — see the comments at each call site for the mapping. Drop these
+# patches the day upstream's own bump reaches or passes our pin.
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"

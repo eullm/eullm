@@ -97,7 +97,7 @@ not just feared: bumping the submodule pin alone from a commit 1.5 months
 old to the latest tag broke `cargo build` immediately, on 3 real C-API
 changes (`use_mlock`/`use_mmap` fields replaced by `load_mode`,
 `mtmd_input_text` needing a new `text_len`, an mtmd helper's return type
-changed to `mtmd_helper_bitmap_wrapper`) — full details in backlog item H3-P.
+changed to `mtmd_helper_bitmap_wrapper`) — full details in backlog item H3-R.
 
 - **Check upstream at least once a week.** Compare our submodule pin against
   the latest `bNNNNN` tag on `ggml-org/llama.cpp` — sort tag numbers
@@ -124,7 +124,7 @@ changed to `mtmd_helper_bitmap_wrapper`) — full details in backlog item H3-P.
 - **A failed bump attempt is cheap, not wasted, when caught at compile time.**
   Catching a breaking API change at local `cargo build`, before opening a PR
   or spending CI/GPU time, is the right place to catch it. Revert the pin,
-  log exactly what broke (see H3-P for the format), and try again the
+  log exactly what broke (see H3-R for the format), and try again the
   following week — a failed attempt is a reason to fix the wrapper next time,
   never a reason to stop trying.
 

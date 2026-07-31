@@ -13,12 +13,23 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.70 — 2026-07-30
+## 0.6.70 — 2026-07-31
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc3`. The context
-auto-shrink fix below has not been run against real hardware yet — that is
-what this pre-release is for. More may accumulate under this version before
-the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc4`. The context
+auto-shrink fix and the llama.cpp bump below have not been run against real
+hardware yet — that is what this pre-release is for. More may accumulate
+under this version before the final release.*
+
+### Changed
+- **Bumped the pinned `llama.cpp` from a commit six weeks old to tag
+  `b10200`, current as of 2026-07-30.** Brings every upstream fix and model
+  architecture addition from that window. Three C-API breaks needed porting
+  in the vendored Rust wrapper: `use_mlock`/`use_mmap` became a single
+  `load_mode` value (no user-visible change — eullm never overrides either
+  flag), the multimodal input struct gained a required length field, and a
+  multimodal helper's return type changed shape internally. None of this
+  changes any flag, default, or observable behaviour; it keeps eullm current
+  with upstream instead of falling further behind.
 
 ### Fixed
 - **A context that will not fit is caught at load, and shrunk automatically
