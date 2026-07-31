@@ -21,16 +21,19 @@ under this version before the final release.*
 ### Fixed
 - **The name `eullm list` shows is always a name you can run.** It printed the
   `id` recorded inside each manifest, which is not necessarily the directory
-  the model lives in, so two models could be listed under the same name and
-  only one of them could be reached by it. A store with `gemma-4-e4b` listed
-  twice is what turned this up. The listing now shows the directory, which is
-  the only string `run`, `rm` and `show` can resolve.
+  the model lives in. A manifest edited by hand, or copied from another model,
+  therefore made a model list under a name that resolves to a *different*
+  model, leaving it impossible to start: `run`, `rm` and `show` all resolve the
+  directory. Found on a real store where a 12B listed under a 4B's name and
+  could not be launched at all. The listing now shows the directory, and the
+  `id` field is advisory.
 - **A model whose manifest is missing no longer disappears from `eullm list`
   without a word.** The listing counted a directory only when it held a
-  readable `manifest.json`, and skipped everything else in silence, so an
-  interrupted pull or a directory copied from another machine left weights on
-  disk and nothing on screen. Those directories are now reported under the
-  table, with the reason and how to repair them.
+  readable `manifest.json` and skipped everything else in silence, so an
+  interrupted pull, a restored backup or a directory copied from another
+  machine left weights on disk and nothing on screen. The store this was found
+  on had 12 GB of a model hidden that way. Those directories are now reported
+  under the table, with the reason and how to repair them.
 - **DeepSeek R1 models answer instead of declining the turn.** R1 and its
   distills are trained on DeepSeek's own chat format, and eullm was falling
   back to ChatML for them. The result was not a worse answer but none:
