@@ -15,8 +15,10 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-07-30
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc2`. More is expected
-under this version before the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc3`. The context
+auto-shrink fix below has not been run against real hardware yet — that is
+what this pre-release is for. More may accumulate under this version before
+the final release.*
 
 ### Fixed
 - **A context that will not fit is caught at load, and shrunk automatically
