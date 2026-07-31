@@ -309,36 +309,52 @@ impl AppState {
         let ctx_checkpoints_for_swap = self.ctx_checkpoints;
         let checkpoint_min_step_for_swap = self.checkpoint_min_step;
         let rust_debug_for_swap = self.rust_debug;
+        // What the banner shows unless the sequential engine has to shrink it.
+        // The scheduler never shrinks: if its context does not fit, the whole
+        // swap fails, so requested and actual are always the same there.
+        let requested_ctx_size = override_ctx_size.unwrap_or(self.ctx_size);
 
-        let (new_engine, new_scheduler, ready_info) = tokio::task::spawn_blocking(move || {
-            if batch_size > 0 {
-                let sched_config = SchedulerConfig {
-                    max_batch_size: batch_size,
-                    queue_capacity: batch_size * 8,
-                    ctx_checkpoints: ctx_checkpoints_for_swap,
-                    checkpoint_min_step: checkpoint_min_step_for_swap,
-                    debug_logit_check: rust_debug_for_swap,
-                };
-                let sched = BatchScheduler::new(config, sched_config);
-                match sched.start() {
-                    Ok((handle, model_info)) => Ok((None, Some(handle), Some(model_info))),
-                    Err(e) => Err(format!("Failed to start scheduler: {e}")),
-                }
-            } else {
-                match InferenceEngine::load(config) {
-                    Ok(eng) => {
-                        // Read it here, on the blocking thread that already
-                        // owns the model, rather than after the move into the
-                        // slot: the estimate needs the model's own metadata.
-                        let info = eng.ready_info();
-                        Ok((Some(Arc::new(eng)), None, Some(info)))
+        let (new_engine, new_scheduler, ready_info, effective_ctx_size) =
+            tokio::task::spawn_blocking(move || {
+                if batch_size > 0 {
+                    let sched_config = SchedulerConfig {
+                        max_batch_size: batch_size,
+                        queue_capacity: batch_size * 8,
+                        ctx_checkpoints: ctx_checkpoints_for_swap,
+                        checkpoint_min_step: checkpoint_min_step_for_swap,
+                        debug_logit_check: rust_debug_for_swap,
+                    };
+                    let sched = BatchScheduler::new(config, sched_config);
+                    match sched.start() {
+                        Ok((handle, model_info)) => {
+                            Ok((None, Some(handle), Some(model_info), requested_ctx_size))
+                        }
+                        Err(e) => Err(format!("Failed to start scheduler: {e}")),
                     }
-                    Err(e) => Err(format!("Failed to load model: {e}")),
+                } else {
+                    match InferenceEngine::load(config) {
+                        Ok(eng) => {
+                            // Read it here, on the blocking thread that already
+                            // owns the model, rather than after the move into the
+                            // slot: the estimate needs the model's own metadata.
+                            let info = eng.ready_info();
+                            // May be smaller than `requested_ctx_size`: `load()`
+                            // shrinks it automatically when the requested size
+                            // does not fit, and the banner has to say what
+                            // actually loaded — `info`'s KV estimate already
+                            // reflects the shrunk size, so showing the
+                            // requested one here would state a KV cost that
+                            // belongs to a different context than the one
+                            // printed next to it.
+                            let actual_ctx_size = eng.context_size();
+                            Ok((Some(Arc::new(eng)), None, Some(info), actual_ctx_size))
+                        }
+                        Err(e) => Err(format!("Failed to load model: {e}")),
+                    }
                 }
-            }
-        })
-        .await
-        .map_err(|e| format!("Task join error: {e}"))??;
+            })
+            .await
+            .map_err(|e| format!("Task join error: {e}"))??;
 
         // ── 3. Install the new model in the slot ─────────────────────
         {
@@ -372,7 +388,7 @@ impl AppState {
             ctx_checkpoints: self.ctx_checkpoints,
             checkpoint_min_step: self.checkpoint_min_step,
             batch_size,
-            ctx_size: override_ctx_size.unwrap_or(self.ctx_size),
+            ctx_size: effective_ctx_size,
             n_ctx_train: info.n_ctx_train,
             flash_attn: self.flash_attn,
             cache_type_k,

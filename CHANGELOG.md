@@ -15,16 +15,49 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-07-30
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc2`. More is expected
-under this version before the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc3`. The context
+auto-shrink fix below has not been run against real hardware yet — that is
+what this pre-release is for. More may accumulate under this version before
+the final release.*
 
 ### Fixed
+- **A context that will not fit is caught at load, and shrunk automatically
+  instead of failing on the first message.** The sequential engine — every
+  multimodal model, and anything run with `--batch-size 0` — creates its
+  context on the first request rather than at load, so an oversized
+  `--ctx-size` printed "Model loaded successfully" and only failed once a chat
+  message actually asked for the KV cache. Found running a 12B Q8 vision model
+  plus its projector on a 16 GB card: `--ctx-size 4096` loaded clean and then
+  refused every message, and `--cache-type-k/-v q8_0` did nothing about it —
+  Gemma 4's mixed sliding-window architecture forces f16 regardless of what is
+  asked for, so that flag was never the lever here. The context is now proven
+  by allocating it once during load; a size that does not fit is halved and
+  retried until one does, with the reduction and the KV cost printed plainly,
+  or the load fails outright if even a 512-token window will not fit. The
+  startup banner reports the size actually used, not the one that was asked
+  for, so the two numbers it prints — context and KV memory — always describe
+  the same load.
+- **The startup banner no longer claims continuous batching on a model running
+  sequentially.** A multimodal model forces the sequential engine, and the log
+  said so, but the banner two lines below still printed `Mode: continuous
+  batching` — the corrected value never left the block that computed it. The
+  same stale number was handed to the API server, so it believed it had a
+  batching scheduler that did not exist.
+- **The name `eullm list` shows is always a name you can run.** It printed the
+  `id` recorded inside each manifest, which is not necessarily the directory
+  the model lives in. A manifest edited by hand, or copied from another model,
+  therefore made a model list under a name that resolves to a *different*
+  model, leaving it impossible to start: `run`, `rm` and `show` all resolve the
+  directory. Found on a real store where a 12B listed under a 4B's name and
+  could not be launched at all. The listing now shows the directory, and the
+  `id` field is advisory.
 - **A model whose manifest is missing no longer disappears from `eullm list`
   without a word.** The listing counted a directory only when it held a
-  readable `manifest.json`, and skipped everything else in silence, so an
-  interrupted pull or a directory copied from another machine left weights on
-  disk and nothing on screen. Those directories are now reported under the
-  table, with the reason and how to repair them.
+  readable `manifest.json` and skipped everything else in silence, so an
+  interrupted pull, a restored backup or a directory copied from another
+  machine left weights on disk and nothing on screen. The store this was found
+  on had 12 GB of a model hidden that way. Those directories are now reported
+  under the table, with the reason and how to repair them.
 - **DeepSeek R1 models answer instead of declining the turn.** R1 and its
   distills are trained on DeepSeek's own chat format, and eullm was falling
   back to ChatML for them. The result was not a worse answer but none:

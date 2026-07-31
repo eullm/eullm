@@ -416,11 +416,21 @@ impl ModelStore {
                             continue;
                         }
                     };
-                    // Backfill the addressable id from the directory name for
-                    // manifests written before the `id` field existed.
-                    if manifest.id.is_empty()
-                        && let Some(dir) = entry.file_name().to_str()
-                    {
+                    // The directory name *is* the addressable id, and it
+                    // overrides whatever the manifest claims.
+                    //
+                    // `gguf_path`, `exists`, `rm` and `run` all resolve
+                    // `root/<id>`, so the only string that can address a model
+                    // is its directory name. The manifest's own `id` was
+                    // trusted here, which made the NAME column a label rather
+                    // than a handle: two directories carrying a copied
+                    // manifest both printed the same id, and only one of them
+                    // could be reached by it. Reported from a real store with
+                    // `gemma-4-e4b` listed twice.
+                    //
+                    // This also covers manifests written before the field
+                    // existed, which is why the backfill was here originally.
+                    if let Some(dir) = entry.file_name().to_str() {
                         manifest.id = dir.to_string();
                     }
                     models.push(manifest);
@@ -536,6 +546,49 @@ fn dir_size(path: &std::path::Path) -> Result<u64, Box<dyn std::error::Error>> {
         }
     }
     Ok(total)
+}
+
+#[cfg(test)]
+mod addressable_id_tests {
+    use super::*;
+
+    /// Two directories carrying the same manifest `id`, which is what a
+    /// manifest copied between models produces.
+    #[test]
+    fn the_listed_name_is_always_the_directory_that_can_be_run() {
+        let root = std::env::temp_dir().join(format!("eullm-ids-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["gemma-4-e4b", "gemma-4-e4b-gguf"] {
+            let d = root.join(dir);
+            fs::create_dir_all(&d).expect("model dir");
+            fs::write(d.join("model.gguf"), b"weights").expect("weights");
+            // Both manifests claim the same id, as a copied one would.
+            let manifest = serde_json::json!({
+                "id": "gemma-4-e4b", "name": "Gemma 4 E4B", "description": "",
+                "languages": [], "base": "", "vram_gb": 8, "size_bytes": 7,
+                "license": "Apache-2.0", "digest": "", "pulled_at": "",
+                "status": "ready", "gguf_file": "model.gguf",
+            });
+            fs::write(d.join("manifest.json"), manifest.to_string()).expect("manifest");
+        }
+        let store = ModelStore::at(root.clone());
+
+        let mut ids: Vec<String> = store
+            .list()
+            .expect("list")
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["gemma-4-e4b", "gemma-4-e4b-gguf"]);
+
+        // Every name the listing shows must resolve to weights on disk,
+        // which is the property that makes it a handle rather than a label.
+        for id in &ids {
+            assert!(store.is_present(id), "{id} is listed but cannot be run");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
 }
 
 #[cfg(test)]
