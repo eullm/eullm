@@ -1718,6 +1718,37 @@ diligenza manuale.
   chiamarla da entrambi i comandi, emettendola dopo il primo caricamento del
   modello nel caso di `serve` (che parte senza modello).
 
+- [ ] **H3-O · Backend GPU caricati a runtime invece che compilati nel binario** *(nice to have)*
+  Oggi pubblichiamo binari separati per backend (CPU, CUDA, Vulkan) e, dentro
+  quello CUDA, tre architetture compilate insieme nello stesso file (`sm_86`,
+  `sm_89`, `sm_120` — Ampere/Ada/Blackwell), il che lo porta a ~900 MB. Un
+  confronto diretto con una build di llama.cpp compilata per una sola
+  architettura (~500 MB, solo `sm_120`) ha chiarito che la differenza è
+  interamente quella scelta di copertura, non spreco nostro — ma resta il
+  motivo per cui l'idea vale la pena registrarla.
+
+  llama.cpp offre già il meccanismo per farlo diversamente: `GGML_BACKEND_DL`
+  (`ggml/CMakeLists.txt:86`) compila i backend come librerie dinamiche caricate
+  a runtime tramite un vero registro (`ggml_backend_reg_*`,
+  `ggml/include/ggml-backend.h`), invece di essere linkati staticamente in base
+  a quale cargo feature ha compilato il binario. Un `eullm` CPU-only minimo
+  potrebbe fare il discovery della GPU al primo avvio e proporre di scaricare
+  solo il backend giusto per quella scheda, invece di scegliere tra binari
+  interi o subire tre architetture in uno.
+
+  È la stessa idea di B1/B2 (la strategia DLL Windows già documentata più
+  sopra, oggi non urgente) generalizzata a ogni piattaforma e resa automatica.
+  Il costo reale non è tecnico ma di fiducia: un binario firmato con un
+  checksum è una cosa, un programma che scarica ed esegue codice nativo in
+  base a cosa trova sulla macchina è un'altra — servirebbe verifica del
+  checksum sul backend scaricato e probabilmente una conferma esplicita, non
+  un download silenzioso. Tocca anche `llama-cpp-sys-2/build.rs`,
+  l'inizializzazione del backend in `inference/mod.rs`, e l'intera matrice di
+  `release-engine.yml` (i backend andrebbero pubblicati come artefatti a
+  parte). Prima di impegnarsi nel resto, verificare che `GGML_BACKEND_DL`
+  compili pulito sul nostro commit pinnato è il primo passo, non tutto il
+  lavoro insieme.
+
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
