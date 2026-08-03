@@ -347,6 +347,56 @@ fn multimodal_to_channel(
     rx
 }
 
+/// Build the prompt and stop sequences for a chat request.
+///
+/// Tries the model's own GGUF-embedded Jinja template first, via
+/// [`InferenceEngine::apply_jinja_chat_template`] — the same mechanism
+/// llama-server uses by default, and the only correct choice for models
+/// whose real template doesn't match any hardcoded family we guess from the
+/// name (found on `gemma-4-12b-q8`, which turns out to use a GPT-OSS-style
+/// reasoning-channel template, not Gemma's `<start_of_turn>` format at all).
+///
+/// Only attempted in sequential mode (`snap.engine` is `Some`, i.e.
+/// `snap.scheduler` is `None`): the continuous-batching scheduler runs the
+/// model on its own dedicated thread and does not expose it here, so that
+/// path keeps the hardcoded per-family template for now — a real, separate
+/// piece of work if this needs to reach it too.
+///
+/// Falls back to the hardcoded template whenever the dynamic one isn't
+/// available: no engine access, the GGUF has no embedded template at all, or
+/// rendering it failed. No hardcoded stop sequence is added on the dynamic
+/// path — the model's own end-of-generation token ends the turn regardless
+/// of which template built the prompt, and a marker like `<|end|>` belongs
+/// to a different template, not this one.
+fn build_chat_prompt(
+    snap: &SlotSnapshot,
+    messages: &[Value],
+    think: bool,
+    model_name: &str,
+) -> (String, Vec<String>) {
+    if snap.scheduler.is_none()
+        && let Some(engine) = snap.engine.as_ref()
+    {
+        let pairs: Vec<(&str, &str)> = messages
+            .iter()
+            .map(|msg| {
+                let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                (role, content)
+            })
+            .collect();
+        if let Some(dynamic) = engine.apply_jinja_chat_template(&pairs) {
+            return (dynamic.prompt, Vec::new());
+        }
+    }
+
+    let template = crate::chat_template::ChatTemplate::detect(model_name);
+    let prompt = format_chat_prompt(messages, think, model_name);
+    let mut stop_sequences = template.stop_sequences();
+    stop_sequences.push("<|end|>".to_string());
+    (prompt, stop_sequences)
+}
+
 /// Format chat messages into a prompt string using the model-appropriate template.
 /// When `think` is false, suppresses Qwen3 thinking mode (ChatML only).
 fn format_chat_prompt(messages: &[Value], think: bool, model_name: &str) -> String {
@@ -971,13 +1021,9 @@ async fn chat(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
-    let template = crate::chat_template::ChatTemplate::detect(model_name_ref);
-    let prompt = format_chat_prompt(&messages, think, model_name_ref);
+    let (prompt, stop_sequences) = build_chat_prompt(&snap, &messages, think, model_name_ref);
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
-
-    let mut stop_sequences = template.stop_sequences();
-    stop_sequences.push("<|end|>".to_string());
 
     let request = GenerateRequest {
         prompt,
@@ -1245,13 +1291,9 @@ async fn chat_completions(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
-    let template = crate::chat_template::ChatTemplate::detect(model_name_ref);
-    let prompt = format_chat_prompt(&messages, think, model_name_ref);
+    let (prompt, stop_sequences) = build_chat_prompt(&snap, &messages, think, model_name_ref);
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
-
-    let mut stop_sequences = template.stop_sequences();
-    stop_sequences.push("<|end|>".to_string());
 
     let request = GenerateRequest {
         prompt,

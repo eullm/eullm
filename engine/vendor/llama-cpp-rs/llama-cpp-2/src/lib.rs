@@ -408,6 +408,33 @@ pub enum ApplyChatTemplateError {
     FfiError(i32),
 }
 
+/// Failed to render a model's own Jinja chat template via
+/// [`crate::model::LlamaModel::apply_jinja_chat_template`].
+#[derive(Debug, thiserror::Error)]
+pub enum JinjaChatTemplateError {
+    /// a role or content string contained a null byte and thus could not be converted to a c string.
+    #[error("{0}")]
+    NulError(#[from] NulError),
+    /// the rendered prompt was not valid utf8.
+    #[error("{0}")]
+    FromUtf8Error(#[from] FromUtf8Error),
+    /// a required output pointer was null despite an `LLAMA_RS_STATUS_OK` result.
+    #[error("null result from llama.cpp despite an OK status")]
+    NullResult,
+    /// invalid argument passed across the FFI boundary (a null model or output pointer).
+    #[error("invalid argument")]
+    InvalidArgument,
+    /// the C++ side failed to allocate the returned string.
+    #[error("allocation failed")]
+    AllocationFailed,
+    /// llama.cpp's Jinja engine (minja) threw while parsing or rendering the template.
+    #[error("llama.cpp raised an exception while rendering the chat template")]
+    Exception,
+    /// llama.cpp returned a status code this wrapper does not recognize.
+    #[error("unrecognized status code {0}")]
+    UnknownStatus(i32),
+}
+
 /// Failed to accept a token in a sampler.
 #[derive(Debug, thiserror::Error)]
 pub enum SamplerAcceptError {

@@ -15,8 +15,30 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-03
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc6`. More may
-accumulate under this version before the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc7`. The dynamic
+chat template below has not been re-validated across every known model
+family yet — that is what this pre-release is for. More may accumulate
+under this version before the final release.*
+
+### Added
+- **Chat models that ship their own template in the GGUF now use it,
+  instead of a name-based guess.** Comparing eullm's answers against
+  llama-server's for the same `gemma-4-12b-q8` model turned up a real
+  correctness bug: the file's actual chat template — read from its GGUF
+  metadata — is a reasoning-channel, tool-calling format completely unlike
+  Gemma's own `<start_of_turn>`/`<end_of_turn>` markers, but eullm's Gemma
+  detection (matching on the model name) built a plain Gemma-shaped prompt
+  regardless. The model still answered, because LLMs are forgiving of a
+  slightly-off prompt, but not the way it was actually instruction-tuned —
+  and it explains the `<|channel|>`/`<|message|>` marker leakage the harmony
+  filters (0.6.69) were already band-aiding. Sequential-mode requests (any
+  model without continuous batching active, which includes every multimodal
+  model today) now render through llama.cpp's own Jinja engine reading the
+  GGUF's embedded template — the same mechanism llama-server uses by
+  default — and fall back to eullm's own per-family templates only when a
+  model has no embedded template at all. Continuous-batching requests are
+  unchanged for now: the scheduler runs the model on its own thread and
+  doesn't expose it to this code path yet.
 
 ### Fixed
 - **A multimodal model no longer reserves a compute buffer sized for a
