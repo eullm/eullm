@@ -124,6 +124,23 @@ pub fn cpu_features_summary() -> String {
         .into_owned()
 }
 
+/// Vision encoders use NON-causal attention, which requires the entire image
+/// to land in a single micro-batch: `n_ubatch >= image_tokens`. The default
+/// n_ubatch (512, or whatever `build_ctx_params` derives from `config.n_batch`)
+/// silently caps effective image resolution and hard-aborts above it (GGML_ASSERT
+/// "non-causal attention requires n_ubatch >= n_tokens"). Sized to the image
+/// token budget (`EULLM_IMAGE_MAX_TOKENS`) so a higher budget genuinely raises
+/// resolution instead of crashing. Shared between `generate_multimodal`'s real
+/// context and `probe_and_shrink_context`'s probe, which must agree — a probe
+/// built from a smaller batch than the request that follows it proves nothing.
+fn multimodal_batch_size(config: &InferenceConfig) -> u32 {
+    let img_budget = std::env::var("EULLM_IMAGE_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(0);
+    config.n_batch.max(img_budget).max(512)
+}
+
 /// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(
     config: &InferenceConfig,
@@ -1041,7 +1058,21 @@ impl InferenceEngine {
                  from 0 above) and is only ever produced by `candidate / 2`, floored at \
                  FLOOR which is nonzero",
             );
-            match model.new_context(backend, build_ctx_params(config, ctx_size)) {
+            // A model loaded with an mmproj gets requests through
+            // `generate_multimodal`, whose context uses `multimodal_batch_size`
+            // instead of `config.n_batch`/`n_ubatch` — larger, since a whole
+            // image must fit in one micro-batch. Probing with the plain text
+            // batch size would prove a compute-buffer requirement smaller than
+            // the one a real image request makes, which is exactly the gap a
+            // 12B Q8 vision model on real hardware exposed: load-time probe
+            // passed, first image sent failed with the same OOM the probe was
+            // built to catch.
+            let mut probe_params = build_ctx_params(config, ctx_size);
+            if config.mmproj_path.is_some() {
+                let mm_batch = multimodal_batch_size(config);
+                probe_params = probe_params.with_n_batch(mm_batch).with_n_ubatch(mm_batch);
+            }
+            match model.new_context(backend, probe_params) {
                 Ok(ctx) => {
                     drop(ctx); // probing fit, not keeping it — see the load()-site comment
                     if candidate < requested {
@@ -1681,19 +1712,9 @@ impl InferenceEngine {
         let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
             || self.config.cache_type_v != KvCacheType::F16;
 
-        // Vision encoders use NON-causal attention, which requires the entire
-        // image to land in a single micro-batch: `n_ubatch >= image_tokens`.
-        // The default n_ubatch (512) silently caps effective image resolution
-        // and hard-aborts above it (GGML_ASSERT "non-causal attention requires
-        // n_ubatch >= n_tokens"). Size both n_batch and n_ubatch to the image
-        // token budget so a higher EULLM_IMAGE_MAX_TOKENS genuinely raises
-        // resolution instead of crashing. Multimodal-only — text/scheduler
-        // contexts are untouched.
-        let img_budget = std::env::var("EULLM_IMAGE_MAX_TOKENS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(0);
-        let mm_batch = self.config.n_batch.max(img_budget).max(512);
+        // See `multimodal_batch_size` — must match what `probe_and_shrink_context`
+        // used to prove this context size fits, or the probe proves nothing.
+        let mm_batch = multimodal_batch_size(&self.config);
         let mk_params = |ctk, ctv| {
             build_ctx_params_with_cache(&self.config, ctx_size, ctk, ctv)
                 .with_n_batch(mm_batch)

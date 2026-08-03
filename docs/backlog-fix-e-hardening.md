@@ -1798,15 +1798,40 @@ diligenza manuale.
   quelle che affermano esplicitamente i default di `use_mmap`/`use_mlock`;
   le 225 unit test di `eullm-engine` passano.
 
-  **Non ancora fatto, ed è la condizione per far uscire una rc**: la
-  validazione su hardware reale richiesta dalla regola appena scritta in
-  CLAUDE.md — ricaricare ogni famiglia di modelli locale, incluso un
-  multimodale e il template di ragionamento DeepSeek, per verificare che il
-  sizing della KV cache (`estimate_kv_memory`, `probe_and_shrink_context`,
-  `correct_kv_cache_for_model`) e i template di chat si comportino ancora
-  come atteso contro il comportamento reale di `b10200`, non solo contro
-  quello di `9e3b928` su cui erano stati scritti e validati.
+  **Validazione su hardware reale iniziata il 3 agosto, su `rc4`**: ha trovato
+  subito un gap reale nel probe di `probe_and_shrink_context` — vedi H3-T,
+  già corretto nella stessa giornata. Restano da ricaricare le altre famiglie
+  di modelli (incluso il template di ragionamento DeepSeek) prima di
+  considerare `0.6.70` pronta per l'uscita definitiva.
 
+- [ ] **H3-T · Il probe del contesto non usava lo stesso sizing della vera
+  richiesta multimodale** *(P2)*
+  Trovato il 3 agosto 2026 testando `rc4` su hardware reale: un modello
+  vision 12B Q8 caricava pulito a `--ctx-size 4096` (il probe di
+  `probe_and_shrink_context` passava), e poi il primo messaggio con
+  un'immagine allegata falliva con lo stesso errore di allocazione che il
+  probe esiste apposta per intercettare — `could not allocate a context of
+  4096 tokens ... Its KV cache alone needs about 3072 MiB`.
+
+  Causa: `generate_multimodal` dimensiona `n_batch`/`n_ubatch` diversamente
+  dal resto — un encoder visivo usa attenzione non causale, quindi l'intera
+  immagine deve entrare in un solo micro-batch (`n_ubatch >= image_tokens`,
+  altrimenti `GGML_ASSERT` va in crash). Questo sizing (`mm_batch`, funzione
+  `multimodal_batch_size`) era più grande di quello usato dal probe a
+  caricamento (`build_ctx_params`, che deriva `n_ubatch` da `config.n_batch`
+  limitato a 1024). Un buffer di calcolo più grande serve più VRAM: il probe
+  provava una richiesta più leggera di quella che una vera immagine avrebbe
+  fatto, quindi "ci sta" a caricamento non garantiva "ci sta" al primo
+  messaggio con immagine — esattamente il divario che la validazione su
+  hardware reale, e non la build pulita, doveva scoprire.
+
+  Fix: `multimodal_batch_size` estratta come funzione condivisa; il probe in
+  `probe_and_shrink_context` ora, quando `config.mmproj_path` è impostato,
+  costruisce i parametri di prova con lo stesso `mm_batch` di
+  `generate_multimodal`, non più con i parametri di testo semplice. Verificato
+  in locale (senza GPU in questo ambiente): `cargo build`/`clippy` puliti con
+  e senza `--features multimodal`, le 225 unit test passano. Da confermare su
+  hardware reale con lo stesso modello che ha esposto il problema, in `rc5`.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
