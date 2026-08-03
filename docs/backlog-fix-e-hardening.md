@@ -1832,6 +1832,26 @@ diligenza manuale.
   in locale (senza GPU in questo ambiente): `cargo build`/`clippy` puliti con
   e senza `--features multimodal`, le 225 unit test passano. Da confermare su
   hardware reale con lo stesso modello che ha esposto il problema, in `rc5`.
+
+  **Confermato su hardware reale in `rc5`, il 3 agosto**: niente più crash al
+  primo messaggio con immagine, a `--ctx-size 4096` e a `16384` — in entrambi i
+  casi il probe scende in modo consistente fino a `1024`, che è quindi il vero
+  tetto trovato, non un artefatto del valore di partenza. Ma `1024` si è
+  rivelato troppo stretto per una chat multi-turno con immagine (risposte
+  tagliate a metà frase per esaurimento del contesto condiviso — vedi i log
+  con `num_predict capped`), e ha esposto un **secondo problema**, distinto da
+  quello che questa voce descriveva in origine: `mm_batch` di default seguiva
+  `--n-batch` (2048, il batch di testo), non la reale dimensione in token
+  dell'immagine (~266 per una slice di Gemma 4, verificato dal log
+  `n_tokens_batch = 266` dello stesso caricamento). Un buffer di calcolo
+  dimensionato per 2048 token quando ne servono ~266 schiacciava la KV cache
+  ben oltre il necessario. Corretto in `rc6`: `multimodal_batch_size` non
+  dipende più da `config.n_batch` — usa `EULLM_IMAGE_MAX_TOKENS` se impostata,
+  altrimenti il pavimento di 512 già previsto. Da confermare su hardware reale
+  quanto sale il tetto rispetto a `1024`, e se resta un divario rispetto ai
+  16k che `llama-cli`/`llama-server` gestiscono sullo stesso modello — divario
+  non ancora spiegato del tutto (vedi la sessione di debug comparativo di
+  prima di questo bump, mai conclusa).
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
