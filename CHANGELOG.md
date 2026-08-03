@@ -13,12 +13,23 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.70 — 2026-07-31
+## 0.6.70 — 2026-08-03
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc4`. The context
-auto-shrink fix and the llama.cpp bump below have not been run against real
-hardware yet — that is what this pre-release is for. More may accumulate
-under this version before the final release.*
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc5`. More may
+accumulate under this version before the final release.*
+
+### Fixed
+- **The context probe at load time now proves what a real image request will
+  actually need, not a smaller stand-in.** `generate_multimodal` sizes its
+  batch/micro-batch to fit a whole image in one pass — larger than the plain
+  text batch the load-time probe (added earlier in this same pre-release) was
+  using. Found on real hardware, on rc4: a 12B Q8 vision model loaded clean at
+  `--ctx-size 4096` — the probe passed — and then the same OOM the probe
+  exists to catch anyway on the first message with an attached image, because
+  that request's compute buffer was sized differently than the one just
+  proven to fit. The probe now uses the same multimodal batch sizing as the
+  real request whenever an mmproj is configured, so a load-time pass means an
+  image request will actually go through.
 
 ### Changed
 - **Bumped the pinned `llama.cpp` from a commit six weeks old to tag
