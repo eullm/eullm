@@ -125,20 +125,26 @@ pub fn cpu_features_summary() -> String {
 }
 
 /// Vision encoders use NON-causal attention, which requires the entire image
-/// to land in a single micro-batch: `n_ubatch >= image_tokens`. The default
-/// n_ubatch (512, or whatever `build_ctx_params` derives from `config.n_batch`)
-/// silently caps effective image resolution and hard-aborts above it (GGML_ASSERT
-/// "non-causal attention requires n_ubatch >= n_tokens"). Sized to the image
-/// token budget (`EULLM_IMAGE_MAX_TOKENS`) so a higher budget genuinely raises
-/// resolution instead of crashing. Shared between `generate_multimodal`'s real
-/// context and `probe_and_shrink_context`'s probe, which must agree — a probe
-/// built from a smaller batch than the request that follows it proves nothing.
-fn multimodal_batch_size(config: &InferenceConfig) -> u32 {
+/// to land in a single micro-batch: `n_ubatch >= image_tokens`. Sized to the
+/// image token budget (`EULLM_IMAGE_MAX_TOKENS`) so a higher budget genuinely
+/// raises resolution instead of hard-aborting (GGML_ASSERT "non-causal
+/// attention requires n_ubatch >= n_tokens"). Deliberately NOT derived from
+/// `config.n_batch` (the text prefill batch, 2048 by default): that batch size
+/// has nothing to do with how many tokens one image encodes to (Gemma 4's clip
+/// output is ~256-300 tokens per slice — verified against a real load's
+/// `n_tokens_batch` log line), and reserving a compute buffer sized for a
+/// 2048-token micro-batch by default squeezed the KV cache — and so n_ctx —
+/// far more than any single image actually required. 512 is the floor,
+/// comfortably above a typical single-slice image. Shared between
+/// `generate_multimodal`'s real context and `probe_and_shrink_context`'s
+/// probe, which must agree — a probe built from a smaller batch than the
+/// request that follows it proves nothing.
+fn multimodal_batch_size() -> u32 {
     let img_budget = std::env::var("EULLM_IMAGE_MAX_TOKENS")
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
-    config.n_batch.max(img_budget).max(512)
+    img_budget.max(512)
 }
 
 /// Build context params with flash attention, n_batch, and KV cache types applied.
@@ -1069,7 +1075,7 @@ impl InferenceEngine {
             // built to catch.
             let mut probe_params = build_ctx_params(config, ctx_size);
             if config.mmproj_path.is_some() {
-                let mm_batch = multimodal_batch_size(config);
+                let mm_batch = multimodal_batch_size();
                 probe_params = probe_params.with_n_batch(mm_batch).with_n_ubatch(mm_batch);
             }
             match model.new_context(backend, probe_params) {
@@ -1714,7 +1720,7 @@ impl InferenceEngine {
 
         // See `multimodal_batch_size` — must match what `probe_and_shrink_context`
         // used to prove this context size fits, or the probe proves nothing.
-        let mm_batch = multimodal_batch_size(&self.config);
+        let mm_batch = multimodal_batch_size();
         let mk_params = |ctk, ctv| {
             build_ctx_params_with_cache(&self.config, ctx_size, ctk, ctv)
                 .with_n_batch(mm_batch)

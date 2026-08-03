@@ -15,10 +15,23 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-03
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc5`. More may
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc6`. More may
 accumulate under this version before the final release.*
 
 ### Fixed
+- **A multimodal model no longer reserves a compute buffer sized for a
+  2048-token image when the image itself needs a few hundred.** The fix above
+  (probing with the same batch a real image request uses) exposed a second,
+  pre-existing sizing problem: that batch defaulted to the general text
+  prefill batch (`--n-batch`, 2048), not to how many tokens an image actually
+  encodes to. Found immediately after shipping the probe fix, on the same real
+  hardware: a 12B Q8 vision model that needs its context reduced all the way
+  to 1024 to fit, even though Gemma 4's own projector output for that image
+  was ~266 tokens — nowhere near 2048. `EULLM_IMAGE_MAX_TOKENS` still raises
+  this explicitly for higher-resolution images; absent that, the floor is now
+  512 (comfortably above a typical single image slice) instead of following
+  the text batch size upward. Every multimodal model gets a meaningfully
+  larger usable context as a result.
 - **The context probe at load time now proves what a real image request will
   actually need, not a smaller stand-in.** `generate_multimodal` sizes its
   batch/micro-batch to fit a whole image in one pass — larger than the plain
