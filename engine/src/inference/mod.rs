@@ -869,6 +869,19 @@ pub enum StreamEvent {
     Error(String),
 }
 
+/// A chat prompt rendered through a model's own GGUF-embedded Jinja template,
+/// returned by [`InferenceEngine::apply_jinja_chat_template`].
+///
+/// llama.cpp's own rendering also reports `thinking_start_tag`/
+/// `thinking_end_tag` (the template's reasoning-block delimiters, when it
+/// declares any) via `llama_cpp_2::model::JinjaChatTemplateResult` — not
+/// carried here yet because nothing consumes them: stripping a reasoning
+/// block from the *response* on this path is separate, not-yet-done work.
+pub struct DynamicChatTemplate {
+    /// The rendered prompt, ready to generate from as-is (`raw: true`).
+    pub prompt: String,
+}
+
 /// The loaded inference engine, holding the model and backend.
 ///
 /// This is the **sequential** engine — one request at a time. For concurrent
@@ -936,6 +949,56 @@ impl InferenceEngine {
     /// than the one printed next to it.
     pub fn context_size(&self) -> u32 {
         self.config.context_size
+    }
+
+    /// Render `messages` (role, content pairs) through this model's own chat
+    /// template — the Jinja template embedded in its GGUF, applied with
+    /// llama.cpp's own engine, the same way llama-server does by default —
+    /// instead of guessing a hardcoded format from the model's name.
+    ///
+    /// Returns `None`, rather than an error, whenever the caller should fall
+    /// back to its own known-good hardcoded template: either the GGUF has no
+    /// embedded template at all (`was_explicit` came back false — llama.cpp
+    /// silently rendered a built-in ChatML fallback that has nothing to do
+    /// with this model), or the FFI call itself failed (logged at `warn`).
+    /// A model with a real template that fails to render is the rare case;
+    /// treating it the same as "no template" keeps the caller simple and
+    /// never worse off than before this existed.
+    ///
+    /// Text-only: message content is a single string per message. Not used
+    /// for the multimodal path (`generate_multimodal` builds its own
+    /// mtmd-aware prompt; matching an image marker to whatever this template
+    /// happens to emit is separate, harder work — see backlog).
+    pub fn apply_jinja_chat_template(
+        &self,
+        messages: &[(&str, &str)],
+    ) -> Option<DynamicChatTemplate> {
+        let messages: Vec<llama_cpp_2::model::LlamaChatMessage> = messages
+            .iter()
+            .map(|(role, content)| {
+                llama_cpp_2::model::LlamaChatMessage::new((*role).to_string(), (*content).to_string())
+            })
+            .collect::<Result<_, _>>()
+            .inspect_err(|e| {
+                tracing::warn!("chat message contained a null byte, cannot render via Jinja: {e}");
+            })
+            .ok()?;
+
+        let result = self
+            .model
+            .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true)
+            .inspect_err(|e| {
+                tracing::warn!("Jinja chat template rendering failed, falling back: {e}");
+            })
+            .ok()?;
+
+        if !result.was_explicit {
+            return None;
+        }
+
+        Some(DynamicChatTemplate {
+            prompt: result.prompt,
+        })
     }
 
     /// Load a GGUF model and prepare the inference engine.

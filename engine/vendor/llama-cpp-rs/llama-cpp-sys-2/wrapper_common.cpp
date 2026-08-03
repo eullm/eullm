@@ -6,6 +6,7 @@
 #include <string>
 #include <stdint.h>
 
+#include "llama.cpp/common/chat.h"
 #include "llama.cpp/common/common.h"
 #include "llama.cpp/common/fit.h"
 #include "llama.cpp/common/json-schema-to-grammar.h"
@@ -36,6 +37,58 @@ extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
 extern "C" void llama_rs_string_free(char * ptr) {
     if (ptr) {
         std::free(ptr);
+    }
+}
+
+extern "C" llama_rs_status llama_rs_apply_chat_template(
+    const struct llama_model * model,
+    const char * const * roles,
+    const char * const * contents,
+    size_t n_messages,
+    bool add_generation_prompt,
+    bool * out_was_explicit,
+    char ** out_prompt,
+    char ** out_thinking_start_tag,
+    char ** out_thinking_end_tag) {
+    if (!model || !roles || !contents || !out_was_explicit || !out_prompt ||
+        !out_thinking_start_tag || !out_thinking_end_tag) {
+        return LLAMA_RS_STATUS_INVALID_ARGUMENT;
+    }
+
+    *out_was_explicit = false;
+    *out_prompt = nullptr;
+    *out_thinking_start_tag = nullptr;
+    *out_thinking_end_tag = nullptr;
+
+    try {
+        auto tmpls = common_chat_templates_init(model, /* chat_template_override */ "");
+        *out_was_explicit = common_chat_templates_was_explicit(tmpls.get());
+
+        common_chat_templates_inputs inputs;
+        inputs.add_generation_prompt = add_generation_prompt;
+        inputs.messages.reserve(n_messages);
+        for (size_t i = 0; i < n_messages; i++) {
+            common_chat_msg msg;
+            msg.role = roles[i] ? roles[i] : "";
+            msg.content = contents[i] ? contents[i] : "";
+            inputs.messages.push_back(std::move(msg));
+        }
+
+        const auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+        *out_prompt = llama_rs_dup_string(params.prompt);
+        if (!*out_prompt) {
+            return LLAMA_RS_STATUS_ALLOCATION_FAILED;
+        }
+        if (!params.thinking_start_tag.empty()) {
+            *out_thinking_start_tag = llama_rs_dup_string(params.thinking_start_tag);
+        }
+        if (!params.thinking_end_tags.empty()) {
+            *out_thinking_end_tag = llama_rs_dup_string(params.thinking_end_tags.front());
+        }
+        return LLAMA_RS_STATUS_OK;
+    } catch (const std::exception &) {
+        return LLAMA_RS_STATUS_EXCEPTION;
     }
 }
 

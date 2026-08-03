@@ -14,9 +14,9 @@ use crate::model::params::LlamaModelParams;
 use crate::token::LlamaToken;
 use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
-    ApplyChatTemplateError, ChatTemplateError, LlamaContextLoadError, LlamaLoraAdapterInitError,
-    LlamaModelLoadError, MetaValError, NewLlamaChatMessageError, StringToTokenError,
-    TokenToStringError,
+    ApplyChatTemplateError, ChatTemplateError, JinjaChatTemplateError, LlamaContextLoadError,
+    LlamaLoraAdapterInitError, LlamaModelLoadError, MetaValError, NewLlamaChatMessageError,
+    StringToTokenError, TokenToStringError,
 };
 
 pub mod params;
@@ -91,6 +91,27 @@ impl LlamaChatMessage {
             content: CString::new(content)?,
         })
     }
+}
+
+/// Result of rendering a model's own chat template through llama.cpp's Jinja
+/// engine (`common_chat_templates_apply`), returned by
+/// [`LlamaModel::apply_jinja_chat_template`].
+#[derive(Debug, Clone)]
+pub struct JinjaChatTemplateResult {
+    /// The rendered prompt, ready to tokenize.
+    pub prompt: String,
+    /// `true` only when the GGUF actually carried its own chat template.
+    /// When `false`, llama.cpp silently fell back to a built-in ChatML
+    /// template internally, and `prompt` reflects that fallback rather than
+    /// anything specific to this model — callers should prefer a
+    /// known-good template of their own in that case.
+    pub was_explicit: bool,
+    /// The opening delimiter of a reasoning/thinking block, when the
+    /// template declares one (e.g. `<think>`, or `<|channel|>thought\n`).
+    pub thinking_start_tag: Option<String>,
+    /// The closing delimiter matching `thinking_start_tag`. When a template
+    /// declares more than one closing form, this is only the first.
+    pub thinking_end_tag: Option<String>,
 }
 
 /// The Rope type that's used within the model.
@@ -890,6 +911,93 @@ impl LlamaModel {
         }
         buff.truncate(res.try_into().expect("res is negative"));
         Ok(String::from_utf8(buff)?)
+    }
+
+    /// Render `messages` through this model's own Jinja chat template — the
+    /// template embedded in the GGUF, applied with llama.cpp's own Jinja
+    /// engine (`common_chat_templates_apply`, `minja` under the hood) — the
+    /// same mechanism llama-server uses by default.
+    ///
+    /// Unlike [`Self::apply_chat_template`], which only supports llama.cpp's
+    /// fixed list of pre-defined formats and cannot parse arbitrary Jinja,
+    /// this renders whatever template the model actually ships with,
+    /// including custom ones (tool-calling formats, reasoning-channel
+    /// formats, and anything else `common_chat_templates_apply` supports).
+    ///
+    /// Check [`JinjaChatTemplateResult::was_explicit`] before trusting the
+    /// result: when `false`, the GGUF had no embedded template at all and
+    /// llama.cpp rendered a built-in ChatML fallback instead — callers with
+    /// their own known-good template for this situation should prefer it.
+    ///
+    /// Text-only: each message is a single content string, not the
+    /// structured content-parts some templates use for multimodal input.
+    ///
+    /// # Errors
+    /// See [`JinjaChatTemplateError`].
+    pub fn apply_jinja_chat_template(
+        &self,
+        messages: &[LlamaChatMessage],
+        add_generation_prompt: bool,
+    ) -> Result<JinjaChatTemplateResult, JinjaChatTemplateError> {
+        let role_ptrs: Vec<*const c_char> = messages.iter().map(|m| m.role.as_ptr()).collect();
+        let content_ptrs: Vec<*const c_char> = messages.iter().map(|m| m.content.as_ptr()).collect();
+
+        let mut was_explicit = false;
+        let mut out_prompt: *mut c_char = ptr::null_mut();
+        let mut out_thinking_start: *mut c_char = ptr::null_mut();
+        let mut out_thinking_end: *mut c_char = ptr::null_mut();
+
+        let status = unsafe {
+            llama_cpp_sys_2::llama_rs_apply_chat_template(
+                self.model.as_ptr(),
+                role_ptrs.as_ptr(),
+                content_ptrs.as_ptr(),
+                messages.len(),
+                add_generation_prompt,
+                &raw mut was_explicit,
+                &raw mut out_prompt,
+                &raw mut out_thinking_start,
+                &raw mut out_thinking_end,
+            )
+        };
+
+        // Takes ownership of an optional C string allocated by the wrapper
+        // (freeing it via `llama_rs_string_free`), converting it to an owned
+        // `String`. Returns `Ok(None)` for a null pointer, which the wrapper
+        // uses for "the template declares no such tag" — not an error.
+        let take_optional_string = |raw: *mut c_char| -> Result<Option<String>, JinjaChatTemplateError> {
+            if raw.is_null() {
+                return Ok(None);
+            }
+            let bytes = unsafe { CStr::from_ptr(raw) }.to_bytes().to_vec();
+            unsafe {
+                llama_cpp_sys_2::llama_rs_string_free(raw);
+            }
+            Ok(Some(String::from_utf8(bytes)?))
+        };
+
+        match status {
+            llama_cpp_sys_2::LLAMA_RS_STATUS_OK => {
+                let prompt = take_optional_string(out_prompt)?
+                    .ok_or(JinjaChatTemplateError::NullResult)?;
+                let thinking_start_tag = take_optional_string(out_thinking_start)?;
+                let thinking_end_tag = take_optional_string(out_thinking_end)?;
+                Ok(JinjaChatTemplateResult {
+                    prompt,
+                    was_explicit,
+                    thinking_start_tag,
+                    thinking_end_tag,
+                })
+            }
+            llama_cpp_sys_2::LLAMA_RS_STATUS_INVALID_ARGUMENT => {
+                Err(JinjaChatTemplateError::InvalidArgument)
+            }
+            llama_cpp_sys_2::LLAMA_RS_STATUS_ALLOCATION_FAILED => {
+                Err(JinjaChatTemplateError::AllocationFailed)
+            }
+            llama_cpp_sys_2::LLAMA_RS_STATUS_EXCEPTION => Err(JinjaChatTemplateError::Exception),
+            other => Err(JinjaChatTemplateError::UnknownStatus(other)),
+        }
     }
 }
 

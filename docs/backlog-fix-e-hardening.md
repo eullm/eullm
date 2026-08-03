@@ -1852,6 +1852,59 @@ diligenza manuale.
   16k che `llama-cli`/`llama-server` gestiscono sullo stesso modello — divario
   non ancora spiegato del tutto (vedi la sessione di debug comparativo di
   prima di questo bump, mai conclusa).
+
+- [ ] **H3-U · Il template di chat era scelto per nome, non letto dal GGUF —
+  ora si usa il vero template quando c'è** *(P2)*
+  Trovato il 3 agosto 2026, confrontando le risposte di eullm con quelle di
+  `llama-server` sullo stesso `gemma-4-12b-q8`: il template di chat reale del
+  file — quello nei metadati del GGUF stesso — è un formato a canali con
+  supporto per il tool-calling (`<|turn|>`, `<|channel|>thought…`), non ha
+  niente a che vedere con `<start_of_turn>`/`<end_of_turn>` di Gemma. La
+  nostra rilevazione (`ChatTemplate::detect`, per nome del modello) sceglieva
+  comunque il template Gemma, costruendo un prompt nella forma sbagliata. Il
+  modello rispondeva comunque — un LLM tollera un prompt leggermente fuori
+  formato — ma non nel modo per cui è stato istruito, ed è la stessa causa
+  dietro le fughe di marcatori `<|channel|>`/`<|message|>` che i filtri
+  Harmony (aggiunti in 0.6.69) tamponavano già senza risolvere.
+
+  Verificato leggendo il codice sorgente di llama.cpp (non ipotizzato):
+  `common_chat_templates_init` in `common/chat.cpp` legge sempre per prima
+  cosa il template incorporato nel GGUF (`llama_model_chat_template`) e lo
+  applica con il proprio motore Jinja (`minja`) — il fallback a un ChatML
+  hardcoded scatta solo se il file non ne ha nessuno. `llama-server` non fa
+  nessuna distinzione per nome di modello: usa sempre quello che il file
+  dichiara di essere. C'è perfino un formato registrato esplicitamente,
+  `COMMON_CHAT_FORMAT_PEG_GEMMA4`, a conferma che questo non è un file
+  etichettato male ma un formato che llama.cpp riconosce di suo.
+
+  Fix: nuova funzione C `llama_rs_apply_chat_template` in
+  `llama-cpp-sys-2/wrapper_common.cpp`, che espone
+  `common_chat_templates_init`/`common_chat_templates_apply` con la stessa
+  convenzione (`llama_rs_status`, stringhe allocate liberate con
+  `llama_rs_string_free`) degli altri wrapper già presenti. Wrapper Rust
+  sicuro `LlamaModel::apply_jinja_chat_template` in `llama-cpp-2`, e sopra
+  `InferenceEngine::apply_jinja_chat_template` in eullm, che lo usa **solo
+  quando il GGUF ha davvero un template incorporato** (`was_explicit`) —
+  altrimenti restituisce `None` e il chiamante ricade sui nostri template
+  hardcoded, esattamente come oggi.
+
+  **Limite di scope deliberato, non un taglio per fretta**: attivo solo in
+  modalità sequenziale (`snap.engine`, quindi anche ogni modello
+  multimodale) — lo scheduler a batch continuo gira il modello sul proprio
+  thread dedicato e non lo espone a questo livello, quindi le richieste in
+  quella modalità restano sui template hardcoded finché qualcuno non fa
+  anche quel lavoro. Il testo generato dal modello non viene ripulito dal
+  blocco di ragionamento (`thinking_start_tag`/`thinking_end_tag` che
+  llama.cpp restituisce insieme al prompt) — quella pulizia resta ai filtri
+  Harmony esistenti, non ancora collegata ai tag veri del template.
+
+  Verificato in locale (senza GPU in questo ambiente): `cargo build`/
+  `clippy` puliti con e senza `--features multimodal`, le 225 unit test
+  passano. **Non ancora verificato su hardware reale** — né che il fix
+  risolva davvero la risposta di `gemma-4-12b-q8`, né che non cambi
+  comportamento sugli altri modelli già validati (DeepSeek R1, Qwen3) se
+  anche i loro GGUF portano un template incorporato che ora prende il posto
+  di quello scritto a mano per loro.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
