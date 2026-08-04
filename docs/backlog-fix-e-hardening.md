@@ -1905,6 +1905,24 @@ diligenza manuale.
   comportamento sugli altri modelli già validati (DeepSeek R1, Qwen3) se
   anche i loro GGUF portano un template incorporato che ora prende il posto
   di quello scritto a mano per loro.
+
+- [ ] **H3-V · `probe_and_shrink_context` si ferma al primo tentativo che
+  passa, non cerca il vero massimo** *(nice to have)*
+  Osservato il 4 agosto 2026 testando `rc7` con un valore deliberatamente
+  non tondo: `--ctx-size 8112` → fallisce → dimezzato esattamente a `4056`
+  (8112 / 2) → questo passa al primo tentativo → l'algoritmo si ferma lì.
+  Non prova mai valori intermedi tra 4056 e 8112 (es. il `4096` che sappiamo
+  già andare bene da un test precedente) — il numero restituito è sempre
+  garantito funzionante (è una vera allocazione, non una stima), ma non è
+  il tetto reale della scheda, solo il primo `requested / 2^k` che ci sta.
+  Non è un bug: è esattamente il comportamento descritto nel commento della
+  funzione ("halving until one fits or a floor is reached"), solo che con
+  un valore di partenza non potenza di due lo si nota — con partenze tipo
+  16384/8192/4096 il dimezzamento atterra sempre sugli stessi numeri già
+  visti prima, mascherando quanto è grezzo il meccanismo.
+  Miglioramento possibile, non urgente: una ricerca più fine (es. binaria)
+  tra l'ultimo valore fallito e il primo riuscito, invece di accontentarsi
+  del primo successo.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
