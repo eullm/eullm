@@ -1847,11 +1847,26 @@ diligenza manuale.
   dimensionato per 2048 token quando ne servono ~266 schiacciava la KV cache
   ben oltre il necessario. Corretto in `rc6`: `multimodal_batch_size` non
   dipende più da `config.n_batch` — usa `EULLM_IMAGE_MAX_TOKENS` se impostata,
-  altrimenti il pavimento di 512 già previsto. Da confermare su hardware reale
-  quanto sale il tetto rispetto a `1024`, e se resta un divario rispetto ai
-  16k che `llama-cli`/`llama-server` gestiscono sullo stesso modello — divario
-  non ancora spiegato del tutto (vedi la sessione di debug comparativo di
-  prima di questo bump, mai conclusa).
+  altrimenti il pavimento di 512 già previsto.
+
+  **Bug simmetrico trovato il 4 agosto testando `rc7`**: il fix di `rc6` ha
+  corretto il probe per il caso immagine ma rotto quello di solo testo. Un
+  modello caricato con mmproj riceve anche messaggi senza immagine, che
+  passano da `generate`/`generate_streaming` — percorso che usa
+  `--n-batch` limitato a 1024, non il batch piccolo dell'immagine. Il probe
+  (dopo `rc6`) validava solo il caso immagine (batch 512), più leggero;
+  avviato con `--ctx-size 65536`, si è ridotto pulito a 4096, ma il primo
+  messaggio di solo testo (senza foto allegata) è fallito con lo stesso
+  errore di allocazione che il probe doveva intercettare — un messaggio
+  successivo con foto invece è passato. Corretto in `rc8`: il probe ora
+  prende il **massimo** tra i due batch possibili (quello del testo normale
+  e quello dell'immagine), non solo quello dell'immagine — copre entrambi i
+  casi che lo stesso modello caricato può davvero servire.
+
+  Resta da confermare su hardware reale quanto sale il tetto rispetto ai
+  16k che `llama-cli`/`llama-server` gestiscono sullo stesso modello —
+  divario non ancora spiegato del tutto (vedi la sessione di debug
+  comparativo di prima di questo bump, mai conclusa).
 
 - [ ] **H3-U · Il template di chat era scelto per nome, non letto dal GGUF —
   ora si usa il vero template quando c'è** *(P2)*
@@ -1905,6 +1920,24 @@ diligenza manuale.
   comportamento sugli altri modelli già validati (DeepSeek R1, Qwen3) se
   anche i loro GGUF portano un template incorporato che ora prende il posto
   di quello scritto a mano per loro.
+
+- [ ] **H3-V · `probe_and_shrink_context` si ferma al primo tentativo che
+  passa, non cerca il vero massimo** *(nice to have)*
+  Osservato il 4 agosto 2026 testando `rc7` con un valore deliberatamente
+  non tondo: `--ctx-size 8112` → fallisce → dimezzato esattamente a `4056`
+  (8112 / 2) → questo passa al primo tentativo → l'algoritmo si ferma lì.
+  Non prova mai valori intermedi tra 4056 e 8112 (es. il `4096` che sappiamo
+  già andare bene da un test precedente) — il numero restituito è sempre
+  garantito funzionante (è una vera allocazione, non una stima), ma non è
+  il tetto reale della scheda, solo il primo `requested / 2^k` che ci sta.
+  Non è un bug: è esattamente il comportamento descritto nel commento della
+  funzione ("halving until one fits or a floor is reached"), solo che con
+  un valore di partenza non potenza di due lo si nota — con partenze tipo
+  16384/8192/4096 il dimezzamento atterra sempre sugli stessi numeri già
+  visti prima, mascherando quanto è grezzo il meccanismo.
+  Miglioramento possibile, non urgente: una ricerca più fine (es. binaria)
+  tra l'ultimo valore fallito e il primo riuscito, invece di accontentarsi
+  del primo successo.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
