@@ -1847,11 +1847,26 @@ diligenza manuale.
   dimensionato per 2048 token quando ne servono ~266 schiacciava la KV cache
   ben oltre il necessario. Corretto in `rc6`: `multimodal_batch_size` non
   dipende più da `config.n_batch` — usa `EULLM_IMAGE_MAX_TOKENS` se impostata,
-  altrimenti il pavimento di 512 già previsto. Da confermare su hardware reale
-  quanto sale il tetto rispetto a `1024`, e se resta un divario rispetto ai
-  16k che `llama-cli`/`llama-server` gestiscono sullo stesso modello — divario
-  non ancora spiegato del tutto (vedi la sessione di debug comparativo di
-  prima di questo bump, mai conclusa).
+  altrimenti il pavimento di 512 già previsto.
+
+  **Bug simmetrico trovato il 4 agosto testando `rc7`**: il fix di `rc6` ha
+  corretto il probe per il caso immagine ma rotto quello di solo testo. Un
+  modello caricato con mmproj riceve anche messaggi senza immagine, che
+  passano da `generate`/`generate_streaming` — percorso che usa
+  `--n-batch` limitato a 1024, non il batch piccolo dell'immagine. Il probe
+  (dopo `rc6`) validava solo il caso immagine (batch 512), più leggero;
+  avviato con `--ctx-size 65536`, si è ridotto pulito a 4096, ma il primo
+  messaggio di solo testo (senza foto allegata) è fallito con lo stesso
+  errore di allocazione che il probe doveva intercettare — un messaggio
+  successivo con foto invece è passato. Corretto in `rc8`: il probe ora
+  prende il **massimo** tra i due batch possibili (quello del testo normale
+  e quello dell'immagine), non solo quello dell'immagine — copre entrambi i
+  casi che lo stesso modello caricato può davvero servire.
+
+  Resta da confermare su hardware reale quanto sale il tetto rispetto ai
+  16k che `llama-cli`/`llama-server` gestiscono sullo stesso modello —
+  divario non ancora spiegato del tutto (vedi la sessione di debug
+  comparativo di prima di questo bump, mai conclusa).
 
 - [ ] **H3-U · Il template di chat era scelto per nome, non letto dal GGUF —
   ora si usa il vero template quando c'è** *(P2)*

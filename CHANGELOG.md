@@ -13,12 +13,26 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.70 — 2026-08-03
+## 0.6.70 — 2026-08-04
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc7`. The dynamic
-chat template below has not been re-validated across every known model
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc8`. The dynamic
+chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
+
+### Fixed
+- **A multimodal model's load-time context probe undersold what an ordinary
+  text message needs.** The previous fix (below) made the probe use the same
+  batch size a real *image* request needs, since that's usually smaller than
+  the general text batch — but a model loaded with an mmproj still receives
+  plain text-only messages too, and those go through the ordinary
+  `generate`/`generate_streaming` path, whose batch is `--n-batch` capped at
+  1024, not the smaller image-sized one. Found immediately on real hardware:
+  `--ctx-size 65536` reduced clean to 4096, then the very first text-only
+  message (no image attached) failed with the OOM the probe exists to catch,
+  while a follow-up message with an image went through fine. The probe now
+  checks the larger of the two batch sizes a loaded multimodal model can
+  actually be asked to serve, not just the image-request one.
 
 ### Added
 - **Chat models that ship their own template in the GGUF now use it,

@@ -1127,19 +1127,29 @@ impl InferenceEngine {
                  from 0 above) and is only ever produced by `candidate / 2`, floored at \
                  FLOOR which is nonzero",
             );
-            // A model loaded with an mmproj gets requests through
-            // `generate_multimodal`, whose context uses `multimodal_batch_size`
-            // instead of `config.n_batch`/`n_ubatch` — larger, since a whole
-            // image must fit in one micro-batch. Probing with the plain text
-            // batch size would prove a compute-buffer requirement smaller than
-            // the one a real image request makes, which is exactly the gap a
-            // 12B Q8 vision model on real hardware exposed: load-time probe
-            // passed, first image sent failed with the same OOM the probe was
-            // built to catch.
+            // A model loaded with an mmproj can still receive a plain
+            // text-only message — `generate`/`generate_streaming` build their
+            // context from `config.n_batch` capped at 1024 (see
+            // `build_ctx_params`), same as any other model — as well as one
+            // with an image, which `generate_multimodal` sizes to
+            // `multimodal_batch_size` instead. The probe must cover whichever
+            // of the two is larger, since either is a real request this same
+            // loaded model will serve: taking only the (usually smaller)
+            // multimodal figure — as a previous version of this probe did —
+            // proved a compute-buffer requirement too small for an ordinary
+            // text message, which is exactly the gap a 12B Q8 vision model on
+            // real hardware exposed: load-time probe passed, first *text*
+            // message with no image attached failed with the same OOM the
+            // probe was built to catch. Taking only the plain text figure,
+            // symmetrically, undersells what a real image needs (see the
+            // fix immediately above this one for that direction).
             let mut probe_params = build_ctx_params(config, ctx_size);
             if config.mmproj_path.is_some() {
-                let mm_batch = multimodal_batch_size();
-                probe_params = probe_params.with_n_batch(mm_batch).with_n_ubatch(mm_batch);
+                let plain_text_ubatch = config.n_batch.min(1024);
+                let worst_case_batch = multimodal_batch_size().max(plain_text_ubatch);
+                probe_params = probe_params
+                    .with_n_batch(worst_case_batch)
+                    .with_n_ubatch(worst_case_batch);
             }
             match model.new_context(backend, probe_params) {
                 Ok(ctx) => {
