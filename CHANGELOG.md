@@ -13,14 +13,31 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.70 — 2026-08-04
+## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc8`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc9`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Fixed
+- **A context that barely fit at load time could crash outright — not just
+  fail cleanly — on the very first real request.** Found on real hardware
+  running rc8: `--ctx-size 65536` reduced to 4096 with no warning of
+  anything unusual, and the first message crashed the process (a llama.cpp
+  `GGML_ASSERT`, not the clean "does not fit" error this probe exists to
+  produce). Re-running the identical command landed on a smaller size
+  instead and worked — pointing at free VRAM fluctuating slightly between
+  runs, with the probe having accepted a candidate that left nothing to
+  absorb that. `probe_and_shrink_context` now requires at least 12% of the
+  GPU's memory to stay free after the probe's own context is allocated, not
+  just a successful allocation, rejecting a knife-edge fit the same way it
+  already rejects an outright failure. It also no longer settles for the
+  first size that clears that bar: plain halving from a large request can
+  land far below what's actually usable (65536 down to 16384 skips
+  everything in between), so it now refines upward from there in
+  1024-token steps to recover as much of that middle ground as still fits
+  with margin.
 - **A multimodal model's load-time context probe undersold what an ordinary
   text message needs.** The previous fix (below) made the probe use the same
   batch size a real *image* request needs, since that's usually smaller than

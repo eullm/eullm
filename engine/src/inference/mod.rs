@@ -147,6 +147,36 @@ fn multimodal_batch_size() -> u32 {
     img_budget.max(512)
 }
 
+/// Fraction of GPU memory currently free, summed across every GPU-type
+/// backend device (`ggml_backend_dev_memory`) — skips CPU and accelerator
+/// devices, which aren't the resource a context's compute buffer and KV
+/// cache actually compete for. Used by `probe_and_shrink_context` to require
+/// some headroom left over, not just a successful allocation.
+///
+/// Returns `None` when there is no GPU device at all (a CPU-only run has no
+/// VRAM margin to check) rather than a bogus ratio.
+fn gpu_free_ratio() -> Option<f64> {
+    let (mut free_sum, mut total_sum) = (0u64, 0u64);
+    let device_count = unsafe { llama_cpp_sys_2::ggml_backend_dev_count() };
+    for i in 0..device_count {
+        let device = unsafe { llama_cpp_sys_2::ggml_backend_dev_get(i) };
+        if device.is_null() {
+            continue;
+        }
+        let device_type = unsafe { llama_cpp_sys_2::ggml_backend_dev_type(device) };
+        if device_type != llama_cpp_sys_2::GGML_BACKEND_DEVICE_TYPE_GPU
+            && device_type != llama_cpp_sys_2::GGML_BACKEND_DEVICE_TYPE_IGPU
+        {
+            continue;
+        }
+        let (mut free, mut total) = (0usize, 0usize);
+        unsafe { llama_cpp_sys_2::ggml_backend_dev_memory(device, &raw mut free, &raw mut total) };
+        free_sum += free as u64;
+        total_sum += total as u64;
+    }
+    (total_sum > 0).then(|| free_sum as f64 / total_sum as f64)
+}
+
 /// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(
     config: &InferenceConfig,
@@ -1086,29 +1116,64 @@ impl InferenceEngine {
         })
     }
 
-    /// Find the largest context size at or below `config.context_size` that
-    /// this model can actually allocate on this GPU, right now, halving until
-    /// one fits or a floor is reached.
+    /// Find a context size at or below `config.context_size` that this model
+    /// can actually allocate on this GPU right now, with some VRAM left over
+    /// afterward — not just the largest that scrapes by.
     ///
-    /// Each attempt is a real `new_context` call, immediately dropped — the
-    /// only reliable test. The KV cost is not one formula across every
-    /// architecture (Gemma 4's mixed sliding-window layers use two different
-    /// window sizes internally), so estimating instead of trying would just
-    /// move the discovery to a different wrong place, which is exactly what
-    /// happened testing this by hand: `--ctx-size 4096` failed, `2048` worked,
-    /// found by guessing rather than being told.
+    /// Two phases, both built on real `new_context` calls, immediately
+    /// dropped — the only reliable test. The KV cost is not one formula
+    /// across every architecture (Gemma 4's mixed sliding-window layers use
+    /// two different window sizes internally), so estimating instead of
+    /// trying would just move the discovery to a different wrong place,
+    /// which is exactly what happened testing this by hand: `--ctx-size
+    /// 4096` failed, `2048` worked, found by guessing rather than being
+    /// told.
+    ///
+    /// 1. **Coarse halving** brackets a working value quickly from whatever
+    ///    was requested, however large.
+    /// 2. **Fine refinement**, in `REFINE_STEP`-token steps upward from that
+    ///    bracket, recovers the middle ground halving alone skips over —
+    ///    found on real hardware requesting 65536 on a 7 GB model: halving
+    ///    alone lands on 16384, but plenty of values between there and the
+    ///    32768 that failed were never even tried.
+    ///
+    /// Both phases require [`MIN_FREE_VRAM_RATIO`] of the GPU's total memory
+    /// to remain free after the probe context is allocated, not just a
+    /// successful allocation — found necessary on the same real hardware: a
+    /// context that barely fit at probe time, with nothing left over,
+    /// crashed hard (a llama.cpp `GGML_ASSERT`, not the clean error this
+    /// function exists to produce instead) on the very next real request,
+    /// because generating actually needs a little more scratch memory than
+    /// a bare context allocation does. A rerun of the identical command
+    /// landed on a smaller, comfortably-margined size and worked — pointing
+    /// at VRAM headroom varying slightly between runs, not a deterministic
+    /// bug, which a margin is the right defense against.
     ///
     /// Returns the size actually loaded with, so every later call — which
-    /// builds its own context from `config.context_size` — uses a size already
-    /// proven to fit rather than repeating the same failing allocation.
-    /// Errors only when even the floor does not fit: that is a real "this
-    /// model cannot run here", not a size to silently accept.
+    /// builds its own context from `config.context_size` — uses a size
+    /// already proven to fit (with margin) rather than repeating the same
+    /// failing or knife-edge allocation. Errors only when even the floor
+    /// does not leave that margin: that is a real "this model cannot run
+    /// here", not a size to silently accept.
     fn probe_and_shrink_context(
         backend: &LlamaBackend,
         model: &LlamaModel,
         config: &InferenceConfig,
     ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
         const FLOOR: u32 = 512;
+        // Recovers the middle ground plain halving jumps over. 1024 tokens
+        // is a small enough step to be worth the extra probe attempts
+        // without turning the search into hundreds of them from a large
+        // starting request.
+        const REFINE_STEP: u32 = 1024;
+        // Fraction of a GPU's *total* memory that must stay free after the
+        // probe context is allocated. 12% is the middle of the 10-15% range
+        // that made the real-hardware crash this defends against stop
+        // reproducing — a working number, not a formula derived from a
+        // fragmentation model that doesn't exist yet. Skipped entirely on a
+        // CPU-only run (no GPU device to have a margin on).
+        const MIN_FREE_VRAM_RATIO: f64 = 0.12;
+
         // 0 means "use the default", matching the fallback every generate
         // call already applies — not a signal to clamp upward. An explicit
         // request below FLOOR is respected as the starting point and simply
@@ -1119,74 +1184,129 @@ impl InferenceEngine {
         } else {
             config.context_size
         };
-        let mut candidate = requested;
 
-        loop {
-            let ctx_size = NonZeroU32::new(candidate).expect(
-                "candidate is never 0: it starts at `requested` (already normalized away \
-                 from 0 above) and is only ever produced by `candidate / 2`, floored at \
-                 FLOOR which is nonzero",
-            );
-            // A model loaded with an mmproj can still receive a plain
-            // text-only message — `generate`/`generate_streaming` build their
-            // context from `config.n_batch` capped at 1024 (see
-            // `build_ctx_params`), same as any other model — as well as one
-            // with an image, which `generate_multimodal` sizes to
-            // `multimodal_batch_size` instead. The probe must cover whichever
-            // of the two is larger, since either is a real request this same
-            // loaded model will serve: taking only the (usually smaller)
-            // multimodal figure — as a previous version of this probe did —
-            // proved a compute-buffer requirement too small for an ordinary
-            // text message, which is exactly the gap a 12B Q8 vision model on
-            // real hardware exposed: load-time probe passed, first *text*
-            // message with no image attached failed with the same OOM the
-            // probe was built to catch. Taking only the plain text figure,
-            // symmetrically, undersells what a real image needs (see the
-            // fix immediately above this one for that direction).
-            let mut probe_params = build_ctx_params(config, ctx_size);
-            if config.mmproj_path.is_some() {
-                let plain_text_ubatch = config.n_batch.min(1024);
-                let worst_case_batch = multimodal_batch_size().max(plain_text_ubatch);
-                probe_params = probe_params
-                    .with_n_batch(worst_case_batch)
-                    .with_n_ubatch(worst_case_batch);
-            }
-            match model.new_context(backend, probe_params) {
-                Ok(ctx) => {
-                    drop(ctx); // probing fit, not keeping it — see the load()-site comment
-                    if candidate < requested {
-                        let info = scheduler::estimate_kv_memory(
-                            model,
-                            u64::from(requested),
-                            &config.cache_type_k,
-                            &config.cache_type_v,
-                        );
-                        let kv_mib = info.kv_k_mib + info.kv_v_mib;
-                        let msg = format!(
-                            "--ctx-size {requested} does not fit here (its KV cache alone \
-                             needs about {kv_mib:.0} MiB); reduced automatically to \
-                             {candidate}, which does. Pass --ctx-size {candidate} yourself \
-                             to silence this, or free up VRAM to keep {requested}."
-                        );
-                        tracing::warn!("{msg}");
-                        eprintln!("[EULLM] {msg}");
-                    }
-                    return Ok(candidate);
+        // A model loaded with an mmproj can still receive a plain text-only
+        // message — `generate`/`generate_streaming` build their context from
+        // `config.n_batch` capped at 1024 (see `build_ctx_params`), same as
+        // any other model — as well as one with an image, which
+        // `generate_multimodal` sizes to `multimodal_batch_size` instead.
+        // The probe must cover whichever of the two is larger, since either
+        // is a real request this same loaded model will serve: taking only
+        // the (usually smaller) multimodal figure proved a compute-buffer
+        // requirement too small for an ordinary text message, which is
+        // exactly the gap a 12B Q8 vision model on real hardware exposed:
+        // load-time probe passed, first *text* message with no image
+        // attached failed with the same OOM the probe was built to catch.
+        // Taking only the plain text figure, symmetrically, undersells what
+        // a real image needs.
+        let worst_case_batch = config
+            .mmproj_path
+            .is_some()
+            .then(|| multimodal_batch_size().max(config.n_batch.min(1024)));
+
+        // Why a candidate was rejected — kept so the final error message (if
+        // even the floor is rejected) can still name the real cause instead
+        // of a placeholder, whether that cause was llama.cpp refusing the
+        // allocation outright or the allocation succeeding with too little
+        // left over.
+        enum ProbeRejection {
+            Alloc(String),
+            Margin(f64),
+        }
+        impl std::fmt::Display for ProbeRejection {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Self::Alloc(e) => write!(f, "{e}"),
+                    Self::Margin(ratio) => write!(
+                        f,
+                        "allocation succeeded but left only {:.0}% of GPU memory free \
+                         (below the {:.0}% minimum this probe requires)",
+                        ratio * 100.0,
+                        MIN_FREE_VRAM_RATIO * 100.0
+                    ),
                 }
-                Err(e) if candidate <= FLOOR => {
-                    let info = scheduler::estimate_kv_memory(
-                        model,
-                        u64::from(candidate),
-                        &config.cache_type_k,
-                        &config.cache_type_v,
-                    );
-                    return Err(
-                        context_alloc_error(&e, candidate, info.kv_k_mib + info.kv_v_mib).into(),
-                    );
-                }
-                Err(_) => candidate = (candidate / 2).max(FLOOR),
             }
         }
+
+        // `Ok(None)` fits (with margin); `Ok(Some(_))` names why it didn't.
+        let try_fits = |candidate: u32| -> Result<Option<ProbeRejection>, Box<dyn std::error::Error + Send + Sync>> {
+            let ctx_size = NonZeroU32::new(candidate)
+                .expect("candidate is never 0: floored at FLOOR, which is nonzero, everywhere it is produced");
+            let mut probe_params = build_ctx_params(config, ctx_size);
+            if let Some(batch) = worst_case_batch {
+                probe_params = probe_params.with_n_batch(batch).with_n_ubatch(batch);
+            }
+            match model.new_context(backend, probe_params) {
+                // Query free/total memory *before* dropping the context —
+                // its memory is still held at this point, so this is asking
+                // "what would be left over if this candidate were kept."
+                Ok(ctx) => {
+                    let ratio = gpu_free_ratio();
+                    drop(ctx);
+                    match ratio {
+                        Some(r) if r < MIN_FREE_VRAM_RATIO => Ok(Some(ProbeRejection::Margin(r))),
+                        _ => Ok(None),
+                    }
+                }
+                Err(e) => Ok(Some(ProbeRejection::Alloc(e.to_string()))),
+            }
+        };
+
+        // Phase 1: coarse halving, exactly as before margin/refinement
+        // existed, to bracket a working value quickly.
+        let mut candidate = requested;
+        let mut last_failure = None;
+        loop {
+            let Some(rejection) = try_fits(candidate)? else {
+                break;
+            };
+            if candidate <= FLOOR {
+                let info = scheduler::estimate_kv_memory(
+                    model,
+                    u64::from(candidate),
+                    &config.cache_type_k,
+                    &config.cache_type_v,
+                );
+                return Err(
+                    context_alloc_error(&rejection, candidate, info.kv_k_mib + info.kv_v_mib).into(),
+                );
+            }
+            last_failure = Some(candidate);
+            candidate = (candidate / 2).max(FLOOR);
+        }
+
+        // Phase 2: fine refinement upward from the coarse bracket, in
+        // REFINE_STEP steps, stopping at (not reaching) the nearest value
+        // phase 1 already knows fails.
+        if let Some(known_bad) = last_failure {
+            let mut probe = candidate.saturating_add(REFINE_STEP);
+            while probe < known_bad {
+                if try_fits(probe)?.is_some() {
+                    break;
+                }
+                candidate = probe;
+                probe = probe.saturating_add(REFINE_STEP);
+            }
+        }
+
+        if candidate < requested {
+            let info = scheduler::estimate_kv_memory(
+                model,
+                u64::from(requested),
+                &config.cache_type_k,
+                &config.cache_type_v,
+            );
+            let kv_mib = info.kv_k_mib + info.kv_v_mib;
+            let msg = format!(
+                "--ctx-size {requested} does not fit here (its KV cache alone \
+                 needs about {kv_mib:.0} MiB); reduced automatically to \
+                 {candidate}, which does. Pass --ctx-size {candidate} yourself \
+                 to silence this, or free up VRAM to keep {requested}."
+            );
+            tracing::warn!("{msg}");
+            eprintln!("[EULLM] {msg}");
+        }
+        Ok(candidate)
     }
 
     /// Attempt to load the multimodal projector if the config has one and the
