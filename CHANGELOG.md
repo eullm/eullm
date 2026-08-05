@@ -15,12 +15,22 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc9`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc10`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Fixed
+- **`eullm run --cli` answered differently than the browser chat for the
+  identical model and question.** The dynamic GGUF chat template added
+  earlier in this version only reached the web/API chat handlers; the
+  terminal chat built its prompt exactly as before, always through the
+  hardcoded per-family template. Two doors onto the same loaded model
+  deciding differently depending only on which one was used to ask. `--cli`
+  now goes through the same decision (`build_cli_prompt`, mirroring
+  `api::routes::build_chat_prompt`): the model's own embedded template first
+  in sequential mode, the hardcoded fallback otherwise — identically to the
+  browser chat.
 - **A context that barely fit at load time could crash outright — not just
   fail cleanly — on the very first real request.** Found on real hardware
   running rc8: `--ctx-size 65536` reduced to 4096 with no warning of

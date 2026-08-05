@@ -2697,6 +2697,32 @@ impl ChatBackend {
     }
 }
 
+/// Build the prompt (and matching stop sequences) for one `--cli` turn.
+///
+/// Mirrors `api::routes::build_chat_prompt` exactly, on purpose: the web/API
+/// path and this terminal one are two doors onto the same loaded model, and
+/// they must decide the same way or the same conversation answers
+/// differently depending only on which door was used to ask — which is
+/// exactly what happened before this existed (`--cli` never got the dynamic
+/// GGUF template `build_chat_prompt` added for the web/API path). Tries the
+/// model's own embedded chat template first, in sequential mode only (a
+/// batching scheduler has no model reference to call this on); falls back
+/// to the hardcoded per-family `template` otherwise, exactly as `--cli`
+/// always has.
+fn build_cli_prompt(
+    backend: &ChatBackend,
+    template: &chat_template::ChatTemplate,
+    pairs: &[(&str, &str)],
+    think_arg: bool,
+) -> (String, Vec<String>) {
+    if let ChatBackend::Sequential(engine) = backend
+        && let Some(dynamic) = engine.apply_jinja_chat_template(pairs)
+    {
+        return (dynamic.prompt, Vec::new());
+    }
+    (template.build_prompt(pairs, think_arg), template.stop_sequences())
+}
+
 async fn interactive_chat(
     backend: ChatBackend,
     model_name: &str,
@@ -2871,7 +2897,7 @@ async fn interactive_chat(
         // TEMPORARY message list — web content is NOT stored in history so it
         // doesn't accumulate across turns and bloat the context.
         let template = crate::chat_template::ChatTemplate::detect(model_name);
-        let prompt = if web_enabled {
+        let (prompt, stop_sequences) = if web_enabled {
             let urls = crate::tools::extract_urls(&input);
             if !urls.is_empty() {
                 let existing_chars: usize = history.iter().map(|m| m.content.len()).sum();
@@ -2919,27 +2945,27 @@ async fn interactive_chat(
                     tmp.push(history.last().unwrap());
                     let pairs: Vec<(&str, &str)> =
                         tmp.iter().map(|m| (m.role, m.content.as_str())).collect();
-                    template.build_prompt(&pairs, think_arg)
+                    build_cli_prompt(&backend, &template, &pairs, think_arg)
                 } else {
                     let pairs: Vec<(&str, &str)> = history
                         .iter()
                         .map(|m| (m.role, m.content.as_str()))
                         .collect();
-                    template.build_prompt(&pairs, think_arg)
+                    build_cli_prompt(&backend, &template, &pairs, think_arg)
                 }
             } else {
                 let pairs: Vec<(&str, &str)> = history
                     .iter()
                     .map(|m| (m.role, m.content.as_str()))
                     .collect();
-                template.build_prompt(&pairs, think_arg)
+                build_cli_prompt(&backend, &template, &pairs, think_arg)
             }
         } else {
             let pairs: Vec<(&str, &str)> = history
                 .iter()
                 .map(|m| (m.role, m.content.as_str()))
                 .collect();
-            template.build_prompt(&pairs, think_arg)
+            build_cli_prompt(&backend, &template, &pairs, think_arg)
         };
 
         // Rough token estimate: ~4 chars per token. Leave room for the response.
@@ -2956,7 +2982,7 @@ async fn interactive_chat(
             prompt,
             max_tokens: max_tokens.min(max_reply_tokens),
             temperature,
-            stop_sequences: template.stop_sequences(),
+            stop_sequences,
             ..Default::default()
         };
 
