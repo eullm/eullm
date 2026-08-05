@@ -1915,11 +1915,24 @@ diligenza manuale.
 
   Verificato in locale (senza GPU in questo ambiente): `cargo build`/
   `clippy` puliti con e senza `--features multimodal`, le 225 unit test
-  passano. **Non ancora verificato su hardware reale** — né che il fix
-  risolva davvero la risposta di `gemma-4-12b-q8`, né che non cambi
-  comportamento sugli altri modelli già validati (DeepSeek R1, Qwen3) se
-  anche i loro GGUF portano un template incorporato che ora prende il posto
-  di quello scritto a mano per loro.
+  passano. **Confermato su hardware reale il 5 agosto** per i messaggi di
+  solo testo via chat web: la risposta ora mostra il blocco di ragionamento
+  reale del template, coerente con quanto osservato su `llama-server`.
+
+  **Incoerenza trovata lo stesso giorno**: il fix copriva solo `routes.rs`
+  (chat web/API) — `eullm run --cli` continuava a costruire il prompt col
+  solo template hardcoded, invariato, quindi la stessa domanda allo stesso
+  modello dava risposte diverse a seconda della porta usata per chiederla.
+  Corretto con `build_cli_prompt` in `main.rs`, che rispecchia esattamente
+  `api::routes::build_chat_prompt` (stessa politica: template dinamico solo
+  in modalità sequenziale, altrimenti il fallback hardcoded).
+
+  Resta da confermare su hardware reale che non cambi comportamento sugli
+  altri modelli già validati (DeepSeek R1, Qwen3) se anche i loro GGUF
+  portano un template incorporato che ora prende il posto di quello scritto
+  a mano per loro — e resta non collegata la pulizia della risposta dal
+  blocco di ragionamento (`thinking_start_tag`/`thinking_end_tag`), ancora
+  affidata solo ai filtri Harmony esistenti.
 
 - [x] **H3-V · `probe_and_shrink_context` si ferma al primo tentativo che
   passa, non cerca il vero massimo** *(nice to have)*
