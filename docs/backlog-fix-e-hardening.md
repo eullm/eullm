@@ -1921,7 +1921,7 @@ diligenza manuale.
   anche i loro GGUF portano un template incorporato che ora prende il posto
   di quello scritto a mano per loro.
 
-- [ ] **H3-V · `probe_and_shrink_context` si ferma al primo tentativo che
+- [x] **H3-V · `probe_and_shrink_context` si ferma al primo tentativo che
   passa, non cerca il vero massimo** *(nice to have)*
   Osservato il 4 agosto 2026 testando `rc7` con un valore deliberatamente
   non tondo: `--ctx-size 8112` → fallisce → dimezzato esattamente a `4056`
@@ -1935,9 +1935,38 @@ diligenza manuale.
   un valore di partenza non potenza di due lo si nota — con partenze tipo
   16384/8192/4096 il dimezzamento atterra sempre sugli stessi numeri già
   visti prima, mascherando quanto è grezzo il meccanismo.
-  Miglioramento possibile, non urgente: una ricerca più fine (es. binaria)
-  tra l'ultimo valore fallito e il primo riuscito, invece di accontentarsi
-  del primo successo.
+
+  **Diventato urgente il 5 agosto** quando un secondo test ha esposto perché
+  la grossolanità del dimezzamento non è solo una questione di contesto
+  sprecato: su `rc8`, `--ctx-size 65536` si è ridotto pulito a `4096`
+  (nessun avviso fuori dall'ordinario), e la prima richiesta reale — un
+  messaggio di solo testo — ha **mandato in crash il processo** (un
+  `GGML_ASSERT` di llama.cpp, non l'errore pulito che questo probe esiste
+  per produrre). Rilanciando lo stesso identico comando, il probe è atterrato
+  su un valore più piccolo ed è andato tutto bene — la VRAM libera
+  fluttuava leggermente tra un avvio e l'altro, e `4096` ci stava per un
+  margine talmente stretto da non reggere quella fluttuazione al momento
+  della richiesta vera.
+
+  Corretto in `rc9`, unendo due cambi nello stesso posto:
+  - **margine di sicurezza**: dopo un'allocazione di prova riuscita,
+    `gpu_free_ratio()` (nuova funzione, somma `ggml_backend_dev_memory` sui
+    dispositivi di tipo GPU) controlla che resti libero almeno il 12% della
+    memoria totale della scheda — non solo che l'allocazione sia riuscita.
+    Sotto quella soglia il candidato viene scartato come se fosse fallito
+    del tutto. 12% è il punto di mezzo dell'intervallo 10-15% indicato,
+    scelto perché ha fatto sparire il crash nella pratica, non calcolato da
+    una formula.
+  - **raffinamento fine**: una volta trovato un valore che passa dimezzando
+    (fase grezza, invariata), si risale a passi di 1024 token verso l'alto,
+    fermandosi appena il valore successivo non passa più (allocazione o
+    margine) — recuperando il terreno intermedio che il solo dimezzamento
+    saltava, verificato ogni passo con una vera allocazione, mai stimato.
+
+  Verificato in locale (senza GPU in questo ambiente): `cargo build`/
+  `clippy` puliti con e senza `--features multimodal`, le 225 unit test
+  passano. Da confermare su hardware reale che il crash non si ripresenti e
+  che il raffinamento recuperi davvero contesto utile tra i valori dimezzati.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
