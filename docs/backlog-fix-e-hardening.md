@@ -2022,17 +2022,29 @@ diligenza manuale.
   gemma-4-e4b l'effetto era diverso — allucinazioni di identità — ma
   scompariva comunque disattivando il messaggio di sistema di default.
 
-  Fix in `engine/src/ui/app.js`: `settings.system` ora parte vuoto invece
+  Fix in rc11 (`engine/src/ui/app.js`): `settings.system` parte vuoto invece
   del testo LaTeX. Entrambi i percorsi di invio (`/api/chat` multimodale e
   `/v1/chat/completions`) già saltano del tutto il turno di sistema quando
   `settings.system` è vuoto (`if (settings.system) ...`), quindi il default
-  ora è "nessun messaggio di sistema", non "messaggio di sistema vuoto" — lo
-  stesso comportamento di fatto già in uso da `--cli`. Il suggerimento LaTeX
-  resta disponibile, opt-in, da Settings.
+  diventa "nessun messaggio di sistema", non "messaggio di sistema vuoto" —
+  lo stesso comportamento di fatto già in uso da `--cli`. Il suggerimento
+  LaTeX resta disponibile, opt-in, da Settings.
+
+  **Seguito in rc12**: disattivare il suggerimento di default perdeva la
+  formattazione automatica delle formule per chiunque non sapesse di doverla
+  riattivare a mano — segnalato subito dall'utente ("non sapendo se ci
+  saranno formule o meno"). Corretto spostando `MATH_FORMAT_HINT` dal campo
+  libero `settings.system` (rimasto vuoto di default, riservato a istruzioni
+  scritte dall'utente e mandate come vero turno `system`) a un'aggiunta in
+  coda al turno **utente** in uscita, condizionata a `settings.math` (attivo
+  di default). Stesso suggerimento, stesso comportamento attivo-di-default di
+  prima della regressione, ma senza reintrodurre un turno di sistema — la
+  parte che effettivamente rompeva i modelli.
 
   Verificato in locale (senza GPU in questo ambiente): non è codice Rust,
   nessuna build da rifare. Da confermare su hardware reale che la chat web
-  torni a rispondere correttamente sui tre modelli con il default vuoto.
+  torni a rispondere correttamente sui tre modelli e che il suggerimento
+  LaTeX in coda al turno utente non introduca a sua volta problemi.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
