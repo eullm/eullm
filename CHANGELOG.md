@@ -15,12 +15,21 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc11`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc12`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Fixed
+- **The default math-formatting hint is back on by default, without the
+  system-message turn that broke it.** rc11 fixed the regression below by
+  turning the hint off by default (opt-in from Settings), which also meant
+  losing the "just works" formula formatting for anyone who didn't know to
+  turn it back on. It's now folded into the outgoing *user* turn instead of
+  sent as a `system`-role message, gated on the existing math-rendering
+  setting (on by default) rather than the separate, still-opt-in free-form
+  system prompt field. Same nudge, same default-on behavior as before the
+  regression, without reintroducing a system turn.
 - **The browser chat's default system message broke every model tested
   except the one it was implicitly tuned for.** After the previous fix made
   `--cli` and the browser chat share the same template decision, real
