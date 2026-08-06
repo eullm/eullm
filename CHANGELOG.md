@@ -15,12 +15,28 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc10`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc11`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Fixed
+- **The browser chat's default system message broke every model tested
+  except the one it was implicitly tuned for.** After the previous fix made
+  `--cli` and the browser chat share the same template decision, real
+  hardware testing surfaced a browser-only regression: with the identical
+  question ("ciao come ti chiami") and the identical model, `--cli` answered
+  correctly while the browser chat did not — ruling out the chat template
+  itself and pointing at the one thing still different between the two.
+  That was the browser's always-on default system message, a LaTeX
+  formatting hint. On DeepSeek-R1-Distill-Qwen-14B it produced an entire
+  unrelated calculus derivation instead of a greeting — DeepSeek's own
+  model card recommends against any system prompt for R1 models, and an
+  atypical one appears to send them into a stereotyped reasoning trace from
+  training instead of engaging with the actual turn. On Qwen2-VL-2B and
+  gemma-4-e4b it produced unrelated hallucinated identity claims. The
+  browser chat now starts with no default system message, matching the
+  CLI; the LaTeX hint is still available, opt-in, from Settings.
 - **`eullm run --cli` answered differently than the browser chat for the
   identical model and question.** The dynamic GGUF chat template added
   earlier in this version only reached the web/API chat handlers; the

@@ -70,13 +70,17 @@
   let pendingMedia = null;
 
   const settings = {
-    // Default math-formatting nudge: some models close a $...$ block before the
-    // final fraction, leaving raw LaTeX. This asks them to delimit every full
-    // formula. Purely a formatting hint — the user can clear it in Settings.
-    system:
-      "When you write mathematics, wrap each complete formula — including the " +
-      "final result — in $...$ (inline) or $$...$$ (block) LaTeX delimiters. " +
-      "Never leave commands like \\frac or \\sqrt outside the delimiters.",
+    // No default system message: real-hardware testing on rc10 found that a
+    // populated system turn (previously a LaTeX-formatting nudge, on by
+    // default) sent DeepSeek-R1-Distill-Qwen-14B into an unrelated reasoning
+    // trace instead of answering the actual question, and produced
+    // hallucinated identity responses on Qwen2-VL-2B and gemma-4-e4b — while
+    // the CLI, which has no such default, answered all three correctly. Both
+    // send paths below already skip the system message when this is empty,
+    // so leaving it blank means no system turn is sent at all. Users who want
+    // the LaTeX-formatting hint (or any other system prompt) can still set
+    // one in Settings.
+    system: "",
     temperature: 0.7,
     maxTokens: 2048,
     // Reasoning ON by default. Reasoning models (DeepSeek-R1, QwQ) are trained
