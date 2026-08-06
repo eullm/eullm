@@ -15,21 +15,24 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc12`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc13`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Fixed
-- **The default math-formatting hint is back on by default, without the
-  system-message turn that broke it.** rc11 fixed the regression below by
-  turning the hint off by default (opt-in from Settings), which also meant
-  losing the "just works" formula formatting for anyone who didn't know to
-  turn it back on. It's now folded into the outgoing *user* turn instead of
-  sent as a `system`-role message, gated on the existing math-rendering
-  setting (on by default) rather than the separate, still-opt-in free-form
-  system prompt field. Same nudge, same default-on behavior as before the
-  regression, without reintroducing a system turn.
+- **The default math-formatting hint is gone for good, not just moved.**
+  rc12 tried to keep it on by default by folding it into the outgoing user
+  turn instead of a `system`-role message, on the theory that the system
+  role itself was the trigger. Real-hardware testing disproved that: the
+  identical question on the identical model (DeepSeek-R1-Distill-Qwen-14B)
+  still hallucinated — this time inventing the name "MathAI" — with the
+  hint riding along in the user turn (prompt token count confirmed it: 57
+  tokens web vs. 16 tokens `--cli` for the same question). The common factor
+  across both failed attempts was appending unsolicited instructions to a
+  short, unrelated prompt, not which role carried them. There is no default
+  nudge anymore in either place; it's opt-in only, typed into the system
+  prompt field in Settings.
 - **The browser chat's default system message broke every model tested
   except the one it was implicitly tuned for.** After the previous fix made
   `--cli` and the browser chat share the same template decision, real

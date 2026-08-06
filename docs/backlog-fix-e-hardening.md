@@ -2045,6 +2045,30 @@ diligenza manuale.
   nessuna build da rifare. Da confermare su hardware reale che la chat web
   torni a rispondere correttamente sui tre modelli e che il suggerimento
   LaTeX in coda al turno utente non introduca a sua volta problemi.
+
+  **Confutato su hardware reale, stesso giorno**: la teoria di rc12 (era il
+  turno `system` il problema, non il contenuto) non ha retto alla prova.
+  Stessa domanda ("ciao come ti chiami"), stesso modello
+  (DeepSeek-R1-Distill-Qwen-14B): il log del server mostra `prompt=57
+  tokens` per la richiesta web contro i `prompt=16 tokens` di `--cli` per la
+  domanda identica — i 41 token in più sono `MATH_FORMAT_HINT`, quindi
+  l'iniezione nel turno utente stava avvenendo come previsto. Il risultato è
+  comunque un'allucinazione di identità, stavolta diversa ("Mi chiamo
+  MathAI" invece di rispondere normalmente). Il fattore comune ai due
+  tentativi falliti non era il ruolo del messaggio ma l'aver accodato
+  un'istruzione estranea a un prompt corto e non correlato — `--cli`, che
+  non manda niente del genere, risponde correttamente ogni volta.
+
+  Corretto in rc13 rimuovendo del tutto `MATH_FORMAT_HINT` e la sua
+  iniezione automatica (sia nel turno utente del ramo multimodale sia in
+  quello del ramo testo). Nessun suggerimento di default in nessuna forma;
+  resta disponibile solo scrivendolo a mano nel campo "System prompt" di
+  Settings, inviato come vero turno `system` — comportamento invariato per
+  chi lo usa già così.
+
+  Verificato in locale (senza GPU in questo ambiente): non è codice Rust,
+  nessuna build da rifare. Da confermare su hardware reale che senza alcuna
+  iniezione automatica la chat web risponda come `--cli` sui tre modelli.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti

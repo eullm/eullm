@@ -69,27 +69,23 @@
   // the same `images:[...]` field. Cleared after each send.
   let pendingMedia = null;
 
-  // Default math-formatting nudge — folded into the outgoing *user* turn
-  // (see MATH_FORMAT_HINT usage in send()), not sent as a system message.
-  // Real-hardware testing on rc10/rc11 found this exact instruction, sent as
-  // a system-role turn, broke DeepSeek-R1-Distill-Qwen-14B (an unrelated
-  // reasoning trace instead of answering the actual question) and produced
-  // identity hallucinations on Qwen2-VL-2B and gemma-4-e4b — while the CLI,
-  // which never sends a system turn, answered the identical question
-  // correctly on the same models. DeepSeek's own model card recommends
-  // against any system prompt for R1 models. Appending the hint to the user
-  // turn instead keeps the nudge on by default without reintroducing a
-  // system-role turn.
-  const MATH_FORMAT_HINT =
-    "When you write mathematics, wrap each complete formula — including the " +
-    "final result — in $...$ (inline) or $$...$$ (block) LaTeX delimiters. " +
-    "Never leave commands like \\frac or \\sqrt outside the delimiters.";
-
   const settings = {
     // Free-form system prompt, opt-in, sent as a literal system-role message
     // when set (e.g. persona/tone/language instructions the user types in
-    // Settings). Left empty by default — see MATH_FORMAT_HINT above for why
-    // a populated-by-default system turn is unsafe.
+    // Settings). Left empty by default.
+    //
+    // A default math-formatting nudge lived here through rc10-rc12 and was
+    // removed for good after two separate real-hardware failures: as a
+    // system-role message (rc10) it sent DeepSeek-R1-Distill-Qwen-14B into
+    // an unrelated reasoning trace and hallucinated identities on
+    // Qwen2-VL-2B/gemma-4-e4b; moving it into the user turn instead (rc12,
+    // to dodge R1's documented sensitivity to system prompts) did not fix
+    // it — same question, same model, still hallucinated (invented the name
+    // "MathAI") once the hint text rode along in the same turn. The common
+    // factor both times was appending unsolicited instructions to a short,
+    // unrelated prompt, not which role carried them. `--cli`, which sends
+    // neither, answers correctly every time. Any such nudge is opt-in only
+    // now, typed by the user into this field.
     system: "",
     temperature: 0.7,
     maxTokens: 2048,
@@ -715,8 +711,7 @@
         // audio both ride this field — the backend's mtmd path auto-detects
         // the media type from the bytes. History is intentionally omitted —
         // the mtmd MVP is a one-shot probe.
-        const hintedText = settings.math ? `${userText}\n\n${MATH_FORMAT_HINT}` : userText;
-        const userMsg = { role: "user", content: hintedText, images: [media.base64] };
+        const userMsg = { role: "user", content: userText, images: [media.base64] };
         const messagesToSend = settings.system
           ? [{ role: "system", content: settings.system }, userMsg]
           : [userMsg];
@@ -735,16 +730,7 @@
       } else {
         const messagesToSend = [];
         if (settings.system) messagesToSend.push({ role: "system", content: settings.system });
-        // Append the math hint to the latest user turn only (not stored back
-        // into `history`, so it isn't duplicated on every subsequent send).
-        const lastIdx = history.length - 1;
-        messagesToSend.push(
-          ...history.map((m, i) =>
-            settings.math && i === lastIdx
-              ? { role: m.role, content: `${m.content}\n\n${MATH_FORMAT_HINT}` }
-              : m,
-          ),
-        );
+        messagesToSend.push(...history);
         resp = await fetch("/v1/chat/completions", withAuth({
           method: "POST",
           headers: { "Content-Type": "application/json" },
