@@ -1934,6 +1934,20 @@ diligenza manuale.
   blocco di ragionamento (`thinking_start_tag`/`thinking_end_tag`), ancora
   affidata solo ai filtri Harmony esistenti.
 
+  **Aggiornamento 6 agosto**: il sospetto sopra sembrava confermato — test su
+  hardware reale con DeepSeek-R1-Distill-Qwen-14B, Qwen2-VL-2B e la variante
+  da 7.1GB di gemma-4-e4b hanno prodotto risposte a vanvera via chat web
+  (DeepSeek: un'intera derivazione di calcolo integrale invece di rispondere
+  "come ti chiami"; gli altri due: allucinazioni di identità tipo "sono il
+  software OpenOffice.org calc"). La causa reale però non era il template
+  dinamico: la stessa identica domanda sullo stesso modello via `--cli` ha
+  risposto correttamente (vedi H3-W). Il meccanismo del template dinamico —
+  la parte che questa voce copre — è quindi scagionato per DeepSeek R1 da un
+  confronto diretto sullo stesso modello. Resta comunque da confermare via
+  `--cli` anche su Qwen2-VL-2B e gemma-4-e4b (finora testati solo via web,
+  dove il vero colpevole — il messaggio di sistema di default — era
+  comunque presente), e resta da validare Qwen3 come già annotato sopra.
+
 - [x] **H3-V · `probe_and_shrink_context` si ferma al primo tentativo che
   passa, non cerca il vero massimo** *(nice to have)*
   Osservato il 4 agosto 2026 testando `rc7` con un valore deliberatamente
@@ -1980,6 +1994,45 @@ diligenza manuale.
   `clippy` puliti con e senza `--features multimodal`, le 225 unit test
   passano. Da confermare su hardware reale che il crash non si ripresenti e
   che il raffinamento recuperi davvero contesto utile tra i valori dimezzati.
+
+- [x] **H3-W · Il messaggio di sistema di default della chat web mandava in
+  crisi modelli diversi da quello per cui sembrava pensato** *(P1)*
+  Trovato il 6 agosto 2026, subito dopo aver reso coerenti CLI e chat web
+  (H3-U): con lo stesso identico modello e la stessa identica domanda ("ciao
+  come ti chiami"), `--cli` rispondeva correttamente e la chat web no, su tre
+  modelli diversi — DeepSeek-R1-Distill-Qwen-14B, Qwen2-VL-2B, gemma-4-e4b
+  (variante 7.1GB). Questo esclude il template dinamico come causa (H3-U):
+  se fosse stato quello, `--cli` avrebbe fallito allo stesso modo, dato che
+  usa la stessa identica funzione di decisione. L'unica differenza reale tra
+  le due porte era il messaggio di sistema: `--cli` parte con un generico
+  "You are a helpful assistant.", la chat web mandava di default un
+  messaggio più elaborato (un suggerimento di formattazione LaTeX, aggiunto
+  in una sessione precedente).
+
+  Su DeepSeek-R1-Distill-Qwen-14B l'effetto era netto: invece di rispondere
+  al saluto, il modello ha prodotto un'intera derivazione di calcolo
+  (l'integrale di eˣsin(nx)) — nessun esempio del genere è presente nel testo
+  del messaggio di sistema stesso, quindi non è un caso di "ripete quello che
+  gli è stato scritto". La spiegazione più coerente: DeepSeek sconsiglia
+  esplicitamente l'uso di un system prompt con i modelli R1 (la scheda del
+  modello raccomanda di mettere le istruzioni nel turno utente), e un
+  messaggio di sistema insolito sembra spingerli a replicare una traccia di
+  ragionamento stereotipata vista in training (fortemente sbilanciata su
+  matematica/codice) invece di rispondere al turno reale. Su Qwen2-VL-2B e
+  gemma-4-e4b l'effetto era diverso — allucinazioni di identità — ma
+  scompariva comunque disattivando il messaggio di sistema di default.
+
+  Fix in `engine/src/ui/app.js`: `settings.system` ora parte vuoto invece
+  del testo LaTeX. Entrambi i percorsi di invio (`/api/chat` multimodale e
+  `/v1/chat/completions`) già saltano del tutto il turno di sistema quando
+  `settings.system` è vuoto (`if (settings.system) ...`), quindi il default
+  ora è "nessun messaggio di sistema", non "messaggio di sistema vuoto" — lo
+  stesso comportamento di fatto già in uso da `--cli`. Il suggerimento LaTeX
+  resta disponibile, opt-in, da Settings.
+
+  Verificato in locale (senza GPU in questo ambiente): non è codice Rust,
+  nessuna build da rifare. Da confermare su hardware reale che la chat web
+  torni a rispondere correttamente sui tre modelli con il default vuoto.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
