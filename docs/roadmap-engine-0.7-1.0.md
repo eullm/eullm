@@ -81,14 +81,31 @@ nessun blocco prolungato del decode durante prefill lunghi; riuso KV validato su
   prefill (sinergia con 0.7-C). Testare prompt da 1, `n_batch` e `n_batch+1` token.
   Output identico a parità di seed rispetto al prefill monolitico.
 
-- [ ] **0.7-E · Auto-composizione `--fit` + `--n-cpu-moe`**
-  Oggi la scelta di N è manuale (trial-and-error documentato nel README). Parser
-  della sezione tensor-info del GGUF (nome/shape/dtype/offset per tensore) per il
-  conteggio byte reale expert vs non-expert per layer; con `--fit --cpu-moe` (o
-  flag dedicato) calcolare automaticamente il minimo N che entra nella VRAM libera,
-  evitando il doppio conteggio dei tensori non-expert già piazzati. Dati di
-  calibrazione reali disponibili: Qwen3.6-35B-A3B Q4_K_M su RTX 3060 12GB
-  (26.5 tok/s blanket → 35.6 tok/s con N=24 + KV Q8_0).
+- [x] **0.7-E · Auto-composizione `--fit` + `--n-cpu-moe`** *(implementato
+  0.6.70-rc14)*
+  Prima la scelta di N era manuale (trial-and-error documentato nel README).
+  Implementato in `engine/src/fit.rs`: `parse_gguf_moe_layout`/
+  `read_gguf_moe_layout` leggono la sezione tensor-info del GGUF (nome +
+  offset per tensore — la dimensione reale viene dalla differenza tra
+  offset consecutivi, non da un calcolo type/shape) e producono `MoeLayout`,
+  la scomposizione per layer in byte expert vs non-expert. `compute_moe_fit`
+  (puro, testato) calcola il minimo N di layer da spingere su CPU RAM
+  (`--n-cpu-moe`) perché il resto entri in VRAM — evizione sempre di un
+  prefisso contiguo `0..N` dal layer più basso, coerente con come
+  `--n-cpu-moe` applica già il pattern per-layer. Se anche con tutti gli
+  esperti su CPU RAM il resto non entra, ricade su uno split parziale a
+  livello di layer intero calcolato sugli stessi byte non-expert (fino a
+  interamente su CPU nel caso estremo) — riusa `compute_fit` esistente
+  invece di duplicare la logica. Attivo solo con `--fit` e solo quando
+  l'utente non ha già scelto lui `--cpu-moe`/`--n-cpu-moe` (rispetta
+  l'intento esplicito). Non tocca `eullm serve`/`api::swap_model`, stessa
+  scelta di scope già documentata per `--fit` in generale.
+
+  Dati di calibrazione reali disponibili per un affinamento futuro (oggi il
+  numero calcolato è il minimo che *entra*, non il più veloce): Qwen3.6-35B-A3B
+  Q4_K_M su RTX 3060 12GB (26.5 tok/s blanket → 35.6 tok/s con N=24 + KV Q8_0)
+  — restano validi come riferimento se in futuro si vorrà ottimizzare oltre
+  al solo "deve partire".
 
 ---
 

@@ -15,10 +15,28 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc13`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc14`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
+
+### Added
+- **`--fit` now auto-sizes MoE expert offload too, not just whole GPU
+  layers.** Previously `--fit` (on by default from the interactive picker)
+  only decided how many *whole* transformer layers fit on the GPU — it had
+  no notion of MoE expert tensors, so a large mixture-of-experts model could
+  be judged "doesn't fit" and prompt to abort, or worse be judged "fits" and
+  then OOM at load, even though `--cpu-moe`/`--n-cpu-moe` would have let it
+  run. `--fit` now parses the GGUF's tensor-info section (real per-tensor
+  byte sizes from consecutive tensor offsets, not a type/shape guess) to
+  split each layer's weight into expert vs. non-expert bytes, and — when the
+  user hasn't already chosen `--cpu-moe`/`--n-cpu-moe` themselves —
+  automatically computes the minimum number of layers whose experts need to
+  move to CPU RAM for the rest to fit fully on GPU. If even every expert on
+  CPU RAM still doesn't leave room for the non-expert weights, it falls back
+  further to a reduced whole-layer split for those too (down to fully CPU in
+  the extreme case) — the model always loads, never a size-related OOM, just
+  possibly slower. Implements roadmap item `0.7-E`.
 
 ### Fixed
 - **The default math-formatting hint is gone for good, not just moved.**

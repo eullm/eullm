@@ -1659,6 +1659,10 @@ async fn cmd_run(
     // `--fit` may override this below once the GGUF file is resolved; until
     // then it is exactly the user-provided `--gpu-layers`.
     let mut gpu_layers = gpu_layers;
+    // The MoE auto-sizing step (below, alongside `--fit`) may override these
+    // too — only when the user hasn't already chosen one explicitly.
+    let mut cpu_moe = cpu_moe;
+    let mut n_cpu_moe = n_cpu_moe;
 
     if !multimodal_oneshot {
         ensure_port_available(port, replace).await;
@@ -1774,6 +1778,36 @@ async fn cmd_run(
                     // Clean return: don't load, don't bind a port. If we were
                     // invoked from the picker flow, the user lands back there.
                     return;
+                }
+            }
+
+            // MoE auto-sizing (roadmap 0.7-E): `--fit`'s whole-layer split
+            // above has no notion of expert tensors, so a MoE model can be
+            // told "doesn't fit" (or worse, told "fits" and then OOM at
+            // load) even though `--cpu-moe`/`--n-cpu-moe` would let it run.
+            // Only when the user hasn't already chosen one of those two
+            // flags themselves — respecting explicit intent over a guess.
+            if !cpu_moe && n_cpu_moe == 0 {
+                match fit::run_moe_fit(&gguf_path, ctx_size, kv_bpe_k, kv_bpe_v) {
+                    fit::MoeFitDecision::NotMoe => {}
+                    fit::MoeFitDecision::Proceed { n_cpu_moe: computed } => {
+                        if computed > 0 {
+                            println!(
+                                "[EULLM] MoE model: keeping expert tensors on CPU RAM for the \
+                                 first {computed} layers so the rest fits in VRAM."
+                            );
+                            n_cpu_moe = computed;
+                            gpu_layers = -1;
+                        }
+                    }
+                    fit::MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers: gl } => {
+                        println!(
+                            "[EULLM] MoE model: even with every expert tensor on CPU RAM, the \
+                             rest doesn't fit fully — offloading a reduced layer split too."
+                        );
+                        cpu_moe = true;
+                        gpu_layers = gl;
+                    }
                 }
             }
         }

@@ -284,6 +284,177 @@ pub fn read_gguf_info(path: &Path) -> Option<GgufInfo> {
     parse_gguf_header(&buf)
 }
 
+/// Per-layer split of a GGUF's tensor bytes into "expert" (the MoE
+/// feed-forward tensors `--cpu-moe`/`--n-cpu-moe` can move to CPU RAM) and
+/// everything else (attention, norms, embeddings, output head, and — for a
+/// MoE model — the router/gate weights, all of which stay GPU-resident
+/// regardless of expert offload).
+///
+/// Sizes come from the GGUF tensor-info section's `offset` field, not from
+/// the tensor's declared type/shape: consecutive tensors' offsets bound each
+/// other's real on-disk byte size exactly, with no need to know every ggml
+/// quantization format's block size.
+#[derive(Debug, Clone)]
+pub struct MoeLayout {
+    /// Bytes of every tensor that is not part of any layer's expert set.
+    pub non_expert_bytes: u64,
+    /// Expert-tensor bytes for each transformer block, indexed by layer
+    /// number parsed from the tensor name (`blk.<i>...`). A dense
+    /// (non-MoE) model has every entry `0`.
+    pub expert_bytes_per_layer: Vec<u64>,
+}
+
+impl MoeLayout {
+    /// Whether any layer actually has expert tensors.
+    pub fn is_moe(&self) -> bool {
+        self.expert_bytes_per_layer.iter().any(|&b| b > 0)
+    }
+}
+
+/// The exact tensor-name families `--cpu-moe`/`--n-cpu-moe` already move to
+/// CPU RAM (`inference::mod.rs`'s `add_cpu_moe_override` / the per-layer
+/// `blk\.{i}\.ffn_(up|down|gate|gate_up)_(ch|)exps` pattern). Matched here by
+/// substring rather than a regex engine — the vocabulary is small and fixed,
+/// so a new dependency isn't worth it for eight literal strings.
+const EXPERT_TENSOR_MARKERS: [&str; 8] = [
+    "ffn_up_exps",
+    "ffn_down_exps",
+    "ffn_gate_exps",
+    "ffn_gate_up_exps",
+    "ffn_up_chexps",
+    "ffn_down_chexps",
+    "ffn_gate_chexps",
+    "ffn_gate_up_chexps",
+];
+
+fn is_expert_tensor_name(name: &str) -> bool {
+    EXPERT_TENSOR_MARKERS.iter().any(|marker| name.contains(marker))
+}
+
+/// Parse the layer index out of a tensor name shaped `blk.<N>.<rest>`.
+/// Returns `None` for the handful of tensors with no layer (embeddings,
+/// output head, output norm) — the caller counts those as non-expert.
+fn tensor_layer_index(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("blk.")?;
+    let end = rest.find('.')?;
+    rest[..end].parse().ok()
+}
+
+/// Round `pos` up to the next multiple of `alignment`. GGUF's tensor data
+/// section starts at the first such boundary after the tensor-info table;
+/// `alignment` defaults to 32 and is only ever overridden by a
+/// `general.alignment` metadata key.
+fn align_up(pos: u64, alignment: u64) -> Option<u64> {
+    if alignment == 0 {
+        return Some(pos);
+    }
+    let rem = pos % alignment;
+    if rem == 0 {
+        Some(pos)
+    } else {
+        pos.checked_add(alignment - rem)
+    }
+}
+
+/// Parse a GGUF's tensor-info section into a [`MoeLayout`].
+///
+/// `data` must start at the file's first byte (magic included) and cover the
+/// metadata block *and* the tensor-info table — both sit before the tensor
+/// data itself, so the same leading chunk `read_gguf_info` already reads is
+/// enough. `file_size` is the real on-disk size, needed only to size the
+/// *last* tensor (every other tensor's size is the gap to the next one's
+/// offset). `n_layers` sizes the returned per-layer vector; pass the value
+/// already read via [`parse_gguf_header`] so the two never disagree.
+///
+/// Returns `None` on any malformed/truncated input, exactly like
+/// [`parse_gguf_header`] — the caller treats that as "not a MoE model" and
+/// falls back to the ordinary dense `--fit` path.
+pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Option<MoeLayout> {
+    let mut c = Cursor::new(data);
+
+    if c.u32()? != GGUF_MAGIC {
+        return None;
+    }
+    let _version = c.u32()?;
+    let tensor_count = c.u64()?;
+    let metadata_kv_count = c.u64()?;
+
+    let mut alignment: u64 = 32;
+    for _ in 0..metadata_kv_count {
+        let key_bytes = c.gguf_string()?;
+        let value_type = c.u32()?;
+        if key_bytes == b"general.alignment" {
+            match c.read_uint_as_u64(value_type) {
+                Some(v) if v > 0 => alignment = v,
+                Some(_) => {}
+                None => c.skip_value(value_type)?,
+            }
+        } else {
+            c.skip_value(value_type)?;
+        }
+    }
+
+    // Tensor-info record: name, n_dimensions, dimensions[n_dimensions] (u64
+    // each), ggml type (u32), offset (u64). Only name and offset matter here;
+    // the rest is consumed purely to keep the cursor aligned with the next
+    // record. `tensor_count` is untrusted (a corrupt file could claim
+    // billions) — no `with_capacity` on it, so a bad count just runs the
+    // bounds-checked cursor out of bytes and returns `None`, never a huge
+    // allocation.
+    let mut tensors: Vec<(String, u64)> = Vec::new();
+    for _ in 0..tensor_count {
+        let name = String::from_utf8_lossy(c.gguf_string()?).into_owned();
+        let n_dims = c.u32()?;
+        for _ in 0..n_dims {
+            c.u64()?;
+        }
+        let _ggml_type = c.u32()?;
+        let offset = c.u64()?;
+        tensors.push((name, offset));
+    }
+    if tensors.is_empty() {
+        return None;
+    }
+
+    let data_start = align_up(c.pos as u64, alignment)?;
+    tensors.sort_by_key(|(_, offset)| *offset);
+
+    let mut non_expert_bytes: u64 = 0;
+    let mut expert_bytes_per_layer = vec![0u64; n_layers as usize];
+
+    for (idx, (name, offset)) in tensors.iter().enumerate() {
+        let size = match tensors.get(idx + 1) {
+            Some((_, next_offset)) => next_offset.checked_sub(*offset)?,
+            None => file_size.checked_sub(data_start)?.checked_sub(*offset)?,
+        };
+
+        match (is_expert_tensor_name(name), tensor_layer_index(name)) {
+            (true, Some(layer)) if (layer as usize) < expert_bytes_per_layer.len() => {
+                expert_bytes_per_layer[layer as usize] += size;
+            }
+            _ => non_expert_bytes += size,
+        }
+    }
+
+    Some(MoeLayout {
+        non_expert_bytes,
+        expert_bytes_per_layer,
+    })
+}
+
+/// Read a GGUF file's leading bytes and parse its tensor layout. Mirrors
+/// [`read_gguf_info`] exactly (same 8 MiB budget, same reasoning for why a
+/// single `Read::read` isn't enough) — see there for why `take().read_to_end()`
+/// is used instead of one `read()` call.
+pub fn read_gguf_moe_layout(path: &Path, file_size: u64, n_layers: u32) -> Option<MoeLayout> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::with_capacity(8 * 1024 * 1024);
+    file.take(8 * 1024 * 1024).read_to_end(&mut buf).ok()?;
+    parse_gguf_moe_layout(&buf, file_size, n_layers)
+}
+
 /// Free VRAM in bytes, as reported by the active GPU backend.
 ///
 /// CUDA-only: calls `cudaMemGetInfo` (cudart is already linked in `--features
@@ -436,6 +607,103 @@ pub fn compute_fit(
     }
 }
 
+/// The outcome of composing `--fit` with MoE expert offload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MoeFitDecision {
+    /// Not a MoE model (or its layout couldn't be read) — the caller's
+    /// existing dense `--fit` decision, from [`compute_fit`], stands
+    /// unchanged.
+    NotMoe,
+    /// Apply directly: keep the first `n_cpu_moe` layers' expert tensors on
+    /// CPU RAM (same convention `--n-cpu-moe` already uses), and offload
+    /// every whole layer to the GPU (`gpu_layers = -1`) — pushing this many
+    /// layers' experts off is enough for everything else to fit.
+    /// `n_cpu_moe == 0` means the model is MoE but already fits fully as-is.
+    Proceed { n_cpu_moe: u32 },
+    /// Even with every layer's experts on CPU RAM, the non-expert weights
+    /// plus KV cache alone don't fit fully on GPU either. Apply blanket
+    /// `--cpu-moe` (all experts on CPU) *and* this `gpu_layers` split for
+    /// the non-expert weights — the same reduced-offload fallback `--fit`
+    /// already uses for a dense model, charged against non-expert bytes
+    /// only. `gpu_layers` can be as low as `0` (fully CPU): the guarantee
+    /// this composes toward is that the model loads, not that it's fast.
+    ProceedCpuMoeAndPartial { gpu_layers: i32 },
+}
+
+/// Compute the MoE-aware fit decision from probed VRAM, GGUF info, and the
+/// tensor layout parsed by [`parse_gguf_moe_layout`]/[`read_gguf_moe_layout`].
+///
+/// Pure decision logic — no I/O — mirroring [`compute_fit`]'s split from
+/// [`run_fit`]. See [`run_moe_fit`] for the I/O-performing wrapper.
+pub fn compute_moe_fit(
+    free_vram: Option<u64>,
+    info: Option<&GgufInfo>,
+    layout: Option<&MoeLayout>,
+    ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+) -> MoeFitDecision {
+    let (Some(free_vram), Some(info), Some(layout)) = (free_vram, info, layout) else {
+        return MoeFitDecision::NotMoe;
+    };
+    if !layout.is_moe() {
+        return MoeFitDecision::NotMoe;
+    }
+
+    let kv_per_layer = match info.kv_elems_per_token_per_layer() {
+        Some((k_elems, v_elems)) => {
+            (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
+        }
+        None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
+    };
+    let total_kv = kv_per_layer * info.n_layers as f64;
+    let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
+    let fixed_cost = layout.non_expert_bytes as f64 + total_kv;
+
+    if fixed_cost >= usable {
+        // Every expert already assumed off-GPU here; charge only the
+        // non-expert bytes against the ordinary dense sizer to find how many
+        // whole layers of *those* still fit.
+        let decision = compute_fit(
+            Some(free_vram),
+            Some(info),
+            layout.non_expert_bytes,
+            ctx_size,
+            kv_bytes_per_elem_k,
+            kv_bytes_per_elem_v,
+        );
+        let gpu_layers = match decision {
+            FitDecision::FitsFully => -1,
+            FitDecision::Partial { layers, .. } => layers,
+            // free_vram/info/file_size are already known valid at this
+            // point, so this arm is unreachable in practice — 0 (fully CPU)
+            // is the safe floor if it ever fires anyway.
+            FitDecision::Unknown { .. } => 0,
+        };
+        return MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers };
+    }
+
+    // Budget left over for expert tensors once non-expert weights + KV are
+    // paid for. Keep layers on GPU from the END backward — `--n-cpu-moe`
+    // only supports evicting a *contiguous* prefix (`blk.0 .. blk.N-1`), so
+    // the moment one layer (scanned from the last) doesn't fit, it and every
+    // earlier layer must go, not just that one.
+    let budget_left = usable - fixed_cost;
+    let n_layers = layout.expert_bytes_per_layer.len();
+    let mut kept_bytes = 0.0f64;
+    let mut n_cpu_moe = n_layers as u32;
+    for (rev_idx, expert_bytes) in layout.expert_bytes_per_layer.iter().rev().enumerate() {
+        let tentative = kept_bytes + *expert_bytes as f64;
+        if tentative > budget_left {
+            break;
+        }
+        kept_bytes = tentative;
+        n_cpu_moe = (n_layers - (rev_idx + 1)) as u32;
+    }
+
+    MoeFitDecision::Proceed { n_cpu_moe }
+}
+
 /// Both stdin and stdout connected to a terminal — the same gate the picker
 /// uses. A non-TTY invocation (Docker, systemd, piped) must never block on a
 /// prompt, so the decision logic checks this before asking anything.
@@ -562,6 +830,38 @@ pub fn run_fit(
             }
         }
     }
+}
+
+/// Run the MoE-aware fit flow: probe VRAM, read the GGUF header and tensor
+/// layout, and delegate to [`compute_moe_fit`].
+///
+/// Always non-interactive — unlike [`run_fit`], this never prompts. It only
+/// runs as a refinement *after* `run_fit` already established a baseline
+/// (and, for `--fit-strict`, only after that baseline didn't abort), and a
+/// second confirmation prompt for a narrower, rarer case (MoE sizing) would
+/// duplicate the choice the user already made for the dense split.
+pub fn run_moe_fit(
+    model_path: &Path,
+    ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+) -> MoeFitDecision {
+    let free_vram = free_vram_bytes();
+    let info = read_gguf_info(model_path);
+    let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
+    let layout = match (&info, file_size) {
+        (Some(i), size) if size > 0 => read_gguf_moe_layout(model_path, size, i.n_layers),
+        _ => None,
+    };
+
+    compute_moe_fit(
+        free_vram,
+        info.as_ref(),
+        layout.as_ref(),
+        ctx_size,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+    )
 }
 
 #[cfg(test)]
@@ -870,5 +1170,274 @@ mod key_length_tests {
             layers(&with_explicit),
             layers(&assumed),
         );
+    }
+}
+
+#[cfg(test)]
+mod moe_layout_tests {
+    use super::*;
+
+    /// Build a synthetic GGUF: `tensors` is `(name, byte_size)` in on-disk
+    /// order; offsets are assigned sequentially starting at 0. `alignment`,
+    /// when `Some`, is written as a `general.alignment` metadata key so the
+    /// parser is exercised on a non-default value instead of always falling
+    /// through to its own default. Returns `(buffer, file_size)` where the
+    /// buffer covers the *whole* synthetic file (dummy tensor-data bytes
+    /// included), unlike production's 8 MiB-capped read — `file_size` is
+    /// still passed separately, exactly as `read_gguf_moe_layout` does, so
+    /// the "last tensor sized from `file_size`" path is exercised the same
+    /// way either way.
+    fn make_gguf_with_tensors(alignment: Option<u64>, tensors: &[(&str, u64)]) -> (Vec<u8>, u64) {
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes()); // version
+        b.extend_from_slice(&(tensors.len() as u64).to_le_bytes()); // tensor_count
+        b.extend_from_slice(&(if alignment.is_some() { 1u64 } else { 0u64 }).to_le_bytes());
+
+        if let Some(a) = alignment {
+            let key = b"general.alignment";
+            b.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            b.extend_from_slice(key);
+            b.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+            b.extend_from_slice(&(a as u32).to_le_bytes());
+        }
+
+        let mut offset = 0u64;
+        for (name, size) in tensors {
+            let name_bytes = name.as_bytes();
+            b.extend_from_slice(&(name_bytes.len() as u64).to_le_bytes());
+            b.extend_from_slice(name_bytes);
+            b.extend_from_slice(&1u32.to_le_bytes()); // n_dimensions
+            b.extend_from_slice(&1u64.to_le_bytes()); // dims[0] (unused by the parser)
+            b.extend_from_slice(&GGUF_TYPE_FLOAT32.to_le_bytes()); // ggml type (unused)
+            b.extend_from_slice(&offset.to_le_bytes());
+            offset += size;
+        }
+        let total_tensor_bytes = offset;
+
+        let align = alignment.unwrap_or(32);
+        let data_start = align_up(b.len() as u64, align).unwrap();
+        b.resize(data_start as usize, 0);
+        b.resize((data_start + total_tensor_bytes) as usize, 0xAA);
+
+        let file_size = b.len() as u64;
+        (b, file_size)
+    }
+
+    #[test]
+    fn separates_expert_and_non_expert_bytes_per_layer() {
+        let (data, file_size) = make_gguf_with_tensors(
+            None,
+            &[
+                ("token_embd.weight", 1000),
+                ("blk.0.attn_q.weight", 100),
+                ("blk.0.ffn_gate_exps.weight", 3000),
+                ("blk.0.ffn_up_exps.weight", 3000),
+                ("blk.0.ffn_down_exps.weight", 3000),
+                ("blk.1.attn_q.weight", 100),
+                ("blk.1.ffn_gate_exps.weight", 4000),
+                ("blk.1.ffn_up_exps.weight", 4000),
+                ("blk.1.ffn_down_exps.weight", 4000),
+                ("output_norm.weight", 50),
+            ],
+        );
+
+        let layout = parse_gguf_moe_layout(&data, file_size, 2).expect("parses");
+        assert!(layout.is_moe());
+        assert_eq!(layout.non_expert_bytes, 1000 + 100 + 100 + 50);
+        assert_eq!(layout.expert_bytes_per_layer, vec![9000, 12000]);
+        assert_eq!(
+            layout.expert_bytes_per_layer.iter().sum::<u64>(),
+            21000
+        );
+    }
+
+    #[test]
+    fn dense_model_has_no_experts() {
+        let (data, file_size) = make_gguf_with_tensors(
+            None,
+            &[
+                ("token_embd.weight", 1000),
+                ("blk.0.attn_q.weight", 100),
+                ("blk.0.ffn_gate.weight", 300),
+                ("blk.0.ffn_up.weight", 300),
+                ("blk.0.ffn_down.weight", 300),
+            ],
+        );
+        let layout = parse_gguf_moe_layout(&data, file_size, 1).expect("parses");
+        assert!(!layout.is_moe());
+        assert_eq!(layout.non_expert_bytes, 2000);
+        assert_eq!(layout.expert_bytes_per_layer, vec![0]);
+    }
+
+    #[test]
+    fn respects_a_custom_alignment_key() {
+        // A single short tensor name keeps the cursor position after the
+        // tensor-info table off any 32-byte boundary, so this only passes if
+        // the parser actually reads `general.alignment` (64 here) instead of
+        // silently defaulting to 32.
+        let (data, file_size) =
+            make_gguf_with_tensors(Some(64), &[("blk.0.ffn_gate_exps.weight", 500)]);
+        let layout = parse_gguf_moe_layout(&data, file_size, 1).expect("parses");
+        assert_eq!(layout.expert_bytes_per_layer, vec![500]);
+        assert_eq!(layout.non_expert_bytes, 0);
+    }
+
+    #[test]
+    fn truncated_tensor_info_returns_none() {
+        let (data, file_size) = make_gguf_with_tensors(
+            None,
+            &[("blk.0.ffn_gate_exps.weight", 500), ("blk.1.attn_q.weight", 100)],
+        );
+        // Cut a few bytes into the first tensor-info record (past the
+        // 24-byte header, mid-way through the name), not the trailing dummy
+        // tensor-data bytes — the parser never reads that far, so trimming
+        // only the tail wouldn't actually exercise a truncated *header*.
+        let truncated = &data[..30];
+        assert!(parse_gguf_moe_layout(truncated, file_size, 2).is_none());
+    }
+
+    #[test]
+    fn layer_index_and_expert_marker_parsing() {
+        assert_eq!(tensor_layer_index("blk.0.attn_q.weight"), Some(0));
+        assert_eq!(tensor_layer_index("blk.17.ffn_gate_exps.weight"), Some(17));
+        assert_eq!(tensor_layer_index("token_embd.weight"), None);
+        assert_eq!(tensor_layer_index("output_norm.weight"), None);
+
+        assert!(is_expert_tensor_name("blk.0.ffn_gate_exps.weight"));
+        assert!(is_expert_tensor_name("blk.0.ffn_up_chexps.weight"));
+        assert!(is_expert_tensor_name("blk.0.ffn_gate_up_exps.weight"));
+        assert!(!is_expert_tensor_name("blk.0.ffn_gate.weight"));
+        assert!(!is_expert_tensor_name("blk.0.attn_q.weight"));
+    }
+}
+
+#[cfg(test)]
+mod moe_fit_tests {
+    use super::*;
+
+    const F16: (f64, f64) = (2.0, 2.0);
+
+    fn info(n_layers: u32) -> GgufInfo {
+        GgufInfo {
+            n_layers,
+            n_embd: None,
+            n_head: None,
+            n_head_kv: None,
+            key_length: None,
+            value_length: None,
+        }
+    }
+
+    #[test]
+    fn not_moe_when_layout_has_no_experts() {
+        let layout = MoeLayout {
+            non_expert_bytes: 5_000_000_000,
+            expert_bytes_per_layer: vec![0, 0, 0],
+        };
+        let d = compute_moe_fit(
+            Some(40 * 1024 * 1024 * 1024),
+            Some(&info(3)),
+            Some(&layout),
+            4096,
+            F16.0,
+            F16.1,
+        );
+        assert_eq!(d, MoeFitDecision::NotMoe);
+    }
+
+    #[test]
+    fn not_moe_when_free_vram_unknown() {
+        let layout = MoeLayout {
+            non_expert_bytes: 1_000_000_000,
+            expert_bytes_per_layer: vec![1_000_000_000],
+        };
+        let d = compute_moe_fit(None, Some(&info(1)), Some(&layout), 4096, F16.0, F16.1);
+        assert_eq!(d, MoeFitDecision::NotMoe);
+    }
+
+    #[test]
+    fn everything_fits_needs_no_eviction() {
+        // 4 layers, tiny non-expert + expert bytes, huge free VRAM.
+        let layout = MoeLayout {
+            non_expert_bytes: 1_000_000_000,
+            expert_bytes_per_layer: vec![500_000_000; 4],
+        };
+        let d = compute_moe_fit(
+            Some(40 * 1024 * 1024 * 1024),
+            Some(&info(4)),
+            Some(&layout),
+            4096,
+            F16.0,
+            F16.1,
+        );
+        assert_eq!(d, MoeFitDecision::Proceed { n_cpu_moe: 0 });
+    }
+
+    /// Budget only has room for one layer's worth of experts after
+    /// non-expert+KV: the LAST layer (highest index) must be the one kept,
+    /// and eviction must cover the contiguous prefix `0..n_cpu_moe`, not an
+    /// arbitrary subset — this is the one real invariant `--n-cpu-moe`
+    /// requires from this function.
+    #[test]
+    fn evicts_a_contiguous_prefix_from_the_lowest_layers() {
+        let per_layer_expert = 2_000_000_000u64; // 2 GB/layer
+        let layout = MoeLayout {
+            non_expert_bytes: 1_000_000_000, // 1 GB
+            expert_bytes_per_layer: vec![per_layer_expert; 4],
+        };
+        // usable ≈ free*0.97 - 640MiB. Pick free VRAM so that after non-expert
+        // (1GB) + a small KV term, there's room for exactly ~1 layer of
+        // experts (2GB) but not 2 (4GB).
+        let free = 4_200_000_000u64;
+        let d = compute_moe_fit(Some(free), Some(&info(4)), Some(&layout), 512, F16.0, F16.1);
+        match d {
+            MoeFitDecision::Proceed { n_cpu_moe } => {
+                assert_eq!(n_cpu_moe, 3, "expected layers 0..=2 evicted, layer 3 kept");
+            }
+            other => panic!("expected Proceed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn experts_only_not_enough_falls_back_to_partial_dense() {
+        // Non-expert weights alone already exceed the VRAM budget, even with
+        // every expert assumed off-GPU.
+        let layout = MoeLayout {
+            non_expert_bytes: 20_000_000_000, // 20 GB
+            expert_bytes_per_layer: vec![1_000_000_000; 2],
+        };
+        let free = 8_000_000_000u64; // 8 GB free
+        let d = compute_moe_fit(Some(free), Some(&info(2)), Some(&layout), 4096, F16.0, F16.1);
+        match d {
+            MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers } => {
+                assert!(gpu_layers >= 0, "must still resolve to a loadable split");
+                assert!(
+                    gpu_layers < 2,
+                    "20GB of non-expert weight can't fit fully in 8GB free"
+                );
+            }
+            other => panic!("expected ProceedCpuMoeAndPartial, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extreme_case_still_resolves_to_a_startable_split() {
+        // Pathological: enormous non-expert weight, almost no free VRAM.
+        // Must still resolve to *something* loadable (gpu_layers as low as
+        // 0 — fully CPU — is an acceptable, expected outcome here), never an
+        // unresolvable decision.
+        let layout = MoeLayout {
+            non_expert_bytes: 500_000_000_000, // 500 GB (absurd on purpose)
+            expert_bytes_per_layer: vec![50_000_000_000; 8],
+        };
+        let free = 2_000_000_000u64; // 2 GB free
+        let d = compute_moe_fit(Some(free), Some(&info(8)), Some(&layout), 4096, F16.0, F16.1);
+        match d {
+            MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers } => {
+                assert!(gpu_layers >= 0, "even the worst case must resolve, not abort");
+            }
+            other => panic!("expected ProceedCpuMoeAndPartial even in the extreme case, got {other:?}"),
+        }
     }
 }
