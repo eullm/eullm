@@ -121,8 +121,11 @@ nessun blocco prolungato del decode durante prefill lunghi; riuso KV validato su
   *prima* del prompt continua/annulla di `run_fit`: risolve sempre in una
   configurazione caricabile, quindi non c'è niente da chiedere (prima il
   prompt citava uno split per layer interi che il passo MoE stava per
-  sovrascrivere). Resta da validare su hardware reale che il 35B ora parta
-  dal picker.
+  sovrascrivere). Non è un problema solo MoE: anche Qwen3.6-27B dense
+  (stesso vocabolario da 248k token, arch `qwen35` ibrida SSM) falliva
+  identico su rc14 — stessa causa, stesso fix, il match per suffisso
+  `.block_count` è agnostico all'architettura. Resta da validare su
+  hardware reale che 35B-A3B e 27B ora partano dal picker con rc15.
 
 ---
 

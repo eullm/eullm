@@ -38,6 +38,12 @@ under this version before the final release.*
   "doesn't fit, continue?" prompt: it always resolves to a loadable
   configuration, so there is nothing left to ask — previously the prompt
   quoted a whole-layer split that the MoE step was about to override.
+  Confirmed not MoE-specific before release: dense Qwen3.6-27B (same 248k
+  vocabulary) failed identically on rc14 — same root cause, same fix; its
+  `qwen35.block_count` sits at key 17, twenty keys before the tokenizer
+  arrays that overrun the buffer, and the suffix-based key matching is
+  architecture-agnostic so the hybrid-SSM `qwen35` arch needs no special
+  handling.
 
 ### Added
 - **`--fit` now auto-sizes MoE expert offload too, not just whole GPU

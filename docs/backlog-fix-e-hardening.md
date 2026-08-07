@@ -2088,10 +2088,15 @@ diligenza manuale.
   lo stop dipende solo da `is_eog_token` — se il modello emette
   `<|im_start|>` (inizio turno, non fine) come testo e *poi* qualcosa lo
   ferma a 7 token, c'è anche una domanda su cosa abbia fermato la
-  generazione così presto. Da testare la stessa domanda via `--cli` sullo
-  stesso modello (stesso metodo di isolamento che ha chiuso H3-W) e
-  ispezionare il template GGUF incorporato del file con lo script già
-  usato per gemma-4.
+  generazione così presto. Ispezionare il template GGUF incorporato del
+  file con lo script già usato per gemma-4.
+
+  **Isolamento già fatto (7 agosto, rc14)**: stessa domanda via `--cli`
+  sullo stesso modello → risposta pulita ("Ciao! Mi chiamo AI.", 8 token,
+  stop regolare, nessun marker nel testo). Il bug è quindi confinato al
+  percorso chat web, esattamente come H3-W: il prompt costruito dalla UI
+  (history multipla / campi extra) va guardato per primo, non il template
+  in sé, che sul percorso CLI rende correttamente.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
