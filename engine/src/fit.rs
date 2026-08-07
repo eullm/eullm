@@ -217,9 +217,22 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     // The metadata keys we want, each an integer stored as u32 or u64 depending
     // on the exporter. The `_kv` head count is checked before the plain head
     // count because the former does NOT end with `.attention.head_count`.
+    //
+    // Running out of buffer mid-metadata breaks out with whatever was parsed
+    // so far instead of returning `None`. Exporters write the hyperparameter
+    // keys before the tokenizer block, and a big-vocab model's tokenizer
+    // arrays alone can overrun any fixed read budget — found on real
+    // hardware with Qwen3.6-35B-A3B (248k-token vocabulary): its
+    // `block_count` sat 20 keys before the truncation point, and discarding
+    // it made `--fit` report "could not parse layer count", fall back to
+    // `--gpu-layers all`, and OOM on a model the sizer exists to handle.
     for _ in 0..metadata_kv_count {
-        let key_bytes = c.gguf_string()?;
-        let value_type = c.u32()?;
+        let Some(key_bytes) = c.gguf_string() else {
+            break;
+        };
+        let Some(value_type) = c.u32() else {
+            break;
+        };
 
         // Pick which field (if any) this key feeds. All are scalar integers;
         // an array-typed match is ignored (skipped) to stay aligned.
@@ -241,18 +254,34 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             None
         };
 
-        match target {
-            Some(slot) => {
-                if let Some(v) = c.read_uint_as_u64(value_type) {
+        let advanced = match target {
+            Some(slot) => match c.read_uint_as_u64(value_type) {
+                Some(v) => {
                     // Clamp into u32; all of these counts are small.
                     *slot = u32::try_from(v).ok().or(Some(u32::MAX));
-                } else {
-                    // Unexpected type for a key we wanted; skip to stay aligned.
-                    c.skip_value(value_type)?;
+                    true
                 }
-            }
+                // Unexpected type for a key we wanted; skip to stay aligned.
+                None => c.skip_value(value_type).is_some(),
+            },
             // Not a key we care about (or an array) — skip its value.
-            None => c.skip_value(value_type)?,
+            None => c.skip_value(value_type).is_some(),
+        };
+        if !advanced {
+            break;
+        }
+
+        // Everything wanted is in hand — stop here instead of paying to
+        // skip through the tokenizer arrays (and instead of depending on
+        // the read budget covering them at all).
+        if n_layers.is_some()
+            && n_embd.is_some()
+            && n_head.is_some()
+            && n_head_kv.is_some()
+            && key_length.is_some()
+            && value_length.is_some()
+        {
+            break;
         }
     }
 
@@ -442,17 +471,35 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
     })
 }
 
-/// Read a GGUF file's leading bytes and parse its tensor layout. Mirrors
-/// [`read_gguf_info`] exactly (same 8 MiB budget, same reasoning for why a
-/// single `Read::read` isn't enough) — see there for why `take().read_to_end()`
-/// is used instead of one `read()` call.
+/// Read a GGUF file's leading bytes and parse its tensor layout.
+///
+/// Unlike [`read_gguf_info`] — whose parser can stop early because the keys
+/// it wants come first — the tensor-info table sits *after* every metadata
+/// entry, so the whole metadata block must fit in the buffer. A big-vocab
+/// model overruns the first budget with tokenizer arrays alone (Qwen3.6's
+/// 248k-token vocabulary plus merges is ~10 MiB of metadata by itself), so
+/// on a parse failure the read retries with geometrically larger budgets
+/// before giving up. The cap stays far below any real model's weights, so
+/// this never reads tensor data. Same `take().read_to_end()` pattern as
+/// `read_gguf_info` — see there for why a single `Read::read` isn't enough.
 pub fn read_gguf_moe_layout(path: &Path, file_size: u64, n_layers: u32) -> Option<MoeLayout> {
     use std::io::Read;
 
-    let file = std::fs::File::open(path).ok()?;
-    let mut buf = Vec::with_capacity(8 * 1024 * 1024);
-    file.take(8 * 1024 * 1024).read_to_end(&mut buf).ok()?;
-    parse_gguf_moe_layout(&buf, file_size, n_layers)
+    for cap in [8u64 << 20, 32 << 20, 128 << 20] {
+        let cap = cap.min(file_size);
+        let file = std::fs::File::open(path).ok()?;
+        let mut buf = Vec::with_capacity(cap as usize);
+        file.take(cap).read_to_end(&mut buf).ok()?;
+        if let Some(layout) = parse_gguf_moe_layout(&buf, file_size, n_layers) {
+            return Some(layout);
+        }
+        // The whole file is already in the buffer — a bigger budget cannot
+        // see anything more.
+        if (buf.len() as u64) >= file_size {
+            break;
+        }
+    }
+    None
 }
 
 /// Free VRAM in bytes, as reported by the active GPU backend.
@@ -835,11 +882,13 @@ pub fn run_fit(
 /// Run the MoE-aware fit flow: probe VRAM, read the GGUF header and tensor
 /// layout, and delegate to [`compute_moe_fit`].
 ///
-/// Always non-interactive — unlike [`run_fit`], this never prompts. It only
-/// runs as a refinement *after* `run_fit` already established a baseline
-/// (and, for `--fit-strict`, only after that baseline didn't abort), and a
-/// second confirmation prompt for a narrower, rarer case (MoE sizing) would
-/// duplicate the choice the user already made for the dense split.
+/// Always non-interactive — unlike [`run_fit`], this never prompts. The
+/// caller runs it *before* `run_fit`: a MoE decision here always resolves to
+/// a loadable configuration (expert offload, in the worst case combined with
+/// a reduced layer split down to fully-CPU), so there is no "doesn't fit,
+/// continue anyway?" question left to ask. Only when this returns
+/// [`MoeFitDecision::NotMoe`] does the dense `run_fit` flow — with its
+/// prompt and its `--fit-strict` handling — take over.
 pub fn run_moe_fit(
     model_path: &Path,
     ctx_size: u32,
@@ -1131,6 +1180,55 @@ mod key_length_tests {
         ]);
         let info = parse_gguf_header(&data).expect("header parses");
         assert_eq!(info.kv_elems_per_token_per_layer(), Some((1024.0, 512.0)));
+    }
+
+    /// Qwen3.6-35B-A3B's tokenizer block (248k-token vocabulary) overruns
+    /// the 8 MiB read budget on its own, so the buffer ends mid-array. The
+    /// hyperparameter keys all precede it — a truncation there must degrade
+    /// to "return what was parsed", not discard an already-read layer count
+    /// (which made `--fit` fall back to `--gpu-layers all` and OOM on real
+    /// hardware).
+    #[test]
+    fn tolerates_truncation_inside_the_tokenizer_arrays() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        b.extend_from_slice(&5u64.to_le_bytes()); // claims 5 metadata entries
+        put_u32(b"qwen35moe.block_count", 40, &mut b);
+        put_u32(b"qwen35moe.embedding_length", 2048, &mut b);
+        put_u32(b"qwen35moe.attention.head_count", 16, &mut b);
+        put_u32(b"qwen35moe.attention.head_count_kv", 2, &mut b);
+        // Fifth entry: a tokenizer array whose contents lie past the end of
+        // the buffer — only the array header made it in.
+        let key = b"tokenizer.ggml.tokens";
+        b.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        b.extend_from_slice(key);
+        b.extend_from_slice(&GGUF_TYPE_ARRAY.to_le_bytes());
+        b.extend_from_slice(&GGUF_TYPE_STRING.to_le_bytes());
+        b.extend_from_slice(&248_320u64.to_le_bytes());
+
+        let info = parse_gguf_header(&b).expect("partial parse must succeed");
+        assert_eq!(info.n_layers, 40);
+        assert_eq!(info.n_head_kv, Some(2));
+    }
+
+    /// Once every wanted key is filled the parser must stop reading — a
+    /// later duplicate that would overwrite an already-parsed value proves
+    /// the stop happened by design, not because the buffer ran out.
+    #[test]
+    fn stops_reading_once_every_wanted_key_is_in_hand() {
+        let data = header(&[
+            (b"arch.block_count", 40),
+            (b"arch.embedding_length", 2048),
+            (b"arch.attention.head_count", 16),
+            (b"arch.attention.head_count_kv", 2),
+            (b"arch.attention.key_length", 256),
+            (b"arch.attention.value_length", 256),
+            (b"arch.block_count", 99),
+        ]);
+        let info = parse_gguf_header(&data).expect("parses");
+        assert_eq!(info.n_layers, 40);
     }
 
     /// The whole point: with the real head dimension the sizer charges more

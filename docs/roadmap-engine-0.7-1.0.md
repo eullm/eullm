@@ -107,6 +107,23 @@ nessun blocco prolungato del decode durante prefill lunghi; riuso KV validato su
   — restano validi come riferimento se in futuro si vorrà ottimizzare oltre
   al solo "deve partire".
 
+  **Correzione rc15, trovata al primo test su hardware reale (7 agosto)**:
+  proprio Qwen3.6-35B-A3B (UD-Q4_K_M, vocabolario da 248k token) faceva
+  fallire `--fit` a monte — "could not parse layer count" → fallback a
+  `--gpu-layers all` → OOM. Il parser dell'header leggeva i primi 8 MiB e
+  scartava *tutto* se i metadati sforavano (gli array del tokenizer di quel
+  modello da soli superano il budget), buttando via il `block_count` già
+  letto 20 chiavi prima. Ora `parse_gguf_header` tollera il troncamento
+  (restituisce il parziale, e si ferma appena ha tutti i campi voluti) e
+  `read_gguf_moe_layout` — che la tabella tensori la trova solo *dopo*
+  tutti i metadati, quindi il troncamento lì non è tollerabile — ritenta
+  con budget crescenti (8→32→128 MiB). Spostata anche la decisione MoE
+  *prima* del prompt continua/annulla di `run_fit`: risolve sempre in una
+  configurazione caricabile, quindi non c'è niente da chiedere (prima il
+  prompt citava uno split per layer interi che il passo MoE stava per
+  sovrascrivere). Resta da validare su hardware reale che il 35B ora parta
+  dal picker.
+
 ---
 
 ## 0.8 — Contesto elastico e pipeline RAG completa

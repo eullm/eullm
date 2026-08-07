@@ -15,10 +15,29 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc14`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc15`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
+
+### Fixed
+- **`--fit` failed outright on big-vocabulary models — including the one
+  MoE model the new auto-sizing was built for.** Found on real hardware
+  immediately after rc14: picking Qwen3.6-35B-A3B from the menu printed
+  "--fit could not size the model: could not parse layer count", fell back
+  to `--gpu-layers all`, and OOM'd — the exact failure `--fit` exists to
+  prevent. The file's layer count was present and readable; the parser read
+  only the first 8 MiB of the file and gave up wholesale when the metadata
+  ran past that — and this model's 248k-token vocabulary alone overruns it.
+  The header parser now keeps what it has already read when the buffer ends
+  (the layer count and attention dims sit well before the tokenizer block,
+  which is also why it now stops as soon as it has them), and the MoE
+  tensor-layout reader — which genuinely needs the full metadata span,
+  since the tensor table sits after it — retries with larger read budgets
+  instead of failing. The MoE sizing decision also moved *before* the
+  "doesn't fit, continue?" prompt: it always resolves to a loadable
+  configuration, so there is nothing left to ask — previously the prompt
+  quoted a whole-layer split that the MoE step was about to override.
 
 ### Added
 - **`--fit` now auto-sizes MoE expert offload too, not just whole GPU

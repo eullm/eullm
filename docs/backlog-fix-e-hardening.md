@@ -2069,6 +2069,29 @@ diligenza manuale.
   Verificato in locale (senza GPU in questo ambiente): non è codice Rust,
   nessuna build da rifare. Da confermare su hardware reale che senza alcuna
   iniezione automatica la chat web risponda come `--cli` sui tre modelli.
+
+- [ ] **H3-X · QwQ-32B-Preview via chat web: `<|im_start|>` trapela nel
+  testo e la risposta si tronca a 7 token** *(P2)*
+  Trovato il 7 agosto 2026 su rc14, testando `eullm run --fit` con
+  `qwq-32b` (QwQ-32B-Preview-Q4_K_M) scelto dal picker: alla domanda "ciao
+  come ti chiami?" la chat web ha risposto `Mi chiamo AI.<|im_start|>` — 7
+  token totali (confermato dall'audit log: `output_tokens=7`), col marker
+  ChatML renderizzato come testo visibile e la generazione interrotta lì.
+  Il modello si era caricato correttamente (split 43/64 layer via `--fit`,
+  nessun OOM) — il problema è a valle, nella costruzione del prompt o nella
+  gestione dei token di stop, non nel caricamento.
+
+  Sospetti da verificare, in ordine: (a) QwQ-32B-Preview è un modello
+  reasoning con un template proprio — il template dinamico (H3-U) potrebbe
+  renderizzarlo in una forma che il modello non si aspetta, come già visto
+  per gemma-4-12b-q8; (b) sul percorso dinamico `stop_sequences` è vuoto e
+  lo stop dipende solo da `is_eog_token` — se il modello emette
+  `<|im_start|>` (inizio turno, non fine) come testo e *poi* qualcosa lo
+  ferma a 7 token, c'è anche una domanda su cosa abbia fermato la
+  generazione così presto. Da testare la stessa domanda via `--cli` sullo
+  stesso modello (stesso metodo di isolamento che ha chiuso H3-W) e
+  ispezionare il template GGUF incorporato del file con lo script già
+  usato per gemma-4.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
