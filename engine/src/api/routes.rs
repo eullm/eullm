@@ -356,26 +356,28 @@ fn multimodal_to_channel(
 /// name (found on `gemma-4-12b-q8`, which turns out to use a GPT-OSS-style
 /// reasoning-channel template, not Gemma's `<start_of_turn>` format at all).
 ///
-/// Only attempted in sequential mode (`snap.engine` is `Some`, i.e.
-/// `snap.scheduler` is `None`): the continuous-batching scheduler runs the
-/// model on its own dedicated thread and does not expose it here, so that
-/// path keeps the hardcoded per-family template for now — a real, separate
-/// piece of work if this needs to reach it too.
+/// Works on both loading paths: the sequential engine exposes it directly,
+/// and the continuous-batching scheduler exposes it through
+/// [`SchedulerHandle::apply_jinja_chat_template`] (a weak reference to the
+/// decode thread's model — see `SharedModel` in the scheduler). The
+/// batching path used to be excluded and silently fell back to the
+/// hardcoded per-family template, which is how QwQ-32B-Preview — ChatML by
+/// name-detection, but trained with its own default system turn — answered
+/// off distribution on the web path while `--cli` (sequential at the time)
+/// was fine.
 ///
 /// Falls back to the hardcoded template whenever the dynamic one isn't
-/// available: no engine access, the GGUF has no embedded template at all, or
-/// rendering it failed. No hardcoded stop sequence is added on the dynamic
-/// path — the model's own end-of-generation token ends the turn regardless
-/// of which template built the prompt, and a marker like `<|end|>` belongs
-/// to a different template, not this one.
+/// available: the GGUF has no embedded template at all, rendering it
+/// failed, or the model is mid-swap. No hardcoded stop sequence is added on
+/// the dynamic path — the model's own end-of-generation token ends the turn
+/// regardless of which template built the prompt, and a marker like
+/// `<|end|>` belongs to a different template, not this one.
 fn build_chat_prompt(
     snap: &SlotSnapshot,
     messages: &[Value],
     think: bool,
     model_name: &str,
 ) -> (String, Vec<String>) {
-    if snap.scheduler.is_none()
-        && let Some(engine) = snap.engine.as_ref()
     {
         let pairs: Vec<(&str, &str)> = messages
             .iter()
@@ -385,7 +387,14 @@ fn build_chat_prompt(
                 (role, content)
             })
             .collect();
-        if let Some(dynamic) = engine.apply_jinja_chat_template(&pairs) {
+        let dynamic = if let Some(engine) = snap.engine.as_ref() {
+            engine.apply_jinja_chat_template(&pairs)
+        } else if let Some(scheduler) = snap.scheduler.as_ref() {
+            scheduler.apply_jinja_chat_template(&pairs)
+        } else {
+            None
+        };
+        if let Some(dynamic) = dynamic {
             return (dynamic.prompt, Vec::new());
         }
     }

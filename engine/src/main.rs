@@ -2746,19 +2746,21 @@ impl ChatBackend {
 /// differently depending only on which door was used to ask — which is
 /// exactly what happened before this existed (`--cli` never got the dynamic
 /// GGUF template `build_chat_prompt` added for the web/API path). Tries the
-/// model's own embedded chat template first, in sequential mode only (a
-/// batching scheduler has no model reference to call this on); falls back
-/// to the hardcoded per-family `template` otherwise, exactly as `--cli`
-/// always has.
+/// model's own embedded chat template first — on both backends, the batched
+/// one via the scheduler's weak model reference (see `SharedModel`); falls
+/// back to the hardcoded per-family `template` otherwise, exactly as
+/// `--cli` always has.
 fn build_cli_prompt(
     backend: &ChatBackend,
     template: &chat_template::ChatTemplate,
     pairs: &[(&str, &str)],
     think_arg: bool,
 ) -> (String, Vec<String>) {
-    if let ChatBackend::Sequential(engine) = backend
-        && let Some(dynamic) = engine.apply_jinja_chat_template(pairs)
-    {
+    let dynamic = match backend {
+        ChatBackend::Sequential(engine) => engine.apply_jinja_chat_template(pairs),
+        ChatBackend::Batched(scheduler) => scheduler.apply_jinja_chat_template(pairs),
+    };
+    if let Some(dynamic) = dynamic {
         return (dynamic.prompt, Vec::new());
     }
     (template.build_prompt(pairs, think_arg), template.stop_sequences())

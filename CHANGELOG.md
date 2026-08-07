@@ -15,12 +15,31 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc15`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc16`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Fixed
+- **The dynamic GGUF chat template now works with continuous batching too —
+  the web/API and CLI paths finally build prompts the same way on every
+  loading path.** Found on QwQ-32B-Preview: asked "ciao come ti chiami?"
+  via the web chat it answered as an OpenAI assistant and leaked a literal
+  `<|im_start|>` into the visible reply, while the same question via
+  `--cli` on the same running binary answered cleanly. The web/API path
+  only rendered the model's own embedded Jinja template in sequential
+  mode; with the batching scheduler (the default — even `--batch-size 1`
+  runs it) it silently fell back to the hardcoded name-detected template,
+  which for QwQ meant bare ChatML without the default system turn the
+  model was trained to expect. The scheduler now shares its model with
+  API/CLI threads for template rendering (read-only, the same pattern
+  llama-server uses: HTTP threads render prompts while slots decode),
+  through a weak reference so an in-flight request can never pin a
+  swapped-out model's VRAM. Both `build_chat_prompt` (web/API) and
+  `build_cli_prompt` (`--cli`) now try the embedded template first on
+  both backends and fall back to the hardcoded family template only when
+  the GGUF has none.
+
 - **`--fit` failed outright on big-vocabulary models — including the one
   MoE model the new auto-sizing was built for.** Found on real hardware
   immediately after rc14: picking Qwen3.6-35B-A3B from the menu printed
@@ -38,6 +57,12 @@ under this version before the final release.*
   "doesn't fit, continue?" prompt: it always resolves to a loadable
   configuration, so there is nothing left to ask — previously the prompt
   quoted a whole-layer split that the MoE step was about to override.
+  Confirmed not MoE-specific before release: dense Qwen3.6-27B (same 248k
+  vocabulary) failed identically on rc14 — same root cause, same fix; its
+  `qwen35.block_count` sits at key 17, twenty keys before the tokenizer
+  arrays that overrun the buffer, and the suffix-based key matching is
+  architecture-agnostic so the hybrid-SSM `qwen35` arch needs no special
+  handling.
 
 ### Added
 - **`--fit` now auto-sizes MoE expert offload too, not just whole GPU

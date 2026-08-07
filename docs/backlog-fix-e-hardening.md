@@ -2070,7 +2070,7 @@ diligenza manuale.
   nessuna build da rifare. Da confermare su hardware reale che senza alcuna
   iniezione automatica la chat web risponda come `--cli` sui tre modelli.
 
-- [ ] **H3-X · QwQ-32B-Preview via chat web: `<|im_start|>` trapela nel
+- [x] **H3-X · QwQ-32B-Preview via chat web: `<|im_start|>` trapela nel
   testo e la risposta si tronca a 7 token** *(P2)*
   Trovato il 7 agosto 2026 su rc14, testando `eullm run --fit` con
   `qwq-32b` (QwQ-32B-Preview-Q4_K_M) scelto dal picker: alla domanda "ciao
@@ -2088,10 +2088,36 @@ diligenza manuale.
   lo stop dipende solo da `is_eog_token` — se il modello emette
   `<|im_start|>` (inizio turno, non fine) come testo e *poi* qualcosa lo
   ferma a 7 token, c'è anche una domanda su cosa abbia fermato la
-  generazione così presto. Da testare la stessa domanda via `--cli` sullo
-  stesso modello (stesso metodo di isolamento che ha chiuso H3-W) e
-  ispezionare il template GGUF incorporato del file con lo script già
-  usato per gemma-4.
+  generazione così presto. Ispezionare il template GGUF incorporato del
+  file con lo script già usato per gemma-4.
+
+  **Isolamento già fatto (7 agosto, rc14)**: stessa domanda via `--cli`
+  sullo stesso modello → risposta pulita ("Ciao! Mi chiamo AI.", 8 token,
+  stop regolare, nessun marker nel testo). Il bug è quindi confinato al
+  percorso chat web, esattamente come H3-W: il prompt costruito dalla UI
+  (history multipla / campi extra) va guardato per primo, non il template
+  in sé, che sul percorso CLI rende correttamente.
+
+  **Causa trovata e corretta in rc16.** Non era la UI: era
+  `build_chat_prompt` (routes.rs), che tentava il template dinamico GGUF
+  (H3-U) **solo in modalità sequenziale** — col scheduler di continuous
+  batching (il default, anche a `--batch-size 1`) cadeva in silenzio sul
+  template hardcoded rilevato dal nome. Per QwQ-32B-Preview quello
+  significa ChatML nudo, senza il turno system di default ("You are Qwen
+  developed by Alibaba…") col quale il modello è stato addestrato: fuori
+  distribuzione → identità sbagliata ("creato da OpenAI"), salto di
+  `<|im_end|>` e apertura di un nuovo turno — cioè il `<|im_start|>`
+  visibile. La CLI mascherava il problema seminando un system message
+  proprio ("You are a helpful assistant."). Fix: lo scheduler ora
+  condivide il modello coi thread API/CLI per il solo rendering del
+  template (lettura pura, lo stesso pattern di llama-server), tramite
+  `Weak` così una richiesta in volo non può trattenere la VRAM di un
+  modello scambiato via; entrambe le porte (`build_chat_prompt` e
+  `build_cli_prompt`) tentano il template incorporato su entrambi i
+  backend. Da validare su hardware reale (rc16, chat web, stessa domanda);
+  se il leak persistesse, verificare per prima cosa che il file GGUF
+  incorpori davvero `tokenizer.chat_template` — senza, il fallback resta
+  quello di oggi e servirà seminare un system di default anche lato UI.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti

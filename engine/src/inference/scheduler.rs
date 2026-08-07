@@ -197,10 +197,43 @@ struct PromptCheckpoint {
     created_at: std::time::Instant,
 }
 
+/// The scheduler's loaded model, shared read-only outside the decode thread.
+///
+/// Exists so `SchedulerHandle::apply_jinja_chat_template` can render the
+/// model's GGUF-embedded chat template from API/CLI threads while the decode
+/// loop runs — the same pattern upstream llama-server uses, where HTTP
+/// threads render prompts against the model concurrently with slot decoding.
+/// That is safe because `llama_model` is immutable after load: decoding
+/// mutates only the *context*, and template rendering
+/// (`common_chat_templates_init` + `apply`) only reads model metadata and
+/// vocab strings.
+///
+/// Lifetime: the decode thread holds the only long-lived `Arc`; everyone
+/// else gets a `Weak` and upgrades per call. Model teardown therefore still
+/// happens on the scheduler thread when its loop exits (shutdown or swap),
+/// exactly as before this type existed — a handle held by an in-flight
+/// request cannot pin the old model's VRAM across a swap.
+pub struct SharedModel(LlamaModel);
+
+// SAFETY: see the type-level comment — the wrapped llama_model is immutable
+// after load and every cross-thread access through this type is read-only.
+unsafe impl Send for SharedModel {}
+unsafe impl Sync for SharedModel {}
+
+impl std::ops::Deref for SharedModel {
+    type Target = LlamaModel;
+    fn deref(&self) -> &LlamaModel {
+        &self.0
+    }
+}
+
 /// Handle returned to callers for submitting requests.
 #[derive(Clone)]
 pub struct SchedulerHandle {
     tx: crossbeam_channel::Sender<ScheduledRequest>,
+    /// Weak reference to the decode thread's model, for chat-template
+    /// rendering only — see [`SharedModel`] for why weak.
+    model: std::sync::Weak<SharedModel>,
     /// Notify the scheduler thread that new work is available.
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
@@ -232,6 +265,25 @@ impl SchedulerHandle {
             let _ = handle.join();
             tracing::info!("Scheduler thread exited");
         }
+    }
+
+    /// Render `messages` through the loaded model's own GGUF-embedded Jinja
+    /// chat template — the batching-path twin of
+    /// [`super::InferenceEngine::apply_jinja_chat_template`], so both doors
+    /// onto a loaded model build prompts the same way (found the hard way on
+    /// QwQ-32B-Preview: the CLI seeded a system turn and worked while the
+    /// web path, hardcoded-ChatML-only with no system turn, answered off
+    /// distribution and leaked `<|im_start|>` into the visible reply).
+    ///
+    /// Returns `None` when the caller should fall back to its hardcoded
+    /// per-family template: the GGUF embeds no template, rendering failed,
+    /// or the decode thread has already dropped the model (shutdown/swap).
+    pub fn apply_jinja_chat_template(
+        &self,
+        messages: &[(&str, &str)],
+    ) -> Option<super::DynamicChatTemplate> {
+        let model = self.model.upgrade()?;
+        super::render_jinja_chat_template(&model, messages)
     }
 
     /// Submit a request for inference. Returns immediately.
@@ -326,7 +378,11 @@ impl BatchScheduler {
         let shutdown_clone = Arc::clone(&shutdown);
 
         // Channel for the scheduler thread to signal model load completion.
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<ModelReadyInfo, String>>();
+        // Carries a weak reference to the loaded model alongside the load
+        // info, so the handle can render chat templates (see `SharedModel`).
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<
+            Result<(ModelReadyInfo, std::sync::Weak<SharedModel>), String>,
+        >();
 
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
@@ -369,8 +425,8 @@ impl BatchScheduler {
             })?;
 
         // Wait for the model to finish loading before returning.
-        let model_info = match ready_rx.recv() {
-            Ok(Ok(info)) => info,
+        let (model_info, model) = match ready_rx.recv() {
+            Ok(Ok(pair)) => pair,
             Ok(Err(e)) => return Err(e.into()),
             Err(_) => return Err("Scheduler thread exited before model was loaded".into()),
         };
@@ -378,6 +434,7 @@ impl BatchScheduler {
         Ok((
             SchedulerHandle {
                 tx: req_tx,
+                model,
                 notify,
                 notify_mutex,
                 shutdown,
@@ -644,7 +701,7 @@ fn run_scheduler_loop(
     notify: Arc<std::sync::Condvar>,
     notify_mutex: Arc<std::sync::Mutex<()>>,
     shutdown: Arc<AtomicBool>,
-    ready_tx: std::sync::mpsc::Sender<Result<ModelReadyInfo, String>>,
+    ready_tx: std::sync::mpsc::Sender<Result<(ModelReadyInfo, std::sync::Weak<SharedModel>), String>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Use the RETURNED value, never `config.gpu_layers` — on a binary with no
     // GPU backend this is 0. See `super::check_gpu_support` for what asking
@@ -698,6 +755,12 @@ fn run_scheduler_loop(
             return Err(msg.into());
         }
     };
+    // The decode thread keeps the only strong reference; the handle gets a
+    // weak one for chat-template rendering (see `SharedModel`). Declared
+    // before `ctx` below so the context — which borrows the model — drops
+    // first when the loop exits.
+    let model_owner = Arc::new(SharedModel(model));
+    let model = &*model_owner;
 
     // Use context_size as the TOTAL KV cache budget, shared across all
     // sequences (matching Ollama / llama.cpp server behaviour).  Previous
@@ -832,7 +895,7 @@ fn run_scheduler_loop(
     );
 
     // Signal that the model is loaded and ready.
-    let _ = ready_tx.send(Ok(kv_info));
+    let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));
 
     loop {
         // ── 0. Check shutdown flag ────────────────────────────────────

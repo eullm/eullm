@@ -912,6 +912,42 @@ pub struct DynamicChatTemplate {
     pub prompt: String,
 }
 
+/// Shared implementation behind [`InferenceEngine::apply_jinja_chat_template`]
+/// and [`scheduler::SchedulerHandle::apply_jinja_chat_template`]: render
+/// `messages` through the model's own GGUF-embedded Jinja template, or
+/// `None` when the caller should fall back to its hardcoded per-family
+/// template (no embedded template in the GGUF, or the FFI call failed).
+pub(crate) fn render_jinja_chat_template(
+    model: &LlamaModel,
+    messages: &[(&str, &str)],
+) -> Option<DynamicChatTemplate> {
+    let messages: Vec<llama_cpp_2::model::LlamaChatMessage> = messages
+        .iter()
+        .map(|(role, content)| {
+            llama_cpp_2::model::LlamaChatMessage::new((*role).to_string(), (*content).to_string())
+        })
+        .collect::<Result<_, _>>()
+        .inspect_err(|e| {
+            tracing::warn!("chat message contained a null byte, cannot render via Jinja: {e}");
+        })
+        .ok()?;
+
+    let result = model
+        .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true)
+        .inspect_err(|e| {
+            tracing::warn!("Jinja chat template rendering failed, falling back: {e}");
+        })
+        .ok()?;
+
+    if !result.was_explicit {
+        return None;
+    }
+
+    Some(DynamicChatTemplate {
+        prompt: result.prompt,
+    })
+}
+
 /// The loaded inference engine, holding the model and backend.
 ///
 /// This is the **sequential** engine — one request at a time. For concurrent
@@ -1003,32 +1039,7 @@ impl InferenceEngine {
         &self,
         messages: &[(&str, &str)],
     ) -> Option<DynamicChatTemplate> {
-        let messages: Vec<llama_cpp_2::model::LlamaChatMessage> = messages
-            .iter()
-            .map(|(role, content)| {
-                llama_cpp_2::model::LlamaChatMessage::new((*role).to_string(), (*content).to_string())
-            })
-            .collect::<Result<_, _>>()
-            .inspect_err(|e| {
-                tracing::warn!("chat message contained a null byte, cannot render via Jinja: {e}");
-            })
-            .ok()?;
-
-        let result = self
-            .model
-            .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true)
-            .inspect_err(|e| {
-                tracing::warn!("Jinja chat template rendering failed, falling back: {e}");
-            })
-            .ok()?;
-
-        if !result.was_explicit {
-            return None;
-        }
-
-        Some(DynamicChatTemplate {
-            prompt: result.prompt,
-        })
+        render_jinja_chat_template(&self.model, messages)
     }
 
     /// Load a GGUF model and prepare the inference engine.
