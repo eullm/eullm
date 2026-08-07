@@ -1767,48 +1767,55 @@ async fn cmd_run(
 
         // --fit: auto-size the GPU offload to free VRAM before loading. Opt-in;
         // headless-safe (never prompts unless both stdin and stdout are TTYs).
+        //
+        // MoE auto-sizing (roadmap 0.7-E) decides FIRST: a MoE decision
+        // always resolves to a loadable configuration (expert offload, in
+        // the worst case combined with a reduced layer split down to
+        // fully-CPU), so there is no "doesn't fit, continue anyway?" left to
+        // ask — and asking it with the dense whole-layer numbers, as an
+        // earlier ordering did, describes a split that MoE sizing is about
+        // to override anyway. Only when the model is not MoE (or the user
+        // already chose --cpu-moe/--n-cpu-moe themselves — explicit intent
+        // beats a guess) does the dense run_fit flow, with its prompt and
+        // its --fit-strict handling, take over.
         if fit {
             let kv_bpe_k = inference::cache_type_bytes_per_elem(&cache_type_k);
             let kv_bpe_v = inference::cache_type_bytes_per_elem(&cache_type_v);
-            match fit::run_fit(
-                &gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v,
-            ) {
-                fit::FitOutcome::Proceed(n) => gpu_layers = n,
-                fit::FitOutcome::Abort => {
-                    // Clean return: don't load, don't bind a port. If we were
-                    // invoked from the picker flow, the user lands back there.
-                    return;
+            let moe_decision = if !cpu_moe && n_cpu_moe == 0 {
+                fit::run_moe_fit(&gguf_path, ctx_size, kv_bpe_k, kv_bpe_v)
+            } else {
+                fit::MoeFitDecision::NotMoe
+            };
+            match moe_decision {
+                fit::MoeFitDecision::Proceed { n_cpu_moe: computed } if computed > 0 => {
+                    println!(
+                        "[EULLM] MoE model: keeping expert tensors on CPU RAM for the \
+                         first {computed} layers so the rest fits in VRAM."
+                    );
+                    n_cpu_moe = computed;
+                    gpu_layers = -1;
                 }
-            }
-
-            // MoE auto-sizing (roadmap 0.7-E): `--fit`'s whole-layer split
-            // above has no notion of expert tensors, so a MoE model can be
-            // told "doesn't fit" (or worse, told "fits" and then OOM at
-            // load) even though `--cpu-moe`/`--n-cpu-moe` would let it run.
-            // Only when the user hasn't already chosen one of those two
-            // flags themselves — respecting explicit intent over a guess.
-            if !cpu_moe && n_cpu_moe == 0 {
-                match fit::run_moe_fit(&gguf_path, ctx_size, kv_bpe_k, kv_bpe_v) {
-                    fit::MoeFitDecision::NotMoe => {}
-                    fit::MoeFitDecision::Proceed { n_cpu_moe: computed } => {
-                        if computed > 0 {
-                            println!(
-                                "[EULLM] MoE model: keeping expert tensors on CPU RAM for the \
-                                 first {computed} layers so the rest fits in VRAM."
-                            );
-                            n_cpu_moe = computed;
-                            gpu_layers = -1;
-                        }
-                    }
-                    fit::MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers: gl } => {
-                        println!(
-                            "[EULLM] MoE model: even with every expert tensor on CPU RAM, the \
-                             rest doesn't fit fully — offloading a reduced layer split too."
-                        );
-                        cpu_moe = true;
-                        gpu_layers = gl;
-                    }
+                fit::MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers: gl } => {
+                    println!(
+                        "[EULLM] MoE model: even with every expert tensor on CPU RAM, the \
+                         rest doesn't fit fully — offloading a reduced layer split too."
+                    );
+                    cpu_moe = true;
+                    gpu_layers = gl;
                 }
+                // Dense model, a MoE that already fits fully as-is
+                // (computed == 0), or an unreadable layout.
+                _ => match fit::run_fit(
+                    &gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v,
+                ) {
+                    fit::FitOutcome::Proceed(n) => gpu_layers = n,
+                    fit::FitOutcome::Abort => {
+                        // Clean return: don't load, don't bind a port. If we
+                        // were invoked from the picker flow, the user lands
+                        // back there.
+                        return;
+                    }
+                },
             }
         }
 
