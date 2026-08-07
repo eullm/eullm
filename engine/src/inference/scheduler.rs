@@ -888,7 +888,7 @@ fn run_scheduler_loop(
 
     // Estimate KV cache memory from model dimensions and cache types.
     let kv_info = estimate_kv_memory(
-        &model,
+        model,
         total_ctx as u64,
         &config.cache_type_k,
         &config.cache_type_v,
@@ -999,7 +999,7 @@ fn run_scheduler_loop(
                     // Slot id as the seed fallback: distinct per slot, so two
                     // concurrent unseeded requests cannot collapse onto the
                     // same sequence even in the clock-unusable case.
-                    let sampler = super::sampling::build_sampler(&model, req, seq_id as u32);
+                    let sampler = super::sampling::build_sampler(model, req, seq_id as u32);
 
                     let seq = ActiveSequence {
                         seq_id,
