@@ -624,3 +624,12 @@ dialog#settings-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
   .composer { padding: 10px 10px 8px; }
   .welcome h1 { font-size: 22px; }
 }
+
+/* Divider shown in the transcript when the user switches model mid-chat. */
+.model-switch-note {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12px;
+  margin: 14px 0;
+  overflow-wrap: anywhere;
+}

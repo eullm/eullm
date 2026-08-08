@@ -2792,7 +2792,12 @@ async fn interactive_chat(
     let short = model_name.strip_prefix("eullm/").unwrap_or(model_name);
 
     let mut temperature: f32 = 0.8;
-    let mut max_reply_tokens: u32 = 2048;
+    // u32::MAX = unlimited: the request already clamps to the remaining
+    // context budget, which is the real bound. A fixed default cap truncated
+    // reasoning models mid-think (Qwen3.6 spent ~2000 tokens thinking about a
+    // hard question and hit the old 2048 default before answering at all);
+    // /maxtokens <n> still sets a cap, /maxtokens 0 returns to unlimited.
+    let mut max_reply_tokens: u32 = u32::MAX;
     // Sticky reasoning toggle. ON by default (reasoning models need it). When
     // OFF we append the ` /no_think` soft-switch to each user turn AND, for
     // every model except the DeepSeek-R1 family, also force an empty
@@ -2872,7 +2877,12 @@ async fn interactive_chat(
             );
             println!("  /no_think         Disable reasoning (sticky until /think)");
             println!("  /temp <0.0–2.0>   Set temperature (current: {temperature:.1})");
-            println!("  /maxtokens <n>    Set max reply tokens (current: {max_reply_tokens})");
+            let max_reply_display = if max_reply_tokens == u32::MAX {
+                "unlimited".to_string()
+            } else {
+                max_reply_tokens.to_string()
+            };
+            println!("  /maxtokens <n>    Cap reply tokens, 0 = unlimited (current: {max_reply_display})");
             println!("  /system <text>    Replace system prompt");
             println!("  /help             Show this help\n");
             continue;
@@ -2902,11 +2912,15 @@ async fn interactive_chat(
             continue;
         } else if let Some(val) = input.strip_prefix("/maxtokens ") {
             match val.trim().parse::<u32>() {
-                Ok(n) if n > 0 => {
+                Ok(0) => {
+                    max_reply_tokens = u32::MAX;
+                    println!("Max reply tokens set to unlimited (context window is the cap)\n");
+                }
+                Ok(n) => {
                     max_reply_tokens = n;
                     println!("Max reply tokens set to {max_reply_tokens}\n");
                 }
-                _ => eprintln!("Usage: /maxtokens <n>\n"),
+                _ => eprintln!("Usage: /maxtokens <n>  (0 = unlimited)\n"),
             }
             continue;
         } else if let Some(sys) = input.strip_prefix("/system ") {

@@ -88,7 +88,12 @@
     // now, typed by the user into this field.
     system: "",
     temperature: 0.7,
-    maxTokens: 2048,
+    // 0 = unlimited: max_tokens is omitted from the request and the server
+    // generates until the model stops or the context window fills (its own
+    // default, matching Ollama's num_predict=-1). A fixed cap here truncated
+    // reasoning models mid-think: Qwen3.6 spent ~2000 tokens thinking about a
+    // hard question and hit the old 2048 default before answering at all.
+    maxTokens: 0,
     // Reasoning ON by default. Reasoning models (DeepSeek-R1, QwQ) are trained
     // to always emit a <think> block; suppressing it (think:false injects an
     // empty <think></think>) makes them degenerate into a canned greeting.
@@ -727,13 +732,17 @@
             messages: messagesToSend,
             stream: true,
             temperature: settings.temperature,
-            max_tokens: settings.maxTokens,
+            // 0 = unlimited: omit the cap and let the server generate until
+            // the model stops or the context window fills.
+            ...(settings.maxTokens > 0 ? { max_tokens: settings.maxTokens } : {}),
           }),
         }));
       } else {
         const messagesToSend = [];
         if (settings.system) messagesToSend.push({ role: "system", content: settings.system });
-        messagesToSend.push(...history);
+        // Send only role/content — history entries also carry UI-internal
+        // fields (the authoring model, model-switch metadata).
+        messagesToSend.push(...history.map(({ role, content }) => ({ role, content })));
         resp = await fetch("/v1/chat/completions", withAuth({
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -743,7 +752,9 @@
             messages: messagesToSend,
             stream: true,
             temperature: settings.temperature,
-            max_tokens: settings.maxTokens,
+            // 0 = unlimited: omit the cap and let the server generate until
+            // the model stops or the context window fills.
+            ...(settings.maxTokens > 0 ? { max_tokens: settings.maxTokens } : {}),
             // Pass-through field for Ollama-compatible backends that honour it.
             think: settings.think,
           }),
@@ -811,7 +822,14 @@
         }
       }
 
-      history.push({ role: "assistant", content: stripThink(assistantText) || assistantText });
+      // Tag the turn with the model that wrote it: after a mid-conversation
+      // model switch, the send path uses this to tell the new model that the
+      // earlier assistant turns are not its own words (see modelSwitchNotice).
+      history.push({
+        role: "assistant",
+        content: stripThink(assistantText) || assistantText,
+        model: currentModel,
+      });
       const dt = (performance.now() - t0) / 1000;
       const tps = tokenCount > 0 ? (tokenCount / dt).toFixed(1) : "—";
       metaEl.innerHTML = `<span>${tokenCount} chunks</span><span>${dt.toFixed(2)}s</span><span>~${tps} chunk/s</span>`;
@@ -1055,7 +1073,47 @@
   });
 
   els.modelSelect.addEventListener("change", (e) => {
+    const previous = currentModel;
     currentModel = e.target.value;
+    if (!previous || previous === currentModel || !history.length) return;
+
+    // A mid-conversation model switch keeps the history — but the new model
+    // would read the previous model's turns as its own words and stay in
+    // character (observed live: gemma-4 introduced itself as Qwen "to be
+    // consistent with my previous answer"). Record the switch ONCE, as a
+    // system turn *at this point in the history*: the new model sees a past
+    // event it can act on, nothing is repeated on later prompts, and the
+    // history before the switch stays byte-identical for prefix KV reuse.
+    // Deliberately a narrow exception to the no-automatic-injections rule
+    // (see the `system` setting's comment): it exists only at a switch
+    // point, states facts about turn authorship, and carries no style or
+    // formatting instructions.
+    //
+    // Flipping the dropdown without sending anything coalesces: the pending
+    // note is updated in place, and removed entirely if the user returns to
+    // the model the conversation was already on.
+    const last = history[history.length - 1];
+    const pendingSwitch = last?.switchFrom ? history.pop() : null;
+    const from = pendingSwitch ? pendingSwitch.switchFrom : previous;
+    const lastNote = els.messages.querySelector(".model-switch-note:last-child");
+    if (pendingSwitch && lastNote) lastNote.remove();
+    if (from === currentModel) return; // switched back — nothing changed
+
+    history.push({
+      role: "system",
+      content:
+        `The assistant model changed at this point in the conversation: the replies above ` +
+        `were written by ${from}, and from here on the assistant is ${currentModel}. ` +
+        `${currentModel}, answer as yourself — your own identity, knowledge and style. Do ` +
+        `not claim the previous model's identity, and feel free to differ from its answers.`,
+      switchFrom: from,
+    });
+
+    const note = document.createElement("div");
+    note.className = "model-switch-note";
+    note.textContent = `— model changed: ${from} → ${currentModel} —`;
+    els.messages.appendChild(note);
+    els.messages.scrollTop = els.messages.scrollHeight;
   });
 
   // ── Settings modal ────────────────────────────────────────────────────
@@ -1077,7 +1135,7 @@
     if (els.settingsModal.returnValue !== "ok") return;
     settings.system = els.settingsSystem.value.trim();
     settings.temperature = parseFloat(els.settingsTemp.value);
-    settings.maxTokens = parseInt(els.settingsMaxTokens.value, 10) || 2048;
+    settings.maxTokens = parseInt(els.settingsMaxTokens.value, 10) || 0;
     settings.think = els.settingsThink.checked;
     settings.math = els.settingsMath.checked;
     // Re-render the last assistant turn so the math toggle takes effect immediately.
