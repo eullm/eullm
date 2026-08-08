@@ -948,9 +948,18 @@ fn strip_preopened_thinking(prompt: &mut String, start_tag: &str) -> bool {
 /// `messages` through the model's own GGUF-embedded Jinja template, or
 /// `None` when the caller should fall back to its hardcoded per-family
 /// template (no embedded template in the GGUF, or the FFI call failed).
+///
+/// `think` is passed through to the template's own reasoning toggle
+/// (`enable_thinking`): templates that support it — the Qwen3 family —
+/// render their own suppression form when `false` (Qwen3.6 emits a
+/// pre-closed empty `<think>` block, the exact bytes the hardcoded ChatML
+/// fallback injects by hand); templates without a toggle ignore it, which
+/// is also correct — always-reasoning models like the DeepSeek-R1 family
+/// never learned a suppressed form (see `think_suppression_prefix`).
 pub(crate) fn render_jinja_chat_template(
     model: &LlamaModel,
     messages: &[(&str, &str)],
+    think: bool,
 ) -> Option<DynamicChatTemplate> {
     let messages: Vec<llama_cpp_2::model::LlamaChatMessage> = messages
         .iter()
@@ -964,7 +973,7 @@ pub(crate) fn render_jinja_chat_template(
         .ok()?;
 
     let result = model
-        .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true)
+        .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true, think)
         .inspect_err(|e| {
             tracing::warn!("Jinja chat template rendering failed, falling back: {e}");
         })
@@ -1076,8 +1085,9 @@ impl InferenceEngine {
     pub fn apply_jinja_chat_template(
         &self,
         messages: &[(&str, &str)],
+        think: bool,
     ) -> Option<DynamicChatTemplate> {
-        render_jinja_chat_template(&self.model, messages)
+        render_jinja_chat_template(&self.model, messages, think)
     }
 
     /// Load a GGUF model and prepare the inference engine.

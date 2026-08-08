@@ -2757,8 +2757,8 @@ fn build_cli_prompt(
     think_arg: bool,
 ) -> (String, Vec<String>) {
     let dynamic = match backend {
-        ChatBackend::Sequential(engine) => engine.apply_jinja_chat_template(pairs),
-        ChatBackend::Batched(scheduler) => scheduler.apply_jinja_chat_template(pairs),
+        ChatBackend::Sequential(engine) => engine.apply_jinja_chat_template(pairs, think_arg),
+        ChatBackend::Batched(scheduler) => scheduler.apply_jinja_chat_template(pairs, think_arg),
     };
     if let Some(dynamic) = dynamic {
         return (dynamic.prompt, Vec::new());

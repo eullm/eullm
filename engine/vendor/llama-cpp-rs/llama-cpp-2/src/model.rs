@@ -932,12 +932,18 @@ impl LlamaModel {
     /// Text-only: each message is a single content string, not the
     /// structured content-parts some templates use for multimodal input.
     ///
+    /// `enable_thinking` maps to llama.cpp's
+    /// `common_chat_templates_inputs.enable_thinking`: templates with a
+    /// reasoning toggle (Qwen3 family) render their own suppression form
+    /// when `false`; templates without one ignore it.
+    ///
     /// # Errors
     /// See [`JinjaChatTemplateError`].
     pub fn apply_jinja_chat_template(
         &self,
         messages: &[LlamaChatMessage],
         add_generation_prompt: bool,
+        enable_thinking: bool,
     ) -> Result<JinjaChatTemplateResult, JinjaChatTemplateError> {
         let role_ptrs: Vec<*const c_char> = messages.iter().map(|m| m.role.as_ptr()).collect();
         let content_ptrs: Vec<*const c_char> = messages.iter().map(|m| m.content.as_ptr()).collect();
@@ -954,6 +960,7 @@ impl LlamaModel {
                 content_ptrs.as_ptr(),
                 messages.len(),
                 add_generation_prompt,
+                enable_thinking,
                 &raw mut was_explicit,
                 &raw mut out_prompt,
                 &raw mut out_thinking_start,

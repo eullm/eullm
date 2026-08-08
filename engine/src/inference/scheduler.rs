@@ -281,9 +281,10 @@ impl SchedulerHandle {
     pub fn apply_jinja_chat_template(
         &self,
         messages: &[(&str, &str)],
+        think: bool,
     ) -> Option<super::DynamicChatTemplate> {
         let model = self.model.upgrade()?;
-        super::render_jinja_chat_template(&model, messages)
+        super::render_jinja_chat_template(&model, messages, think)
     }
 
     /// Submit a request for inference. Returns immediately.

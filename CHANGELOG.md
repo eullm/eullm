@@ -15,10 +15,25 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc17`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc18`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
+
+### Added
+- **The web UI's "Reasoning mode" checkbox now actually works on the
+  dynamic-template path.** The Settings checkbox (and the API's
+  `think: false`) was silently ignored for any model rendered through its
+  own GGUF-embedded template — the Jinja render never received the flag.
+  It now maps to llama.cpp's `enable_thinking` template input: models
+  whose template has a reasoning toggle (the Qwen3 family) render their
+  official suppression form (Qwen3.6 emits the same pre-closed empty
+  `<think>` block the hardcoded ChatML fallback injects by hand);
+  always-reasoning models (DeepSeek-R1, QwQ) have no suppressed form and
+  ignore it, as before. Checkbox label updated to say exactly that.
+  Reasoning stays ON by default — suppressing it on models that need it
+  degrades answers, and unchecking is one click for the models where it
+  works.
 
 ### Fixed
 - **Reasoning no longer leaks as plain text with a dangling `</think>` on

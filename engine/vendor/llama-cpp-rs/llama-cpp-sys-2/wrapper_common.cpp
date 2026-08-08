@@ -46,6 +46,7 @@ extern "C" llama_rs_status llama_rs_apply_chat_template(
     const char * const * contents,
     size_t n_messages,
     bool add_generation_prompt,
+    bool enable_thinking,
     bool * out_was_explicit,
     char ** out_prompt,
     char ** out_thinking_start_tag,
@@ -66,6 +67,7 @@ extern "C" llama_rs_status llama_rs_apply_chat_template(
 
         common_chat_templates_inputs inputs;
         inputs.add_generation_prompt = add_generation_prompt;
+        inputs.enable_thinking = enable_thinking;
         inputs.messages.reserve(n_messages);
         for (size_t i = 0; i < n_messages; i++) {
             common_chat_msg msg;
