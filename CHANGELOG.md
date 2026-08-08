@@ -15,7 +15,7 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc20`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc21`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
@@ -49,6 +49,25 @@ under this version before the final release.*
   Reasoning stays ON by default — suppressing it on models that need it
   degrades answers, and unchecking is one click for the models where it
   works.
+
+### Added
+- **`--fit` now works on `serve`, and on every model swap — without ever
+  prompting.** Found live: `run --fit` sized a dense 27B at 43/64 layers,
+  then switching to the 22 GB MoE from the web UI loaded it with those
+  same launch settings — no expert offload, wrong split — and OOM'd
+  ("Failed to load model: null result from llama cpp"). The `--fit`/
+  `--fit-strict` flags moved into the shared `RuntimeOpts` (so `serve` has
+  them too), and `api::swap_model` now runs the same sizing before every
+  load — the initial lazy load on `serve` and every API-triggered swap on
+  both commands — after the old model is unloaded, so the measured free
+  VRAM is real. MoE auto-sizing resolves silently as always; a dense
+  partial split is applied and logged instead of asked about (a daemon has
+  nobody at the keyboard — `serve` started from a shell is still a TTY, so
+  the interactive gate alone would have blocked it); `--fit-strict`
+  surfaces as an error to the API caller instead of a question. The server
+  also now inherits the user's original `--gpu-layers`/`--cpu-moe`/
+  `--n-cpu-moe` flags rather than the values a launch-time fit computed
+  for the first model.
 
 ### Fixed
 - **Reasoning models no longer get truncated mid-think by the default

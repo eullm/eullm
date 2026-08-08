@@ -788,6 +788,52 @@ pub fn run_fit(
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
 ) -> FitOutcome {
+    run_fit_impl(
+        model_path,
+        fallback_gpu_layers,
+        ctx_size,
+        strict,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+        /* allow_prompt */ true,
+    )
+}
+
+/// [`run_fit`] for server contexts: never prompts, even on an interactive
+/// terminal. A daemon (or a model swap serving an API request) has nobody
+/// at the keyboard on the other end of stdin — `serve` started from a shell
+/// IS a TTY, so the [`run_fit`] gate alone would block it on the first
+/// partial-fit load. A partial split proceeds with a logged one-liner;
+/// `strict` still refuses, and the caller turns that into an API error.
+pub fn run_fit_headless(
+    model_path: &Path,
+    fallback_gpu_layers: i32,
+    ctx_size: u32,
+    strict: bool,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+) -> FitOutcome {
+    run_fit_impl(
+        model_path,
+        fallback_gpu_layers,
+        ctx_size,
+        strict,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+        /* allow_prompt */ false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_fit_impl(
+    model_path: &Path,
+    fallback_gpu_layers: i32,
+    ctx_size: u32,
+    strict: bool,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+    allow_prompt: bool,
+) -> FitOutcome {
     let free_vram = free_vram_bytes();
     let info = read_gguf_info(model_path);
     let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
@@ -844,7 +890,7 @@ pub fn run_fit(
                 return FitOutcome::Abort;
             }
 
-            if interactive() {
+            if allow_prompt && interactive() {
                 println!("[EULLM] --fit: model does not fit fully on the GPU.");
                 println!("  Free VRAM:  {}", gib(free));
                 println!("  Model size: {}", gib(file_size));

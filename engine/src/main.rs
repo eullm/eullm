@@ -73,8 +73,8 @@ fn picker_run(model: &str) -> Commands {
     let mut cmd = Cli::parse_from(["eullm", "run", "--", model])
         .command
         .expect("`eullm run <model>` always parses to a subcommand");
-    if let Commands::Run { fit, .. } = &mut cmd {
-        *fit = true;
+    if let Commands::Run { opts, .. } = &mut cmd {
+        opts.fit = true;
     }
     cmd
 }
@@ -130,6 +130,22 @@ struct RuntimeOpts {
     /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
     #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
     gpu_layers: i32,
+
+    /// Auto-fit GPU layers to available VRAM (CUDA builds only). Probes
+    /// free VRAM and the model's layer count, then offloads as many layers
+    /// as fit. Opt-in: without it, --gpu-layers is used as-is. If VRAM
+    /// can't be probed it falls back to --gpu-layers. On `run` a partial
+    /// split asks for confirmation when the terminal is interactive; on
+    /// `serve` (and on model swaps requested through the API) it never
+    /// prompts — the computed split is applied and logged.
+    #[arg(long)]
+    fit: bool,
+
+    /// With --fit, refuse to load (instead of offloading a partial split
+    /// or falling back) when the model does not fully fit on the GPU. On
+    /// `serve`, a refused load surfaces as an error to the API caller.
+    #[arg(long)]
+    fit_strict: bool,
 
     /// For MoE models (e.g. Qwen3-30B-A3B): keep expert tensors
     /// (`*.ffn_(up|down|gate)_exps`) on CPU RAM while attention,
@@ -296,18 +312,6 @@ enum Commands {
 
         #[command(flatten)]
         opts: RuntimeOpts,
-
-        /// Auto-fit GPU layers to available VRAM (CUDA builds only). Probes
-        /// free VRAM and the model's layer count, then offloads as many layers
-        /// as fit. Opt-in: without it, --gpu-layers is used as-is. If VRAM
-        /// can't be probed it falls back to --gpu-layers.
-        #[arg(long)]
-        fit: bool,
-
-        /// With --fit, refuse to load (instead of offloading a partial split
-        /// or falling back) when the model does not fully fit on the GPU.
-        #[arg(long)]
-        fit_strict: bool,
 
         /// Disable the embedded chat UI (otherwise served on --ui-port).
         /// Use this for headless / backend / RAG deployments where you only
@@ -540,8 +544,6 @@ async fn main() {
         Commands::Pull { model } => cmd_pull_maybe(&store, model.as_deref()).await,
         Commands::Run {
             model,
-            fit,
-            fit_strict,
             no_ui,
             cli,
             image,
@@ -555,6 +557,8 @@ async fn main() {
                 batch_size,
                 replace,
                 gpu_layers,
+                fit,
+                fit_strict,
                 cpu_moe,
                 n_cpu_moe,
                 rs_seq,
@@ -676,6 +680,8 @@ async fn main() {
                 batch_size,
                 replace,
                 gpu_layers,
+                fit,
+                fit_strict,
                 cpu_moe,
                 n_cpu_moe,
                 rs_seq,
@@ -725,6 +731,8 @@ async fn main() {
                 ui_port_opt,
                 batch_size,
                 gpu_layers,
+                fit,
+                fit_strict,
                 ctx_size,
                 threads,
                 !no_flash_attn,
@@ -1663,6 +1671,15 @@ async fn cmd_run(
     // too — only when the user hasn't already chosen one explicitly.
     let mut cpu_moe = cpu_moe;
     let mut n_cpu_moe = n_cpu_moe;
+    // What the user actually asked for, before --fit specializes the mut
+    // bindings above to the LAUNCH model. The API server must inherit these
+    // originals: with --fit it re-sizes each model it loads against them,
+    // and handing it the launch model's computed split instead is exactly
+    // the bug where a dense 27B's 43/64 split was reused to load a 22 GB
+    // MoE and OOM'd.
+    let flag_gpu_layers = gpu_layers;
+    let flag_cpu_moe = cpu_moe;
+    let flag_n_cpu_moe = n_cpu_moe;
 
     if !multimodal_oneshot {
         ensure_port_available(port, replace).await;
@@ -2057,7 +2074,9 @@ async fn cmd_run(
             model_name: Some(api_model_name),
             engine,
             scheduler,
-            gpu_layers,
+            gpu_layers: flag_gpu_layers,
+            fit,
+            fit_strict,
             ctx_size,
             threads: resolved_threads,
             flash_attn,
@@ -2065,8 +2084,8 @@ async fn cmd_run(
             cache_type_k,
             cache_type_v,
             batch_size,
-            cpu_moe,
-            n_cpu_moe,
+            cpu_moe: flag_cpu_moe,
+            n_cpu_moe: flag_n_cpu_moe,
             rs_seq,
             ctx_checkpoints,
             checkpoint_min_step,
@@ -2120,6 +2139,8 @@ async fn cmd_serve(
     ui_port: Option<u16>,
     batch_size: usize,
     gpu_layers: i32,
+    fit: bool,
+    fit_strict: bool,
     ctx_size: u32,
     threads: Option<u32>,
     flash_attn: bool,
@@ -2162,6 +2183,8 @@ async fn cmd_serve(
         engine: None,
         scheduler: None,
         gpu_layers,
+        fit,
+        fit_strict,
         ctx_size,
         threads,
         flash_attn,
