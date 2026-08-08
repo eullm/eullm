@@ -15,12 +15,27 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc19`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc20`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
 ### Added
+- **Switching model mid-conversation now tells the new model it is not the
+  old one — once, at the switch point.** The web UI keeps the conversation
+  across a model switch, and the new model reads the previous model's
+  turns as its own words: observed live, gemma-4 introduced itself as Qwen
+  "to be consistent with my previous answer" (its own reasoning said so).
+  The UI now records the switch as a single system turn inserted into the
+  history *at the point where it happened* — naming who wrote the earlier
+  replies and inviting the new model to answer as itself — plus a visible
+  divider in the transcript. Nothing is repeated on later prompts, the
+  conversation is never cleared or compressed, and the history before the
+  switch stays byte-identical so prefix KV reuse keeps working. Flipping
+  the dropdown back and forth without sending coalesces the pending note
+  (and cancels it when returning to the model the conversation was already
+  on).
+
 - **The web UI's "Reasoning mode" checkbox now actually works on the
   dynamic-template path.** The Settings checkbox (and the API's
   `think: false`) was silently ignored for any model rendered through its
