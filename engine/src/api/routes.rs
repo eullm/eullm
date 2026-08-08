@@ -388,9 +388,9 @@ fn build_chat_prompt(
             })
             .collect();
         let dynamic = if let Some(engine) = snap.engine.as_ref() {
-            engine.apply_jinja_chat_template(&pairs)
+            engine.apply_jinja_chat_template(&pairs, think)
         } else if let Some(scheduler) = snap.scheduler.as_ref() {
-            scheduler.apply_jinja_chat_template(&pairs)
+            scheduler.apply_jinja_chat_template(&pairs, think)
         } else {
             None
         };

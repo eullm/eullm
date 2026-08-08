@@ -15,12 +15,40 @@ something changed, less so for understanding what it means.
 
 ## 0.6.70 — 2026-08-05
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc16`. The dynamic
+*Published so far only as the pre-release `EuLLM-v0.6.70-rc18`. The dynamic
 chat template further up has not been re-validated across every known model
 family yet — that is what this pre-release is for. More may accumulate
 under this version before the final release.*
 
+### Added
+- **The web UI's "Reasoning mode" checkbox now actually works on the
+  dynamic-template path.** The Settings checkbox (and the API's
+  `think: false`) was silently ignored for any model rendered through its
+  own GGUF-embedded template — the Jinja render never received the flag.
+  It now maps to llama.cpp's `enable_thinking` template input: models
+  whose template has a reasoning toggle (the Qwen3 family) render their
+  official suppression form (Qwen3.6 emits the same pre-closed empty
+  `<think>` block the hardcoded ChatML fallback injects by hand);
+  always-reasoning models (DeepSeek-R1, QwQ) have no suppressed form and
+  ignore it, as before. Checkbox label updated to say exactly that.
+  Reasoning stays ON by default — suppressing it on models that need it
+  degrades answers, and unchecking is one click for the models where it
+  works.
+
 ### Fixed
+- **Reasoning no longer leaks as plain text with a dangling `</think>` on
+  the dynamic-template path.** Found on real hardware the day the dynamic
+  template reached the batching path (rc16): both Qwen3.6 models answered
+  in the web chat with their whole reasoning as ordinary body text ending
+  in a bare `</think>` — no Reasoning box. Their template *pre-opens* the
+  thinking block in the prompt, so the model starts mid-think and emits
+  only the closing tag, leaving clients nothing to key on. The dynamic
+  path now strips a pre-opened thinking tag from the rendered prompt's
+  tail (llama.cpp reports the template's tag delimiters), so the model
+  emits the opening tag itself and the full block stays in the output —
+  the same deliberate deviation, borrowed from Ollama, that the hardcoded
+  DeepSeek-R1 template has always documented and applied.
+
 - **The dynamic GGUF chat template now works with continuous batching too —
   the web/API and CLI paths finally build prompts the same way on every
   loading path.** Found on QwQ-32B-Preview: asked "ciao come ti chiami?"

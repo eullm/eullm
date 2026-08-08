@@ -2114,10 +2114,23 @@ diligenza manuale.
   `Weak` così una richiesta in volo non può trattenere la VRAM di un
   modello scambiato via; entrambe le porte (`build_chat_prompt` e
   `build_cli_prompt`) tentano il template incorporato su entrambi i
-  backend. Da validare su hardware reale (rc16, chat web, stessa domanda);
-  se il leak persistesse, verificare per prima cosa che il file GGUF
-  incorpori davvero `tokenizer.chat_template` — senza, il fallback resta
-  quello di oggi e servirà seminare un system di default anche lato UI.
+  backend.
+
+  **Validato su hardware reale (7 agosto, rc16)**: QwQ via chat web ora
+  risponde come via CLI — niente `<|im_start|>` nel testo, niente identità
+  OpenAI ("Ciao! Mi chiamo AI.昊": il residuo bizzarro è il modello
+  Preview, identico su entrambe le porte, che era l'obiettivo). Il 35B-A3B
+  ora si presenta correttamente come Qwen anche dal web. La validazione ha
+  però esposto un effetto collaterale del percorso dinamico, corretto in
+  rc17: il template di Qwen3.6 *pre-apre* il blocco `<think>` nel prompt,
+  quindi il modello emetteva solo il tag di chiusura e la UI mostrava il
+  ragionamento come testo normale con un `</think>` penzolante. Ora
+  `render_jinja_chat_template` toglie dalla coda del prompt il
+  `thinking_start_tag` pre-aperto (riportato da llama.cpp), così il
+  modello emette il tag da sé e i client vedono il blocco completo — la
+  stessa deviazione deliberata, presa da Ollama, già documentata e
+  applicata dal template DeepSeek-R1 hardcoded. Da validare su rc17 che i
+  due Qwen3.6 mostrino il box Reasoning dal web come già fa gemma-4.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti

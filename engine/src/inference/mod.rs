@@ -904,12 +904,43 @@ pub enum StreamEvent {
 ///
 /// llama.cpp's own rendering also reports `thinking_start_tag`/
 /// `thinking_end_tag` (the template's reasoning-block delimiters, when it
-/// declares any) via `llama_cpp_2::model::JinjaChatTemplateResult` — not
-/// carried here yet because nothing consumes them: stripping a reasoning
-/// block from the *response* on this path is separate, not-yet-done work.
+/// declares any) via `llama_cpp_2::model::JinjaChatTemplateResult`. The
+/// start tag is consumed by [`strip_preopened_thinking`] below; stripping a
+/// reasoning block from the *response* on this path is separate,
+/// not-yet-done work.
 pub struct DynamicChatTemplate {
     /// The rendered prompt, ready to generate from as-is (`raw: true`).
     pub prompt: String,
+}
+
+/// If `prompt` ends with the template's thinking start tag (ignoring
+/// trailing whitespace), remove it — tag and trailing whitespace both — so
+/// the model emits the opening tag itself as its first output tokens.
+///
+/// Some reasoning templates pre-open the thinking block in the prompt so
+/// the model cannot skip reasoning (Qwen3.6 does; DeepSeek-R1's official
+/// template does too). Generating from such a prompt means the response
+/// starts mid-think and carries only the *closing* tag, so every client
+/// that renders reasoning sections — the bundled web UI included — shows
+/// the reasoning as plain leaked text with a dangling `</think>`. This is
+/// the same deliberate deviation the hardcoded DeepSeek template documents
+/// (see `build_deepseek_r1`): Ollama leaves the tag out of the prompt, the
+/// model emits it on its own, and the full block stays in the output where
+/// clients key on it. Found on real hardware the day the dynamic template
+/// reached the batching path: both Qwen3.6 models answered with their
+/// reasoning as body text ending in a bare `</think>`.
+///
+/// Returns `true` when a tag was stripped (exposed for tests).
+fn strip_preopened_thinking(prompt: &mut String, start_tag: &str) -> bool {
+    if start_tag.is_empty() {
+        return false;
+    }
+    let content_len = prompt.trim_end().len();
+    if !prompt[..content_len].ends_with(start_tag) {
+        return false;
+    }
+    prompt.truncate(content_len - start_tag.len());
+    true
 }
 
 /// Shared implementation behind [`InferenceEngine::apply_jinja_chat_template`]
@@ -917,9 +948,18 @@ pub struct DynamicChatTemplate {
 /// `messages` through the model's own GGUF-embedded Jinja template, or
 /// `None` when the caller should fall back to its hardcoded per-family
 /// template (no embedded template in the GGUF, or the FFI call failed).
+///
+/// `think` is passed through to the template's own reasoning toggle
+/// (`enable_thinking`): templates that support it — the Qwen3 family —
+/// render their own suppression form when `false` (Qwen3.6 emits a
+/// pre-closed empty `<think>` block, the exact bytes the hardcoded ChatML
+/// fallback injects by hand); templates without a toggle ignore it, which
+/// is also correct — always-reasoning models like the DeepSeek-R1 family
+/// never learned a suppressed form (see `think_suppression_prefix`).
 pub(crate) fn render_jinja_chat_template(
     model: &LlamaModel,
     messages: &[(&str, &str)],
+    think: bool,
 ) -> Option<DynamicChatTemplate> {
     let messages: Vec<llama_cpp_2::model::LlamaChatMessage> = messages
         .iter()
@@ -933,7 +973,7 @@ pub(crate) fn render_jinja_chat_template(
         .ok()?;
 
     let result = model
-        .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true)
+        .apply_jinja_chat_template(&messages, /* add_generation_prompt */ true, think)
         .inspect_err(|e| {
             tracing::warn!("Jinja chat template rendering failed, falling back: {e}");
         })
@@ -943,9 +983,16 @@ pub(crate) fn render_jinja_chat_template(
         return None;
     }
 
-    Some(DynamicChatTemplate {
-        prompt: result.prompt,
-    })
+    let mut prompt = result.prompt;
+    if let Some(start_tag) = result.thinking_start_tag.as_deref()
+        && strip_preopened_thinking(&mut prompt, start_tag)
+    {
+        tracing::debug!(
+            "template pre-opened a {start_tag} reasoning block; stripped so the model emits the tag itself"
+        );
+    }
+
+    Some(DynamicChatTemplate { prompt })
 }
 
 /// The loaded inference engine, holding the model and backend.
@@ -1038,8 +1085,9 @@ impl InferenceEngine {
     pub fn apply_jinja_chat_template(
         &self,
         messages: &[(&str, &str)],
+        think: bool,
     ) -> Option<DynamicChatTemplate> {
-        render_jinja_chat_template(&self.model, messages)
+        render_jinja_chat_template(&self.model, messages, think)
     }
 
     /// Load a GGUF model and prepare the inference engine.
@@ -2485,5 +2533,35 @@ mod stop_reason_tests {
             stop_reason: StopReason::Length,
         };
         assert_eq!(r.stop_reason.as_api_str(), "length");
+    }
+
+    // ── strip_preopened_thinking ────────────────────────────────────────────
+
+    #[test]
+    fn strips_preopened_think_tag_and_trailing_whitespace() {
+        // Qwen3.6's template shape: generation prompt then a forced-open block.
+        let mut p = "<|im_start|>assistant\n<think>\n".to_string();
+        assert!(super::strip_preopened_thinking(&mut p, "<think>"));
+        assert_eq!(p, "<|im_start|>assistant\n");
+    }
+
+    #[test]
+    fn leaves_prompts_without_a_preopened_block_alone() {
+        // Plain ChatML generation prompt — nothing to strip.
+        let mut p = "<|im_start|>assistant\n".to_string();
+        assert!(!super::strip_preopened_thinking(&mut p, "<think>"));
+        assert_eq!(p, "<|im_start|>assistant\n");
+
+        // A think tag somewhere in history is not a pre-opened block.
+        let mut p = "<|im_start|>user\nsay <think> back<|im_end|>\n<|im_start|>assistant\n".to_string();
+        assert!(!super::strip_preopened_thinking(&mut p, "<think>"));
+    }
+
+    #[test]
+    fn empty_tag_never_strips() {
+        // A template that declares no tag must not truncate whitespace.
+        let mut p = "<|im_start|>assistant\n".to_string();
+        assert!(!super::strip_preopened_thinking(&mut p, ""));
+        assert_eq!(p, "<|im_start|>assistant\n");
     }
 }

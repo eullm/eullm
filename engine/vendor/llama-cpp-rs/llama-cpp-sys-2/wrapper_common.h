@@ -71,12 +71,17 @@ void llama_rs_memory_breakdown_print(const struct llama_context * ctx);
 // free) only when the template declares reasoning/thinking delimiters;
 // otherwise left NULL. Text-only: message content is a single string per
 // message, not the structured content-parts multimodal templates can use.
+// `enable_thinking` maps to common_chat_templates_inputs.enable_thinking:
+// templates with a reasoning toggle (Qwen3 family) render their own
+// suppression form when false (e.g. a pre-closed empty <think> block);
+// templates without one ignore it.
 llama_rs_status llama_rs_apply_chat_template(
     const struct llama_model * model,
     const char * const * roles,
     const char * const * contents,
     size_t n_messages,
     bool add_generation_prompt,
+    bool enable_thinking,
     bool * out_was_explicit,
     char ** out_prompt,
     char ** out_thinking_start_tag,

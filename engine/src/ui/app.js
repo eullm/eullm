@@ -92,6 +92,9 @@
     // Reasoning ON by default. Reasoning models (DeepSeek-R1, QwQ) are trained
     // to always emit a <think> block; suppressing it (think:false injects an
     // empty <think></think>) makes them degenerate into a canned greeting.
+    // On models whose own template has a reasoning toggle (Qwen3 family) the
+    // server maps think:false to the template's enable_thinking=false, which
+    // renders the model's official suppression form.
     think: true,
     // Math rendering ON by default. Heuristics protect currency-looking `$NN`
     // patterns; user can disable from settings if false positives appear.
