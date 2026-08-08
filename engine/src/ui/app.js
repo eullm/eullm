@@ -88,7 +88,12 @@
     // now, typed by the user into this field.
     system: "",
     temperature: 0.7,
-    maxTokens: 2048,
+    // 0 = unlimited: max_tokens is omitted from the request and the server
+    // generates until the model stops or the context window fills (its own
+    // default, matching Ollama's num_predict=-1). A fixed cap here truncated
+    // reasoning models mid-think: Qwen3.6 spent ~2000 tokens thinking about a
+    // hard question and hit the old 2048 default before answering at all.
+    maxTokens: 0,
     // Reasoning ON by default. Reasoning models (DeepSeek-R1, QwQ) are trained
     // to always emit a <think> block; suppressing it (think:false injects an
     // empty <think></think>) makes them degenerate into a canned greeting.
@@ -727,7 +732,9 @@
             messages: messagesToSend,
             stream: true,
             temperature: settings.temperature,
-            max_tokens: settings.maxTokens,
+            // 0 = unlimited: omit the cap and let the server generate until
+            // the model stops or the context window fills.
+            ...(settings.maxTokens > 0 ? { max_tokens: settings.maxTokens } : {}),
           }),
         }));
       } else {
@@ -743,7 +750,9 @@
             messages: messagesToSend,
             stream: true,
             temperature: settings.temperature,
-            max_tokens: settings.maxTokens,
+            // 0 = unlimited: omit the cap and let the server generate until
+            // the model stops or the context window fills.
+            ...(settings.maxTokens > 0 ? { max_tokens: settings.maxTokens } : {}),
             // Pass-through field for Ollama-compatible backends that honour it.
             think: settings.think,
           }),
@@ -1077,7 +1086,7 @@
     if (els.settingsModal.returnValue !== "ok") return;
     settings.system = els.settingsSystem.value.trim();
     settings.temperature = parseFloat(els.settingsTemp.value);
-    settings.maxTokens = parseInt(els.settingsMaxTokens.value, 10) || 2048;
+    settings.maxTokens = parseInt(els.settingsMaxTokens.value, 10) || 0;
     settings.think = els.settingsThink.checked;
     settings.math = els.settingsMath.checked;
     // Re-render the last assistant turn so the math toggle takes effect immediately.
