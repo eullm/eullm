@@ -13,12 +13,13 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.70 — 2026-08-05
+## 0.6.70 — 2026-08-08
 
-*Published so far only as the pre-release `EuLLM-v0.6.70-rc21`. The dynamic
-chat template further up has not been re-validated across every known model
-family yet — that is what this pre-release is for. More may accumulate
-under this version before the final release.*
+*Accumulated through pre-releases `rc1`–`rc21`, each validated on real
+hardware as it landed: the dynamic chat template across every locally
+available model family (Qwen3/3.6 dense and MoE, QwQ, gemma-4 including
+vision, DeepSeek-R1 distills), `--fit` auto-sizing on big-vocabulary and
+MoE models, and the reasoning-mode toggle end to end.*
 
 ### Added
 - **Switching model mid-conversation now tells the new model it is not the
