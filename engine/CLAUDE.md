@@ -57,10 +57,19 @@ Two things the struct does **not** do, and they are where the remaining care
 is needed:
 
 - **A flag deliberately kept out needs its reason written next to it**, and
-  both paths wired by hand. Today that is `--fit`/`--fit-strict` alone: they
-  size the offload against measured free VRAM *before* the load, and `serve`
-  loads inside `api::swap_model`, which has no such step. Offering them there
-  would parse them and do nothing, which is worse than not offering them.
+  both paths wired by hand. `--fit`/`--fit-strict` were that flag until
+  0.6.70-rc21: `serve` loads inside `api::swap_model`, which had no sizing
+  step, so offering them there would have parsed them and done nothing.
+  They now live in `RuntimeOpts` and `swap_model` runs the same sizing
+  before every load (after the old model is unloaded, so the measured free
+  VRAM is real) — but *never prompts*: a daemon, or a swap serving an API
+  request, has nobody at the keyboard, so a partial split is applied and
+  logged (`fit::run_fit_headless`) and `--fit-strict` surfaces as an API
+  error instead of a question. Two rules survive that work: `ServeConfig`
+  must receive the user's ORIGINAL `--gpu-layers`/`--cpu-moe`/`--n-cpu-moe`
+  flags, never values a launch-time fit computed (a dense 27B's 43/64
+  split reused to load a 22 GB MoE via web-UI swap OOM'd — found live);
+  and anything that can block on stdin must stay out of the swap path.
 - **A shared flag still has to reach the model `serve` loads**, through
   `ServeConfig` and into `api::swap_model`. Parsing it is not honouring it.
   Where a per-request override exists (`ctx_size`, `batch_size` via

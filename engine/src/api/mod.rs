@@ -57,6 +57,19 @@ pub struct AppState {
 
     // ── Immutable inference settings (from CLI flags) ────────────────
     pub gpu_layers: i32,
+    /// `--fit`: size the GPU offload against measured free VRAM before
+    /// every load this server performs — the initial lazy load and every
+    /// API-triggered swap. Never prompts (a daemon cannot ask questions):
+    /// the MoE path always resolves to a loadable configuration, and the
+    /// dense path proceeds with the computed split, or refuses the load
+    /// when `fit_strict` is set. Without this, a swap reused the *launch*
+    /// model's layer split for whatever model came next — observed live:
+    /// `run --fit` sized a dense 27B at 43/64 layers, then a web-UI switch
+    /// to a 22 GB MoE loaded with those same settings and OOM'd.
+    pub fit: bool,
+    /// `--fit-strict`: with `fit`, a model that does not fully fit is not
+    /// loaded; the API caller gets the error instead of a partial split.
+    pub fit_strict: bool,
     pub ctx_size: u32,
     pub threads: u32,
     pub flash_attn: bool,
@@ -277,10 +290,66 @@ impl AppState {
                 crate::audit::sanitize_for_log(&normalized)
             );
         }
+        // ── 2a. Size the offload for THIS model (--fit) ─────────────
+        // The launch flags describe the launch model; whatever is being
+        // swapped in has its own size, layer count, and (possibly) expert
+        // layout. Runs after the unload above so the measured free VRAM is
+        // real. Never prompts — same decision order as the `run` startup
+        // flow: MoE auto-sizing first (always resolves), then the dense
+        // split, headless.
+        let effective_ctx = override_ctx_size.unwrap_or(self.ctx_size);
+        let mut gpu_layers = self.gpu_layers;
+        let mut cpu_moe = self.cpu_moe;
+        let mut n_cpu_moe = self.n_cpu_moe;
+        if self.fit {
+            let kv_bpe_k = crate::inference::cache_type_bytes_per_elem(&cache_type_k);
+            let kv_bpe_v = crate::inference::cache_type_bytes_per_elem(&cache_type_v);
+            let moe_decision = if !cpu_moe && n_cpu_moe == 0 {
+                crate::fit::run_moe_fit(&gguf_path, effective_ctx, kv_bpe_k, kv_bpe_v)
+            } else {
+                crate::fit::MoeFitDecision::NotMoe
+            };
+            match moe_decision {
+                crate::fit::MoeFitDecision::Proceed { n_cpu_moe: computed } if computed > 0 => {
+                    tracing::info!(
+                        "--fit: MoE model — keeping expert tensors on CPU RAM for the \
+                         first {computed} layers so the rest fits in VRAM"
+                    );
+                    n_cpu_moe = computed;
+                    gpu_layers = -1;
+                }
+                crate::fit::MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers: gl } => {
+                    tracing::info!(
+                        "--fit: MoE model — even with every expert tensor on CPU RAM the \
+                         rest doesn't fit fully; offloading a reduced layer split ({gl})"
+                    );
+                    cpu_moe = true;
+                    gpu_layers = gl;
+                }
+                _ => match crate::fit::run_fit_headless(
+                    &gguf_path,
+                    self.gpu_layers,
+                    effective_ctx,
+                    self.fit_strict,
+                    kv_bpe_k,
+                    kv_bpe_v,
+                ) {
+                    crate::fit::FitOutcome::Proceed(n) => gpu_layers = n,
+                    crate::fit::FitOutcome::Abort => {
+                        return Err(ModelError::LoadFailed(format!(
+                            "--fit-strict: model '{normalized}' does not fully fit in the \
+                             currently free VRAM; not loading. Retry without --fit-strict \
+                             to allow a partial CPU/GPU split."
+                        )));
+                    }
+                },
+            }
+        }
+
         let config = InferenceConfig {
             model_path: gguf_path,
-            gpu_layers: self.gpu_layers,
-            context_size: override_ctx_size.unwrap_or(self.ctx_size),
+            gpu_layers,
+            context_size: effective_ctx,
             threads: self.threads,
             flash_attn: self.flash_attn,
             n_batch: self.n_batch,
@@ -291,8 +360,8 @@ impl AppState {
             // `engine.generate_multimodal()`. Models without an mmproj keep
             // the text-only fast path (None → no extra VRAM, no init cost).
             mmproj_path: mmproj_path.clone(),
-            cpu_moe: self.cpu_moe,
-            n_cpu_moe: self.n_cpu_moe,
+            cpu_moe,
+            n_cpu_moe,
             rs_seq: self.rs_seq,
         };
 
@@ -582,6 +651,13 @@ pub struct ServeConfig {
     pub engine: Option<Arc<InferenceEngine>>,
     pub scheduler: Option<SchedulerHandle>,
     pub gpu_layers: i32,
+    /// Auto-size the GPU offload before every model load (see
+    /// `AppState::fit`). Pass the user's `--fit` flag, never a value a
+    /// previous fit computed.
+    pub fit: bool,
+    /// With `fit`, refuse a load that does not fully fit instead of
+    /// offloading a partial split (see `AppState::fit_strict`).
+    pub fit_strict: bool,
     pub ctx_size: u32,
     pub threads: u32,
     pub flash_attn: bool,
@@ -731,6 +807,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         }),
         swap_lock: tokio::sync::Mutex::new(()),
         gpu_layers: cfg.gpu_layers,
+        fit: cfg.fit,
+        fit_strict: cfg.fit_strict,
         ctx_size: cfg.ctx_size,
         threads: cfg.threads,
         flash_attn: cfg.flash_attn,
@@ -1185,6 +1263,8 @@ mod http_tests {
             }),
             swap_lock: tokio::sync::Mutex::new(()),
             gpu_layers: 0,
+            fit: false,
+            fit_strict: false,
             ctx_size: 4096,
             threads: 1,
             flash_attn: false,
