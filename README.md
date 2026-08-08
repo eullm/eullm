@@ -2,7 +2,7 @@
   <img src="eullm-logo-github.png" alt="EULLM" width="560" />
 </p>
 
-<p align="center"><strong>The European Sovereign LLM Platform</strong></p>
+<p align="center"><strong>EULLM Platform</strong></p>
 <p align="center"><strong>The inference Engine is ready today.</strong> Drop-in Ollama replacement, Apache 2.0, EU-sovereign, AI Act-ready audit trail, zero telemetry.<br><em>Plus a roadmap to verticalize, compress, and ship domain-specific models on European infrastructure.</em></p>
 
 <p align="center">
