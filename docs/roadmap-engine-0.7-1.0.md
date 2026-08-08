@@ -124,8 +124,25 @@ nessun blocco prolungato del decode durante prefill lunghi; riuso KV validato su
   sovrascrivere). Non è un problema solo MoE: anche Qwen3.6-27B dense
   (stesso vocabolario da 248k token, arch `qwen35` ibrida SSM) falliva
   identico su rc14 — stessa causa, stesso fix, il match per suffisso
-  `.block_count` è agnostico all'architettura. Resta da validare su
-  hardware reale che 35B-A3B e 27B ora partano dal picker con rc15.
+  `.block_count` è agnostico all'architettura. **Validato su hardware
+  reale (8 agosto)**: con rc15+ sia 35B-A3B (MoE, `GPU layers: all` +
+  primi 17 layer di esperti su RAM, 38 tok/s su RTX 5070 Ti) sia 27B
+  dense (split 51/64 a ctx 4096, 43/64 a ctx 16384) partono dal picker.
+
+  **Estensione rc21, trovata dal vivo l'8 agosto**: il sizing valeva solo
+  per il caricamento di lancio — uno swap dalla chat web (o via API)
+  caricava il modello successivo con le impostazioni del modello di
+  lancio: `run --fit` su 27B (43/64), switch al 35B MoE → niente offload
+  esperti, split sbagliato, OOM. Ora `--fit`/`--fit-strict` sono in
+  `RuntimeOpts` (esistono anche su `serve`) e `api::swap_model` esegue lo
+  stesso sizing prima di ogni caricamento, dopo lo scarico del modello
+  precedente (VRAM misurata reale), **senza mai chiedere conferma**
+  (`run_fit_headless` — un daemon non ha nessuno alla tastiera;
+  `--fit-strict` diventa un errore API). Il server eredita i flag
+  originali dell'utente, mai i valori fittati sul modello di lancio.
+  Validato su hardware reale con rc21: 27B via `--fit` → switch dalla
+  chat al 35B MoE → caricamento riuscito con offload esperti, risposta a
+  ~33 chunk/s.
 
 ---
 
