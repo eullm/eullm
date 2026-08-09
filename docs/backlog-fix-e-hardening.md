@@ -2132,9 +2132,27 @@ diligenza manuale.
   applicata dal template DeepSeek-R1 hardcoded. Da validare su rc17 che i
   due Qwen3.6 mostrino il box Reasoning dal web come già fa gemma-4.
 
-- [ ] **H4-A · Tool calling sull'endpoint OpenAI: `tools` ignorato,
+- [x] **H4-A · Tool calling sull'endpoint OpenAI: `tools` ignorato,
   niente `tool_calls` né `reasoning_content`** *(P1 — issue #334,
   regressione di aspettativa rispetto a llama-server)*
+
+  **Implementato in 0.6.80-rc2**, seguendo il piano qui sotto con una
+  differenza rispetto alla stima: llama.cpp nel frattempo è passato ai
+  parser PEG (`common_chat_params.parser` = arena serializzata con
+  `save()`/`load()`), quindi lo shim restituisce la tripla (format id,
+  parser salvato, generation prompt) e il parse la ricostruisce stateless
+  — render e parse possono girare su thread diversi in momenti diversi.
+  Nuove FFI `llama_rs_apply_chat_template_oai` (messaggi e tools come JSON
+  OpenAI grezzo → `common_chat_msgs_parse_oaicompat`, ruoli tool e
+  tool_calls in history sopravvivono) e `llama_rs_chat_parse` (output →
+  `to_json_oaicompat`). Il percorso tools bufferizza sempre la
+  generazione (i tool_calls strutturati esistono solo a output completo);
+  lo streaming risponde con un singolo delta — SSE OpenAI valido ma
+  grossolano; lo streaming incrementale dei tool call è lavoro futuro
+  separato. Test CI sul round-trip FFI e sulla semantica del fallback
+  (parser vuoto = contenuto passante); estrazione tool_calls/reasoning da
+  validare su hardware con DevoxxGenie (il client del segnalatore) e con
+  `curl` su Qwen3.6.
   Segnalato da odlg il 9 agosto 2026 (issue #334): IntelliJ + DevoxxGenie
   contro EuLLM — quando il modello vuole chiamare un tool il client non
   capisce; con llama-server lo stesso plugin chiama i tool e mostra il

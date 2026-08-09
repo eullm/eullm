@@ -89,6 +89,38 @@ llama_rs_status llama_rs_apply_chat_template(
 
 void llama_rs_string_free(char * ptr);
 
+// OpenAI-compatible chat template application. `messages_json` is the
+// request's own OpenAI-format messages array (so tool roles and assistant
+// tool_calls survive), `tools_json` the OpenAI tools array or NULL,
+// `tool_choice` "auto"/"required"/"none" or NULL. Besides the rendered
+// prompt, returns the output-format triple (`out_format`, `out_parser`,
+// `out_generation_prompt`) that llama_rs_chat_parse needs.
+llama_rs_status llama_rs_apply_chat_template_oai(
+    const struct llama_model * model,
+    const char * messages_json,
+    const char * tools_json,
+    const char * tool_choice,
+    bool add_generation_prompt,
+    bool enable_thinking,
+    bool * out_was_explicit,
+    char ** out_prompt,
+    int32_t * out_format,
+    char ** out_parser,
+    char ** out_generation_prompt,
+    char ** out_thinking_start_tag,
+    char ** out_thinking_end_tag);
+
+// Parse raw model output into an OpenAI-compatible message JSON
+// ({"role","content","reasoning_content","tool_calls",...}) using the format
+// triple from llama_rs_apply_chat_template_oai. Model-free and stateless.
+llama_rs_status llama_rs_chat_parse(
+    const char * input,
+    bool is_partial,
+    int32_t format,
+    const char * parser,
+    const char * generation_prompt,
+    char ** out_json);
+
 #ifdef __cplusplus
 }
 #endif

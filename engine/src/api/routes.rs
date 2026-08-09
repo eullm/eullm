@@ -1300,7 +1300,54 @@ async fn chat_completions(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
-    let (prompt, stop_sequences) = build_chat_prompt(&snap, &messages, think, model_name_ref);
+    // ── Tool calling (issue #334): render through the model's own template
+    // with the request's full OpenAI-format JSON, so tool definitions, tool
+    // roles and assistant tool_calls in the history all reach the template.
+    // Falls back to the plain path — tools ignored, with a warning — when
+    // the GGUF embeds no template: there is no reliable way to teach an
+    // unknown hardcoded format to call tools.
+    let tools_json: Option<String> = body
+        .get("tools")
+        .filter(|t| t.as_array().is_some_and(|a| !a.is_empty()))
+        .map(Value::to_string);
+    let tool_choice: Option<String> = body.get("tool_choice").map(|tc| {
+        // String forms pass through; the named-function object form is
+        // approximated as "required" (the closest common_chat mapping).
+        tc.as_str().map_or_else(|| "required".to_string(), str::to_string)
+    });
+    let oai_template = if tools_json.is_some() {
+        serde_json::to_string(&messages).ok().and_then(|messages_json| {
+            if let Some(engine) = snap.engine.as_ref() {
+                engine.apply_oai_chat_template(
+                    &messages_json,
+                    tools_json.as_deref(),
+                    tool_choice.as_deref(),
+                    think,
+                )
+            } else if let Some(scheduler) = snap.scheduler.as_ref() {
+                scheduler.apply_oai_chat_template(
+                    &messages_json,
+                    tools_json.as_deref(),
+                    tool_choice.as_deref(),
+                    think,
+                )
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    if tools_json.is_some() && oai_template.is_none() {
+        tracing::warn!(
+            "tools requested but the model has no embedded chat template; proceeding without tools"
+        );
+    }
+
+    let (prompt, stop_sequences) = match &oai_template {
+        Some(tmpl) => (tmpl.prompt.clone(), Vec::new()),
+        None => build_chat_prompt(&snap, &messages, think, model_name_ref),
+    };
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
 
@@ -1318,10 +1365,111 @@ async fn chat_completions(
         stop_sequences,
         // think-aware: with think:false a think tag in the OUTPUT is
         // spurious, since the prompt already carries a closed empty block.
-        filter_sequences: crate::inference::default_filters(think),
+        // On the tool path nothing is filtered: the format-aware parser
+        // needs the raw output, thinking blocks included.
+        filter_sequences: if oai_template.is_some() {
+            Vec::new()
+        } else {
+            crate::inference::default_filters(think)
+        },
         grammar,
         raw: false,
     };
+
+    // ── Tool calling (issue #334): buffered, format-aware path ──────────
+    // Structured tool_calls only exist once the output is complete and
+    // parsed, and a client that asked for tools cannot act on half a call
+    // anyway, so this path always buffers the full generation. A streaming
+    // request still gets an SSE response — one delta carrying the whole
+    // parsed message, then the finish chunk — which is valid OpenAI
+    // streaming, just coarse.
+    if let Some(tmpl) = oai_template {
+        let rx = if let Some(ref sched) = snap.scheduler {
+            sched.submit(request)
+        } else {
+            sequential_to_channel(Arc::clone(snap.engine.as_ref().unwrap()), request)
+        };
+        let Collected {
+            text,
+            tokens_generated,
+            tokens_prompt,
+            duration_ms,
+            stop_reason,
+        } = collect_stream(rx).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e })),
+            )
+        })?;
+
+        let mut audit = AuditEntry::new(model.clone(), "chat.completions".to_string());
+        audit.input_tokens = tokens_prompt;
+        audit.output_tokens = tokens_generated;
+        audit.duration_ms = duration_ms;
+        audit.user_id = user_id.clone();
+        AuditLogger::new().log(&audit);
+
+        let (message, called_tools) = match tmpl.parse_output(&text) {
+            Some(parsed) => {
+                let mut message = json!({ "role": "assistant" });
+                message["content"] =
+                    if parsed.content.is_empty() && !parsed.tool_calls.is_empty() {
+                        Value::Null
+                    } else {
+                        Value::String(parsed.content)
+                    };
+                if let Some(reasoning) = parsed.reasoning_content {
+                    message["reasoning_content"] = Value::String(reasoning);
+                }
+                let called = !parsed.tool_calls.is_empty();
+                if called {
+                    message["tool_calls"] = parsed
+                        .tool_calls
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, call)| {
+                            json!({
+                                "id": call.id.unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
+                                "index": i,
+                                "type": "function",
+                                "function": { "name": call.name, "arguments": call.arguments },
+                            })
+                        })
+                        .collect();
+                }
+                (message, called)
+            }
+            None => (json!({ "role": "assistant", "content": text }), false),
+        };
+        let finish_reason = if called_tools {
+            "tool_calls"
+        } else {
+            stop_reason.as_api_str()
+        };
+        let usage = json!({
+            "prompt_tokens": tokens_prompt,
+            "completion_tokens": tokens_generated,
+            "total_tokens": tokens_prompt + tokens_generated,
+        });
+
+        if is_streaming(&body) {
+            let stream = buffered_message_sse(model, message, finish_reason.to_string(), usage);
+            return Ok(Sse::new(stream).into_response());
+        }
+        return Ok(Json(json!({
+            "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
+            "object": "chat.completion",
+            "created": chrono::Utc::now().timestamp(),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": message,
+                "finish_reason": finish_reason,
+            }],
+            "usage": usage,
+        }))
+        .into_response());
+    }
 
     if let Some(ref sched) = snap.scheduler {
         let rx = sched.submit(request);
@@ -1429,6 +1577,45 @@ async fn chat_completions(
 }
 
 // ── Streaming helpers ────────────────────────────────────────────────────────
+
+/// SSE for the buffered tool-calling path: the whole parsed message as one
+/// delta chunk, then a finish chunk with usage, then `[DONE]`. Coarse but
+/// valid OpenAI streaming — structured tool calls cannot be streamed
+/// incrementally without the format-aware incremental parser, which is
+/// separate future work.
+fn buffered_message_sse(
+    model: String,
+    message: Value,
+    finish_reason: String,
+    usage: Value,
+) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
+    async_stream::stream! {
+        let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+        let created = chrono::Utc::now().timestamp();
+        yield Ok(Event::default().data(
+            json!({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{ "index": 0, "delta": message, "finish_reason": Value::Null }],
+            })
+            .to_string(),
+        ));
+        yield Ok(Event::default().data(
+            json!({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }],
+                "usage": usage,
+            })
+            .to_string(),
+        ));
+        yield Ok(Event::default().data("[DONE]"));
+    }
+}
 
 #[derive(Clone, Copy)]
 enum StreamFormat {

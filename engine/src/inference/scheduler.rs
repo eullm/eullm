@@ -287,6 +287,20 @@ impl SchedulerHandle {
         super::render_jinja_chat_template(&model, messages, think)
     }
 
+    /// Tool-aware twin of [`Self::apply_jinja_chat_template`], fed the
+    /// request's own OpenAI-format JSON. See
+    /// [`super::render_oai_chat_template`].
+    pub fn apply_oai_chat_template(
+        &self,
+        messages_json: &str,
+        tools_json: Option<&str>,
+        tool_choice: Option<&str>,
+        think: bool,
+    ) -> Option<super::DynamicOaiTemplate> {
+        let model = self.model.upgrade()?;
+        super::render_oai_chat_template(&model, messages_json, tools_json, tool_choice, think)
+    }
+
     /// Submit a request for inference. Returns immediately.
     ///
     /// The caller should listen on the returned `mpsc::Receiver<StreamEvent>`

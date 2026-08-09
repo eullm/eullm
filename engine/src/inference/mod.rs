@@ -913,6 +913,142 @@ pub struct DynamicChatTemplate {
     pub prompt: String,
 }
 
+/// A chat prompt rendered from OpenAI-format request JSON (messages plus
+/// optional tools), carrying the output-format descriptor needed to parse
+/// the model's raw output back into structured content, reasoning and tool
+/// calls. Unlike [`DynamicChatTemplate`], the pre-opened thinking tag is
+/// NOT stripped here: the parser this descriptor builds was derived from
+/// the prompt exactly as rendered, and expects the output shape that prompt
+/// produces.
+pub struct DynamicOaiTemplate {
+    /// The rendered prompt, ready to generate from as-is.
+    pub prompt: String,
+    format: i32,
+    parser: String,
+    generation_prompt: String,
+}
+
+/// One tool call extracted from a model's output.
+pub struct ParsedToolCall {
+    /// Call id, when the output format carries one (most don't).
+    pub id: Option<String>,
+    /// The function name.
+    pub name: String,
+    /// The function arguments, as a JSON string (OpenAI convention).
+    pub arguments: String,
+}
+
+/// A model's raw output parsed through its template's output format.
+pub struct ParsedChatMessage {
+    /// The visible assistant text (may be empty when the turn is all tool
+    /// calls).
+    pub content: String,
+    /// Extracted reasoning, when the model produced a thinking block.
+    pub reasoning_content: Option<String>,
+    /// Structured tool calls, in output order.
+    pub tool_calls: Vec<ParsedToolCall>,
+}
+
+impl DynamicOaiTemplate {
+    /// Parse `text` (the model's complete raw output for one turn) with
+    /// llama.cpp's format-aware parser — the same `common_chat_parse`
+    /// llama-server uses, so a model that tool-calls correctly there
+    /// produces the same structured result here. Returns `None` when the
+    /// parse fails outright; the caller should fall back to treating the
+    /// text as plain content.
+    pub fn parse_output(&self, text: &str) -> Option<ParsedChatMessage> {
+        let raw = llama_cpp_2::model::chat_parse(
+            text,
+            /* is_partial */ false,
+            self.format,
+            &self.parser,
+            &self.generation_prompt,
+        )
+        .inspect_err(|e| tracing::warn!("chat output parse failed, treating as plain text: {e}"))
+        .ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw)
+            .inspect_err(|e| tracing::warn!("chat output parse returned invalid JSON: {e}"))
+            .ok()?;
+
+        let content = v
+            .get("content")
+            .and_then(|c| c.as_str())
+            .unwrap_or("")
+            .to_string();
+        let reasoning_content = v
+            .get("reasoning_content")
+            .and_then(|r| r.as_str())
+            .filter(|r| !r.is_empty())
+            .map(str::to_string);
+        let tool_calls = v
+            .get("tool_calls")
+            .and_then(|t| t.as_array())
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| {
+                        let f = call.get("function")?;
+                        let name = f.get("name")?.as_str()?.to_string();
+                        // OpenAI convention is a JSON *string*; tolerate an
+                        // object by re-serializing it.
+                        let arguments = match f.get("arguments") {
+                            Some(serde_json::Value::String(s)) => s.clone(),
+                            Some(other) => other.to_string(),
+                            None => "{}".to_string(),
+                        };
+                        let id = call
+                            .get("id")
+                            .and_then(|i| i.as_str())
+                            .filter(|i| !i.is_empty())
+                            .map(str::to_string);
+                        Some(ParsedToolCall { id, name, arguments })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Some(ParsedChatMessage {
+            content,
+            reasoning_content,
+            tool_calls,
+        })
+    }
+}
+
+/// Render an OpenAI-format request (messages JSON, optional tools JSON and
+/// tool_choice) through the model's own chat template. `None` means the
+/// caller should fall back to the plain path: no embedded template in the
+/// GGUF, or rendering failed.
+pub(crate) fn render_oai_chat_template(
+    model: &LlamaModel,
+    messages_json: &str,
+    tools_json: Option<&str>,
+    tool_choice: Option<&str>,
+    think: bool,
+) -> Option<DynamicOaiTemplate> {
+    let result = model
+        .apply_chat_template_oaicompat(
+            messages_json,
+            tools_json,
+            tool_choice,
+            /* add_generation_prompt */ true,
+            think,
+        )
+        .inspect_err(|e| {
+            tracing::warn!("OAI chat template rendering failed, falling back: {e}");
+        })
+        .ok()?;
+    if !result.was_explicit {
+        return None;
+    }
+    Some(DynamicOaiTemplate {
+        prompt: result.prompt,
+        format: result.format,
+        parser: result.parser,
+        generation_prompt: result.generation_prompt,
+    })
+}
+
 /// If `prompt` ends with the template's thinking start tag (ignoring
 /// trailing whitespace), remove it — tag and trailing whitespace both — so
 /// the model emits the opening tag itself as its first output tokens.
@@ -1088,6 +1224,18 @@ impl InferenceEngine {
         think: bool,
     ) -> Option<DynamicChatTemplate> {
         render_jinja_chat_template(&self.model, messages, think)
+    }
+
+    /// Tool-aware twin of [`Self::apply_jinja_chat_template`], fed the
+    /// request's own OpenAI-format JSON. See [`render_oai_chat_template`].
+    pub fn apply_oai_chat_template(
+        &self,
+        messages_json: &str,
+        tools_json: Option<&str>,
+        tool_choice: Option<&str>,
+        think: bool,
+    ) -> Option<DynamicOaiTemplate> {
+        render_oai_chat_template(&self.model, messages_json, tools_json, tool_choice, think)
     }
 
     /// Load a GGUF model and prepare the inference engine.
@@ -2563,5 +2711,45 @@ mod stop_reason_tests {
         let mut p = "<|im_start|>assistant\n".to_string();
         assert!(!super::strip_preopened_thinking(&mut p, ""));
         assert_eq!(p, "<|im_start|>assistant\n");
+    }
+
+    // ── DynamicOaiTemplate::parse_output ────────────────────────────────────
+    //
+    // The parse side is model-free (llama.cpp's common_chat_parse rebuilds
+    // its state from the descriptor alone), so the full FFI round trip runs
+    // in CI. With an empty parser descriptor llama.cpp substitutes a pure
+    // content parser: everything — thinking tags included — passes through
+    // as content, verbatim. Reasoning and tool-call extraction live in the
+    // PEG parser the template render derives, which needs a real GGUF, so
+    // that half is validated on hardware; what CI pins down here is the FFI
+    // round trip and the fallback semantics.
+
+    fn content_only_template() -> super::DynamicOaiTemplate {
+        super::DynamicOaiTemplate {
+            prompt: String::new(),
+            format: 0,
+            parser: String::new(),
+            generation_prompt: String::new(),
+        }
+    }
+
+    #[test]
+    fn parse_output_without_a_parser_keeps_think_tags_inline() {
+        let parsed = content_only_template()
+            .parse_output("<think>weigh the options</think>The answer is 4.")
+            .expect("parse must succeed");
+        assert_eq!(parsed.content, "<think>weigh the options</think>The answer is 4.");
+        assert_eq!(parsed.reasoning_content, None);
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn parse_output_plain_text_passes_through() {
+        let parsed = content_only_template()
+            .parse_output("Just an answer, no thinking block.")
+            .expect("parse must succeed");
+        assert_eq!(parsed.content, "Just an answer, no thinking block.");
+        assert_eq!(parsed.reasoning_content, None);
+        assert!(parsed.tool_calls.is_empty());
     }
 }

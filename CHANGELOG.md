@@ -17,6 +17,24 @@ something changed, less so for understanding what it means.
 
 *Accumulating; published only as `EuLLM-v0.6.80-rc*` pre-releases so far.*
 
+### Added
+- **Tool calling on the OpenAI endpoint** (#334). `tools` and `tool_choice`
+  in a `/v1/chat/completions` request now reach the model: the prompt is
+  rendered through the model's own chat template with the request's full
+  OpenAI-format JSON (tool definitions, `tool` role messages, and
+  assistant `tool_calls` in the history all survive), and the raw output
+  is parsed back with llama.cpp's format-aware parser — the same one
+  llama-server uses — into structured `tool_calls`, `content`, and
+  `reasoning_content`, with `finish_reason: "tool_calls"` when the model
+  called something. Reasoning arrives in `reasoning_content` on this path,
+  which is what clients render as a separate thinking box. Works on models
+  whose GGUF embeds a chat template (Qwen3 family and most modern
+  releases); without one, tools are ignored with a logged warning, as
+  before. One knowing limit: tool requests are parsed whole, so a
+  streaming request gets its answer as a single delta rather than
+  token-by-token — incremental tool-call streaming is separate future
+  work.
+
 ### Fixed
 - **Markdown tables render as tables in the chat UI** (#335). They used to
   come out as plain text with visible pipes. GFM syntax — a header row, a
