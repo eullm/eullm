@@ -37,13 +37,17 @@ something changed, less so for understanding what it means.
 
 ### Fixed
 - **Normal vertical spacing between blocks in the chat UI.** Headings,
-  lists, tables and code blocks were surrounded by roughly twice the
+  lists, tables and code blocks were surrounded by up to three times the
   intended air, and a blank line between numbered list items visibly
-  restarted the numbering. The message body preserves the source's blank
-  lines (that is what separates plain-text paragraphs), but block elements
-  bring their own margins, so the two spacings stacked. Blank lines
-  touching a block element are now dropped; blank lines between plain
-  paragraphs still render as before.
+  restarted the numbering. Two causes stacked on top of the elements' own
+  margins, and both are fixed: the source's blank lines next to a block
+  element rendered as visible gaps (the message body preserves newlines,
+  which is what separates plain-text paragraphs), and the renderer's own
+  join put a newline between every pair of elements, which between two
+  blocks — two list items included — rendered as one more empty line.
+  Fixed in two steps: rc3 removed the first cause, rc4 the second, which
+  real output showed was the dominant one. Blank lines between plain
+  paragraphs still render exactly as before.
 
 - **Markdown tables render as tables in the chat UI** (#335). They used to
   come out as plain text with visible pipes. GFM syntax — a header row, a

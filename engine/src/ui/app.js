@@ -519,7 +519,20 @@
       }
       compact.push(out[k]);
     }
-    return compact.join("\n");
+
+    // Second layer of the same problem: the join separator itself. Under
+    // pre-wrap, a "\n" BETWEEN two block elements (two <li>, two
+    // blockquotes, a </ul> and a <table>) renders as an empty line box on
+    // top of the elements' margins. Block elements break the line on their
+    // own, so the newline is only needed between two plain-text entries.
+    let html = "";
+    for (let k = 0; k < compact.length; k++) {
+      if (k > 0 && !blockish(compact[k]) && !blockish(compact[k - 1])) {
+        html += "\n";
+      }
+      html += compact[k];
+    }
+    return html;
   }
 
   function renderContent(text) {
