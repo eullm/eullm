@@ -633,3 +633,28 @@ dialog#settings-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
   margin: 14px 0;
   overflow-wrap: anywhere;
 }
+
+/* GFM tables in chat messages (issue #335). display:block + overflow-x so a
+   wide table scrolls inside its own box instead of stretching the page;
+   white-space back to normal because .msg-content is pre-wrap. */
+.msg-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 10px 0;
+  white-space: normal;
+}
+.msg-content th,
+.msg-content td {
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  text-align: left;
+}
+.msg-content th {
+  background: var(--bg-elev);
+  font-weight: 600;
+}
+.msg-content tbody tr:nth-child(even) {
+  background: color-mix(in srgb, var(--bg-elev) 45%, transparent);
+}

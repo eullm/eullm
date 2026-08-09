@@ -2131,6 +2131,40 @@ diligenza manuale.
   stessa deviazione deliberata, presa da Ollama, già documentata e
   applicata dal template DeepSeek-R1 hardcoded. Da validare su rc17 che i
   due Qwen3.6 mostrino il box Reasoning dal web come già fa gemma-4.
+
+- [ ] **H4-A · Tool calling sull'endpoint OpenAI: `tools` ignorato,
+  niente `tool_calls` né `reasoning_content`** *(P1 — issue #334,
+  regressione di aspettativa rispetto a llama-server)*
+  Segnalato da odlg il 9 agosto 2026 (issue #334): IntelliJ + DevoxxGenie
+  contro EuLLM — quando il modello vuole chiamare un tool il client non
+  capisce; con llama-server lo stesso plugin chiama i tool e mostra il
+  thinking in un box separato. Verificato nel codice: zero occorrenze di
+  `tools`/`tool_calls`/`reasoning_content` in `api/routes.rs` — il
+  parametro `tools` della richiesta OpenAI viene ignorato del tutto, il
+  modello non sa dei tool (o ne vede la definizione come testo), e
+  l'eventuale markup di tool-call esce come testo dentro `content`.
+  Stessa cosa per il reasoning: llama-server lo separa nel campo
+  `reasoning_content`, noi lo streammiamo inline.
+
+  Piano, in tre pezzi sulla stessa infrastruttura del template dinamico
+  (lo shim `llama_rs_apply_chat_template` → `common_chat_templates_apply`
+  di rc16):
+  1. accettare `tools`/`tool_choice` su `/v1/chat/completions` e passarli
+     allo shim — `common_chat_templates_inputs` ha già il campo `tools`,
+     il wrapper oggi passa solo i messaggi (come fu per
+     `enable_thinking` in rc18);
+  2. parsare l'output del modello nei `tool_calls` strutturati con
+     `common_chat_parse` (llama.cpp lo fa per famiglia di template — è
+     esattamente ciò che llama-server usa, quindi parità garantita sui
+     modelli dove funziona lì);
+  3. separare il reasoning in `reasoning_content` nello stream SSE (i
+     `thinking_start_tag`/`thinking_end_tag` che già riceviamo dallo
+     shim dicono dove tagliare).
+  Da fare nella finestra 0.6.80. Nota di test: DevoxxGenie come client di
+  riferimento (è il setup del segnalatore), più un giro `curl` con
+  `tools` + `tool_choice:"auto"` su Qwen3.6 (famiglia hermes) e su un
+  modello senza template tool per il fallback pulito (campo assente,
+  niente errori).
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti

@@ -387,6 +387,24 @@
     return s;
   }
 
+  // Split a markdown table row into cells: outer pipes are optional, inner
+  // pipes separate. Pipes inside code spans can't reach here — code is
+  // stashed as opaque placeholders before the block pass runs.
+  function splitTableRow(line) {
+    let t = line.trim();
+    if (t.startsWith("|")) t = t.slice(1);
+    if (t.endsWith("|")) t = t.slice(0, -1);
+    return t.split("|");
+  }
+
+  // The row under a table header: only dashes and alignment colons per cell,
+  // e.g. `|---|:---:|--:|`. This is what commits the block as a table.
+  function isTableSeparator(line) {
+    if (!line || !line.includes("|") || !line.includes("-")) return false;
+    const cells = splitTableRow(line);
+    return cells.length > 0 && cells.every((c) => /^\s*:?-+:?\s*$/.test(c));
+  }
+
   function renderMarkdownBlocks(text) {
     const lines = text.split("\n");
     const out = [];
@@ -402,7 +420,40 @@
       return /^\s*<math[^>]*display="block"[^>]*>[\s\S]*?<\/math>\s*$/.test(l);
     };
 
-    for (const line of lines) {
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // GFM table: a row with pipes whose NEXT line is a separator row with
+      // the same cell count (issue #335 — tables used to render as plain
+      // text with visible pipes). During streaming the separator hasn't
+      // arrived yet, so the header shows as text for a moment and snaps
+      // into a table on the next re-render; that's fine.
+      if (
+        line.includes("|") &&
+        i + 1 < lines.length &&
+        isTableSeparator(lines[i + 1]) &&
+        splitTableRow(line).length === splitTableRow(lines[i + 1]).length
+      ) {
+        closeList();
+        const aligns = splitTableRow(lines[i + 1]).map((c) => {
+          const t = c.trim();
+          if (t.startsWith(":") && t.endsWith(":")) return "center";
+          if (t.endsWith(":")) return "right";
+          return null;
+        });
+        const cell = (c, tag, k) =>
+          `<${tag}${aligns[k] ? ` style="text-align:${aligns[k]}"` : ""}>${renderInline(c.trim())}</${tag}>`;
+        const rows = [];
+        rows.push("<tr>" + splitTableRow(line).map((c, k) => cell(c, "th", k)).join("") + "</tr>");
+        i += 1; // consume the separator row
+        while (i + 1 < lines.length && lines[i + 1].includes("|") && lines[i + 1].trim()) {
+          i += 1;
+          rows.push("<tr>" + splitTableRow(lines[i]).map((c, k) => cell(c, "td", k)).join("") + "</tr>");
+        }
+        out.push(
+          `<table><thead>${rows[0]}</thead><tbody>${rows.slice(1).join("")}</tbody></table>`,
+        );
+        continue;
+      }
       // Horizontal rule
       if (/^[-_*]{3,}\s*$/.test(line)) {
         closeList(); out.push("<hr/>"); continue;

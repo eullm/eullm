@@ -13,6 +13,17 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.80 — unreleased
+
+*Accumulating; published only as `EuLLM-v0.6.80-rc*` pre-releases so far.*
+
+### Fixed
+- **Markdown tables render as tables in the chat UI** (#335). They used to
+  come out as plain text with visible pipes. GFM syntax — a header row, a
+  `|---|` separator, optional `:` alignment markers — now produces a real
+  table, with wide ones scrolling inside their own box instead of
+  stretching the page. Tables inside code blocks are left alone.
+
 ## 0.6.70 — 2026-08-08
 
 *Accumulated through pre-releases `rc1`–`rc21`, each validated on real
