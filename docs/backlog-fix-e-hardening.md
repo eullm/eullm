@@ -2218,7 +2218,33 @@ diligenza manuale.
   ~11 tok/s; il punto di equilibrio stimato è ~32k"). Serve distinguere
   flag esplicito da default in clap (Option<u32> o ArgMatches). Punto di
   equilibrio stimato per questo hardware: 32768 con KV q8_0 (~1,3 GiB);
-  misura di conferma ancora da fare.
+  misura di conferma ancora da fare. Nota architetturale utile al
+  calcolo: Qwen3.6 è ibrido SSM (`full_attention_interval=4`), solo un
+  layer su quattro paga KV per token, gli altri hanno stato ricorrente a
+  dimensione fissa: il costo del contesto va calcolato dai metadati, non
+  stimato con la formula dei transformer classici.
+
+- [ ] **H4-D · Context shift: conversazione infinita a finestra fissa
+  invece del troncamento** *(P2 — complementare a H4-C, richiesto il 9
+  agosto: "quando diventiamo troppo lenti un sistema per comprimere o
+  cancellare quella vecchia")*
+  Oggi quando il contesto si riempie la generazione si ferma con
+  `done_reason=length`, e l'unico rimedio è allargare la finestra, che
+  oltre il punto di equilibrio VRAM rende tutto CPU-bound (vedi tabella
+  H4-C). llama-server risolve col context shift: a finestra piena tiene
+  il prefisso protetto (system prompt), scarta la metà più vecchia della
+  conversazione, shifta le posizioni del resto (rope shift /
+  `llama_kv_cache_seq_add`) e continua a generare. Finestra fissa alla
+  dimensione veloce, conversazione senza limite, velocità costante.
+  Da implementare nello scheduler (il percorso sequenziale può seguire):
+  attenzione ai checkpoint (`PromptCheckpoint` cattura stati che dopo lo
+  shift non corrispondono più), al riuso prefissi (lo shift invalida il
+  match esatto dei token residenti: aggiornare `CachedSlot.tokens` in
+  coerenza), e ai modelli ibridi/ricorrenti dove lo stato SSM non è
+  shiftabile per posizione (llama.cpp gestisce il caso, verificare cosa
+  espone il binding). La compressione del KV oltre la quantizzazione
+  (q8_0/q4_0, già disponibili) resta fuori scope: è ricerca, non
+  ingegneria.
   Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
   già individuata, non è questione di ritoccare un margine: `.msg-content`
   è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente
