@@ -2204,7 +2204,9 @@ diligenza manuale.
   | ctx richiesto | KV | config prodotta | VRAM usata | velocità | esito |
   |---|---|---|---|---|---|
   | 4096 (default) | 320 MiB F16 | esperti CPU primi 17 layer | — | ~56 chunk/s | tronca a ~4k token |
-  | 262144 (trained) | ~20 GiB F16 | quasi tutto su CPU, GPU 0-1% | ~6 GiB | ~11 tok/s | mai troncato; stessa velocità del CIX P1 CPU-only |
+  | 262144 (trained) | ~20 GiB F16 | quasi tutto su CPU, GPU 0-1% | ~6 GiB | ~11 tok/s | pre-rc5: stima KV uniforme, GPU inutilizzata |
+  | 262144 con rc5 | idem | sconto ibrido medio | 14,5 GiB (89%) | ~40 tok/s | margine ~600 MiB, al pelo (media ottimista di mezzo layer) |
+  | 262144 con rc7 | idem | conteggio esatto layer paganti | 14,0 GiB (86%) | ~42 chunk/s | margine ~1 GiB, velocità invariata: campagna chiusa |
   | 32768 + KV q8_0 | ~0,7 GiB | GPU ben impacchettata, RAM dimezzata | 13,4 GiB (83%) | ~45,4 chunk/s | **il punto di equilibrio**: 5900 token senza troncare, -20% di velocità per 8× la finestra |
 
   **Campagna completa (9 agosto)**. Dal caso 262k è uscito anche un fix
