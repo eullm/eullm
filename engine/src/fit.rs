@@ -57,8 +57,14 @@ pub struct GgufInfo {
     /// Hybrid-SSM attention cadence (`<arch>.full_attention_interval`): only
     /// one layer in every `interval` is full attention and pays per-token KV
     /// cache; the rest carry fixed-size recurrent state. Absent (or 1) on
-    /// classic transformers, where every layer pays.
+    /// classic transformers, where every layer pays. Some hybrid exporters
+    /// omit the key entirely — see `effective_attention_interval` for the
+    /// architecture default that covers them.
     pub full_attention_interval: Option<u32>,
+    /// `general.architecture`, e.g. `qwen35moe`. Used to apply upstream's
+    /// per-architecture attention-cadence default when the explicit key is
+    /// missing.
+    pub architecture: Option<String>,
 }
 
 impl GgufInfo {
@@ -127,9 +133,27 @@ impl GgufInfo {
     /// from the VRAM ceiling. The ceiling division is alignment-independent
     /// and at worst one layer conservative.
     fn kv_paying_layers(&self, n: u64) -> u64 {
-        match self.full_attention_interval {
+        match self.effective_attention_interval() {
             Some(interval) if interval > 1 => n.div_ceil(u64::from(interval)),
             _ => n,
+        }
+    }
+
+    /// The attention cadence actually in effect: the explicit header key
+    /// when present, else upstream's per-architecture default. llama.cpp
+    /// hardcodes `full_attn_interval = 4` for the qwen35 family and
+    /// qwen3next BEFORE the optional key read (`models/qwen35.cpp`,
+    /// `qwen35moe.cpp`, `qwen3next.cpp`), and real GGUFs rely on it:
+    /// Ornith-1.0-35B (arch `qwen35moe`) ships without the key at all, so
+    /// keying the discount on the header alone silently re-charged every
+    /// layer full KV on that model.
+    fn effective_attention_interval(&self) -> Option<u32> {
+        if self.full_attention_interval.is_some() {
+            return self.full_attention_interval;
+        }
+        match self.architecture.as_deref() {
+            Some(arch) if arch.starts_with("qwen35") || arch == "qwen3next" => Some(4),
+            _ => None,
         }
     }
 }
@@ -245,6 +269,7 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let mut key_length: Option<u32> = None;
     let mut value_length: Option<u32> = None;
     let mut full_attention_interval: Option<u32> = None;
+    let mut architecture: Option<String> = None;
 
     // The metadata keys we want, each an integer stored as u32 or u64 depending
     // on the exporter. The `_kv` head count is checked before the plain head
@@ -265,6 +290,20 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         let Some(value_type) = c.u32() else {
             break;
         };
+
+        // `general.architecture` is the one string-typed key we want — it is
+        // conventionally the first key in the file, and it selects the
+        // per-architecture attention-cadence default when the explicit
+        // interval key is absent (see `effective_attention_interval`).
+        if key_bytes == b"general.architecture" && value_type == GGUF_TYPE_STRING {
+            match c.gguf_string() {
+                Some(s) => {
+                    architecture = Some(String::from_utf8_lossy(s).into_owned());
+                    continue;
+                }
+                None => break,
+            }
+        }
 
         // Pick which field (if any) this key feeds. All are scalar integers;
         // an array-typed match is ignored (skipped) to stay aligned.
@@ -335,6 +374,7 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         key_length,
         value_length,
         full_attention_interval,
+        architecture,
     })
 }
 
@@ -1081,6 +1121,7 @@ mod tests {
             key_length: None,
             value_length: None,
             full_attention_interval: None,
+            architecture: None,
         }
     }
 
@@ -1142,6 +1183,7 @@ mod tests {
             key_length: None,
             value_length: None,
             full_attention_interval: None,
+            architecture: None,
         };
         let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
         let file = 18_500_000_000;
@@ -1206,6 +1248,14 @@ mod key_length_tests {
         buf.extend_from_slice(key);
         buf.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
         buf.extend_from_slice(&val.to_le_bytes());
+    }
+
+    fn put_str(key: &[u8], val: &[u8], buf: &mut Vec<u8>) {
+        buf.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        buf.extend_from_slice(key);
+        buf.extend_from_slice(&GGUF_TYPE_STRING.to_le_bytes());
+        buf.extend_from_slice(&(val.len() as u64).to_le_bytes());
+        buf.extend_from_slice(val);
     }
 
     fn header(entries: &[(&[u8], u32)]) -> Vec<u8> {
@@ -1336,6 +1386,33 @@ mod key_length_tests {
         assert_eq!(info.full_attention_interval, Some(4));
     }
 
+    /// The Ornith case: a `qwen35moe` GGUF that ships WITHOUT the explicit
+    /// interval key. Upstream hardcodes the default 4 before the optional
+    /// read, so the discount must apply from the architecture alone.
+    #[test]
+    fn qwen35_architectures_default_the_attention_interval() {
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        b.extend_from_slice(&2u64.to_le_bytes());
+        put_str(b"general.architecture", b"qwen35moe", &mut b);
+        put_u32(b"qwen35moe.block_count", 64, &mut b);
+
+        let info = parse_gguf_header(&b).expect("parses");
+        assert_eq!(info.architecture.as_deref(), Some("qwen35moe"));
+        assert_eq!(info.full_attention_interval, None);
+        // 64 layers at the defaulted cadence of 4: 16 pay KV, not 64.
+        assert_eq!(info.kv_paying_layers(64), 16);
+
+        // An unknown architecture without the key stays uniform.
+        let dense = GgufInfo {
+            architecture: Some("llama".to_string()),
+            ..info.clone()
+        };
+        assert_eq!(dense.kv_paying_layers(64), 64);
+    }
+
     /// A dense model never writes `full_attention_interval`; the parser
     /// scans to the end (skipping unwanted values) and everything else is
     /// still read correctly.
@@ -1369,6 +1446,7 @@ mod key_length_tests {
             key_length: Some(256),
             value_length: Some(256),
             full_attention_interval: None,
+            architecture: None,
         };
         let hybrid = GgufInfo {
             full_attention_interval: Some(4),
@@ -1404,6 +1482,7 @@ mod key_length_tests {
             key_length: Some(128),
             value_length: Some(128),
             full_attention_interval: None,
+            architecture: None,
         };
         let assumed = GgufInfo {
             key_length: None,
@@ -1586,6 +1665,7 @@ mod moe_fit_tests {
             key_length: None,
             value_length: None,
             full_attention_interval: None,
+            architecture: None,
         }
     }
 
