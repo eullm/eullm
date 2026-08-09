@@ -2274,6 +2274,23 @@ diligenza manuale.
   Nessun cambiamento visibile ai client oltre un log quando avviene.
   Pianificato come primo lavoro della prossima sessione.
 
+- [ ] **H4-F · Model store: i quant HF (`repo:QUANT`) collidono nella
+  stessa identità** *(P2 — segnalato da odlg nella coda della #334, 9
+  agosto, su rc8)*
+  Due sintomi con la stessa radice: (a) `hf.co/unsloth/Ornith-1.0-35B-
+  GGUF:UD-Q5_K_XL` e `:UD-Q4_K_M` sono visti come lo stesso modello, non
+  si può passare dall'uno all'altro (lo swap li deduplica); (b) lanciato
+  il `:UD-Q4_K_M`, un lancio successivo col repo senza suffisso fa
+  ripartire il download del Q4_K_M invece di riusare/chiedere. Sospetto:
+  `normalize_model_name` tratta `:QUANT` come tag Ollama e lo appiattisce
+  (`qwen3:14b` → `qwen3-14b`), e la dedup dello swap confronta gli stem
+  dei file; il quant deve invece far parte dell'identità del modello
+  (directory dello store, nome in `/v1/models` e `/api/tags`, confronto
+  di swap), e il repo nudo deve risolvere sul quant di default della pull
+  logic dichiarandolo, non scaricare in silenzio un quant già presente.
+  Da testare con due quant dello stesso repo: pull di entrambi, swap
+  avanti e indietro, lancio col nome nudo.
+
 - [ ] **H4-E · Banner: la stima KV di `estimate_kv_memory` non conosce gli
   ibridi** *(P3 — cosmetico, emerso dall'audit di fine giornata del 9
   agosto sui percorsi dense)*
