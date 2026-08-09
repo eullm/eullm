@@ -2201,10 +2201,16 @@ diligenza manuale.
   l'estremo opposto è altrettanto sbagliato: campagna di misure del 9
   agosto su RTX 5070 Ti 16 GiB, Qwen3.6-35B-A3B UD-Q4_K_M, `--fit`:
 
-  | ctx richiesto | KV (F16) | config prodotta | velocità | esito |
-  |---|---|---|---|---|
-  | 4096 (default) | 320 MiB | esperti CPU primi 17 layer | ~56 chunk/s | tronca a ~4k token |
-  | 262144 (trained) | ~20 GiB | quasi tutto su CPU, GPU 0-1% | ~11 tok/s | mai troncato; stessa velocità del CIX P1 CPU-only, la GPU non contribuiva |
+  | ctx richiesto | KV | config prodotta | VRAM usata | velocità | esito |
+  |---|---|---|---|---|---|
+  | 4096 (default) | 320 MiB F16 | esperti CPU primi 17 layer | — | ~56 chunk/s | tronca a ~4k token |
+  | 262144 (trained) | ~20 GiB F16 | quasi tutto su CPU, GPU 0-1% | ~6 GiB | ~11 tok/s | mai troncato; stessa velocità del CIX P1 CPU-only |
+  | 32768 + KV q8_0 | ~0,7 GiB | GPU ben impacchettata, RAM dimezzata | 13,4 GiB (83%) | da misurare | il punto di equilibrio |
+
+  Dettaglio istruttivo del caso 262k: il KV viaggia col layer (ogni layer
+  full-attention portava >1,2 GiB di sola cache), quindi nel budget VRAM
+  entravano pochissimi layer: il crollo a 6 GiB usati non era prudenza,
+  era la fetta per layer diventata ingestibile.
 
   Con 262k il sizing ha fatto i conti giusti su una richiesta impossibile
   (20 GiB di KV su 15,9 di VRAM) e ha prodotto una config caricabile ma
