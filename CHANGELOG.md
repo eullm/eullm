@@ -62,7 +62,7 @@ something changed, less so for understanding what it means.
   rc7 the paying-layer count is exact instead of averaged — an offloaded
   block can hold one more attention layer than the mean (a block of 22
   with cadence 4 holds 6, not 5.5), and that half-slice under-charge was
-  eating ~0.5 GiB of the safety margin at large contexts. From rc9 the
+  eating ~0.5 GiB of the safety margin at large contexts. From rc8 the
   discount also applies to hybrid GGUFs that ship WITHOUT the explicit
   cadence key: llama.cpp hardcodes the default of 4 for the qwen35 family
   and qwen3next before even reading the key, and real models rely on that
