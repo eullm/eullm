@@ -2255,10 +2255,22 @@ diligenza manuale.
   shift non corrispondono più), al riuso prefissi (lo shift invalida il
   match esatto dei token residenti: aggiornare `CachedSlot.tokens` in
   coerenza), e ai modelli ibridi/ricorrenti dove lo stato SSM non è
-  shiftabile per posizione (llama.cpp gestisce il caso, verificare cosa
-  espone il binding). La compressione del KV oltre la quantizzazione
-  (q8_0/q4_0, già disponibili) resta fuori scope: è ricerca, non
-  ingegneria.
+  shiftabile per posizione. La compressione del KV oltre la
+  quantizzazione (q8_0/q4_0, già disponibili) resta fuori scope: è
+  ricerca, non ingegneria.
+
+  **Ricognizione API fatta (9 agosto), si può partire senza sorprese**:
+  il binding espone già `clear_kv_cache_seq` con range (rimozione della
+  fetta vecchia) e `kv_cache_seq_add` (shift delle posizioni); upstream
+  ha `llama_memory_can_shift(mem)` per chiedere se il modello supporta lo
+  shift, da wrappare (dieci righe in kv_cache.rs). Design a due rami:
+  (a) `can_shift`=sì (transformer classici): shift vero, costo ~zero;
+  (b) `can_shift`=no (ibridi SSM come Qwen3.6, ricorrenti): fallback
+  "re-anchor", tronca la history al prefisso protetto + coda recente e
+  ri-prefill; pochi secondi con prefill batch 2048, riducibili
+  ripartendo da un `PromptCheckpoint` compatibile invece che da zero.
+  Nessun cambiamento visibile ai client oltre un log quando avviene.
+  Pianificato come primo lavoro della prossima sessione.
   Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
   già individuata, non è questione di ritoccare un margine: `.msg-content`
   è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente
