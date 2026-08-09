@@ -107,7 +107,7 @@ impl GgufInfo {
         Some((n_head_kv * k_dim, n_head_kv * v_dim))
     }
 
-    /// Fraction of layers that actually pay per-token KV cache.
+    /// How many of `n` offloaded layers pay per-token KV cache.
     ///
     /// Charging every layer the full KV slice is exactly right on a classic
     /// transformer and wildly wrong on a hybrid-SSM model. Measured on real
@@ -116,10 +116,20 @@ impl GgufInfo {
     /// GiB, the sizer stopped at a handful of layers and left 8 GiB of VRAM
     /// idle, and the MoE path's total-KV estimate came out 4× the real ~20
     /// GiB. Three out of four layers actually cost only their weights.
-    fn kv_layer_fraction(&self) -> f64 {
+    ///
+    /// Rounded UP, not averaged. llama.cpp offloads a contiguous block of
+    /// layers, and how many attention layers fall inside it depends on the
+    /// alignment (upstream marks layer `i` as attention when
+    /// `(i+1) % interval == 0` — see `models/qwen35.cpp`): a block of 22
+    /// with interval 4 holds 6 paying layers, not 5.5. The average
+    /// under-charged by half a KV slice (~0.5 GiB at 262k context) and ate
+    /// into the safety margin — observed live as a load sitting ~600 MiB
+    /// from the VRAM ceiling. The ceiling division is alignment-independent
+    /// and at worst one layer conservative.
+    fn kv_paying_layers(&self, n: u64) -> u64 {
         match self.full_attention_interval {
-            Some(interval) if interval > 1 => 1.0 / f64::from(interval),
-            _ => 1.0,
+            Some(interval) if interval > 1 => n.div_ceil(u64::from(interval)),
+            _ => n,
         }
     }
 }
@@ -655,30 +665,36 @@ pub fn compute_fit(
         };
     }
 
-    // KV bytes per offloaded layer for this context. Exact when the attention
-    // dims are known (mirrors the scheduler's runtime estimate); coarse
-    // fallback otherwise. Scaled by the fraction of layers that pay KV at
-    // all: on a hybrid-SSM model only one layer per `full_attention_interval`
-    // carries a cache, so the AVERAGE per-layer cost is what the split math
-    // needs (see `kv_layer_fraction` for the measured failure).
-    let kv_per_layer = match info.kv_elems_per_token_per_layer() {
+    // KV bytes for one PAYING layer at this context. Exact when the
+    // attention dims are known (mirrors the scheduler's runtime estimate);
+    // coarse fallback otherwise. On hybrid-SSM models only some layers pay
+    // (see `kv_paying_layers`), so the cost of offloading n layers is
+    // per-layer weights times n plus this slice times the paying count —
+    // counted exactly, not averaged, because the average under-charges
+    // whenever the offloaded block holds one more attention layer than the
+    // mean (measured live: ~0.5 GiB at 262k context).
+    let kv_per_paying_layer = match info.kv_elems_per_token_per_layer() {
         Some((k_elems, v_elems)) => {
             (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
         }
         None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    } * info.kv_layer_fraction();
-
-    let cost_per_layer = per_layer_weight + kv_per_layer;
+    };
 
     // Budget = a fraction of free VRAM, minus the flat compute-buffer reserve.
     let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
 
-    let max_layers = (usable / cost_per_layer).floor();
-    let max_layers = if max_layers < 0.0 {
-        0
-    } else {
-        max_layers as u64
-    };
+    // Largest layer count whose exact cost fits the budget. A few hundred
+    // iterations at most; the closed-form division stopped being exact the
+    // moment the KV charge became per-paying-layer instead of uniform.
+    let mut max_layers = 0u64;
+    for n in (0..=n_layers).rev() {
+        let cost = (n as f64) * per_layer_weight
+            + (info.kv_paying_layers(n) as f64) * kv_per_paying_layer;
+        if cost <= usable {
+            max_layers = n;
+            break;
+        }
+    }
 
     if max_layers >= n_layers {
         FitDecision::FitsFully
@@ -733,13 +749,14 @@ pub fn compute_moe_fit(
         return MoeFitDecision::NotMoe;
     }
 
-    let kv_per_layer = match info.kv_elems_per_token_per_layer() {
+    let kv_per_paying_layer = match info.kv_elems_per_token_per_layer() {
         Some((k_elems, v_elems)) => {
             (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
         }
         None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    } * info.kv_layer_fraction();
-    let total_kv = kv_per_layer * info.n_layers as f64;
+    };
+    let total_kv =
+        kv_per_paying_layer * info.kv_paying_layers(info.n_layers as u64) as f64;
     let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
     let fixed_cost = layout.non_expert_bytes as f64 + total_kv;
 
