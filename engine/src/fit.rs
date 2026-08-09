@@ -54,6 +54,11 @@ pub struct GgufInfo {
     pub key_length: Option<u32>,
     /// Explicit value head dimension (`<arch>.attention.value_length`).
     pub value_length: Option<u32>,
+    /// Hybrid-SSM attention cadence (`<arch>.full_attention_interval`): only
+    /// one layer in every `interval` is full attention and pays per-token KV
+    /// cache; the rest carry fixed-size recurrent state. Absent (or 1) on
+    /// classic transformers, where every layer pays.
+    pub full_attention_interval: Option<u32>,
 }
 
 impl GgufInfo {
@@ -100,6 +105,22 @@ impl GgufInfo {
         };
 
         Some((n_head_kv * k_dim, n_head_kv * v_dim))
+    }
+
+    /// Fraction of layers that actually pay per-token KV cache.
+    ///
+    /// Charging every layer the full KV slice is exactly right on a classic
+    /// transformer and wildly wrong on a hybrid-SSM model. Measured on real
+    /// hardware (Qwen3.6-35B-A3B, `full_attention_interval=4`, 64 layers,
+    /// `--ctx-size 262144`): the uniform charge priced every layer at ~1.35
+    /// GiB, the sizer stopped at a handful of layers and left 8 GiB of VRAM
+    /// idle, and the MoE path's total-KV estimate came out 4× the real ~20
+    /// GiB. Three out of four layers actually cost only their weights.
+    fn kv_layer_fraction(&self) -> f64 {
+        match self.full_attention_interval {
+            Some(interval) if interval > 1 => 1.0 / f64::from(interval),
+            _ => 1.0,
+        }
     }
 }
 
@@ -213,6 +234,7 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let mut n_head_kv: Option<u32> = None;
     let mut key_length: Option<u32> = None;
     let mut value_length: Option<u32> = None;
+    let mut full_attention_interval: Option<u32> = None;
 
     // The metadata keys we want, each an integer stored as u32 or u64 depending
     // on the exporter. The `_kv` head count is checked before the plain head
@@ -250,6 +272,8 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             Some(&mut key_length)
         } else if key_bytes.ends_with(b".attention.value_length") {
             Some(&mut value_length)
+        } else if key_bytes.ends_with(b".full_attention_interval") {
+            Some(&mut full_attention_interval)
         } else {
             None
         };
@@ -274,12 +298,20 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         // Everything wanted is in hand — stop here instead of paying to
         // skip through the tokenizer arrays (and instead of depending on
         // the read budget covering them at all).
+        // `full_attention_interval` is in the early-stop set even though only
+        // hybrid-SSM models have it: on those it sits AFTER the attention
+        // dims (qwen35 writes it at key 33, value_length at 27), so stopping
+        // without it would always miss it. Dense models simply scan on to the
+        // buffer's end — every unwanted value is skipped by cursor
+        // arithmetic, and the truncation tolerance above already covers the
+        // case where the buffer ends first.
         if n_layers.is_some()
             && n_embd.is_some()
             && n_head.is_some()
             && n_head_kv.is_some()
             && key_length.is_some()
             && value_length.is_some()
+            && full_attention_interval.is_some()
         {
             break;
         }
@@ -292,6 +324,7 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         n_head_kv,
         key_length,
         value_length,
+        full_attention_interval,
     })
 }
 
@@ -624,13 +657,16 @@ pub fn compute_fit(
 
     // KV bytes per offloaded layer for this context. Exact when the attention
     // dims are known (mirrors the scheduler's runtime estimate); coarse
-    // fallback otherwise.
+    // fallback otherwise. Scaled by the fraction of layers that pay KV at
+    // all: on a hybrid-SSM model only one layer per `full_attention_interval`
+    // carries a cache, so the AVERAGE per-layer cost is what the split math
+    // needs (see `kv_layer_fraction` for the measured failure).
     let kv_per_layer = match info.kv_elems_per_token_per_layer() {
         Some((k_elems, v_elems)) => {
             (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
         }
         None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    };
+    } * info.kv_layer_fraction();
 
     let cost_per_layer = per_layer_weight + kv_per_layer;
 
@@ -702,7 +738,7 @@ pub fn compute_moe_fit(
             (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
         }
         None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    };
+    } * info.kv_layer_fraction();
     let total_kv = kv_per_layer * info.n_layers as f64;
     let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
     let fixed_cost = layout.non_expert_bytes as f64 + total_kv;
@@ -1027,6 +1063,7 @@ mod tests {
             n_head_kv: None,
             key_length: None,
             value_length: None,
+            full_attention_interval: None,
         }
     }
 
@@ -1087,6 +1124,7 @@ mod tests {
             n_head_kv: Some(8),
             key_length: None,
             value_length: None,
+            full_attention_interval: None,
         };
         let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
         let file = 18_500_000_000;
@@ -1261,7 +1299,9 @@ mod key_length_tests {
 
     /// Once every wanted key is filled the parser must stop reading — a
     /// later duplicate that would overwrite an already-parsed value proves
-    /// the stop happened by design, not because the buffer ran out.
+    /// the stop happened by design, not because the buffer ran out. The
+    /// wanted set includes `full_attention_interval`, which hybrid models
+    /// write AFTER the attention dims, so the fixture is hybrid-shaped.
     #[test]
     fn stops_reading_once_every_wanted_key_is_in_hand() {
         let data = header(&[
@@ -1271,10 +1311,67 @@ mod key_length_tests {
             (b"arch.attention.head_count_kv", 2),
             (b"arch.attention.key_length", 256),
             (b"arch.attention.value_length", 256),
+            (b"arch.full_attention_interval", 4),
             (b"arch.block_count", 99),
         ]);
         let info = parse_gguf_header(&data).expect("parses");
         assert_eq!(info.n_layers, 40);
+        assert_eq!(info.full_attention_interval, Some(4));
+    }
+
+    /// A dense model never writes `full_attention_interval`; the parser
+    /// scans to the end (skipping unwanted values) and everything else is
+    /// still read correctly.
+    #[test]
+    fn dense_models_parse_without_an_attention_interval() {
+        let data = header(&[
+            (b"arch.block_count", 40),
+            (b"arch.embedding_length", 2048),
+            (b"arch.attention.head_count", 16),
+            (b"arch.attention.head_count_kv", 2),
+            (b"arch.attention.key_length", 256),
+            (b"arch.attention.value_length", 256),
+        ]);
+        let info = parse_gguf_header(&data).expect("parses");
+        assert_eq!(info.n_layers, 40);
+        assert_eq!(info.full_attention_interval, None);
+    }
+
+    /// The hybrid-SSM discount: with `full_attention_interval=4` only one
+    /// layer in four pays KV, so at a large context the sizer offloads far
+    /// more layers than the uniform charge would allow. Measured live at
+    /// `--ctx-size 262144` on Qwen3.6-35B-A3B: the uniform math stopped
+    /// with 8 GiB of VRAM idle.
+    #[test]
+    fn hybrid_ssm_models_offload_more_layers_at_large_context() {
+        let dense = GgufInfo {
+            n_layers: 64,
+            n_embd: Some(5120),
+            n_head: Some(24),
+            n_head_kv: Some(4),
+            key_length: Some(256),
+            value_length: Some(256),
+            full_attention_interval: None,
+        };
+        let hybrid = GgufInfo {
+            full_attention_interval: Some(4),
+            ..dense.clone()
+        };
+        let free = Some(16u64 * 1024 * 1024 * 1024);
+        let file_size = 22u64 * 1024 * 1024 * 1024;
+        let ctx = 131072;
+        let dense_layers = match compute_fit(free, Some(&dense), file_size, ctx, 2.0, 2.0) {
+            FitDecision::Partial { layers, .. } => layers,
+            other => panic!("expected partial, got {other:?}"),
+        };
+        let hybrid_layers = match compute_fit(free, Some(&hybrid), file_size, ctx, 2.0, 2.0) {
+            FitDecision::Partial { layers, .. } => layers,
+            other => panic!("expected partial, got {other:?}"),
+        };
+        assert!(
+            hybrid_layers > dense_layers,
+            "hybrid must offload more: {hybrid_layers} vs {dense_layers}"
+        );
     }
 
     /// The whole point: with the real head dimension the sizer charges more
@@ -1289,6 +1386,7 @@ mod key_length_tests {
             n_head_kv: Some(8),
             key_length: Some(128),
             value_length: Some(128),
+            full_attention_interval: None,
         };
         let assumed = GgufInfo {
             key_length: None,
@@ -1470,6 +1568,7 @@ mod moe_fit_tests {
             n_head_kv: None,
             key_length: None,
             value_length: None,
+            full_attention_interval: None,
         }
     }
 

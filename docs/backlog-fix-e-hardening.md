@@ -2205,7 +2205,15 @@ diligenza manuale.
   |---|---|---|---|---|---|
   | 4096 (default) | 320 MiB F16 | esperti CPU primi 17 layer | — | ~56 chunk/s | tronca a ~4k token |
   | 262144 (trained) | ~20 GiB F16 | quasi tutto su CPU, GPU 0-1% | ~6 GiB | ~11 tok/s | mai troncato; stessa velocità del CIX P1 CPU-only |
-  | 32768 + KV q8_0 | ~0,7 GiB | GPU ben impacchettata, RAM dimezzata | 13,4 GiB (83%) | da misurare | il punto di equilibrio |
+  | 32768 + KV q8_0 | ~0,7 GiB | GPU ben impacchettata, RAM dimezzata | 13,4 GiB (83%) | ~45,4 chunk/s | **il punto di equilibrio**: 5900 token senza troncare, -20% di velocità per 8× la finestra |
+
+  **Campagna completa (9 agosto)**. Dal caso 262k è uscito anche un fix
+  immediato, in 0.6.80-rc5: il sizer addebitava il KV a tutti i layer
+  uniformemente, ma sugli ibridi SSM paga solo un layer ogni
+  `full_attention_interval` (1 su 4 in Qwen3.6): ora l'header espone
+  l'intervallo e sia lo split dense sia il percorso MoE scalano il KV di
+  conseguenza. A 262k il fit ora stima ~22 layer invece di ~9; il punto
+  H4-C resta comunque valido per la scelta automatica della finestra.
 
   Dettaglio istruttivo del caso 262k: il KV viaggia col layer (ogni layer
   full-attention portava >1,2 GiB di sola cache), quindi nel budget VRAM
