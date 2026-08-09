@@ -50,9 +50,14 @@ something changed, less so for understanding what it means.
   other layers carry fixed-size recurrent state. The per-layer and
   total-KV estimates now scale by that cadence, on both the dense split
   and the MoE sizing path. Classic transformers are unaffected. Measured
-  equilibrium for a 16 GiB card on the 35B MoE, for reference: 32768
-  context with q8_0 KV runs at ~45 chunk/s with the card 83% packed, and
-  a 5900-token answer completes without truncation.
+  on the 35B MoE at the 262144 extreme: from ~11 tok/s with the GPU idle
+  to ~40 tok/s with the card 89% packed. Measured equilibrium for a 16
+  GiB card, for reference: 32768 context with q8_0 KV runs at ~45
+  chunk/s, and a 5900-token answer completes without truncation. From
+  rc7 the paying-layer count is exact instead of averaged — an offloaded
+  block can hold one more attention layer than the mean (a block of 22
+  with cadence 4 holds 6, not 5.5), and that half-slice under-charge was
+  eating ~0.5 GiB of the safety margin at large contexts.
 
 - **Normal vertical spacing between blocks in the chat UI.** Headings,
   lists, tables and code blocks were surrounded by up to three times the
