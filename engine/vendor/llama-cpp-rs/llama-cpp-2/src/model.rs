@@ -114,6 +114,86 @@ pub struct JinjaChatTemplateResult {
     pub thinking_end_tag: Option<String>,
 }
 
+/// Result of rendering a chat template from OpenAI-format request JSON,
+/// returned by [`LlamaModel::apply_chat_template_oaicompat`]. Besides the
+/// prompt it carries the output-format descriptor ([`Self::format`],
+/// [`Self::parser`], [`Self::generation_prompt`]) that [`chat_parse`] needs
+/// to turn the model's raw output back into structured content /
+/// reasoning_content / tool_calls.
+#[derive(Debug, Clone)]
+pub struct OaiChatTemplateResult {
+    /// The rendered prompt, ready to tokenize.
+    pub prompt: String,
+    /// See [`JinjaChatTemplateResult::was_explicit`].
+    pub was_explicit: bool,
+    /// llama.cpp's `common_chat_format` discriminant for the output syntax
+    /// this prompt sets the model up to produce.
+    pub format: i32,
+    /// The saved PEG parser for that output syntax (may be empty for
+    /// formats that need none). Opaque; pass to [`chat_parse`] verbatim.
+    pub parser: String,
+    /// The generation prompt suffix, used by the parser to recognize
+    /// message boundaries. May be empty.
+    pub generation_prompt: String,
+    /// See [`JinjaChatTemplateResult::thinking_start_tag`].
+    pub thinking_start_tag: Option<String>,
+    /// See [`JinjaChatTemplateResult::thinking_end_tag`].
+    pub thinking_end_tag: Option<String>,
+}
+
+/// Parse a model's raw output with the format descriptor from
+/// [`LlamaModel::apply_chat_template_oaicompat`]. Model-free and stateless —
+/// callable from any thread, at any time after the render. Returns the
+/// parsed message as OpenAI-compatible JSON
+/// (`{"role","content","reasoning_content","tool_calls",...}`).
+///
+/// # Errors
+/// See [`JinjaChatTemplateError`].
+pub fn chat_parse(
+    input: &str,
+    is_partial: bool,
+    format: i32,
+    parser: &str,
+    generation_prompt: &str,
+) -> Result<String, JinjaChatTemplateError> {
+    let input_c = CString::new(input)?;
+    let parser_c = CString::new(parser)?;
+    let generation_prompt_c = CString::new(generation_prompt)?;
+    let mut out_json: *mut c_char = ptr::null_mut();
+
+    let status = unsafe {
+        llama_cpp_sys_2::llama_rs_chat_parse(
+            input_c.as_ptr(),
+            is_partial,
+            format,
+            parser_c.as_ptr(),
+            generation_prompt_c.as_ptr(),
+            &raw mut out_json,
+        )
+    };
+
+    match status {
+        llama_cpp_sys_2::LLAMA_RS_STATUS_OK => {
+            if out_json.is_null() {
+                return Err(JinjaChatTemplateError::NullResult);
+            }
+            let bytes = unsafe { CStr::from_ptr(out_json) }.to_bytes().to_vec();
+            unsafe {
+                llama_cpp_sys_2::llama_rs_string_free(out_json);
+            }
+            Ok(String::from_utf8(bytes)?)
+        }
+        llama_cpp_sys_2::LLAMA_RS_STATUS_INVALID_ARGUMENT => {
+            Err(JinjaChatTemplateError::InvalidArgument)
+        }
+        llama_cpp_sys_2::LLAMA_RS_STATUS_ALLOCATION_FAILED => {
+            Err(JinjaChatTemplateError::AllocationFailed)
+        }
+        llama_cpp_sys_2::LLAMA_RS_STATUS_EXCEPTION => Err(JinjaChatTemplateError::Exception),
+        other => Err(JinjaChatTemplateError::UnknownStatus(other)),
+    }
+}
+
 /// The Rope type that's used within the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RopeType {
@@ -992,6 +1072,94 @@ impl LlamaModel {
                 Ok(JinjaChatTemplateResult {
                     prompt,
                     was_explicit,
+                    thinking_start_tag,
+                    thinking_end_tag,
+                })
+            }
+            llama_cpp_sys_2::LLAMA_RS_STATUS_INVALID_ARGUMENT => {
+                Err(JinjaChatTemplateError::InvalidArgument)
+            }
+            llama_cpp_sys_2::LLAMA_RS_STATUS_ALLOCATION_FAILED => {
+                Err(JinjaChatTemplateError::AllocationFailed)
+            }
+            llama_cpp_sys_2::LLAMA_RS_STATUS_EXCEPTION => Err(JinjaChatTemplateError::Exception),
+            other => Err(JinjaChatTemplateError::UnknownStatus(other)),
+        }
+    }
+
+    /// Render a chat template from OpenAI-format request JSON — messages as
+    /// the request's own `messages` array (tool roles and assistant
+    /// `tool_calls` in history survive, unlike the `(role, content)`
+    /// projection of [`Self::apply_jinja_chat_template`]) plus the optional
+    /// `tools` array and `tool_choice`. The result carries the
+    /// output-format descriptor that [`chat_parse`] consumes.
+    ///
+    /// # Errors
+    /// See [`JinjaChatTemplateError`].
+    pub fn apply_chat_template_oaicompat(
+        &self,
+        messages_json: &str,
+        tools_json: Option<&str>,
+        tool_choice: Option<&str>,
+        add_generation_prompt: bool,
+        enable_thinking: bool,
+    ) -> Result<OaiChatTemplateResult, JinjaChatTemplateError> {
+        let messages_c = CString::new(messages_json)?;
+        let tools_c = tools_json.map(CString::new).transpose()?;
+        let tool_choice_c = tool_choice.map(CString::new).transpose()?;
+
+        let mut was_explicit = false;
+        let mut out_prompt: *mut c_char = ptr::null_mut();
+        let mut out_format: i32 = 0;
+        let mut out_parser: *mut c_char = ptr::null_mut();
+        let mut out_generation_prompt: *mut c_char = ptr::null_mut();
+        let mut out_thinking_start: *mut c_char = ptr::null_mut();
+        let mut out_thinking_end: *mut c_char = ptr::null_mut();
+
+        let status = unsafe {
+            llama_cpp_sys_2::llama_rs_apply_chat_template_oai(
+                self.model.as_ptr(),
+                messages_c.as_ptr(),
+                tools_c.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
+                tool_choice_c.as_ref().map_or(ptr::null(), |c| c.as_ptr()),
+                add_generation_prompt,
+                enable_thinking,
+                &raw mut was_explicit,
+                &raw mut out_prompt,
+                &raw mut out_format,
+                &raw mut out_parser,
+                &raw mut out_generation_prompt,
+                &raw mut out_thinking_start,
+                &raw mut out_thinking_end,
+            )
+        };
+
+        let take_optional_string = |raw: *mut c_char| -> Result<Option<String>, JinjaChatTemplateError> {
+            if raw.is_null() {
+                return Ok(None);
+            }
+            let bytes = unsafe { CStr::from_ptr(raw) }.to_bytes().to_vec();
+            unsafe {
+                llama_cpp_sys_2::llama_rs_string_free(raw);
+            }
+            Ok(Some(String::from_utf8(bytes)?))
+        };
+
+        match status {
+            llama_cpp_sys_2::LLAMA_RS_STATUS_OK => {
+                let prompt = take_optional_string(out_prompt)?
+                    .ok_or(JinjaChatTemplateError::NullResult)?;
+                let parser = take_optional_string(out_parser)?.unwrap_or_default();
+                let generation_prompt =
+                    take_optional_string(out_generation_prompt)?.unwrap_or_default();
+                let thinking_start_tag = take_optional_string(out_thinking_start)?;
+                let thinking_end_tag = take_optional_string(out_thinking_end)?;
+                Ok(OaiChatTemplateResult {
+                    prompt,
+                    was_explicit,
+                    format: out_format,
+                    parser,
+                    generation_prompt,
                     thinking_start_tag,
                     thinking_end_tag,
                 })

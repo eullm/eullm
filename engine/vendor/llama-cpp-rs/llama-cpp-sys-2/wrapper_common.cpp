@@ -40,6 +40,119 @@ extern "C" void llama_rs_string_free(char * ptr) {
     }
 }
 
+// OpenAI-compatible chat template application: messages and tools arrive as
+// the request's own JSON, so tool roles, assistant tool_calls in history and
+// tool definitions all flow through llama.cpp's oaicompat parsers instead of
+// a lossy (role, content) projection. Returns, alongside the prompt, the
+// output-format descriptor triple (format id, saved PEG parser, generation
+// prompt) that llama_rs_chat_parse needs to turn the model's raw output back
+// into structured content / reasoning_content / tool_calls.
+extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
+    const struct llama_model * model,
+    const char * messages_json,
+    const char * tools_json,
+    const char * tool_choice,
+    bool add_generation_prompt,
+    bool enable_thinking,
+    bool * out_was_explicit,
+    char ** out_prompt,
+    int32_t * out_format,
+    char ** out_parser,
+    char ** out_generation_prompt,
+    char ** out_thinking_start_tag,
+    char ** out_thinking_end_tag) {
+    if (!model || !messages_json || !out_was_explicit || !out_prompt || !out_format ||
+        !out_parser || !out_generation_prompt || !out_thinking_start_tag || !out_thinking_end_tag) {
+        return LLAMA_RS_STATUS_INVALID_ARGUMENT;
+    }
+
+    *out_was_explicit = false;
+    *out_prompt = nullptr;
+    *out_format = 0;
+    *out_parser = nullptr;
+    *out_generation_prompt = nullptr;
+    *out_thinking_start_tag = nullptr;
+    *out_thinking_end_tag = nullptr;
+
+    try {
+        auto tmpls = common_chat_templates_init(model, /* chat_template_override */ "");
+        *out_was_explicit = common_chat_templates_was_explicit(tmpls.get());
+
+        common_chat_templates_inputs inputs;
+        inputs.add_generation_prompt = add_generation_prompt;
+        inputs.enable_thinking = enable_thinking;
+        // Matches llama-server's default: reasoning is extracted to
+        // reasoning_content, and templates that strip prior-turn reasoning
+        // from the history do so.
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+        inputs.messages = common_chat_msgs_parse_oaicompat(nlohmann::ordered_json::parse(messages_json));
+        if (tools_json && tools_json[0] != '\0') {
+            inputs.tools = common_chat_tools_parse_oaicompat(nlohmann::ordered_json::parse(tools_json));
+        }
+        if (tool_choice && tool_choice[0] != '\0') {
+            inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice);
+        }
+
+        const auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+        *out_prompt = llama_rs_dup_string(params.prompt);
+        if (!*out_prompt) {
+            return LLAMA_RS_STATUS_ALLOCATION_FAILED;
+        }
+        *out_format = (int32_t) params.format;
+        *out_parser = llama_rs_dup_string(params.parser);
+        *out_generation_prompt = llama_rs_dup_string(params.generation_prompt);
+        if (!params.thinking_start_tag.empty()) {
+            *out_thinking_start_tag = llama_rs_dup_string(params.thinking_start_tag);
+        }
+        if (!params.thinking_end_tags.empty()) {
+            *out_thinking_end_tag = llama_rs_dup_string(params.thinking_end_tags.front());
+        }
+        return LLAMA_RS_STATUS_OK;
+    } catch (const std::exception &) {
+        return LLAMA_RS_STATUS_EXCEPTION;
+    }
+}
+
+// Parse a model's raw output with the format descriptor returned by
+// llama_rs_apply_chat_template_oai. Model-free and stateless: the PEG arena
+// is rebuilt from its saved form on each call, so the two halves can run on
+// different threads at different times. Returns the parsed message as
+// OpenAI-compatible JSON ({"role","content","reasoning_content","tool_calls",...}).
+extern "C" llama_rs_status llama_rs_chat_parse(
+    const char * input,
+    bool is_partial,
+    int32_t format,
+    const char * parser,
+    const char * generation_prompt,
+    char ** out_json) {
+    if (!input || !out_json || format < 0 || format >= COMMON_CHAT_FORMAT_COUNT) {
+        return LLAMA_RS_STATUS_INVALID_ARGUMENT;
+    }
+
+    *out_json = nullptr;
+    try {
+        common_chat_parser_params params;
+        params.format = (common_chat_format) format;
+        // Always split reasoning out to reasoning_content — the caller
+        // decides what to do with it, and inline think tags are exactly what
+        // OpenAI-compatible clients cannot render.
+        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        if (generation_prompt && generation_prompt[0] != '\0') {
+            params.generation_prompt = generation_prompt;
+        }
+        if (parser && parser[0] != '\0') {
+            params.parser.load(parser);
+        }
+
+        const auto msg = common_chat_parse(input, is_partial, params);
+        *out_json = llama_rs_dup_string(msg.to_json_oaicompat().dump());
+        return *out_json ? LLAMA_RS_STATUS_OK : LLAMA_RS_STATUS_ALLOCATION_FAILED;
+    } catch (const std::exception &) {
+        return LLAMA_RS_STATUS_EXCEPTION;
+    }
+}
+
 extern "C" llama_rs_status llama_rs_apply_chat_template(
     const struct llama_model * model,
     const char * const * roles,
