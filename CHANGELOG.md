@@ -37,8 +37,13 @@ something changed, less so for understanding what it means.
   markup into the reply: the parser retries in salvage mode, which
   extracts the tool calls it recognized even when surrounding text
   confused the strict grammar (reported live in #334 on a second-round
-  call, "unparsed peg-native output"); only a truly unparseable output
-  falls back to plain text.
+  call, "unparsed peg-native output"). rc8 adds the last line of defense
+  for the case where both parse modes reject a reply whose call block is
+  perfectly readable — reproduced byte for byte from the #334 report: a
+  format-agnostic extractor recognizes well-formed native-syntax
+  `<tool_call>` blocks and returns them structured, with the surrounding
+  text as content. Only a reply with no readable call at all still falls
+  back to plain text.
 
 ### Fixed
 - **`--fit` no longer overcharges KV on hybrid-SSM models, so far more
