@@ -2184,8 +2184,12 @@ diligenza manuale.
   modello senza template tool per il fallback pulito (campo assente,
   niente errori).
 
-- [ ] **H4-B · Chat web: troppo spazio verticale tra i blocchi renderizzati**
-  *(P3 — cosmetico, richiesto il 9 agosto validando le tabelle di rc1)*
+- [x] **H4-B · Chat web: troppo spazio verticale tra i blocchi renderizzati**
+  *(P3 — cosmetico, richiesto il 9 agosto validando le tabelle di rc1;
+  corretto in 0.6.80-rc3 esattamente come diagnosticato sotto: righe vuote
+  adiacenti a un blocco inghiottite nel renderer, CSS lasciato com'era
+  perché i margini erano già giusti. Bonus: una riga vuota tra elementi di
+  una lista numerata non spezza più la numerazione.)*
   Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
   già individuata, non è questione di ritoccare un margine: `.msg-content`
   è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente

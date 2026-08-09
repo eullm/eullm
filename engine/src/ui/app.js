@@ -496,7 +496,30 @@
       out.push(renderInline(line));
     }
     closeList();
-    return out.join("\n");
+
+    // The message body is white-space: pre-wrap, so blank SOURCE lines
+    // render as visible gaps — and block elements bring their own CSS
+    // margins, so a blank line next to a heading, list, table or code block
+    // doubles the spacing (H4-B: roughly twice the intended air between
+    // blocks). Swallow blank lines that touch block-level output; blank
+    // lines between plain-text paragraphs stay, because there pre-wrap is
+    // exactly what separates the paragraphs.
+    const blockish = (s) =>
+      /^<(?:h[1-6]|ul|ol|\/ul|\/ol|li|hr|table|blockquote)\b/.test(s) ||
+      /^CODE\d+$/.test(s.trim());
+    const compact = [];
+    for (let k = 0; k < out.length; k++) {
+      if (!out[k].trim()) {
+        const prev = compact.length ? compact[compact.length - 1] : null;
+        let next = null;
+        for (let j = k + 1; j < out.length; j++) {
+          if (out[j].trim()) { next = out[j]; break; }
+        }
+        if ((prev && blockish(prev)) || (next && blockish(next))) continue;
+      }
+      compact.push(out[k]);
+    }
+    return compact.join("\n");
   }
 
   function renderContent(text) {
