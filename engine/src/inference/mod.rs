@@ -953,19 +953,40 @@ impl DynamicOaiTemplate {
     /// Parse `text` (the model's complete raw output for one turn) with
     /// llama.cpp's format-aware parser — the same `common_chat_parse`
     /// llama-server uses, so a model that tool-calls correctly there
-    /// produces the same structured result here. Returns `None` when the
-    /// parse fails outright; the caller should fall back to treating the
-    /// text as plain content.
+    /// produces the same structured result here. When both the strict parse
+    /// and its salvage retry fail, a last-resort extractor recognizes
+    /// well-formed native-syntax `<tool_call>` blocks before giving up —
+    /// found necessary in the wild (#334): a model's second-round output
+    /// carried a perfectly readable call that the PEG grammar rejected, in
+    /// both modes, and the raw markup leaked to the client. Returns `None`
+    /// only when nothing at all can be extracted; the caller then treats
+    /// the text as plain content.
     pub fn parse_output(&self, text: &str) -> Option<ParsedChatMessage> {
-        let raw = llama_cpp_2::model::chat_parse(
+        let raw = match llama_cpp_2::model::chat_parse(
             text,
             /* is_partial */ false,
             self.format,
             &self.parser,
             &self.generation_prompt,
-        )
-        .inspect_err(|e| tracing::warn!("chat output parse failed, treating as plain text: {e}"))
-        .ok()?;
+        ) {
+            Ok(raw) => raw,
+            Err(e) => {
+                let (content, tool_calls) = extract_native_tool_calls(text);
+                if tool_calls.is_empty() {
+                    tracing::warn!("chat output parse failed, treating as plain text: {e}");
+                    return None;
+                }
+                tracing::warn!(
+                    "chat output parse failed ({e}); recovered {} tool call(s) with the native-syntax extractor",
+                    tool_calls.len()
+                );
+                return Some(ParsedChatMessage {
+                    content,
+                    reasoning_content: None,
+                    tool_calls,
+                });
+            }
+        };
         let v: serde_json::Value = serde_json::from_str(&raw)
             .inspect_err(|e| tracing::warn!("chat output parse returned invalid JSON: {e}"))
             .ok()?;
@@ -1013,6 +1034,74 @@ impl DynamicOaiTemplate {
             tool_calls,
         })
     }
+}
+
+/// Last-resort extractor for native-syntax tool calls:
+/// `<tool_call><function=NAME><parameter=KEY>VALUE</parameter>…</function></tool_call>`.
+///
+/// Exists because the format-aware PEG parse can reject a complete reply
+/// whose call block is perfectly readable — observed live in #334, where
+/// both the strict parse and the salvage retry threw on a well-formed
+/// second-round call and the raw markup leaked to the client as content.
+/// This is deliberately dumb string scanning: no grammar, no schema —
+/// parameter values become JSON strings, which every OpenAI client accepts.
+/// Returns the text with the recognized blocks removed, plus the calls in
+/// output order; an ill-formed block is left in place as text.
+pub(crate) fn extract_native_tool_calls(text: &str) -> (String, Vec<ParsedToolCall>) {
+    let mut content = String::new();
+    let mut calls = Vec::new();
+    let mut rest = text;
+
+    while let Some(start) = rest.find("<tool_call>") {
+        let Some(end_rel) = rest[start..].find("</tool_call>") else {
+            break;
+        };
+        let block = &rest[start + "<tool_call>".len()..start + end_rel];
+
+        let parsed = (|| {
+            let fn_open = block.find("<function=")?;
+            let name_start = fn_open + "<function=".len();
+            let name_end = name_start + block[name_start..].find('>')?;
+            let name = block[name_start..name_end].trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let body = &block[name_end + 1..block.find("</function>").unwrap_or(block.len())];
+
+            let mut args = serde_json::Map::new();
+            let mut params = body;
+            while let Some(p_open) = params.find("<parameter=") {
+                let key_start = p_open + "<parameter=".len();
+                let key_end = key_start + params[key_start..].find('>')?;
+                let key = params[key_start..key_end].trim().to_string();
+                let value_start = key_end + 1;
+                let value_end = value_start + params[value_start..].find("</parameter>")?;
+                let value = params[value_start..value_end].trim().to_string();
+                args.insert(key, serde_json::Value::String(value));
+                params = &params[value_end + "</parameter>".len()..];
+            }
+            Some(ParsedToolCall {
+                id: None,
+                name,
+                arguments: serde_json::Value::Object(args).to_string(),
+            })
+        })();
+
+        match parsed {
+            Some(call) => {
+                content.push_str(&rest[..start]);
+                calls.push(call);
+                rest = &rest[start + end_rel + "</tool_call>".len()..];
+            }
+            None => {
+                // Ill-formed block: keep it as text and stop scanning past it,
+                // so nothing readable is silently swallowed.
+                break;
+            }
+        }
+    }
+    content.push_str(rest);
+    (content.trim().to_string(), calls)
 }
 
 /// Render an OpenAI-format request (messages JSON, optional tools JSON and
@@ -2741,6 +2830,58 @@ mod stop_reason_tests {
         assert_eq!(parsed.content, "<think>weigh the options</think>The answer is 4.");
         assert_eq!(parsed.reasoning_content, None);
         assert!(parsed.tool_calls.is_empty());
+    }
+
+    // ── extract_native_tool_calls ───────────────────────────────────────────
+
+    /// The exact output from #334's failing second round, byte for byte from
+    /// the reporter's server log: both PEG parse modes rejected it, and this
+    /// extractor is the reason the call still reaches the client structured.
+    #[test]
+    fn extracts_the_exact_block_the_peg_parser_rejected_in_334() {
+        let text = "<tool_call>\n<function=search_files>\n<parameter=file_pattern>\n*.java\n</parameter>\n<parameter=pattern>\ngetAccountType\\(\\)\n</parameter>\n</function>\n</tool_call>";
+        let (content, calls) = super::extract_native_tool_calls(text);
+        assert_eq!(content, "");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "search_files");
+        let args: serde_json::Value = serde_json::from_str(&calls[0].arguments).unwrap();
+        assert_eq!(args["file_pattern"], "*.java");
+        assert_eq!(args["pattern"], "getAccountType\\(\\)");
+    }
+
+    #[test]
+    fn extractor_keeps_surrounding_text_as_content() {
+        let text = "Let me search for that.\n<tool_call>\n<function=grep>\n<parameter=q>\nfoo\n</parameter>\n</function>\n</tool_call>\nDone.";
+        let (content, calls) = super::extract_native_tool_calls(text);
+        assert_eq!(content, "Let me search for that.\n\nDone.");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "grep");
+    }
+
+    #[test]
+    fn extractor_leaves_ill_formed_blocks_alone() {
+        // No closing tag: nothing extracted, nothing swallowed.
+        let text = "before <tool_call><function=x><parameter=a>1</parameter>";
+        let (content, calls) = super::extract_native_tool_calls(text);
+        assert_eq!(content, text);
+        assert!(calls.is_empty());
+
+        // No function name: block kept as text.
+        let text2 = "<tool_call>just prose</tool_call>";
+        let (content2, calls2) = super::extract_native_tool_calls(text2);
+        assert_eq!(content2, text2);
+        assert!(calls2.is_empty());
+    }
+
+    #[test]
+    fn extractor_handles_multiple_calls_in_order() {
+        let text = "<tool_call><function=a><parameter=k>1</parameter></function></tool_call>\n<tool_call><function=b></function></tool_call>";
+        let (content, calls) = super::extract_native_tool_calls(text);
+        assert_eq!(content, "");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "a");
+        assert_eq!(calls[1].name, "b");
+        assert_eq!(calls[1].arguments, "{}");
     }
 
     #[test]

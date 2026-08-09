@@ -37,8 +37,13 @@ something changed, less so for understanding what it means.
   markup into the reply: the parser retries in salvage mode, which
   extracts the tool calls it recognized even when surrounding text
   confused the strict grammar (reported live in #334 on a second-round
-  call, "unparsed peg-native output"); only a truly unparseable output
-  falls back to plain text.
+  call, "unparsed peg-native output"). rc8 adds the last line of defense
+  for the case where both parse modes reject a reply whose call block is
+  perfectly readable — reproduced byte for byte from the #334 report: a
+  format-agnostic extractor recognizes well-formed native-syntax
+  `<tool_call>` blocks and returns them structured, with the surrounding
+  text as content. Only a reply with no readable call at all still falls
+  back to plain text.
 
 ### Fixed
 - **`--fit` no longer overcharges KV on hybrid-SSM models, so far more
@@ -57,7 +62,12 @@ something changed, less so for understanding what it means.
   rc7 the paying-layer count is exact instead of averaged — an offloaded
   block can hold one more attention layer than the mean (a block of 22
   with cadence 4 holds 6, not 5.5), and that half-slice under-charge was
-  eating ~0.5 GiB of the safety margin at large contexts.
+  eating ~0.5 GiB of the safety margin at large contexts. From rc8 the
+  discount also applies to hybrid GGUFs that ship WITHOUT the explicit
+  cadence key: llama.cpp hardcodes the default of 4 for the qwen35 family
+  and qwen3next before even reading the key, and real models rely on that
+  (Ornith-1.0-35B, arch `qwen35moe`, has no such key at all), so the
+  sizer now reads `general.architecture` and applies the same default.
 
 - **Normal vertical spacing between blocks in the chat UI.** Headings,
   lists, tables and code blocks were surrounded by up to three times the
