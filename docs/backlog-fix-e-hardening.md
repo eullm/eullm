@@ -2189,7 +2189,76 @@ diligenza manuale.
   corretto in 0.6.80-rc3 esattamente come diagnosticato sotto: righe vuote
   adiacenti a un blocco inghiottite nel renderer, CSS lasciato com'era
   perché i margini erano già giusti. Bonus: una riga vuota tra elementi di
-  una lista numerata non spezza più la numerazione.)*
+  una lista numerata non spezza più la numerazione. Nota post-rc3: sui
+  dati reali è emerso un secondo strato dominante, il newline di join tra
+  elementi a blocco renderizzato da pre-wrap come riga vuota; corretto in
+  rc4.)*
+
+- [ ] **H4-C · `--fit` deve scegliere anche il contesto, non solo i layer**
+  *(P2 — riapre la voce archiviata "è solo un default", con dati nuovi)*
+  Il default 4096 ha troncato risposte reali due volte in due giorni
+  (reasoning + tabelle lunghe sono l'uso normale, non un caso limite), e
+  l'estremo opposto è altrettanto sbagliato: campagna di misure del 9
+  agosto su RTX 5070 Ti 16 GiB, Qwen3.6-35B-A3B UD-Q4_K_M, `--fit`:
+
+  | ctx richiesto | KV | config prodotta | VRAM usata | velocità | esito |
+  |---|---|---|---|---|---|
+  | 4096 (default) | 320 MiB F16 | esperti CPU primi 17 layer | — | ~56 chunk/s | tronca a ~4k token |
+  | 262144 (trained) | ~20 GiB F16 | quasi tutto su CPU, GPU 0-1% | ~6 GiB | ~11 tok/s | mai troncato; stessa velocità del CIX P1 CPU-only |
+  | 32768 + KV q8_0 | ~0,7 GiB | GPU ben impacchettata, RAM dimezzata | 13,4 GiB (83%) | ~45,4 chunk/s | **il punto di equilibrio**: 5900 token senza troncare, -20% di velocità per 8× la finestra |
+
+  **Campagna completa (9 agosto)**. Dal caso 262k è uscito anche un fix
+  immediato, in 0.6.80-rc5: il sizer addebitava il KV a tutti i layer
+  uniformemente, ma sugli ibridi SSM paga solo un layer ogni
+  `full_attention_interval` (1 su 4 in Qwen3.6): ora l'header espone
+  l'intervallo e sia lo split dense sia il percorso MoE scalano il KV di
+  conseguenza. A 262k il fit ora stima ~22 layer invece di ~9; il punto
+  H4-C resta comunque valido per la scelta automatica della finestra.
+
+  Dettaglio istruttivo del caso 262k: il KV viaggia col layer (ogni layer
+  full-attention portava >1,2 GiB di sola cache), quindi nel budget VRAM
+  entravano pochissimi layer: il crollo a 6 GiB usati non era prudenza,
+  era la fetta per layer diventata ingestibile.
+
+  Con 262k il sizing ha fatto i conti giusti su una richiesta impossibile
+  (20 GiB di KV su 15,9 di VRAM) e ha prodotto una config caricabile ma
+  CPU-bound: corretto formalmente, inutile in pratica. Proposta: quando
+  `--fit` è attivo e `--ctx-size` NON è passato esplicitamente, scegliere
+  il contesto: partire dal trained context come tetto, calcolare il costo
+  KV, scendere per potenze di due finché la configurazione resta
+  GPU-piena (stessa classe di split del default); un `--ctx-size`
+  esplicito resta rispettato alla lettera com'è oggi, al più con un
+  avviso quando produce una config CPU-bound ("a questo contesto vai a
+  ~11 tok/s; il punto di equilibrio stimato è ~32k"). Serve distinguere
+  flag esplicito da default in clap (Option<u32> o ArgMatches). Punto di
+  equilibrio stimato per questo hardware: 32768 con KV q8_0 (~1,3 GiB);
+  misura di conferma ancora da fare. Nota architetturale utile al
+  calcolo: Qwen3.6 è ibrido SSM (`full_attention_interval=4`), solo un
+  layer su quattro paga KV per token, gli altri hanno stato ricorrente a
+  dimensione fissa: il costo del contesto va calcolato dai metadati, non
+  stimato con la formula dei transformer classici.
+
+- [ ] **H4-D · Context shift: conversazione infinita a finestra fissa
+  invece del troncamento** *(P2 — complementare a H4-C, richiesto il 9
+  agosto: "quando diventiamo troppo lenti un sistema per comprimere o
+  cancellare quella vecchia")*
+  Oggi quando il contesto si riempie la generazione si ferma con
+  `done_reason=length`, e l'unico rimedio è allargare la finestra, che
+  oltre il punto di equilibrio VRAM rende tutto CPU-bound (vedi tabella
+  H4-C). llama-server risolve col context shift: a finestra piena tiene
+  il prefisso protetto (system prompt), scarta la metà più vecchia della
+  conversazione, shifta le posizioni del resto (rope shift /
+  `llama_kv_cache_seq_add`) e continua a generare. Finestra fissa alla
+  dimensione veloce, conversazione senza limite, velocità costante.
+  Da implementare nello scheduler (il percorso sequenziale può seguire):
+  attenzione ai checkpoint (`PromptCheckpoint` cattura stati che dopo lo
+  shift non corrispondono più), al riuso prefissi (lo shift invalida il
+  match esatto dei token residenti: aggiornare `CachedSlot.tokens` in
+  coerenza), e ai modelli ibridi/ricorrenti dove lo stato SSM non è
+  shiftabile per posizione (llama.cpp gestisce il caso, verificare cosa
+  espone il binding). La compressione del KV oltre la quantizzazione
+  (q8_0/q4_0, già disponibili) resta fuori scope: è ricerca, non
+  ingegneria.
   Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
   già individuata, non è questione di ritoccare un margine: `.msg-content`
   è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente

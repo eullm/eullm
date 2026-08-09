@@ -36,6 +36,19 @@ something changed, less so for understanding what it means.
   work.
 
 ### Fixed
+- **`--fit` no longer overcharges KV on hybrid-SSM models, so far more
+  layers reach the GPU at large contexts.** Found by a user reading nvtop:
+  at `--ctx-size 262144` on Qwen3.6-35B the sizer used ~6 GiB of a 16 GiB
+  card and left the rest idle. The sizer charged every layer a full KV
+  slice, but hybrid models pay KV only on their full-attention layers (one
+  in four on Qwen3.6, `full_attention_interval` in the GGUF header); the
+  other layers carry fixed-size recurrent state. The per-layer and
+  total-KV estimates now scale by that cadence, on both the dense split
+  and the MoE sizing path. Classic transformers are unaffected. Measured
+  equilibrium for a 16 GiB card on the 35B MoE, for reference: 32768
+  context with q8_0 KV runs at ~45 chunk/s with the card 83% packed, and
+  a 5900-token answer completes without truncation.
+
 - **Normal vertical spacing between blocks in the chat UI.** Headings,
   lists, tables and code blocks were surrounded by up to three times the
   intended air, and a blank line between numbered list items visibly
