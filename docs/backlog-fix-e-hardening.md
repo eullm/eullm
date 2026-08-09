@@ -2273,6 +2273,20 @@ diligenza manuale.
   ripartendo da un `PromptCheckpoint` compatibile invece che da zero.
   Nessun cambiamento visibile ai client oltre un log quando avviene.
   Pianificato come primo lavoro della prossima sessione.
+
+- [ ] **H4-E · Banner: la stima KV di `estimate_kv_memory` non conosce gli
+  ibridi** *(P3 — cosmetico, emerso dall'audit di fine giornata del 9
+  agosto sui percorsi dense)*
+  Il fit (fit.rs) ora sconta il KV per i layer ibridi (chiave esplicita o
+  default d'architettura qwen35*/qwen3next); la riga "KV memory" del
+  banner viene invece da `scheduler::estimate_kv_memory`, che usa ancora
+  la formula uniforme dei transformer classici: sui qwen35 stampa una
+  stima gonfiata (~4×) rispetto a ciò che il fit calcola e llama.cpp
+  alloca. Era già impreciso prima (segnalato da odlg in #140: stima a
+  metà del reale su un altro asse), oggi è un'asimmetria interna: due
+  calcoli diversi per lo stesso numero. Allineare la stima del banner
+  alla logica di fit.rs (o farle condividere la funzione). Solo display,
+  nessun effetto sulle decisioni di caricamento.
   Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
   già individuata, non è questione di ritoccare un margine: `.msg-content`
   è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente
