@@ -427,8 +427,9 @@ pub enum JinjaChatTemplateError {
     /// the C++ side failed to allocate the returned string.
     #[error("allocation failed")]
     AllocationFailed,
-    /// llama.cpp's Jinja engine (minja) threw while parsing or rendering the template.
-    #[error("llama.cpp raised an exception while rendering the chat template")]
+    /// llama.cpp's chat machinery threw — while rendering a template or
+    /// while parsing model output with the format-aware parser.
+    #[error("llama.cpp raised an exception in the chat template engine")]
     Exception,
     /// llama.cpp returned a status code this wrapper does not recognize.
     #[error("unrecognized status code {0}")]
