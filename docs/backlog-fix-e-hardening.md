@@ -2189,7 +2189,36 @@ diligenza manuale.
   corretto in 0.6.80-rc3 esattamente come diagnosticato sotto: righe vuote
   adiacenti a un blocco inghiottite nel renderer, CSS lasciato com'era
   perché i margini erano già giusti. Bonus: una riga vuota tra elementi di
-  una lista numerata non spezza più la numerazione.)*
+  una lista numerata non spezza più la numerazione. Nota post-rc3: sui
+  dati reali è emerso un secondo strato dominante, il newline di join tra
+  elementi a blocco renderizzato da pre-wrap come riga vuota; corretto in
+  rc4.)*
+
+- [ ] **H4-C · `--fit` deve scegliere anche il contesto, non solo i layer**
+  *(P2 — riapre la voce archiviata "è solo un default", con dati nuovi)*
+  Il default 4096 ha troncato risposte reali due volte in due giorni
+  (reasoning + tabelle lunghe sono l'uso normale, non un caso limite), e
+  l'estremo opposto è altrettanto sbagliato: campagna di misure del 9
+  agosto su RTX 5070 Ti 16 GiB, Qwen3.6-35B-A3B UD-Q4_K_M, `--fit`:
+
+  | ctx richiesto | KV (F16) | config prodotta | velocità | esito |
+  |---|---|---|---|---|
+  | 4096 (default) | 320 MiB | esperti CPU primi 17 layer | ~56 chunk/s | tronca a ~4k token |
+  | 262144 (trained) | ~20 GiB | quasi tutto su CPU, GPU 0-1% | ~11 tok/s | mai troncato; stessa velocità del CIX P1 CPU-only, la GPU non contribuiva |
+
+  Con 262k il sizing ha fatto i conti giusti su una richiesta impossibile
+  (20 GiB di KV su 15,9 di VRAM) e ha prodotto una config caricabile ma
+  CPU-bound: corretto formalmente, inutile in pratica. Proposta: quando
+  `--fit` è attivo e `--ctx-size` NON è passato esplicitamente, scegliere
+  il contesto: partire dal trained context come tetto, calcolare il costo
+  KV, scendere per potenze di due finché la configurazione resta
+  GPU-piena (stessa classe di split del default); un `--ctx-size`
+  esplicito resta rispettato alla lettera com'è oggi, al più con un
+  avviso quando produce una config CPU-bound ("a questo contesto vai a
+  ~11 tok/s; il punto di equilibrio stimato è ~32k"). Serve distinguere
+  flag esplicito da default in clap (Option<u32> o ArgMatches). Punto di
+  equilibrio stimato per questo hardware: 32768 con KV q8_0 (~1,3 GiB);
+  misura di conferma ancora da fare.
   Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
   già individuata, non è questione di ritoccare un margine: `.msg-content`
   è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente
