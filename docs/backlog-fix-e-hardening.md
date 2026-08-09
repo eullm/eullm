@@ -2165,6 +2165,19 @@ diligenza manuale.
   `tools` + `tool_choice:"auto"` su Qwen3.6 (famiglia hermes) e su un
   modello senza template tool per il fallback pulito (campo assente,
   niente errori).
+
+- [ ] **H4-B · Chat web: troppo spazio verticale tra i blocchi renderizzati**
+  *(P3 — cosmetico, richiesto il 9 agosto validando le tabelle di rc1)*
+  Tra titoli, liste e tabelle c'è circa il doppio dell'aria voluta. Causa
+  già individuata, non è questione di ritoccare un margine: `.msg-content`
+  è `white-space: pre-wrap`, quindi le righe vuote del markdown sorgente
+  restano come newline visibili E i blocchi (`<h3>`, `<ol>`, `<table>`)
+  aggiungono i loro margini CSS — le due spaziature si sommano. Fix in
+  `renderMarkdownBlocks`: quando l'output adiacente è un elemento a blocco,
+  inghiottire le righe vuote sorgente (il blocco porta già il suo margine);
+  poi eventualmente limare i margini di qualche px. Attenzione a non
+  toccare le righe vuote dentro il testo semplice, dove il pre-wrap è
+  proprio ciò che preserva i paragrafi.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
