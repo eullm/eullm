@@ -145,7 +145,27 @@ extern "C" llama_rs_status llama_rs_chat_parse(
             params.parser.load(parser);
         }
 
-        const auto msg = common_chat_parse(input, is_partial, params);
+        common_chat_msg msg;
+        try {
+            msg = common_chat_parse(input, is_partial, params);
+        } catch (const std::exception &) {
+            if (is_partial) {
+                return LLAMA_RS_STATUS_EXCEPTION;
+            }
+            // The strict parse of a complete output throws on any unparsed
+            // remainder ("unparsed peg-native output: ..."), even when the
+            // tool calls themselves were captured fine — seen in the wild on
+            // a second-round tool call whose surrounding text the grammar
+            // did not expect. The partial path extracts whatever AST nodes
+            // were recognized instead of throwing, which salvages the calls;
+            // only if that also fails is the output truly unparseable.
+            msg = common_chat_parse(input, /* is_partial */ true, params);
+            if (msg.empty()) {
+                // The salvage captured nothing; let the caller fall back to
+                // the raw text rather than returning an empty message.
+                return LLAMA_RS_STATUS_EXCEPTION;
+            }
+        }
         *out_json = llama_rs_dup_string(msg.to_json_oaicompat().dump());
         return *out_json ? LLAMA_RS_STATUS_OK : LLAMA_RS_STATUS_ALLOCATION_FAILED;
     } catch (const std::exception &) {

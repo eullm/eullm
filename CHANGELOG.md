@@ -33,7 +33,12 @@ something changed, less so for understanding what it means.
   before. One knowing limit: tool requests are parsed whole, so a
   streaming request gets its answer as a single delta rather than
   token-by-token — incremental tool-call streaming is separate future
-  work.
+  work. From rc6, a strict parse failure no longer leaks the raw call
+  markup into the reply: the parser retries in salvage mode, which
+  extracts the tool calls it recognized even when surrounding text
+  confused the strict grammar (reported live in #334 on a second-round
+  call, "unparsed peg-native output"); only a truly unparseable output
+  falls back to plain text.
 
 ### Fixed
 - **`--fit` no longer overcharges KV on hybrid-SSM models, so far more
