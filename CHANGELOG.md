@@ -46,6 +46,15 @@ something changed, less so for understanding what it means.
   back to plain text.
 
 ### Fixed
+- **A download onto an unmounted volume says so, instead of "File
+  exists".** When the model store lives behind a symlink to a volume that
+  is not mounted, creating the destination directory fails with EEXIST —
+  the link is there, it just leads nowhere — and the pull reported
+  `Download failed: File exists (os error 17)`, which reads as "you
+  already have this model". The download path now uses the same
+  diagnostic the rest of the store already had: it names the dangling
+  symlink and says to mount the volume or set `EULLM_MODELS_DIR`.
+
 - **Different quants of the same model are different models again**
   (#345). Switching between `repo:UD-Q5_K_XL` and `repo:UD-Q4_K_M` did
   nothing: the server compared names with a file-stem rule that cuts at

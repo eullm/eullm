@@ -71,8 +71,12 @@ pub async fn download_file(
     on_progress: Option<ProgressCallback>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Ensure parent directory exists up-front so we can put the .part there.
+    // Through the store's helper, for its diagnosis: a bare `create_dir_all`
+    // reports EEXIST ("File exists (os error 17)") when a path component is
+    // a symlink to an unmounted volume, which reads as "already downloaded"
+    // and sent a user hunting for a file that was never there.
     if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
+        crate::models::store::create_model_dir(parent)?;
     }
     let tmp_path = dest.with_extension("gguf.part");
 
