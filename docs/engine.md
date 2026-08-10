@@ -122,14 +122,26 @@ error at load, while sized, the worst case is a slower partial split.
 | To be asked before a partial split | `--fit` (interactive terminals only) |
 | To refuse a load that doesn't fully fit | `--fit-strict` |
 
-Two properties worth knowing. `--gpu-layers` is a ceiling rather than a
-fixed count on purpose: a number chosen against one model is not a fact
-about the next one the process loads, and applying it blindly to a swapped-in
-model is exactly how an out-of-memory error happens. And automatic sizing
-never asks questions — it applies the split and logs one line naming the
-flags that override it — because a default that interrupts every launch is
-its own kind of failure. Where free VRAM cannot be probed (any non-CUDA
-build) sizing stays silent and `--gpu-layers` is used as-is.
+Three properties worth knowing.
+
+`--gpu-layers` is a ceiling rather than a fixed count on purpose: a number
+chosen against one model is not a fact about the next one the process loads,
+and applying it blindly to a swapped-in model is exactly how an
+out-of-memory error happens.
+
+Automatic sizing never asks questions — it applies the split and logs one
+line naming the flags that override it — because a default that interrupts
+every launch is its own kind of failure. Where free VRAM cannot be probed
+(any non-CUDA build) it stays silent and `--gpu-layers` is used as-is.
+
+The budget leaves headroom on purpose, and it is the same headroom the
+loader requires: enough of the card's total memory must stay free for the
+context and its compute buffers, or the weights load and then no context can
+be allocated at all. Sizing that aims past that floor produces a split the
+loader refuses, which is a worse failure than a conservative one — so the
+sizer takes the stricter of its own fragmentation margin and the loader's
+minimum. Expect a loaded model to leave roughly 12% of the card free; that
+is not waste, it is what the next token's compute buffer is allocated from.
 
 ### `eullm pull <model>`
 
@@ -240,8 +252,24 @@ curl http://localhost:11434/api/generate \
 
 - In-flight requests on the old model complete normally (they hold cloned handles)
 - The new model loads on a blocking thread, then atomically replaces the slot
-- Inference settings (GPU layers, context size, cache types, batch size) are preserved across swaps
 - The model name must be an imported model (`eullm import-ollama`) or a local GGUF path
+
+**What carries across a swap, and what does not.** The flags you launched
+with are settings, and they apply to every model the process loads: context
+size, cache types, batch size, thread count, and `--gpu-layers` as an upper
+bound. What a *model* needs is decided per model, freshly, on each load:
+
+| Per model, re-decided on every load | Why |
+|---|---|
+| How many layers go on the GPU | Sized against the VRAM actually free at that moment, for that model's own weights and KV cache |
+| MoE expert offload | Only MoE models have experts to move |
+| The multimodal projector | A projector belongs to the weights it was trained with; pairing it with another model fails the load |
+| Sequential vs batched execution | Vision models need the sequential engine; text models get the scheduler back |
+
+That split is not a detail: treating a per-model property as a process-wide
+setting is how a launch model's projector ended up on its successors, and how
+a layer count chosen for one model produced an out-of-memory error on the
+next one.
 
 ## KV Cache Quantization
 
@@ -675,7 +703,11 @@ This provides the traceability required by the EU AI Act (Regulation 2024/1689).
 | `metal` | Apple Silicon | `cargo build --release --features metal` |
 | *(none)* | CPU only | `cargo build --release` |
 
-GPU layers are offloaded automatically. Use `--gpu-layers 0` for CPU-only inference, or `--gpu-layers N` to offload N layers.
+How much of the model goes on the GPU is decided automatically on every
+load — see [Automatic GPU sizing](#automatic-gpu-sizing) above. `--gpu-layers
+0` forces CPU-only inference; `--gpu-layers N` caps the offload at N layers.
+Sizing needs a CUDA build to read free VRAM; on the other backends
+`--gpu-layers` is used as given.
 
 ## Integration Examples
 
