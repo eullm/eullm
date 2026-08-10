@@ -46,6 +46,18 @@ something changed, less so for understanding what it means.
   back to plain text.
 
 ### Fixed
+- **Different quants of the same model are different models again**
+  (#345). Switching between `repo:UD-Q5_K_XL` and `repo:UD-Q4_K_M` did
+  nothing: the server compared names with a file-stem rule that cuts at
+  the last dot, so every `ornith-1.*` quant collapsed into `ornith-1` and
+  the requested model looked already loaded. Comparison now keys on the
+  full name (path component and `.gguf` extension aside), so names with
+  dots in them — `qwen3.6-27b`, any `x.y` release — stay distinct.
+  Related: running a bare `hf.co/owner/repo` when a quant of that repo is
+  already downloaded now uses it instead of downloading a second copy; if
+  several are present, it lists them and asks which one, rather than
+  guessing.
+
 - **`--fit` no longer overcharges KV on hybrid-SSM models, so far more
   layers reach the GPU at large contexts.** Found by a user reading nvtop:
   at `--ctx-size 262144` on Qwen3.6-35B the sizer used ~6 GiB of a 16 GiB

@@ -210,14 +210,8 @@ impl AppState {
         {
             let slot = self.slot.read().await;
             if let Some(ref loaded) = slot.model_name {
-                let loaded_stem = std::path::Path::new(loaded.as_str())
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(loaded);
-                let req_stem = std::path::Path::new(normalized.as_str())
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(&normalized);
+                let loaded_stem = model_identity_key(loaded);
+                let req_stem = model_identity_key(&normalized);
                 if loaded_stem == req_stem {
                     tracing::info!(
                         "Model {} already loaded (swapped by another request)",
@@ -640,6 +634,25 @@ fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
 /// API requests using Ollama naming conventions find the right model.
 fn normalize_model_name(name: &str) -> String {
     name.replace(':', "-")
+}
+
+/// Canonical comparison key for "is this model already loaded?" checks: the
+/// last path component (a loaded model may be a full `.gguf` path), with a
+/// `.gguf` extension stripped, compared case-insensitively.
+///
+/// Deliberately NOT `Path::file_stem`. Model names legitimately contain dots
+/// (`qwen3.6-27b`, `ornith-1.0-35b-gguf-ud-q5_k_xl`), and `file_stem` cuts
+/// at the LAST dot, which collapsed every `ornith-1.*` quant into the same
+/// `ornith-1` identity — reported as #345: switching between two quants of
+/// the same repo was a silent no-op because the swap believed the requested
+/// model was already loaded.
+pub(crate) fn model_identity_key(name: &str) -> String {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let base = match last.char_indices().rev().nth(4) {
+        Some((i, _)) if last[i..].eq_ignore_ascii_case(".gguf") => &last[..i],
+        _ => last,
+    };
+    base.to_ascii_lowercase()
 }
 
 /// Configuration for starting the API server.

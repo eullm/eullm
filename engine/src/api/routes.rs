@@ -1861,16 +1861,11 @@ fn model_names_match(loaded: &str, normalized_request: &str) -> bool {
     if loaded == normalized_request {
         return true;
     }
-    // Compare file stems: "/models/qwen3-8b.gguf" → "qwen3-8b".
-    let loaded_stem = std::path::Path::new(loaded)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(loaded);
-    let request_stem = std::path::Path::new(normalized_request)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(normalized_request);
-    loaded_stem == request_stem
+    // Otherwise compare identity keys: last path component, `.gguf` stripped,
+    // case-insensitive. See `api::model_identity_key` for why this is not
+    // `file_stem` — model names contain dots, and cutting at the last one
+    // made every quant of a repo look like the same model (#345).
+    crate::api::model_identity_key(loaded) == crate::api::model_identity_key(normalized_request)
 }
 
 #[cfg(test)]
@@ -1886,6 +1881,30 @@ mod tests {
     fn max_tokens_defaults_to_unbounded_not_a_small_fixed_cap() {
         let sp = parse_generate_params(&json!({}));
         assert_eq!(sp.max_tokens, u32::MAX);
+    }
+
+    /// #345: two quants of the same HuggingFace repo are different models.
+    /// The old stem comparison cut at the LAST dot, so every `ornith-1.*`
+    /// collapsed to `ornith-1` and switching quants was a silent no-op.
+    #[test]
+    fn different_quants_of_a_repo_are_different_models() {
+        assert!(!model_names_match(
+            "ornith-1.0-35b-gguf-ud-q5_k_xl",
+            "ornith-1.0-35b-gguf-ud-q4_k_m"
+        ));
+        assert!(!model_names_match("qwen3.6-27b-q8_0", "qwen3.6-27b-q4_k_m"));
+    }
+
+    /// The matching a path-loaded model still needs: same model addressed as
+    /// a full path, with or without the extension, in any case.
+    #[test]
+    fn a_loaded_path_still_matches_its_plain_name() {
+        assert!(model_names_match(
+            "/home/u/.eullm/models/qwen3.6-27b/Qwen3.6-27B-Q4_K_M.gguf",
+            "Qwen3.6-27B-Q4_K_M"
+        ));
+        assert!(model_names_match("ornith-1.0-35b.gguf", "ORNITH-1.0-35B"));
+        assert!(model_names_match("qwen3-8b", "qwen3-8b"));
     }
 
     #[test]
