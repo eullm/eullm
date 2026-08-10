@@ -856,6 +856,24 @@ fn gib(bytes: u64) -> String {
     format!("{:.2} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
+/// Apply a user-set `--gpu-layers` ceiling to a computed offload.
+///
+/// `--gpu-layers` states how many layers the user wants on the GPU, and that
+/// upper bound is honoured — but it cannot raise the offload above what the
+/// sizer says fits. A layer count chosen for one model is not a fact about
+/// the next one: that is the same mistake as reusing a launch model's split
+/// for a swapped-in model, which is how a 27B loaded with `all` layers and
+/// died out of memory. Forcing past the estimate is what `--no-fit` is for.
+///
+/// Negative means "no ceiling" (`-1` = all layers) on either side.
+pub fn apply_gpu_layers_ceiling(computed: i32, ceiling: i32) -> i32 {
+    match (computed, ceiling) {
+        (_, c) if c < 0 => computed,
+        (comp, c) if comp < 0 => c,
+        (comp, c) => comp.min(c),
+    }
+}
+
 /// Result of running the full `--fit` flow: the effective `gpu_layers` to use,
 /// or `Abort` when the user (or strict mode) declined to load.
 pub enum FitOutcome {
@@ -889,6 +907,7 @@ pub fn run_fit(
         kv_bytes_per_elem_k,
         kv_bytes_per_elem_v,
         /* allow_prompt */ true,
+        /* announce */ true,
     )
 }
 
@@ -914,6 +933,7 @@ pub fn run_fit_headless(
         kv_bytes_per_elem_k,
         kv_bytes_per_elem_v,
         /* allow_prompt */ false,
+        /* announce */ false,
     )
 }
 
@@ -926,6 +946,7 @@ fn run_fit_impl(
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
     allow_prompt: bool,
+    announce: bool,
 ) -> FitOutcome {
     let free_vram = free_vram_bytes();
     let info = read_gguf_info(model_path);
@@ -942,21 +963,29 @@ fn run_fit_impl(
 
     match decision {
         FitDecision::Unknown { reason } => {
-            eprintln!("[EULLM] --fit could not size the model: {reason}.");
             if strict {
+                eprintln!("[EULLM] --fit could not size the model: {reason}.");
                 eprintln!(
                     "[EULLM] --fit-strict set: refusing to load without a reliable estimate."
                 );
                 return FitOutcome::Abort;
             }
-            eprintln!(
-                "[EULLM] Falling back to --gpu-layers {}.",
-                if fallback_gpu_layers < 0 {
-                    "all".to_string()
-                } else {
-                    fallback_gpu_layers.to_string()
-                }
-            );
+            // Silent when sizing is the automatic default: every non-CUDA
+            // build lands here on every launch (there is no free-VRAM probe
+            // to read), and an unrequested warning about a flag the user
+            // never typed is noise. A `--fit` that was actually asked for
+            // still gets its explanation.
+            if announce {
+                eprintln!("[EULLM] --fit could not size the model: {reason}.");
+                eprintln!(
+                    "[EULLM] Falling back to --gpu-layers {}.",
+                    if fallback_gpu_layers < 0 {
+                        "all".to_string()
+                    } else {
+                        fallback_gpu_layers.to_string()
+                    }
+                );
+            }
             FitOutcome::Proceed(fallback_gpu_layers)
         }
         FitDecision::FitsFully => {
@@ -1004,11 +1033,15 @@ fn run_fit_impl(
                     }
                 }
             } else {
-                // Non-interactive (Docker/systemd/piped): never prompt. Proceed
-                // with the computed split so the service starts unattended.
+                // No prompt here: either the caller forbids it (a server, or
+                // automatic sizing) or this is not a terminal (Docker,
+                // systemd, piped). Say what was decided and why — a partial
+                // split costs speed, and the user is entitled to know it
+                // happened even when nobody asked a question.
                 eprintln!(
-                    "[EULLM] --fit: model does not fit fully ({} free VRAM, model {}). \
-                     Offloading {layers}/{n_layers} layers, rest in RAM (non-interactive: not prompting).",
+                    "[EULLM] Model larger than free VRAM ({} free, model {}): \
+                     offloading {layers}/{n_layers} layers, the rest runs in RAM (slower). \
+                     Set --gpu-layers to choose yourself, or --no-fit to disable sizing.",
                     gib(free),
                     gib(file_size),
                 );
