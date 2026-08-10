@@ -2291,6 +2291,31 @@ diligenza manuale.
   Da testare con due quant dello stesso repo: pull di entrambi, swap
   avanti e indietro, lancio col nome nudo.
 
+- [ ] **H4-G · Revisione della documentazione tecnica: è indietro rispetto
+  al codice** *(P2 — richiesto il 10 agosto, con esempi trovati durante la
+  documentazione del sizing automatico)*
+  `docs/engine.md` documentava `--batch-size 8` (è 1 da 0.6.36, e il
+  cambio nacque proprio da un bug utente), `--gpu-layers -1 (all)` come
+  default, e non citava affatto `--fit`, `--cpu-moe`, `--n-cpu-moe`,
+  `--web`, `--ui-port`, `--mmproj`, `--ctx-checkpoints`, `--rs-seq`,
+  `--rust-debug`, né i tipi di cache reali (elencava `tq4_0`/`tq3_0`,
+  rimossi con TurboQuant in 0.5.8). Corretta la sezione `run` + `serve`
+  in 0.6.80; resta da rivedere il resto con lo stesso metro:
+  - `docs/engine.md`: API reference (verificare che i campi e gli endpoint
+    elencati esistano davvero, incluso `tools`/`tool_calls` appena
+    aggiunti), sezioni swap/batching, esempi di integrazione;
+  - `docs/getting-started.md`, `docs/architecture.md`, `docs/hub.md`,
+    `docs/forge.md`: mai riletti dopo mesi di lavoro sull'engine;
+  - README: 25+ blocchi "New in vX" in ordine sparso, alcuni con
+    affermazioni superate da release successive (il bullet `--fit` di
+    v0.6.10 diceva "opt-in" fino a oggi) — valutare se comprimerli in una
+    sezione storica e lasciare in alto solo lo stato corrente;
+  - `docs/benchmarks.md`: numeri da rifare, l'hardware e le build sono
+    cambiati (i dati freschi della campagna 9 agosto stanno solo qui nel
+    backlog).
+  Metodo che ha funzionato per la sezione `run`: generare la tabella dei
+  flag da `--help` del binario invece di riscriverla a memoria.
+
 - [ ] **H4-E · Banner: la stima KV di `estimate_kv_memory` non conosce gli
   ibridi** *(P3 — cosmetico, emerso dall'audit di fine giornata del 9
   agosto sui percorsi dense)*

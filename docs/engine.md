@@ -63,28 +63,73 @@ eullm run legal-it-7b
 # With options
 eullm run ./model.gguf --port 8080
 eullm run ./model.gguf --gpu-layers 0      # CPU only
-eullm run ./model.gguf --gpu-layers 20     # Offload 20 layers to GPU
+eullm run ./model.gguf --gpu-layers 20     # At most 20 layers on the GPU
 eullm run ./model.gguf --ctx-size 8192     # Larger context window
 eullm run ./model.gguf --threads 8         # Limit CPU threads
 ```
 
-**Options:**
+**Options** (`eullm run --help` is authoritative; this table is the short form):
 
 | Option | Default | Description |
 |---|---|---|
-| `model` | (required) | Path to GGUF file or catalog model name |
+| `model` | (optional) | GGUF path, catalog id, URL, or `hf.co/<owner>/<repo>[:<quant>]`. Omitted on a terminal, opens the model picker |
 | `--port, -p` | `11434` | API server port |
-| `--gpu-layers` | `-1` (all) | GPU layers to offload (-1 = all, 0 = CPU only) |
-| `--ctx-size, -c` | `4096` | Total context window (shared across batch slots) |
+| `--ui-port` | `11435` | Embedded chat UI port (separate from the API) |
+| `--gpu-layers` | automatic | **Upper bound** on GPU layers (-1 = all, 0 = CPU only). Sizing may offload fewer — see below |
+| `--no-fit` | false | Disable automatic sizing; use `--gpu-layers` as given |
+| `--fit` | (implied) | Same sizing, plus an interactive confirmation before a partial split |
+| `--fit-strict` | false | Refuse to load rather than offload a partial split |
+| `--cpu-moe` | false | MoE models: all expert tensors on CPU RAM (sized automatically when unset) |
+| `--n-cpu-moe` | `0` | MoE models: expert tensors on CPU for the first N layers only |
+| `--ctx-size, -c` | `4096` | Total context window (split across batch slots) |
 | `--threads, -t` | all CPUs | Number of CPU threads |
-| `--batch-size` | `8` | Continuous batching slots (0 = sequential mode) |
-| `--no-flash-attn` | false | Disable flash attention |
-| `--n-batch` | `2048` | Prompt processing batch size (tokens per eval during prefill) |
-| `--cache-type-k` | `f16` | KV cache type for keys (f16, q8_0, q4_0, tq4_0, tq3_0). F16 = best GPU compat |
-| `--cache-type-v` | `f16` | KV cache type for values (f16, q8_0, q4_0, tq4_0, tq3_0). F16 = best GPU compat |
-| `--replace` | false | Replace existing service on the port |
+| `--batch-size` | `1` | Concurrent requests served by the batching scheduler (raise `--ctx-size` with it) |
+| `--n-batch` | `2048` | Prefill batch size (tokens per eval) |
+| `--cache-type-k` | `f16` | KV cache type for keys (f16, q8_0, q4_0). Quantizing frees VRAM for more layers |
+| `--cache-type-v` | `f16` | KV cache type for values (f16, q8_0, q4_0) |
+| `--no-flash-attn` | false | Disable flash attention (on by default) |
+| `--web` | false | Fetch URLs found in user messages and inject their content |
+| `--mmproj` | (auto) | Multimodal projector path, when it is not beside the weights |
+| `--ctx-checkpoints` | `0` | Prompt-prefix state snapshots for hybrid/recurrent models |
+| `--checkpoint-min-step` | `8192` | Minimum new tokens between checkpoints |
+| `--rs-seq` | `0` | Recurrent-state rollback window — leave off unless you know why |
+| `--rust-debug` | false | Per-token NaN/Inf scan of the logits (diagnostics) |
+| `--replace` | false | Replace an existing service on the port |
 | `--daemon` | false | Run as a background daemon |
-| `--pidfile` | `/tmp/eullm.pid` | PID file path (used with --daemon) |
+| `--pidfile` | `/tmp/eullm.pid` | PID file path (with `--daemon`) |
+
+#### Automatic GPU sizing
+
+Since 0.6.80 the engine decides how much of the model goes on the GPU, on
+every load — at startup and on every model swap, on `run` and on `serve`
+alike. It reads free VRAM and the model's own metadata, then charges each
+layer its share of the weights plus its KV-cache slice for the context and
+cache type in use, and offloads as many layers as that budget allows. MoE
+models get their expert tensors moved to CPU RAM first, since only a few
+experts fire per token: that buys far more headroom than whole-layer
+offload can.
+
+You do not need a flag for this. It exists because the alternative default
+is worse: a model larger than free VRAM used to die with an out-of-memory
+error at load, while sized, the worst case is a slower partial split.
+
+| You want | Use |
+|---|---|
+| The engine to decide | nothing — this is the default |
+| To cap how much of the card is used | `--gpu-layers N` (an upper bound; sizing may go lower) |
+| CPU only | `--gpu-layers 0` |
+| To force a count past the estimate | `--no-fit --gpu-layers N` |
+| To be asked before a partial split | `--fit` (interactive terminals only) |
+| To refuse a load that doesn't fully fit | `--fit-strict` |
+
+Two properties worth knowing. `--gpu-layers` is a ceiling rather than a
+fixed count on purpose: a number chosen against one model is not a fact
+about the next one the process loads, and applying it blindly to a swapped-in
+model is exactly how an out-of-memory error happens. And automatic sizing
+never asks questions — it applies the split and logs one line naming the
+flags that override it — because a default that interrupts every launch is
+its own kind of failure. Where free VRAM cannot be probed (any non-CUDA
+build) sizing stays silent and `--gpu-layers` is used as-is.
 
 ### `eullm pull <model>`
 
@@ -121,6 +166,13 @@ Start the API server without loading any model. The first API request with a `"m
 eullm serve
 eullm serve --port 8080
 ```
+
+`serve` takes the same runtime flags as `run` (they are one shared set), and
+they apply to every model it loads or swaps to: automatic GPU sizing runs on
+each load, `--gpu-layers` caps it, `--no-fit` disables it. The one difference
+is that `serve` never prompts — a daemon has nobody at the keyboard — so
+`--fit` adds nothing there and `--fit-strict` surfaces a refused load as an
+error to the API caller.
 
 ### `eullm import-ollama <model> [--ollama-dir PATH]`
 
