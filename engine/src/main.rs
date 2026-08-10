@@ -128,10 +128,11 @@ struct RuntimeOpts {
     #[arg(long)]
     replace: bool,
 
-    /// Number of GPU layers to offload (-1 = all, 0 = CPU only). Setting
-    /// this explicitly turns off automatic sizing: an explicit choice is
-    /// honoured as given. Unset, the engine sizes the offload itself (see
-    /// --fit / --no-fit).
+    /// Maximum GPU layers to offload (-1 = all, 0 = CPU only). This is an
+    /// upper bound, not a fixed count: automatic sizing still runs and may
+    /// offload fewer if that is all that fits, so a number chosen for one
+    /// model cannot run the next one out of VRAM. Use --no-fit to force a
+    /// count past the estimate.
     #[arg(long, allow_hyphen_values = true)]
     gpu_layers: Option<i32>,
 
@@ -595,14 +596,16 @@ async fn main() {
                 rust_debug,
                 mmproj,
             } = opts;
-            // Automatic sizing resolves here, once, for both subcommands:
-            // an explicit --gpu-layers is an explicit choice and turns it
-            // off, --no-fit turns it off outright, and `fit` stays true for
-            // the default path so the engine sizes the offload itself.
+            // Automatic sizing resolves here, once, for both subcommands.
+            // `--no-fit` is the only thing that turns it off: an explicit
+            // `--gpu-layers` becomes a CEILING instead (see
+            // `fit::apply_gpu_layers_ceiling`), because a layer count picked
+            // for one model is not a fact about the next one and would take
+            // the guardrail away exactly when the user is steering.
             // `fit_explicit` (only when the user typed --fit) is what allows
             // the interactive confirmation; automatic sizing never prompts.
             let fit_explicit = fit;
-            let fit = !no_fit && gpu_layers.is_none();
+            let fit = !no_fit;
             let gpu_layers = gpu_layers.unwrap_or(-1);
             // `eullm run` with no model → picker, dispatch back through the same Run.
             let model = match model {
@@ -736,7 +739,8 @@ async fn main() {
             // the default path so the engine sizes the offload itself.
             // No `fit_explicit` here: `serve` never prompts either way
             // (see `api::swap_model`), so the distinction has no meaning.
-            let fit = !no_fit && gpu_layers.is_none();
+            // An explicit `--gpu-layers` is a ceiling, not an off switch.
+            let fit = !no_fit;
             let gpu_layers = gpu_layers.unwrap_or(-1);
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
@@ -1893,6 +1897,9 @@ async fn cmd_run(
         // beats a guess) does the dense run_fit flow, with its prompt and
         // its --fit-strict handling, take over.
         if fit {
+            // What the user asked for with --gpu-layers, kept as an upper
+            // bound: sizing may lower it, never raise it.
+            let ceiling = gpu_layers;
             let kv_bpe_k = inference::cache_type_bytes_per_elem(&cache_type_k);
             let kv_bpe_v = inference::cache_type_bytes_per_elem(&cache_type_v);
             let moe_decision = if !cpu_moe && n_cpu_moe == 0 {
@@ -1938,6 +1945,19 @@ async fn cmd_run(
                         return;
                     }
                 },
+            }
+
+            let capped = fit::apply_gpu_layers_ceiling(gpu_layers, ceiling);
+            if capped != gpu_layers {
+                println!(
+                    "[EULLM] --gpu-layers {ceiling}: offloading {capped} layers instead of the                      {} that would fit. Drop the flag to use the whole card, or --no-fit to                      force a count past the estimate.",
+                    if gpu_layers < 0 {
+                        "all".to_string()
+                    } else {
+                        gpu_layers.to_string()
+                    }
+                );
+                gpu_layers = capped;
             }
         }
 
@@ -3579,11 +3599,9 @@ mod cli_default_parity_tests {
         (o.cache_type_k, o.cache_type_v)
     }
 
-    /// Automatic sizing, resolved from the three inputs that decide it. Same
-    /// expression as the one both subcommand arms use.
+    /// Automatic sizing as both subcommand arms resolve it.
     fn sizing_on(argv: &[&str]) -> bool {
-        let o = runtime_opts(argv);
-        !o.no_fit && o.gpu_layers.is_none()
+        !runtime_opts(argv).no_fit
     }
 
     /// Sizing is on by default (0.6.80): the alternative default is an
@@ -3596,15 +3614,37 @@ mod cli_default_parity_tests {
         assert!(sizing_on(&["eullm", "run", "m.gguf", "--fit"]));
     }
 
-    /// An explicit `--gpu-layers` is an explicit choice, and automatic
-    /// sizing must not overrule it — it would silently ignore the one flag
-    /// the user typed to control this exact thing.
+    /// An explicit `--gpu-layers` is a ceiling, not an off switch: sizing
+    /// keeps running so the count cannot exceed what fits. Turning the
+    /// guardrail off exactly when the user steers would hand back the
+    /// out-of-memory failure this default exists to prevent — a count
+    /// chosen for one model says nothing about the next one loaded.
     #[test]
-    fn an_explicit_gpu_layers_turns_sizing_off() {
-        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "20"]));
-        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "0"]));
-        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "-1"]));
-        assert!(!sizing_on(&["eullm", "serve", "--gpu-layers", "40"]));
+    fn an_explicit_gpu_layers_keeps_sizing_on() {
+        assert!(sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "20"]));
+        assert!(sizing_on(&["eullm", "serve", "--gpu-layers", "40"]));
+        assert_eq!(
+            runtime_opts(&["eullm", "run", "m.gguf", "--gpu-layers", "20"]).gpu_layers,
+            Some(20)
+        );
+    }
+
+    /// The ceiling itself: it lowers a computed offload, never raises one,
+    /// and a negative value on either side means "no bound" (`-1` = all).
+    #[test]
+    fn the_gpu_layers_ceiling_only_ever_lowers() {
+        use crate::fit::apply_gpu_layers_ceiling as cap;
+        // Sizing says 43 fit; the user asked for at most 20.
+        assert_eq!(cap(43, 20), 20);
+        // The user asked for 60, only 43 fit: the estimate wins.
+        assert_eq!(cap(43, 60), 43);
+        // No ceiling set: whatever was computed, including "all".
+        assert_eq!(cap(43, -1), 43);
+        assert_eq!(cap(-1, -1), -1);
+        // Everything fits, but the user wants only 20 on the card.
+        assert_eq!(cap(-1, 20), 20);
+        // CPU-only is a legitimate ceiling.
+        assert_eq!(cap(43, 0), 0);
     }
 
     #[test]

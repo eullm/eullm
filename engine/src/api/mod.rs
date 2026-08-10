@@ -338,6 +338,19 @@ impl AppState {
                     }
                 },
             }
+
+            // A `--gpu-layers` given at startup is an upper bound for every
+            // model this server loads, not a count to apply blindly to a
+            // model it was never chosen for.
+            let capped = crate::fit::apply_gpu_layers_ceiling(gpu_layers, self.gpu_layers);
+            if capped != gpu_layers {
+                tracing::info!(
+                    "--gpu-layers {}: offloading {capped} layers for {}",
+                    self.gpu_layers,
+                    crate::audit::sanitize_for_log(&normalized)
+                );
+                gpu_layers = capped;
+            }
         }
 
         let config = InferenceConfig {

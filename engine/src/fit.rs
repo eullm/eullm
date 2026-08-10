@@ -856,6 +856,24 @@ fn gib(bytes: u64) -> String {
     format!("{:.2} GiB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
 }
 
+/// Apply a user-set `--gpu-layers` ceiling to a computed offload.
+///
+/// `--gpu-layers` states how many layers the user wants on the GPU, and that
+/// upper bound is honoured — but it cannot raise the offload above what the
+/// sizer says fits. A layer count chosen for one model is not a fact about
+/// the next one: that is the same mistake as reusing a launch model's split
+/// for a swapped-in model, which is how a 27B loaded with `all` layers and
+/// died out of memory. Forcing past the estimate is what `--no-fit` is for.
+///
+/// Negative means "no ceiling" (`-1` = all layers) on either side.
+pub fn apply_gpu_layers_ceiling(computed: i32, ceiling: i32) -> i32 {
+    match (computed, ceiling) {
+        (_, c) if c < 0 => computed,
+        (comp, c) if comp < 0 => c,
+        (comp, c) => comp.min(c),
+    }
+}
+
 /// Result of running the full `--fit` flow: the effective `gpu_layers` to use,
 /// or `Abort` when the user (or strict mode) declined to load.
 pub enum FitOutcome {
