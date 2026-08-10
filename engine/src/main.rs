@@ -63,10 +63,11 @@ const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
 /// `eullm run <model>` returns the same value with the defaults clap actually
 /// documents, so there is one source for them again.
 ///
-/// `--fit` is the single deliberate difference. The picker only opens on an
-/// interactive terminal, so sizing GPU layers against measured free VRAM is
-/// the right behaviour there; `eullm run` keeps it opt-in because it is also
-/// what scripts call.
+/// `--fit` is the single deliberate difference, and since 0.6.80 it means
+/// less than it used to: sizing is on by default everywhere, so what the
+/// picker adds is only the *explicit* form — the one that asks for
+/// confirmation before a partial split. The picker only opens on an
+/// interactive terminal, where there is someone to answer.
 fn picker_run(model: &str) -> Commands {
     // `--` first: a model name or path beginning with a dash would otherwise
     // be read as a flag.
@@ -127,19 +128,35 @@ struct RuntimeOpts {
     #[arg(long)]
     replace: bool,
 
-    /// Number of GPU layers to offload (-1 = all, 0 = CPU only)
-    #[arg(long, default_value_t = -1, allow_hyphen_values = true)]
-    gpu_layers: i32,
+    /// Number of GPU layers to offload (-1 = all, 0 = CPU only). Setting
+    /// this explicitly turns off automatic sizing: an explicit choice is
+    /// honoured as given. Unset, the engine sizes the offload itself (see
+    /// --fit / --no-fit).
+    #[arg(long, allow_hyphen_values = true)]
+    gpu_layers: Option<i32>,
 
     /// Auto-fit GPU layers to available VRAM (CUDA builds only). Probes
     /// free VRAM and the model's layer count, then offloads as many layers
-    /// as fit. Opt-in: without it, --gpu-layers is used as-is. If VRAM
-    /// can't be probed it falls back to --gpu-layers. On `run` a partial
-    /// split asks for confirmation when the terminal is interactive; on
-    /// `serve` (and on model swaps requested through the API) it never
-    /// prompts — the computed split is applied and logged.
+    /// as fit.
+    ///
+    /// **On by default** since 0.6.80: without sizing, a model larger than
+    /// the free VRAM dies with an out-of-memory error at load, while with
+    /// it the worst case is a slower partial split — a default that picks
+    /// the crash is the wrong default. Passing --fit explicitly changes
+    /// one thing: on an interactive terminal a partial split asks for
+    /// confirmation, because you asked to be involved in the decision.
+    /// Automatic sizing never asks; it applies the split and logs it.
+    ///
+    /// Turned off by --no-fit, and by setting --gpu-layers yourself. When
+    /// VRAM cannot be probed (any non-CUDA build) automatic sizing stays
+    /// silent and --gpu-layers is used as-is.
     #[arg(long)]
     fit: bool,
+
+    /// Never size the GPU offload automatically; use --gpu-layers as given
+    /// (the pre-0.6.80 behaviour). Wins over --fit.
+    #[arg(long, conflicts_with = "fit")]
+    no_fit: bool,
 
     /// With --fit, refuse to load (instead of offloading a partial split
     /// or falling back) when the model does not fully fit on the GPU. On
@@ -558,6 +575,7 @@ async fn main() {
                 replace,
                 gpu_layers,
                 fit,
+                no_fit,
                 fit_strict,
                 cpu_moe,
                 n_cpu_moe,
@@ -577,6 +595,15 @@ async fn main() {
                 rust_debug,
                 mmproj,
             } = opts;
+            // Automatic sizing resolves here, once, for both subcommands:
+            // an explicit --gpu-layers is an explicit choice and turns it
+            // off, --no-fit turns it off outright, and `fit` stays true for
+            // the default path so the engine sizes the offload itself.
+            // `fit_explicit` (only when the user typed --fit) is what allows
+            // the interactive confirmation; automatic sizing never prompts.
+            let fit_explicit = fit;
+            let fit = !no_fit && gpu_layers.is_none();
+            let gpu_layers = gpu_layers.unwrap_or(-1);
             // `eullm run` with no model → picker, dispatch back through the same Run.
             let model = match model {
                 Some(m) => m,
@@ -646,6 +673,7 @@ async fn main() {
                 replace,
                 gpu_layers,
                 fit,
+                fit_explicit,
                 fit_strict,
                 cpu_moe,
                 n_cpu_moe,
@@ -680,7 +708,9 @@ async fn main() {
                 batch_size,
                 replace,
                 gpu_layers,
-                fit,
+                // `--fit` alone changes nothing on serve (no prompt to allow).
+                fit: _,
+                no_fit,
                 fit_strict,
                 cpu_moe,
                 n_cpu_moe,
@@ -700,6 +730,14 @@ async fn main() {
                 rust_debug,
                 mmproj,
             } = opts;
+            // Automatic sizing resolves here, once, for both subcommands:
+            // an explicit --gpu-layers is an explicit choice and turns it
+            // off, --no-fit turns it off outright, and `fit` stays true for
+            // the default path so the engine sizes the offload itself.
+            // No `fit_explicit` here: `serve` never prompts either way
+            // (see `api::swap_model`), so the distinction has no meaning.
+            let fit = !no_fit && gpu_layers.is_none();
+            let gpu_layers = gpu_layers.unwrap_or(-1);
             let _ = (daemon, pidfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
@@ -1662,6 +1700,9 @@ async fn cmd_run(
     replace: bool,
     gpu_layers: i32,
     fit: bool,
+    // True only when the user typed `--fit`. Automatic sizing (the
+    // default) must never block on a prompt: see `run_fit_headless`.
+    fit_explicit: bool,
     fit_strict: bool,
     cpu_moe: bool,
     n_cpu_moe: u32,
@@ -1878,9 +1919,17 @@ async fn cmd_run(
                 }
                 // Dense model, a MoE that already fits fully as-is
                 // (computed == 0), or an unreadable layout.
-                _ => match fit::run_fit(
-                    &gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v,
-                ) {
+                // Only a `--fit` the user typed may stop and ask; automatic
+                // sizing applies the split and logs it, because a default
+                // that interrupts every launch of a model too big for the
+                // card is its own kind of failure.
+                _ => match if fit_explicit {
+                    fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v)
+                } else {
+                    fit::run_fit_headless(
+                        &gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v,
+                    )
+                } {
                     fit::FitOutcome::Proceed(n) => gpu_layers = n,
                     fit::FitOutcome::Abort => {
                         // Clean return: don't load, don't bind a port. If we
@@ -3528,6 +3577,48 @@ mod cli_default_parity_tests {
     fn kv_defaults(argv: &[&str]) -> (String, String) {
         let o = runtime_opts(argv);
         (o.cache_type_k, o.cache_type_v)
+    }
+
+    /// Automatic sizing, resolved from the three inputs that decide it. Same
+    /// expression as the one both subcommand arms use.
+    fn sizing_on(argv: &[&str]) -> bool {
+        let o = runtime_opts(argv);
+        !o.no_fit && o.gpu_layers.is_none()
+    }
+
+    /// Sizing is on by default (0.6.80): the alternative default is an
+    /// out-of-memory error at load on any model bigger than the free VRAM,
+    /// which is what a user hit while a model swap was choosing `all`.
+    #[test]
+    fn sizing_is_on_unless_told_otherwise() {
+        assert!(sizing_on(&["eullm", "run", "m.gguf"]));
+        assert!(sizing_on(&["eullm", "serve"]));
+        assert!(sizing_on(&["eullm", "run", "m.gguf", "--fit"]));
+    }
+
+    /// An explicit `--gpu-layers` is an explicit choice, and automatic
+    /// sizing must not overrule it — it would silently ignore the one flag
+    /// the user typed to control this exact thing.
+    #[test]
+    fn an_explicit_gpu_layers_turns_sizing_off() {
+        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "20"]));
+        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "0"]));
+        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--gpu-layers", "-1"]));
+        assert!(!sizing_on(&["eullm", "serve", "--gpu-layers", "40"]));
+    }
+
+    #[test]
+    fn no_fit_turns_sizing_off_on_its_own() {
+        assert!(!sizing_on(&["eullm", "run", "m.gguf", "--no-fit"]));
+        assert!(!sizing_on(&["eullm", "serve", "--no-fit"]));
+    }
+
+    /// `--gpu-layers` unset must reach the engine as the old default, so
+    /// disabling sizing changes what decides the split, not the split.
+    #[test]
+    fn unset_gpu_layers_still_means_all() {
+        let o = runtime_opts(&["eullm", "run", "m.gguf"]);
+        assert_eq!(o.gpu_layers.unwrap_or(-1), -1);
     }
 
     #[test]

@@ -17,6 +17,20 @@ something changed, less so for understanding what it means.
 
 *Accumulating; published only as `EuLLM-v0.6.80-rc*` pre-releases so far.*
 
+### Changed
+- **The GPU offload is now sized automatically, without `--fit`.** Loading
+  a model larger than the free VRAM used to end in an out-of-memory error;
+  with sizing the worst case is a slower partial split, so the old default
+  was the one that picked the crash. It bit a user mid-session: a chat-UI
+  switch to a 27B loaded with `all` layers and died. Three things keep it
+  out of the way: setting `--gpu-layers` yourself turns sizing off (an
+  explicit choice is honoured as given), `--no-fit` restores the previous
+  behaviour outright, and automatic sizing never asks questions — it
+  applies the split and logs one line naming both flags. Passing `--fit`
+  explicitly still means what it did: on an interactive terminal a partial
+  split asks for confirmation. Where free VRAM cannot be probed (any
+  non-CUDA build) sizing stays silent and `--gpu-layers` is used as-is.
+
 ### Added
 - **Tool calling on the OpenAI endpoint** (#334). `tools` and `tool_choice`
   in a `/v1/chat/completions` request now reach the model: the prompt is
