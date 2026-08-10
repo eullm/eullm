@@ -62,6 +62,15 @@ something changed, less so for understanding what it means.
   back to plain text.
 
 ### Fixed
+- **Switching away from a vision model no longer breaks the next load.**
+  Launching a multimodal model (Gemma 3/4 and friends) and then switching
+  to any other model from the chat UI failed with `mismatch between text
+  model (n_embd = 2048) and mmproj (n_embd = 2560)`: the projector found
+  for the launch model was handed to the server as a fallback and applied
+  to every model swapped in afterwards. Only an explicit `--mmproj` is a
+  fallback now. Models with a projector of their own still find it, from
+  the store entry or from the file beside their weights.
+
 - **A download onto an unmounted volume says so, instead of "File
   exists".** When the model store lives behind a symlink to a volume that
   is not mounted, creating the destination directory fails with EEXIST —
