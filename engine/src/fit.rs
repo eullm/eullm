@@ -587,11 +587,12 @@ pub fn read_gguf_moe_layout(path: &Path, file_size: u64, n_layers: u32) -> Optio
 
 /// Free VRAM in bytes, as reported by the active GPU backend.
 ///
-/// CUDA-only: calls `cudaMemGetInfo` (cudart is already linked in `--features
-/// cuda` builds). On non-CUDA builds, or when the call fails / reports zero,
-/// returns `None` to signal "VRAM unknown".
+/// `(free, total)` VRAM in bytes. The total matters because the loader's
+/// context probe requires a fraction of the card's TOTAL memory to remain
+/// free after allocation (`inference::MIN_FREE_VRAM_RATIO`), a floor the
+/// sizer has to respect or it produces splits the loader then refuses.
 #[cfg(feature = "cuda")]
-pub fn free_vram_bytes() -> Option<u64> {
+pub fn vram_bytes() -> Option<(u64, u64)> {
     // cudart is linked by the CUDA build of llama.cpp. We bind only the one
     // symbol we need rather than pulling in a CUDA crate.
     unsafe extern "C" {
@@ -606,12 +607,12 @@ pub fn free_vram_bytes() -> Option<u64> {
     if rc != 0 || free == 0 {
         return None;
     }
-    Some(free as u64)
+    Some((free as u64, total as u64))
 }
 
 /// Non-CUDA builds cannot probe VRAM: always "unknown".
 #[cfg(not(feature = "cuda"))]
-pub fn free_vram_bytes() -> Option<u64> {
+pub fn vram_bytes() -> Option<(u64, u64)> {
     None
 }
 
@@ -626,6 +627,18 @@ pub enum FitDecision {
     /// user-provided `--gpu-layers`. `reason` is a human-readable explanation.
     Unknown { reason: String },
 }
+
+/// Fraction of the card's TOTAL memory that must still be free after the
+/// model and its context are resident.
+///
+/// This mirrors `inference::MIN_FREE_VRAM_RATIO`, which the sequential
+/// engine's context probe enforces at load time, and the two must agree:
+/// sizing to leave 3% of *free* VRAM while the loader demands 12% of
+/// *total* produced splits the loader then refused — the model's weights
+/// went in, and the context allocation failed all the way down to 512
+/// tokens ("allocation succeeded but left only 10% of GPU memory free").
+/// Found on a swap into a 27B on a 16 GiB card.
+const MIN_FREE_TOTAL_RATIO: f64 = 0.12;
 
 /// Fraction of free VRAM we're willing to use, reserving a slice for
 /// allocator fragmentation and miscellaneous driver overhead. Together with
@@ -667,14 +680,14 @@ const FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER: f64 = 128.0;
 /// `kv_bytes_per_elem_k` / `_v` are the per-element byte costs of the K and V
 /// caches (e.g. 2.0 for F16, 0.5625 for Q4_0).
 pub fn compute_fit(
-    free_vram: Option<u64>,
+    vram: Option<(u64, u64)>,
     info: Option<&GgufInfo>,
     file_size: u64,
     ctx_size: u32,
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
 ) -> FitDecision {
-    let free_vram = match free_vram {
+    let (free_vram, total_vram) = match vram {
         Some(v) => v,
         None => {
             return FitDecision::Unknown {
@@ -720,8 +733,16 @@ pub fn compute_fit(
         None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
     };
 
-    // Budget = a fraction of free VRAM, minus the flat compute-buffer reserve.
-    let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
+    // Budget = free VRAM, minus the flat compute-buffer reserve, minus
+    // whichever headroom is larger: our own fragmentation margin, or the
+    // floor the loader's context probe will enforce anyway. Sizing past the
+    // loader's floor only produces splits it refuses.
+    let fragmentation_headroom = free_vram as f64 * (1.0 - VRAM_SAFETY_FRACTION);
+    let loader_floor = total_vram as f64 * MIN_FREE_TOTAL_RATIO;
+    let usable = (free_vram as f64
+        - fragmentation_headroom.max(loader_floor)
+        - COMPUTE_BUFFER_RESERVE_BYTES)
+        .max(0.0);
 
     // Largest layer count whose exact cost fits the budget. A few hundred
     // iterations at most; the closed-form division stopped being exact the
@@ -775,14 +796,14 @@ pub enum MoeFitDecision {
 /// Pure decision logic — no I/O — mirroring [`compute_fit`]'s split from
 /// [`run_fit`]. See [`run_moe_fit`] for the I/O-performing wrapper.
 pub fn compute_moe_fit(
-    free_vram: Option<u64>,
+    vram: Option<(u64, u64)>,
     info: Option<&GgufInfo>,
     layout: Option<&MoeLayout>,
     ctx_size: u32,
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
 ) -> MoeFitDecision {
-    let (Some(free_vram), Some(info), Some(layout)) = (free_vram, info, layout) else {
+    let (Some((free_vram, total_vram)), Some(info), Some(layout)) = (vram, info, layout) else {
         return MoeFitDecision::NotMoe;
     };
     if !layout.is_moe() {
@@ -797,7 +818,12 @@ pub fn compute_moe_fit(
     };
     let total_kv =
         kv_per_paying_layer * info.kv_paying_layers(info.n_layers as u64) as f64;
-    let usable = (free_vram as f64 * VRAM_SAFETY_FRACTION - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
+    // Same budget rule as `compute_fit`: never size past the headroom the
+    // loader's context probe will require.
+    let usable = (free_vram as f64
+        - (free_vram as f64 * (1.0 - VRAM_SAFETY_FRACTION)).max(total_vram as f64 * MIN_FREE_TOTAL_RATIO)
+        - COMPUTE_BUFFER_RESERVE_BYTES)
+        .max(0.0);
     let fixed_cost = layout.non_expert_bytes as f64 + total_kv;
 
     if fixed_cost >= usable {
@@ -805,7 +831,7 @@ pub fn compute_moe_fit(
         // non-expert bytes against the ordinary dense sizer to find how many
         // whole layers of *those* still fit.
         let decision = compute_fit(
-            Some(free_vram),
+            Some((free_vram, total_vram)),
             Some(info),
             layout.non_expert_bytes,
             ctx_size,
@@ -948,12 +974,13 @@ fn run_fit_impl(
     allow_prompt: bool,
     announce: bool,
 ) -> FitOutcome {
-    let free_vram = free_vram_bytes();
+    let vram = vram_bytes();
+    let free_vram = vram.map(|(free, _)| free);
     let info = read_gguf_info(model_path);
     let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
 
     let decision = compute_fit(
-        free_vram,
+        vram,
         info.as_ref(),
         file_size,
         ctx_size,
@@ -1067,7 +1094,6 @@ pub fn run_moe_fit(
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
 ) -> MoeFitDecision {
-    let free_vram = free_vram_bytes();
     let info = read_gguf_info(model_path);
     let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
     let layout = match (&info, file_size) {
@@ -1076,7 +1102,7 @@ pub fn run_moe_fit(
     };
 
     compute_moe_fit(
-        free_vram,
+        vram_bytes(),
         info.as_ref(),
         layout.as_ref(),
         ctx_size,
@@ -1170,7 +1196,7 @@ mod tests {
         let info = info_layers(28);
         // 40 GiB free, 5 GB model → fits fully.
         let d = compute_fit(
-            Some(40 * 1024 * 1024 * 1024),
+            Some((40 * 1024 * 1024 * 1024, 40 * 1024 * 1024 * 1024)),
             Some(&info),
             5_000_000_000,
             4096,
@@ -1185,7 +1211,7 @@ mod tests {
         let info = info_layers(32);
         // 4 GB free, 16 GB model → only some layers fit.
         let d = compute_fit(
-            Some(4_000_000_000),
+            Some((4_000_000_000, 4_000_000_000)),
             Some(&info),
             16_000_000_000,
             4096,
@@ -1223,9 +1249,9 @@ mod tests {
         // Large context so the KV term is significant.
         let ctx = 32768;
 
-        let f16 = compute_fit(Some(free), Some(&info), file, ctx, 2.0, 2.0);
+        let f16 = compute_fit(Some((free, free)), Some(&info), file, ctx, 2.0, 2.0);
         // Q4_0 ≈ 0.5625 B/elem for both K and V.
-        let q4 = compute_fit(Some(free), Some(&info), file, ctx, 0.5625, 0.5625);
+        let q4 = compute_fit(Some((free, free)), Some(&info), file, ctx, 0.5625, 0.5625);
 
         let layers = |d: &FitDecision| match d {
             FitDecision::Partial { layers, .. } => *layers,
@@ -1419,6 +1445,52 @@ mod key_length_tests {
         assert_eq!(info.full_attention_interval, Some(4));
     }
 
+    /// The sizer must never hand the loader a split the loader will refuse.
+    /// `inference::probe_and_shrink_context` requires 12% of the card's
+    /// TOTAL memory to still be free once the model and its context are
+    /// resident; sizing to leave 3% of *free* VRAM broke that on a swap
+    /// into a 27B on a 16 GiB card — the weights loaded, then the context
+    /// allocation failed all the way down to 512 tokens.
+    #[test]
+    fn sizing_leaves_the_headroom_the_loader_requires() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let info = GgufInfo {
+            n_layers: 64,
+            n_embd: Some(5120),
+            n_head: Some(24),
+            n_head_kv: Some(4),
+            key_length: Some(256),
+            value_length: Some(256),
+            full_attention_interval: Some(4),
+            architecture: Some("qwen35".to_string()),
+        };
+        // The reported case: 14.38 GiB free on a 15.92 GiB card, 15.66 GiB
+        // of weights, 4096 context, F16 cache.
+        let free = (14.38 * GIB as f64) as u64;
+        let total = (15.92 * GIB as f64) as u64;
+        let file = (15.66 * GIB as f64) as u64;
+        let layers = match compute_fit(Some((free, total)), Some(&info), file, 4096, 2.0, 2.0) {
+            FitDecision::Partial { layers, .. } => layers,
+            other => panic!("expected a partial split, got {other:?}"),
+        };
+
+        // Recompute what that split costs and check the leftover clears the
+        // loader's floor, which is the property that actually matters.
+        let per_layer_weight = file as f64 / 64.0;
+        let kv_per_paying = 4096.0 * (4.0 * 256.0 * 2.0 + 4.0 * 256.0 * 2.0);
+        let paying = info.kv_paying_layers(layers as u64) as f64;
+        let used = layers as f64 * per_layer_weight + paying * kv_per_paying;
+        let left = free as f64 - used - COMPUTE_BUFFER_RESERVE_BYTES;
+        assert!(
+            left >= total as f64 * MIN_FREE_TOTAL_RATIO,
+            "split of {layers} layers leaves {:.2} GiB, below the loader's {:.2} GiB floor",
+            left / GIB as f64,
+            total as f64 * MIN_FREE_TOTAL_RATIO / GIB as f64
+        );
+        // And it is still a useful split, not a collapse to CPU.
+        assert!(layers > 40, "expected a substantial offload, got {layers}");
+    }
+
     /// The Ornith case: a `qwen35moe` GGUF that ships WITHOUT the explicit
     /// interval key. Upstream hardcodes the default 4 before the optional
     /// read, so the discount must apply from the architecture alone.
@@ -1485,7 +1557,7 @@ mod key_length_tests {
             full_attention_interval: Some(4),
             ..dense.clone()
         };
-        let free = Some(16u64 * 1024 * 1024 * 1024);
+        let free = Some((16u64 * 1024 * 1024 * 1024, 16u64 * 1024 * 1024 * 1024));
         let file_size = 22u64 * 1024 * 1024 * 1024;
         let ctx = 131072;
         let dense_layers = match compute_fit(free, Some(&dense), file_size, ctx, 2.0, 2.0) {
@@ -1529,7 +1601,7 @@ mod key_length_tests {
         let file = 2_500_000_000;
         let ctx = 32768;
 
-        let layers = |i: &GgufInfo| match compute_fit(Some(free), Some(i), file, ctx, 2.0, 2.0) {
+        let layers = |i: &GgufInfo| match compute_fit(Some((free, free)), Some(i), file, ctx, 2.0, 2.0) {
             FitDecision::Partial { layers, .. } => layers,
             FitDecision::FitsFully => i32::MAX,
             FitDecision::Unknown { .. } => -1,
@@ -1709,7 +1781,7 @@ mod moe_fit_tests {
             expert_bytes_per_layer: vec![0, 0, 0],
         };
         let d = compute_moe_fit(
-            Some(40 * 1024 * 1024 * 1024),
+            Some((40 * 1024 * 1024 * 1024, 40 * 1024 * 1024 * 1024)),
             Some(&info(3)),
             Some(&layout),
             4096,
@@ -1737,7 +1809,7 @@ mod moe_fit_tests {
             expert_bytes_per_layer: vec![500_000_000; 4],
         };
         let d = compute_moe_fit(
-            Some(40 * 1024 * 1024 * 1024),
+            Some((40 * 1024 * 1024 * 1024, 40 * 1024 * 1024 * 1024)),
             Some(&info(4)),
             Some(&layout),
             4096,
@@ -1763,7 +1835,7 @@ mod moe_fit_tests {
         // (1GB) + a small KV term, there's room for exactly ~1 layer of
         // experts (2GB) but not 2 (4GB).
         let free = 4_200_000_000u64;
-        let d = compute_moe_fit(Some(free), Some(&info(4)), Some(&layout), 512, F16.0, F16.1);
+        let d = compute_moe_fit(Some((free, free)), Some(&info(4)), Some(&layout), 512, F16.0, F16.1);
         match d {
             MoeFitDecision::Proceed { n_cpu_moe } => {
                 assert_eq!(n_cpu_moe, 3, "expected layers 0..=2 evicted, layer 3 kept");
@@ -1781,7 +1853,7 @@ mod moe_fit_tests {
             expert_bytes_per_layer: vec![1_000_000_000; 2],
         };
         let free = 8_000_000_000u64; // 8 GB free
-        let d = compute_moe_fit(Some(free), Some(&info(2)), Some(&layout), 4096, F16.0, F16.1);
+        let d = compute_moe_fit(Some((free, free)), Some(&info(2)), Some(&layout), 4096, F16.0, F16.1);
         match d {
             MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers } => {
                 assert!(gpu_layers >= 0, "must still resolve to a loadable split");
@@ -1805,7 +1877,7 @@ mod moe_fit_tests {
             expert_bytes_per_layer: vec![50_000_000_000; 8],
         };
         let free = 2_000_000_000u64; // 2 GB free
-        let d = compute_moe_fit(Some(free), Some(&info(8)), Some(&layout), 4096, F16.0, F16.1);
+        let d = compute_moe_fit(Some((free, free)), Some(&info(8)), Some(&layout), 4096, F16.0, F16.1);
         match d {
             MoeFitDecision::ProceedCpuMoeAndPartial { gpu_layers } => {
                 assert!(gpu_layers >= 0, "even the worst case must resolve, not abort");
