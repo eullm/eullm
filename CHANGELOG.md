@@ -62,6 +62,24 @@ something changed, less so for understanding what it means.
   back to plain text.
 
 ### Fixed
+- **Automatic sizing no longer produces a split the loader then refuses.**
+  Swapping into a 27B on a 16 GiB card loaded the weights and then failed
+  to allocate a context at all, down to 512 tokens: *"allocation succeeded
+  but left only 10% of GPU memory free"*. Two parts of the engine disagreed
+  about how much VRAM must stay free — the sizer aimed to leave 3% of what
+  was free, the loader's context probe requires 12% of the card's total —
+  so the sizer could hand over a layer count that could never load. The
+  sizer now respects the loader's floor, which is the larger of the two on
+  any card with memory in use.
+
+- **A vision model no longer pins the server to sequential mode.** After
+  launching a multimodal model, every model swapped in afterwards ran
+  without the continuous-batching scheduler, because the sequential
+  fallback that vision needs was passed on to the server instead of
+  staying with the model that needed it. The requested batch size is kept;
+  the fallback is re-applied per model, to whichever one actually carries
+  a projector.
+
 - **Switching away from a vision model no longer breaks the next load.**
   Launching a multimodal model (Gemma 3/4 and friends) and then switching
   to any other model from the chat UI failed with `mismatch between text

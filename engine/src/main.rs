@@ -1732,6 +1732,9 @@ async fn cmd_run(
     // yet route media) and skips port binding because we won't serve an API.
     let multimodal_oneshot = image.is_some();
     let batch_size = if multimodal_oneshot { 0 } else { batch_size };
+    // What the API server is told, kept separate from the value this
+    // launch resolves for its own model (see the multimodal fallback below).
+    let launch_batch_size = batch_size;
     let ui_port = if multimodal_oneshot { None } else { ui_port };
 
     // `--fit` may override this below once the GGUF file is resolved; until
@@ -2025,6 +2028,12 @@ async fn cmd_run(
             }
             batch_size = 0;
         }
+        // …for THIS model. The server keeps the batch size the user asked
+        // for, so a later swap to a text-only model gets the scheduler back:
+        // `swap_model` re-applies the same sequential fallback for whatever
+        // model actually carries a projector. Passing the zeroed value on
+        // pinned every subsequent model to sequential mode — the same shape
+        // of bug as handing the launch model's projector to its successors.
 
         if batch_size > 0 {
             // ── Continuous batching mode ────────────────────────────
@@ -2216,7 +2225,7 @@ async fn cmd_run(
             n_batch,
             cache_type_k,
             cache_type_v,
-            batch_size,
+            batch_size: launch_batch_size,
             cpu_moe: flag_cpu_moe,
             n_cpu_moe: flag_n_cpu_moe,
             rs_seq,
