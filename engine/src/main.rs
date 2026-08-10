@@ -810,6 +810,31 @@ fn is_url(s: &str) -> bool {
     s.starts_with("http://") || s.starts_with("https://")
 }
 
+/// Already-downloaded quants of a HuggingFace repo, as store ids.
+///
+/// A ref without `:quant` resolves to the bare repo id, which is not what is
+/// on disk once any quant has been pulled — the ids carry the quant suffix.
+/// Without this lookup, `eullm run hf.co/owner/repo` after pulling
+/// `repo:UD-Q4_K_M` re-downloaded the same file under the bare id (#345).
+fn local_quants_of_repo(store: &ModelStore, hf: &registry::HfRef) -> Vec<String> {
+    let repo_name = hf.repo.rsplit('/').next().unwrap_or(&hf.repo);
+    let bare = hf_ref_to_model_id(&registry::HfRef {
+        repo: repo_name.to_string(),
+        quant: None,
+        original: hf.original.clone(),
+    });
+    let prefix = format!("{bare}-");
+    let mut ids: Vec<String> = store
+        .list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|m| m.id)
+        .filter(|id| id.starts_with(&prefix) || *id == bare)
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// Derive a filesystem-safe model id from a HuggingFace ref. Uses the repo
 /// name (last path segment), lowercased and sanitized like `url_to_model_id`,
 /// with the quant appended when one was requested so different quants of the
@@ -1726,6 +1751,9 @@ async fn cmd_run(
         }
     };
 
+    // Set when a bare HuggingFace repo ref resolves to a quant already on
+    // disk, whose store id differs from the bare-repo id (see below).
+    let mut return_hf_id: Option<String> = None;
     // Try to resolve as a local GGUF file or downloaded model
     let gguf_path = if is_url(model) {
         // Direct URL: pull into the store (if not already there), then load
@@ -1741,10 +1769,38 @@ async fn cmd_run(
         // then load by the derived id.
         let id = hf_ref_to_model_id(&hf);
         if store.gguf_path(&id).is_none() {
-            println!("Model not found locally. Pulling from HuggingFace...");
-            cmd_pull_hf(store, &hf).await;
+            // A ref with no `:quant` asks for "this repo", and quants of it
+            // may already be on disk under their own ids. Downloading
+            // another copy of a file the user already has is the wrong
+            // default (#345): use what is there, and say which one, since
+            // the choice belongs to the user when several exist.
+            let local = if hf.quant.is_none() {
+                local_quants_of_repo(store, &hf)
+            } else {
+                Vec::new()
+            };
+            match local.as_slice() {
+                [] => {
+                    println!("Model not found locally. Pulling from HuggingFace...");
+                    cmd_pull_hf(store, &hf).await;
+                }
+                [only] => {
+                    println!("Using the copy already downloaded: {only}");
+                    return_hf_id = Some(only.clone());
+                }
+                many => {
+                    eprintln!(
+                        "Error: {} quants of this repo are already downloaded. Name the one to run:",
+                        many.len()
+                    );
+                    for id in many {
+                        eprintln!("  eullm run {id}");
+                    }
+                    std::process::exit(1);
+                }
+            }
         }
-        store.gguf_path(&id)
+        store.gguf_path(return_hf_id.as_deref().unwrap_or(&id))
     } else if let Some(path) = resolve_model_path(model, store) {
         Some(path)
     } else {
