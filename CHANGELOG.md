@@ -13,9 +13,14 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.6.80 — unreleased
+## 0.6.80 — 2026-08-10
 
-*Accumulating; published only as `EuLLM-v0.6.80-rc*` pre-releases so far.*
+*Accumulated through pre-releases `rc1`–`rc12`, each validated on real
+hardware as it landed. Two users' reports drove most of this release: tool
+calling and the model-identity fixes came from [@odlg](https://github.com/odlg)
+running EuLLM behind an IDE agent, and the sizing work came from watching a
+16 GiB card actually load these models — a vision model, a dense 27B and a
+35B MoE swapped back and forth in one conversation.*
 
 ### Changed
 - **The GPU offload is now sized automatically, without `--fit`.** Loading
