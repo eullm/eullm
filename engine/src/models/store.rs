@@ -162,7 +162,7 @@ impl ModelStore {
         mmproj_file: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let model_dir = self.root.join(&entry.id);
-        create_model_dir(&model_dir)?;
+        create_model_dir(&model_dir).map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
 
         let manifest = ModelManifest {
             id: entry.id.clone(),
@@ -204,7 +204,7 @@ impl ModelStore {
         mmproj_file: Option<&str>,
     ) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let model_dir = self.root.join(id);
-        create_model_dir(&model_dir)?;
+        create_model_dir(&model_dir).map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
 
         let manifest = ModelManifest {
             id: id.to_string(),
@@ -481,7 +481,7 @@ impl ModelStore {
     /// problem is a local message and nothing is downloaded.
     pub fn ensure_model_dir(&self, id: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let dir = self.model_path(id);
-        create_model_dir(&dir)?;
+        create_model_dir(&dir).map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
         Ok(dir)
     }
 
@@ -511,7 +511,9 @@ impl ModelStore {
 /// reasons this fails on a real machine: the path is occupied by a regular
 /// file, or it is a symlink whose target is gone. Neither is a plausible
 /// guess from that message alone, so both are named here.
-fn create_model_dir(dir: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn create_model_dir(
+    dir: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     fs::create_dir_all(dir).map_err(|e| {
         let occupant = match fs::symlink_metadata(dir) {
             Ok(md) if md.file_type().is_symlink() => {
@@ -675,6 +677,30 @@ mod tests {
         let root = std::env::temp_dir().join(format!("eullm-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         (ModelStore { root: root.clone() }, root)
+    }
+
+    /// A store path that is a symlink to an unmounted volume must explain
+    /// itself. `create_dir_all` answers EEXIST there — the symlink exists,
+    /// it just does not lead anywhere — and reporting that raw reads as
+    /// "File exists (os error 17)" in the middle of a download, which sounds
+    /// like the model is already present. Reported on a real setup where the
+    /// store lived on a volume that was not mounted yet.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_store_symlink_explains_itself() {
+        let base = std::env::temp_dir().join(format!("eullm-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let link = base.join("models");
+        std::os::unix::fs::symlink(base.join("not-mounted"), &link).unwrap();
+
+        let err = create_model_dir(&link.join("some-model"))
+            .expect_err("a dangling symlink cannot be created into")
+            .to_string();
+        assert!(
+            err.contains("mount it first") || err.contains("symlink"),
+            "error must point at the unmounted volume, got: {err}"
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 
     /// A manifest written before the `id` field existed must still resolve to
