@@ -1989,7 +1989,15 @@ async fn cmd_run(
         if let Some(ref p) = mmproj_for_config {
             println!("Found mmproj: {}", p.display());
         }
-        api_mmproj = mmproj_for_config.clone();
+        // Only an explicit `--mmproj` becomes the server's fallback for
+        // later swaps. A projector discovered for THIS model belongs to
+        // this model: handing it to the next one produced
+        // "mismatch between text model (n_embd = 2048) and mmproj
+        // (n_embd = 2560)" and a failed load, after launching a vision
+        // model and switching to anything else from the chat UI. Every
+        // model that has its own projector still finds it in swap_model,
+        // by store entry or by the file sitting beside its weights.
+        api_mmproj = mmproj.clone();
 
         let config = InferenceConfig {
             model_path: gguf_path,

@@ -135,7 +135,12 @@ pub struct AppState {
     pub web_policy: crate::tools::guard::WebPolicy,
 
     /// Projector to fall back on when the model being loaded declares none
-    /// of its own, from `serve --mmproj`. Normally `None`.
+    /// of its own. Only ever an explicit `--mmproj`, never a projector that
+    /// was discovered for some other model: pairing a projector with weights
+    /// it was not trained on fails the load outright (`mismatch between text
+    /// model and mmproj`), which is what happened when `run`'s auto-detected
+    /// projector was passed here and then applied to every later swap.
+    /// Normally `None`.
     pub fallback_mmproj: Option<PathBuf>,
 
     /// Whether a request's `model` field may name an arbitrary filesystem
