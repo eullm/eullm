@@ -112,7 +112,70 @@ fn list_local_ggufs(store: &ModelStore) -> Vec<LocalModel> {
         }
     }
 
+    // 3) Model directories holding a .gguf but no usable manifest.json.
+    //
+    // Neither branch above sees these: `store.list()` only returns directories
+    // whose manifest parses, and branch 2 only looks at files sitting directly
+    // in the store root. So a perfectly runnable model became invisible the
+    // moment it was tidied from `models/x.gguf` into `models/x/x.gguf` — the
+    // move made it *less* discoverable, which is the opposite of what anyone
+    // doing it expects. An interrupted pull, a restored backup and a directory
+    // copied from another machine all land in the same state.
+    //
+    // `eullm list` already reports these separately (`ModelStore::unlisted`),
+    // and running one by path has always worked. Only the picker was silent,
+    // and the picker is where a user goes precisely when they do not know the
+    // name to type.
+    if let Ok(entries) = std::fs::read_dir(store.root_with_source().0) {
+        for e in entries.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let Some(gguf) = model_gguf_in_dir(&dir) else {
+                continue;
+            };
+            if out.iter().any(|m| m.path == gguf) {
+                continue;
+            }
+            let size = std::fs::metadata(&gguf).map(|md| md.len()).unwrap_or(0);
+            out.push(LocalModel {
+                path: gguf,
+                display_name: e.file_name().to_string_lossy().into_owned(),
+                size_bytes: size,
+            });
+        }
+    }
+
     out
+}
+
+/// The runnable GGUF inside a model directory, if there is one.
+///
+/// Skips `mmproj*.gguf`: a projector is not a model, and offering one as
+/// something to run loads weights that answer nothing. A directory holding
+/// only a projector therefore has no model in it, which is different from
+/// having one that happens to sort second.
+///
+/// Sorted by filename so the choice is stable rather than whatever order the
+/// filesystem returns — a picker entry that changes between runs on the same
+/// unchanged directory is worse than a wrong one, because it cannot be
+/// reported.
+fn model_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    let mut ggufs: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|f| f.path())
+        .filter(|p| {
+            p.extension().is_some_and(|x| x == "gguf")
+                && !p
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.to_ascii_lowercase().starts_with("mmproj"))
+        })
+        .collect();
+    ggufs.sort();
+    ggufs.into_iter().next()
 }
 
 fn format_size(bytes: u64) -> String {
@@ -329,5 +392,79 @@ mod input_tests {
             sanitize_input("/home/u/models/My Model-Q4_K_M.gguf\n"),
             "/home/u/models/my model-q4_k_m.gguf"
         );
+    }
+}
+
+#[cfg(test)]
+mod local_scan_tests {
+    use super::model_gguf_in_dir;
+    use std::fs;
+
+    fn tmpdir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("eullm-picker-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).expect("tmpdir");
+        d
+    }
+
+    /// The case that motivated this: a model tidied from `models/x.gguf` into
+    /// `models/x/x.gguf` has no manifest, so neither `ModelStore::list` nor the
+    /// store-root file scan sees it. Tidying it up must not hide it.
+    #[test]
+    fn a_lone_gguf_in_a_directory_is_found() {
+        let d = tmpdir("lone");
+        fs::write(d.join("qwen2.5-3b-instruct-q5_k_m.gguf"), b"w").unwrap();
+        assert_eq!(
+            model_gguf_in_dir(&d).and_then(|p| p.file_name().map(|n| n.to_owned())),
+            Some("qwen2.5-3b-instruct-q5_k_m.gguf".into())
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    /// A projector is not a model. Offering `mmproj-F16.gguf` as something to
+    /// run loads weights that answer nothing.
+    #[test]
+    fn a_projector_is_never_offered_as_the_model() {
+        let d = tmpdir("vision");
+        fs::write(d.join("mmproj-F16.gguf"), b"p").unwrap();
+        fs::write(d.join("weights.gguf"), b"w").unwrap();
+        assert_eq!(
+            model_gguf_in_dir(&d).and_then(|p| p.file_name().map(|n| n.to_owned())),
+            Some("weights.gguf".into())
+        );
+
+        // And a directory holding ONLY a projector has no model in it, rather
+        // than a model that happens to be a projector.
+        let only = tmpdir("only-proj");
+        fs::write(only.join("mmproj-F16.gguf"), b"p").unwrap();
+        assert!(model_gguf_in_dir(&only).is_none());
+
+        let _ = fs::remove_dir_all(&d);
+        let _ = fs::remove_dir_all(&only);
+    }
+
+    /// Filesystem order is not an ordering. Two runs over an unchanged
+    /// directory must offer the same file.
+    #[test]
+    fn the_choice_is_stable_when_several_quants_sit_together() {
+        let d = tmpdir("multi");
+        for n in ["model-Q8_0.gguf", "model-Q4_K_M.gguf", "model-Q5_K_M.gguf"] {
+            fs::write(d.join(n), b"w").unwrap();
+        }
+        let first = model_gguf_in_dir(&d);
+        assert_eq!(first, model_gguf_in_dir(&d));
+        assert_eq!(
+            first.and_then(|p| p.file_name().map(|n| n.to_owned())),
+            Some("model-Q4_K_M.gguf".into())
+        );
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_directory_without_weights_is_not_a_model() {
+        let d = tmpdir("empty");
+        fs::write(d.join("README.md"), b"x").unwrap();
+        assert!(model_gguf_in_dir(&d).is_none());
+        let _ = fs::remove_dir_all(&d);
     }
 }
