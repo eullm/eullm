@@ -7,8 +7,10 @@ thread pinning, and the T4.1 benchmark baseline.
 
 Both on-chip accelerators were since investigated and closed: the Zhouyi NPU
 does not run autoregressive language models at all, and the integrated GPU
-shares the CPU's DRAM and measures slower than this CPU build on both
-prefill and decode. See § 9.5 for the evidence, and § 9.3 for the one thing
+shares the CPU's DRAM, so it cannot exceed a ceiling the CPU path already
+reaches 88-97% of. We have not run the integrated GPU ourselves; the only
+published measurement of it is slower than this CPU build on both prefill
+and decode. See § 9.5 for the evidence, and § 9.3 for the one thing
 that does move the needle on this board, which is a discrete card in its
 PCIe slot.
 
@@ -835,6 +837,18 @@ thread count includes the four A520s, and ggml's per-operation barrier lets
 the slowest core gate every batch. So the published 2.3× "Vulkan wins" is
 measured against a configuration problem, not against this SoC's CPU.
 
+**We have never run the integrated GPU ourselves, and that limitation
+should be carried wherever this conclusion is.** The table above is one
+third party's Vulkan numbers set against our own CPU numbers, on the same
+board model and the same model file but not the same machine and not the
+same measurement. The published recipe requires replacing the OS with
+Debian 13, adding CIX's package repository and installing their
+closed-source drivers (the open-source ones "will not work"), which is a
+system change we were not willing to make to the unit the rest of these
+measurements run on. What does not depend on measuring it is the shared-bus
+argument: whatever the driver does, the memory is the same memory, and the
+CPU path already reaches 88-97% of it.
+
 None of this rules out the GPU winning on some workload — prefill is
 compute-bound (§ 7.2) and is where an accelerator could in principle
 contribute. It rules out the *reason* usually given for reaching for it,
@@ -876,6 +890,13 @@ and the board has the slot for one.
   measurement.** Confirming it needs `--ctx-size 16384` and a prompt of
   roughly 8192 words. Worth doing: it decides which model to put behind a
   long-context workload on this board.
+- **The integrated GPU has never been run on our unit at all (§ 9.5).** The
+  comparison on record sets a third party's Vulkan numbers against our own
+  CPU numbers, which is corroboration and not a measurement of ours. Running
+  it means replacing the OS with Debian 13 and installing CIX's closed-source
+  drivers on the unit every other measurement here depends on. Worth doing if
+  the conclusion is ever challenged; the shared-bus argument does not depend
+  on it.
 - **Whether the onboard Immortalis-G720 can beat the CPU at decode is
   unmeasured, and the bar is ~37 GB/s of effective DRAM bandwidth (§ 9.2),
   not a tok/s figure.** An integrated GPU shares the same LPDDR5 as the CPU
