@@ -3,8 +3,14 @@
 CPU-only baseline for running EULLM Engine on the CIX P1 SoC (Radxa Orion O6
 mini-ITX board, also sold as the smaller Orion O6N Nano-ITX with the same
 SoC) — no GPU, no NPU. This covers WP4's build profile, runtime verification,
-thread pinning, and the T4.1 benchmark baseline. NPU offload is explicitly
-out of scope here; see the roadmap for where that would land separately.
+thread pinning, and the T4.1 benchmark baseline.
+
+Both on-chip accelerators were since investigated and closed: the Zhouyi NPU
+does not run autoregressive language models at all, and the integrated GPU
+shares the CPU's DRAM and measures slower than this CPU build on both
+prefill and decode. See § 9.5 for the evidence, and § 9.3 for the one thing
+that does move the needle on this board, which is a discrete card in its
+PCIe slot.
 
 ## 1. Hardware summary
 
@@ -697,7 +703,42 @@ onboard Immortalis-G720, measure what the memory subsystem will actually
 give (a STREAM-style test), because the honest headroom is the gap between
 37 GB/s and the board's achievable peak, and nothing more.
 
-### 9.3 What to run on this board
+### 9.3 The same board with a discrete GPU in its PCIe slot
+
+Everything above is the CPU-only configuration. The same unit has also been
+run with an RTX 3060 12GB in its PCIe slot, which makes this a controlled
+comparison rather than a cross-machine one: same CPU, same RAM, same OS,
+same binary family, one variable.
+
+| model | Orion O6, CPU only | Orion O6 + RTX 3060 12GB |
+|---|---:|---:|
+| `qwen3-14b` dense (9.0 GB) | 3.0 tok/s | **33 tok/s** |
+| `qwen3.6-35b-a3b` MoE (21 GB) | 10.8 tok/s | **35.6 tok/s** ¹ |
+
+¹ with `--n-cpu-moe 24 --cache-type-k q8_0 --cache-type-v q8_0`, 10.7 GB
+VRAM — the expert tensors do not fit in 12 GB, so most of them stay in
+system RAM and the card carries the rest.
+
+**The same bandwidth relation explains both columns**, which is why this is
+arithmetic rather than a benchmark result to be argued with. The 3060 reads
+its GDDR6 at 360 GB/s; 33 tok/s on a 9.0 GB model is 297 GB/s of effective
+traffic, 82% of the card's peak — the same 82-97% band the CPU hits against
+its own 40.1 GB/s (§ 9.2). Neither side is leaving anything on the table.
+The 9× difference in outcome is a 9× difference in memory bandwidth, and
+nothing else.
+
+Two consequences worth stating plainly, because they are the ones that
+decide how to deploy this hardware:
+
+- **No software change closes this gap.** The CPU path is at 88-97% of what
+  the board's DRAM can deliver (§ 9.2), the integrated GPU shares that same
+  DRAM, and the NPU does not run autoregressive models at all (§ 9.5).
+  There is no remaining inefficiency to remove.
+- **The board does not have to be replaced to cross it.** It has the slot.
+  The measured 11× on the dense 14B came from adding a mid-range consumer
+  card to this exact unit, not from moving to a different class of machine.
+
+### 9.4 What to run on this board
 
 - **Long prompts, RAG, document Q&A → `qwen3.6-35b-a3b`.** Fastest at
   every prompt length measured, fastest at decode, and by a wide margin the
@@ -716,6 +757,60 @@ give (a STREAM-style test), because the honest headroom is the gap between
   changed with this measurement is the margin: the right model is 2-4×
   faster than the wrong one at the lengths RAG actually uses, and the
   ranking is not the one file size would suggest.
+
+### 9.5 The two on-chip accelerators, and why neither is the answer
+
+The SoC is marketed with a 30 TOPS AI accelerator and an Immortalis-G720
+GPU, so "use the NPU" and "use the GPU" are the first two suggestions
+anyone makes on seeing the CPU numbers. Both were investigated and both are
+closed; this section exists so they are not reopened from the marketing
+sheet every six months.
+
+**The NPU (Arm China Zhouyi) does not run autoregressive language models.**
+It is a static-graph engine: an ONNX graph with fixed shapes, compiled
+ahead of time, in per-tensor or per-channel INT8. An LLM is the opposite
+profile — shapes change every token, there is a KV cache that grows, and
+llama.cpp's K-quants (per-block scales inside superblocks) are not a format
+the NPU speaks. There is no ggml backend for it, and writing one is a
+project against ggml internals plus a vendor SDK, with a licensing question
+attached that matters under this project's Apache-2.0-only rule. It is a
+good accelerator for the workload it was designed for, and there is a
+working example of exactly that (object detection under Frigate on this
+board). Radxa's own llama.cpp documentation for the O6 lists CPU only.
+Independently confirmed by the community running this hardware: *"The
+Zhouyi NPU doesn't know how to LLM. It's an agentic memory and embeddings
+processor. It straight-up doesn't do autoregressive LLM decode."*
+
+**The integrated GPU shares the CPU's DRAM, so it inherits the same
+ceiling.** § 9.2 puts the CPU path at 88-97% of the board's 40.1 GB/s, and
+an integrated GPU has no memory of its own to do better with. The one
+public Vulkan recipe for this board reports 9.9 tok/s on
+`qwen2.5-3b-instruct-q5_k_m` (2.44 GB), against 4.3 tok/s for its own CPU
+baseline. We ran the same model and quant on the same board, CPU only,
+`--threads 8`:
+
+| | prefill (145 / 580 tok) | decode | effective bandwidth | % of 40.1 GB/s |
+|---|---:|---:|---:|---:|
+| public result, CPU baseline | not reported | 4.3 tok/s | 10.5 GB/s | 26% |
+| public result, Vulkan G720 | 15.0-16.5 tok/s | 9.9 tok/s | 24.1 GB/s | 60% |
+| **eullm, CPU, cix-p1 build** | **49.9 / 46.1 tok/s** | **14.5 tok/s** | **35.4 GB/s** | **88%** |
+
+The Vulkan path is 1.46× slower than this CPU build at decode and about 3×
+slower at prefill. Its own CPU baseline, at 26% of the board's bandwidth,
+is roughly one core's worth of throughput — the likely cause is thread
+placement (§ 5): with the BSP firmware exposing all 12 cores, a default
+thread count includes the four A520s, and ggml's per-operation barrier lets
+the slowest core gate every batch. So the published 2.3× "Vulkan wins" is
+measured against a configuration problem, not against this SoC's CPU.
+
+None of this rules out the GPU winning on some workload — prefill is
+compute-bound (§ 7.2) and is where an accelerator could in principle
+contribute. It rules out the *reason* usually given for reaching for it,
+which is decode, and it sets the bar any future attempt has to clear: 35-39
+GB/s effective, and 46 tok/s of prefill on a 2.44 GB model.
+
+**What does cross the gap is a discrete card with its own memory** (§ 9.3),
+and the board has the slot for one.
 
 ## Known open items
 
