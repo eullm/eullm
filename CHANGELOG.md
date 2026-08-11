@@ -13,6 +13,29 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.6.81 — 2026-08-11
+
+### Fixed
+- **Ctrl+C stops the process, instead of leaving it running invisibly.**
+  The shutdown message printed and the terminal came back, but the process
+  stayed alive until any in-flight work finished — with a long prompt in
+  progress, that is minutes of an apparently-dead process still holding
+  the port and the model's memory. `#[tokio::main]`'s runtime drop waits
+  for every blocking task, and inference runs in exactly those. The
+  process now exits once the command is done: nothing needed the wait,
+  since the audit trail is written per completed request and models are
+  read-only.
+
+### Performance
+- No engine change, but a measurement worth acting on: on a Radxa Orion
+  O6, the `eullm-linux-arm64-cix-p1` binary is **2.2–3.1× faster at prompt
+  processing and 1.8× faster at generation** than the generic
+  `eullm-linux-arm64` one (qwen3-4b Q4_K_M, CPU-only, same GGUF, same
+  flags). The two builds differ only in the CPU instruction set their
+  kernels are compiled for. If you run this board, use the `cix-p1`
+  binary; the generic one exists so ARM64 boards without those extensions
+  still work. Full A/B in `docs/arm-cix-p1-cpu-profile.md`.
+
 ## 0.6.80 — 2026-08-10
 
 *Accumulated through pre-releases `rc1`–`rc12`, each validated on real
