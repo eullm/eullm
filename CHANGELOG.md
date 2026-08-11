@@ -15,6 +15,27 @@ something changed, less so for understanding what it means.
 
 ## 0.6.81 — 2026-08-11
 
+### Changed
+- **The daemon writes its log to `~/.eullm/logs/eullm.log`, not `/tmp`.**
+  The log path was derived from the PID file, so it inherited `/tmp` — a
+  directory that is small on many systems and is cleared on reboot or
+  under space pressure, which is exactly when the daemon's log is the only
+  record of what happened. The PID file stays in `/tmp`, where a file that
+  is meaningless after a reboot belongs. Reported by
+  [@PeterHickman](https://github.com/PeterHickman) (#354).
+
+### Added
+- **`qwen3.5-9b` in the catalog** (`eullm run qwen3.5-9b`). Qwen 3.5 9B,
+  Apache 2.0, hybrid architecture: three Gated DeltaNet blocks per
+  full-attention block, so only 8 of its 32 layers carry a KV cache and
+  its 262K native context is affordable on a mid-range card. 5.7 GB at
+  Q4_K_M. Vision-capable through the projector shipped with it, which
+  `eullm pull` fetches alongside the weights.
+- **`--logfile <PATH>`**, on both `run` and `serve`, to put the daemon log
+  wherever the deployment wants it (`/var/log/eullm.log`, a mounted
+  volume). Setting `--pidfile` on its own still keeps the log beside the
+  PID file, so a deployment that already redirects one is unaffected.
+
 ### Fixed
 - **Ctrl+C stops the process, instead of leaving it running invisibly.**
   The shutdown message printed and the terminal came back, but the process
