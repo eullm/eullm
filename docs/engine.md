@@ -97,6 +97,7 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `--replace` | false | Replace an existing service on the port |
 | `--daemon` | false | Run as a background daemon |
 | `--pidfile` | `/tmp/eullm.pid` | PID file path (with `--daemon`) |
+| `--logfile` | `~/.eullm/logs/eullm.log` | Daemon log file (with `--daemon`). Set `--pidfile` alone and the log stays beside it |
 
 #### Automatic GPU sizing
 

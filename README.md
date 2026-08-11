@@ -183,18 +183,21 @@ the background and frees your terminal, no `nohup`, no `&`, no tmux.
 eullm run gemma-4-12b --daemon                       # load model + serve, detached
 eullm serve --daemon                                 # headless API server, detached
 eullm serve --daemon --pidfile /var/run/eullm.pid    # custom PID file location
+eullm serve --daemon --logfile /var/log/eullm.log    # custom log file location
 
 # eullm daemon started (PID 88453).
 #   PID file: /tmp/eullm.pid
-#   Log file: /tmp/eullm.log
+#   Log file: /home/you/.eullm/logs/eullm.log
 #   Stop with: kill 88453
 ```
 
 - **PID file** defaults to `/tmp/eullm.pid` on Linux/macOS, `eullm.pid` in the
-  current directory on Windows — override with `--pidfile`.
-- **Logs**: stdout/stderr are redirected to a `.log` file next to the PID file
-  (e.g. `/tmp/eullm.log`), so startup errors and crashes are captured even
-  after the launching terminal is gone.
+  current directory on Windows — override with `--pidfile`. `/tmp` is the right
+  place for it: a PID from before a reboot means nothing.
+- **Logs**: stdout/stderr are redirected to `~/.eullm/logs/eullm.log`, so
+  startup errors and crashes are captured even after the launching terminal is
+  gone. Override with `--logfile`. Setting `--pidfile` on its own keeps the log
+  beside the PID file, as in earlier releases.
 - **Stop** with `kill $(cat /tmp/eullm.pid)` — the engine handles SIGTERM
   gracefully and finishes in-flight requests before exiting.
 - All other flags work unchanged (`--port`, `--ctx-size`, `--web`,

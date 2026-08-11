@@ -285,6 +285,22 @@ struct RuntimeOpts {
     #[arg(long, default_value = DEFAULT_PIDFILE)]
     pidfile: String,
 
+    /// Log file for the background daemon (used with --daemon).
+    ///
+    /// Defaults to `~/.eullm/logs/eullm.log`. It used to be derived from
+    /// `--pidfile`, which put it in `/tmp` by default: a directory that is
+    /// small on many systems and gets cleared exactly when something is
+    /// filling it up or the machine is rebooted after a crash — the two
+    /// moments the log is the only record of what happened (#354). The
+    /// PID file stays in `/tmp`, where a file that is meaningless across
+    /// reboots belongs.
+    ///
+    /// Setting `--pidfile` without `--logfile` still puts the log next to
+    /// the PID file, so an existing deployment that redirects one keeps
+    /// both together.
+    #[arg(long, value_name = "PATH")]
+    logfile: Option<String>,
+
     /// Enable extra internal diagnostics for the Rust engine layer. Off
     /// by default (zero added per-token cost, matches upstream
     /// llama.cpp). Today this enables a NaN/Inf scan of every generated
@@ -474,19 +490,16 @@ async fn main() {
     {
         let args: Vec<String> = std::env::args().collect();
         if args.contains(&"--daemon".to_string()) {
-            // Find --pidfile value.
-            let pidfile = args
-                .iter()
-                .position(|a| a == "--pidfile")
-                .and_then(|i| args.get(i + 1))
-                .map(|s| s.as_str())
-                .or_else(|| {
-                    args.iter()
-                        .find(|a| a.starts_with("--pidfile="))
-                        .map(|a| a.strip_prefix("--pidfile=").unwrap())
-                })
-                .unwrap_or(DEFAULT_PIDFILE);
-            daemonize(pidfile);
+            // Read straight from argv: clap has not run yet, and it cannot,
+            // because the whole point is to re-exec before the runtime and
+            // the model are touched.
+            let pidfile = arg_value(&args, "--pidfile");
+            let logfile = arg_value(&args, "--logfile");
+            let home = std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .ok();
+            let log_path = resolve_daemon_log_path(logfile, pidfile, home.as_deref());
+            daemonize(pidfile.unwrap_or(DEFAULT_PIDFILE), &log_path);
             // daemonize exits the parent — child continues below without --daemon.
         }
     }
@@ -593,6 +606,7 @@ async fn main() {
                 ui_port,
                 daemon,
                 pidfile,
+                logfile,
                 rust_debug,
                 mmproj,
             } = opts;
@@ -626,7 +640,7 @@ async fn main() {
                 },
             };
             // --daemon is handled at the top of main() before tokio starts.
-            let _ = (daemon, pidfile);
+            let _ = (daemon, pidfile, logfile);
             let mut ctk = inference::parse_cache_type(&cache_type_k).unwrap_or_else(|e| {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
@@ -730,6 +744,7 @@ async fn main() {
                 ui_port,
                 daemon,
                 pidfile,
+                logfile,
                 rust_debug,
                 mmproj,
             } = opts;
@@ -742,7 +757,7 @@ async fn main() {
             // An explicit `--gpu-layers` is a ceiling, not an off switch.
             let fit = !no_fit;
             let gpu_layers = gpu_layers.unwrap_or(-1);
-            let _ = (daemon, pidfile);
+            let _ = (daemon, pidfile, logfile);
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
                 eprintln!(
@@ -3320,7 +3335,68 @@ async fn interactive_chat(
 /// continues well past this; we are only ruling out an immediate death.
 const DAEMON_STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(1200);
 
-fn daemonize(pidfile: &str) {
+/// The value of `--flag VALUE` or `--flag=VALUE` in a raw argv, if present.
+///
+/// Used by the `--daemon` branch, which has to read a couple of flags before
+/// clap parses anything.
+fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let eq_prefix = format!("{flag}=");
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .map(|s| s.as_str())
+        .or_else(|| {
+            args.iter()
+                .find_map(|a| a.strip_prefix(&eq_prefix))
+                .filter(|v| !v.is_empty())
+        })
+}
+
+/// Where the background daemon writes its output.
+///
+/// Precedence, and the reason for each step:
+///
+/// 1. `--logfile` — an explicit choice wins over everything.
+/// 2. `--pidfile` set, `--logfile` not — keep the log beside the PID file,
+///    which is what the engine did for every release up to 0.6.81 and what a
+///    deployment that already redirects the PID file expects.
+/// 3. Neither set — `~/.eullm/logs/eullm.log`, next to the model store and
+///    the audit trail. The old default landed in `/tmp` because it was derived
+///    from the PID file, and `/tmp` is small on many systems and is cleared on
+///    reboot or under space pressure: the log disappears precisely when it is
+///    the only account of why the daemon died (#354). A PID file is genuinely
+///    worthless after a reboot, so that one stays in `/tmp`.
+/// 4. No home directory at all (a service account with `HOME` unset) — the
+///    system temp directory, because a daemon that cannot write a log should
+///    still start.
+fn resolve_daemon_log_path(
+    logfile: Option<&str>,
+    pidfile: Option<&str>,
+    home: Option<&str>,
+) -> PathBuf {
+    if let Some(explicit) = logfile.map(str::trim).filter(|p| !p.is_empty()) {
+        return PathBuf::from(explicit);
+    }
+
+    if let Some(pid) = pidfile.map(str::trim).filter(|p| !p.is_empty()) {
+        // Only the extension changes; a path that does not end in `.pid` just
+        // gains `.log`, rather than having `.pid` substituted anywhere inside it.
+        return PathBuf::from(match pid.strip_suffix(".pid") {
+            Some(stem) => format!("{stem}.log"),
+            None => format!("{pid}.log"),
+        });
+    }
+
+    match home.map(str::trim).filter(|h| !h.is_empty()) {
+        Some(h) => PathBuf::from(h)
+            .join(".eullm")
+            .join("logs")
+            .join("eullm.log"),
+        None => std::env::temp_dir().join("eullm.log"),
+    }
+}
+
+fn daemonize(pidfile: &str, log_path: &std::path::Path) {
     use std::io::Write;
 
     let exe = match std::env::current_exe() {
@@ -3355,13 +3431,23 @@ fn daemonize(pidfile: &str) {
         filtered_args.push(arg.clone());
     }
 
-    // Determine log file path next to PID file.
-    let log_path = pidfile.replace(".pid", ".log");
+    // The default destination (`~/.eullm/logs/`) does not exist on a first
+    // run, and neither does a directory an operator named on the command line.
+    if let Some(parent) = log_path.parent()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = std::fs::create_dir_all(parent)
+    {
+        eprintln!(
+            "Error: cannot create log directory {}: {e}",
+            parent.display()
+        );
+        std::process::exit(1);
+    }
 
-    let log_file = match std::fs::File::create(&log_path) {
+    let log_file = match std::fs::File::create(log_path) {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("Error: cannot create log file {log_path}: {e}");
+            eprintln!("Error: cannot create log file {}: {e}", log_path.display());
             std::process::exit(1);
         }
     };
@@ -3401,13 +3487,13 @@ fn daemonize(pidfile: &str) {
                         eprintln!("Error: the daemon exited immediately ({status}).");
                         // The child's own diagnostics went to the log file, so
                         // show them rather than making the operator go and look.
-                        if let Ok(log) = std::fs::read_to_string(&log_path) {
+                        if let Ok(log) = std::fs::read_to_string(log_path) {
                             let tail: Vec<&str> = log.lines().rev().take(10).collect();
                             for line in tail.into_iter().rev() {
                                 eprintln!("  {line}");
                             }
                         }
-                        eprintln!("  Full log: {log_path}");
+                        eprintln!("  Full log: {}", log_path.display());
                         // No PID file: a stale one is worse than none, because a
                         // stop script will believe it.
                         let _ = std::fs::remove_file(pidfile);
@@ -3428,7 +3514,7 @@ fn daemonize(pidfile: &str) {
             }
             println!("eullm daemon started (PID {pid}).");
             println!("  PID file: {pidfile}");
-            println!("  Log file: {log_path}");
+            println!("  Log file: {}", log_path.display());
             println!("  Stop with: kill {pid}");
             std::process::exit(0);
         }
@@ -3700,6 +3786,95 @@ mod cli_default_parity_tests {
             runtime_opts(&["eullm", "run", "some-model"]),
             runtime_opts(&["eullm", "serve"]),
             "run and serve must agree on every shared runtime flag"
+        );
+    }
+
+    /// Where a daemon's output lands (#354). The old default derived the log
+    /// path from the PID file, so it went to `/tmp` — small on many systems,
+    /// and cleared on reboot or under space pressure, which is exactly when
+    /// the log is the only record of what the daemon was doing.
+    #[test]
+    fn the_daemon_log_defaults_under_the_eullm_home() {
+        assert_eq!(
+            resolve_daemon_log_path(None, None, Some("/home/u")),
+            PathBuf::from("/home/u/.eullm/logs/eullm.log")
+        );
+    }
+
+    /// An explicit `--logfile` beats everything, including a `--pidfile`
+    /// pointing somewhere else.
+    #[test]
+    fn an_explicit_logfile_wins() {
+        assert_eq!(
+            resolve_daemon_log_path(
+                Some("/var/log/eullm.log"),
+                Some("/run/x.pid"),
+                Some("/home/u")
+            ),
+            PathBuf::from("/var/log/eullm.log")
+        );
+    }
+
+    /// The pre-0.6.81 convention, kept for anyone who already redirects the
+    /// PID file: the log stays next to it. Only the extension is replaced —
+    /// `.pid` occurring earlier in the path is left alone.
+    #[test]
+    fn a_custom_pidfile_still_carries_the_log_with_it() {
+        assert_eq!(
+            resolve_daemon_log_path(None, Some("/var/run/eullm/eullm.pid"), Some("/home/u")),
+            PathBuf::from("/var/run/eullm/eullm.log")
+        );
+        assert_eq!(
+            resolve_daemon_log_path(None, Some("/srv/a.pid.d/server"), None),
+            PathBuf::from("/srv/a.pid.d/server.log")
+        );
+    }
+
+    /// A service account with no home directory still gets a daemon: the log
+    /// falls back to the temp directory rather than the start failing.
+    #[test]
+    fn no_home_falls_back_to_the_temp_directory() {
+        assert_eq!(
+            resolve_daemon_log_path(None, None, None),
+            std::env::temp_dir().join("eullm.log")
+        );
+        // An empty HOME is the same as no HOME, not a path relative to `/`.
+        assert_eq!(
+            resolve_daemon_log_path(None, None, Some("  ")),
+            std::env::temp_dir().join("eullm.log")
+        );
+    }
+
+    /// Both spellings of a flag value, since the `--daemon` branch reads argv
+    /// itself — clap has not run at that point and cannot.
+    #[test]
+    fn raw_argv_reads_both_flag_spellings() {
+        let argv: Vec<String> = [
+            "eullm",
+            "serve",
+            "--logfile",
+            "/a/b.log",
+            "--pidfile=/c/d.pid",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(arg_value(&argv, "--logfile"), Some("/a/b.log"));
+        assert_eq!(arg_value(&argv, "--pidfile"), Some("/c/d.pid"));
+        assert_eq!(arg_value(&argv, "--ctx-size"), None);
+    }
+
+    /// `--logfile` is a shared runtime flag, so it exists on both commands.
+    #[test]
+    fn logfile_is_available_to_run_and_serve() {
+        assert_eq!(runtime_opts(&["eullm", "run", "m.gguf"]).logfile, None);
+        assert_eq!(
+            runtime_opts(&["eullm", "serve", "--logfile", "/var/log/eullm.log"]).logfile,
+            Some("/var/log/eullm.log".to_string())
+        );
+        assert_eq!(
+            runtime_opts(&["eullm", "run", "m.gguf", "--logfile", "/var/log/eullm.log"]).logfile,
+            Some("/var/log/eullm.log".to_string())
         );
     }
 
