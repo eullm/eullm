@@ -196,6 +196,61 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
 
 ---
 
+- [ ] **0.8-Z · Decodifica speculativa (MTP prima, draft model dopo)** *(P0 sul percorso ARM)*
+  L'unica leva software che alza il decode su hardware limitato dalla banda di
+  memoria, ed è misurabile perché il limite è misurato: su Orion O6 la banda
+  leggibile è 40.1 GB/s e il motore ne estrae l'88-97%, quindi `tok/s ≈ banda /
+  GB attivi per token` e non esiste ottimizzazione che sposti quel rapporto
+  (`docs/arm-cix-p1-cpu-profile.md` § 9.2). La decodifica speculativa lo aggira
+  invece di combatterlo: un draft propone N token e il modello grande li
+  verifica **in un solo passaggio**, quindi si paga un solo attraversamento dei
+  pesi per N token accettati. Guadagno dichiarato a monte 1.5-2×, che su MoE 35B
+  significherebbe passare da 10.8 a 16-20 tok/s **senza toccare l'hardware**.
+
+  **Vale di più sulla board che sulla GPU**, ed è il motivo per cui è P0 proprio
+  sul percorso a basso consumo: là il decode è al 100% memory-bound e
+  l'ammortamento è puro guadagno, mentre su una scheda discreta il calcolo
+  diventa il limite prima e il moltiplicatore si accorcia. È la voce di roadmap
+  che migliora la configurazione passiva, non quella accelerata.
+
+  **Cosa dà libllama e cosa dobbiamo scrivere noi** (verificato sul pin
+  2026-07-30, non per analogia): `llama.h` espone `llama_context_params.ctx_type
+  = LLAMA_CONTEXT_TYPE_MTP` per creare il context di draft e `llama_n_rs_seq()`
+  per interrogare la finestra di rollback; il resto — ciclo draft/verify/accept,
+  contabilità del rollback sul rifiuto, integrazione con gli slot — vive in
+  `common/speculative.cpp` e `tools/server/server-context.cpp`, che **non
+  linkiamo**. Quindi il supporto a livello di modello c'è e l'orchestrazione è
+  un loop nostro, che è la forma di lavoro già fatta per lo scheduler e i
+  checkpoint.
+
+  **Vincolo sugli ibridi, che è il caso che ci interessa.** Rifiutare un draft
+  significa riavvolgere anche lo stato ricorrente dei layer Gated DeltaNet, e
+  quello si riavvolge solo entro `n_rs_seq`. Upstream lo deriva esattamente da
+  qui (`cparams.n_rs_seq = params.speculative.need_n_rs_seq()` in
+  `common/common.cpp:1632`) e verifica `draft.size() > llama_n_rs_seq(ctx_tgt)`
+  prima di provarci. Il context di draft va invece a `n_rs_seq = 0`. Costo: i
+  tensori di stato ricorrente scalano `(1 + n_rs_seq)`, quindi un draft da 6-8
+  moltiplica per 7-9 uno stato che sul 9B ibrido è dell'ordine dei 50 MiB —
+  accettabile, ma da misurare sul 35B MoE prima di dare per buono. È esattamente
+  ciò per cui `--rs-seq` esiste già come flag sperimentale: non è un knob di
+  riuso KV, è il parametro della decodifica speculativa, e finalmente lo userebbe
+  qualcosa.
+
+  **Ordine di attacco.** Prima MTP self-draft, che non richiede un secondo
+  modello, non ha problemi di vocabolario e costa ~190 MB di pesi in più; prima
+  sul motore sequenziale a singola sequenza, dove non c'è gestione slot di
+  mezzo; e prima misurato sull'Orion, che è la macchina dove il guadagno conta.
+  Solo dopo il percorso con draft model separato (che impone vocabolario
+  identico fra i due) e l'integrazione nello scheduler batch. Chiude anche un
+  cerchio lasciato aperto: la entry di catalogo `qwen3.5-9b` punta oggi al build
+  **senza** MTP perché quel layer sarebbe peso morto; con questa voce fatta,
+  torna a puntare al build MTP.
+
+  **DoD:** guadagno misurato con `bench/arm_cpu_bench.py` su Orion, con e senza,
+  stesso modello e stessi flag; tasso di accettazione riportato; memoria residente
+  confrontata; nessuna regressione sul percorso non speculativo (che resta il
+  default finché il guadagno non è dimostrato sull'hardware).
+
 ## 0.9 — Agentic e verticale
 
 **Gate di uscita:** tool calling validato su Qwen + una seconda famiglia;
