@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated_at": "2026-07-10",
+  "updated_at": "2026-08-11",
   "notes": "Catalog of permissively-licensed open-weight models, curated June 2026. Each entry's hf_repo + hf_filename has been HEAD-verified on huggingface.co at the time of update. unsloth/* is the preferred GGUF source (dynamic-quant, kept current); bartowski/* is the fallback when an unsloth repo is gated or absent. Models older than the listed entries (Qwen3-72B which never shipped, Mixtral-8x7B v1, Mistral-7B-v0.3, Mistral-Small-22B-2409, granite-3.1) were removed as either non-existent, gated, or superseded by the entries below. SHA256 digests are intentionally empty so the catalog stays usable without a multi-TB pre-scan: the engine treats empty digests as 'skip verification with a warning'.",
   "models": [
     {
@@ -293,6 +293,40 @@
       "hf_filename": "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf",
       "digest": "sha256:a86349a4180c4e6bb43f874c29c404fa2be3f90b15509bd6d86f697dba724ec1",
       "recommended": false
+    },
+    {
+      "id": "qwen3.5-9b",
+      "name": "Qwen 3.5 9B (hybrid, vision, May 2026)",
+      "description": "Qwen 3.5 9B. Hybrid architecture: three Gated DeltaNet (linear attention) blocks for every full-attention block, so the KV cache costs roughly a quarter of what a dense 9B would need at the same context, and 262K context is realistic on a mid-range card. Unified vision-language, so it reads images with a multimodal engine build (the default) and runs as a text model otherwise. This is unsloth's MTP repo: the GGUF carries the extra multi-token-prediction layer (about 190 MB over the plain build), which EULLM loads and ignores because it has no speculative decoding yet.",
+      "params_b": 9.0,
+      "quantization": "Q4_K_M",
+      "size_bytes": 5868826976,
+      "vram_gb": 10,
+      "languages": [
+        "en",
+        "it",
+        "de",
+        "fr",
+        "es",
+        "pt",
+        "nl",
+        "zh"
+      ],
+      "domain": "general",
+      "license": "Apache-2.0",
+      "tags": [
+        "instruct",
+        "multilingual",
+        "multimodal",
+        "vision",
+        "long-context"
+      ],
+      "hf_repo": "unsloth/Qwen3.5-9B-MTP-GGUF",
+      "hf_filename": "Qwen3.5-9B-Q4_K_M.gguf",
+      "digest": "sha256:e8dd94817e95d6c0939102049d068418269978377b13616c4726235e232841fe",
+      "recommended": true,
+      "mmproj_repo": "unsloth/Qwen3.5-9B-MTP-GGUF",
+      "mmproj_filename": "mmproj-F16.gguf"
     },
     {
       "id": "gemma-4-12b",

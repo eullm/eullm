@@ -25,6 +25,14 @@ something changed, less so for understanding what it means.
   [@PeterHickman](https://github.com/PeterHickman) (#354).
 
 ### Added
+- **`qwen3.5-9b` in the catalog** (`eullm run qwen3.5-9b`). Qwen 3.5 9B,
+  Apache 2.0, hybrid architecture: three Gated DeltaNet blocks per
+  full-attention block, so only a quarter of its layers pay for a KV
+  cache and its 262K native context is affordable on a mid-range card.
+  Vision-capable through the projector shipped with it, which `eullm pull`
+  fetches alongside the weights. The GGUF comes from unsloth's MTP repo
+  and carries the multi-token-prediction layer; the engine loads and
+  ignores it, since there is no speculative decoding yet.
 - **`--logfile <PATH>`**, on both `run` and `serve`, to put the daemon log
   wherever the deployment wants it (`/var/log/eullm.log`, a mounted
   volume). Setting `--pidfile` on its own still keeps the log beside the
