@@ -72,7 +72,7 @@ curl http://localhost:11434/v1/chat/completions \
 | 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
 | 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-12.8` | ✅ Tested | RTX 3000/4000/5000 |
 | 🐧 Linux ARM64 | `eullm-linux-arm64` | ✅ Tested (community) | Validated on Raspberry Pi 400; RPi 4/5, Orange Pi 5+, Jetson, etc. |
-| 🐧 Linux ARM64 (NVIDIA) | `eullm-linux-arm64-cuda-12.8` | ✅ Tested | ARM host + discrete NVIDIA GPU (sm_86/89/120); validated on an RTX 3060 12GB ARM server, qwen3-14b Q4 at 33 tok/s |
+| 🐧 Linux ARM64 (NVIDIA) | `eullm-linux-arm64-cuda-12.8` | ✅ Tested | ARM host + discrete NVIDIA GPU (sm_86/89/120); validated on a Radxa Orion O6 (CIX P1) with an RTX 3060 12GB in its PCIe slot, qwen3-14b Q4 at 33 tok/s — the same board does 3.0 tok/s on the same model CPU-only |
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | ✅ Tested (community) | Validated on M2 Pro (Metal); M1/M2/M3/M4 |
 | 🍎 macOS Intel | `eullm-macos-x64` | ✅ Tested (community) | Validated on a 2018 Mac mini (i7-8700B, 54 tok/s) and a 2018 MacBook Pro 15" (i9-8950HK, 41 tok/s), qwen3-0.6b Q4. CPU only: Metal is deliberately not built for Intel Macs, see below |
 | 🪟 Windows 11 x64 (CPU) | `eullm-windows-x64.exe` | ✅ Tested | Standalone binary, CLI/server |
@@ -377,7 +377,7 @@ the tensor pattern simply matches nothing. Available on `eullm run` and
 CPU RAM, regardless of how much VRAM is actually free. On a card with more
 headroom than the blanket flag needs, that leaves GPU memory idle and pushes
 more matmuls onto the CPU than necessary, which costs tokens/sec: on a real
-run (Qwen3.6-35B-A3B Q4_K_M, RTX 3060 12GB, ARM64 host), `--cpu-moe --fit`
+run (Qwen3.6-35B-A3B Q4_K_M, RTX 3060 12GB in a Radxa Orion O6), `--cpu-moe --fit`
 used only ~2.5 GB of the 12 GB card and left the GPU at ~26% utilization
 while all 8 CPU cores sat at 80-90% — 26.5 tok/s.
 
@@ -682,7 +682,7 @@ not a bigger token budget.
 - **`--fit`** auto-sizes GPU-offloaded layers to free VRAM (CUDA), charging each layer its weight share *and* its KV-cache slice for the chosen context/cache type — quantizing the KV (`--cache-type-k q8_0 --cache-type-v q4_0`) frees room for more layers, the gain growing with context length. Falls back to partial offload, or to a manual `--gpu-layers`, when it can't size the model. *(Opt-in when introduced; sizing is the default since v0.6.80 and the flag now only adds the interactive confirmation.)*
 - **`hf.co/<repo>[:quant]` shorthand** — `eullm run hf.co/unsloth/Qwen3-14B-GGUF:Q4_K_M` pulls and runs any HuggingFace GGUF repo directly, catalog or not.
 - **Parallel, resumable downloads** — model pulls fan out across up to 16 concurrent HTTP Range requests (default 8) instead of one stream, and a dropped connection retries only the missing chunk instead of restarting the whole file.
-- **Linux ARM64 + NVIDIA CUDA** binary (`eullm-linux-arm64-cuda-12.8`) — validated end-to-end on an RTX 3060 12GB ARM server (qwen3-14b Q4, 33 tok/s, full GPU offload). Ships without an NCCL runtime dependency, so it starts with only the NVIDIA driver installed — no extra packages, no root required.
+- **Linux ARM64 + NVIDIA CUDA** binary (`eullm-linux-arm64-cuda-12.8`) — validated end-to-end on a Radxa Orion O6 (CIX P1) with an RTX 3060 12GB in its PCIe slot (qwen3-14b Q4, 33 tok/s, full GPU offload; 3.0 tok/s on the same board CPU-only). Ships without an NCCL runtime dependency, so it starts with only the NVIDIA driver installed — no extra packages, no root required.
 - **`eullm unload`** / `POST /api/unload` — free the loaded model's VRAM and leave the server running, for handing GPU memory to a co-resident process (e.g. an embedding model during RAG ingestion) without a restart.
 - **`--gpu-layers -1`** now parses correctly (clap hyphen-value fix), and a broken model-store path (e.g. a dangling symlink to an unmounted volume) reports a clear error naming the path instead of a bare `EEXIST`.
 
