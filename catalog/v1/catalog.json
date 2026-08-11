@@ -296,11 +296,11 @@
     },
     {
       "id": "qwen3.5-9b",
-      "name": "Qwen 3.5 9B (hybrid, vision, May 2026)",
-      "description": "Qwen 3.5 9B. Hybrid architecture: three Gated DeltaNet (linear attention) blocks for every full-attention block, so the KV cache costs roughly a quarter of what a dense 9B would need at the same context, and 262K context is realistic on a mid-range card. Unified vision-language, so it reads images with a multimodal engine build (the default) and runs as a text model otherwise. This is unsloth's MTP repo: the GGUF carries the extra multi-token-prediction layer (about 190 MB over the plain build), which EULLM loads and ignores because it has no speculative decoding yet.",
+      "name": "Qwen 3.5 9B (hybrid, vision, Feb 2026)",
+      "description": "Qwen 3.5 9B. Hybrid architecture: three Gated DeltaNet (linear attention) blocks for every full-attention block, so only 8 of its 32 layers carry a KV cache and its 262K native context stays affordable on a mid-range card. Unified vision-language, so it reads images with a multimodal engine build (the default) and runs as a text model otherwise; `eullm pull` fetches the projector alongside the weights.",
       "params_b": 9.0,
       "quantization": "Q4_K_M",
-      "size_bytes": 5868826976,
+      "size_bytes": 5680522464,
       "vram_gb": 10,
       "languages": [
         "en",
@@ -321,11 +321,11 @@
         "vision",
         "long-context"
       ],
-      "hf_repo": "unsloth/Qwen3.5-9B-MTP-GGUF",
+      "hf_repo": "unsloth/Qwen3.5-9B-GGUF",
       "hf_filename": "Qwen3.5-9B-Q4_K_M.gguf",
-      "digest": "sha256:e8dd94817e95d6c0939102049d068418269978377b13616c4726235e232841fe",
+      "digest": "sha256:03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
       "recommended": true,
-      "mmproj_repo": "unsloth/Qwen3.5-9B-MTP-GGUF",
+      "mmproj_repo": "unsloth/Qwen3.5-9B-GGUF",
       "mmproj_filename": "mmproj-F16.gguf"
     },
     {
