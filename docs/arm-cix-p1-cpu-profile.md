@@ -202,13 +202,36 @@ the Orion itself:
 sudo bash bench/detect_arm_big_cores.sh
 ```
 
-It prints a ready-to-use `taskset` command. Combine with `--threads` set to
-the detected big-core count so the scheduler doesn't also spin up worker
-threads for cores it isn't pinned to:
+**The rule is "exclude A520, use every A720" — not "use only the fastest
+A720".** Both A720 tiers are the same microarchitecture with the same ISA
+extensions and differ only in clock ceiling (12% apart on the unit measured
+in § 7.2), so excluding the medium ones trades away half the cores to chase
+a few percent of clock. A520 is the case pinning exists for: a different,
+much weaker core, and with ggml's per-operation barrier one of them in the
+pool gates the whole batch.
+
+On a unit with no A520 visible — which is what the SystemReady UEFI
+firmware gives — that means **no `taskset` at all**, and `--threads` set to
+the full core count:
 
 ```bash
-taskset -c <big-core-list> eullm run <model> --no-ui --threads <big-core-count> < /dev/null > server.log 2>&1 &
+eullm run <model> --no-ui --threads <all-A720-count> < /dev/null > server.log 2>&1 &
 ```
+
+Only when A520 cores are present does pinning earn its keep, and then it is
+to all the A720s, not to the fastest ones:
+
+```bash
+taskset -c <all-A720-list> eullm run <model> --no-ui --threads <A720-count> < /dev/null > server.log 2>&1 &
+```
+
+`bench/detect_arm_big_cores.sh` prints whichever of the two applies. It
+recommended the fastest-tier-only form until 2026-08-11, when measuring it
+showed that costs about 3× on this board — see § 7.2.
+
+**A core list carried over from another firmware silently pins to the
+intersection, not to an error.** `taskset -c 0,9,10,11` on a unit exposing
+cpu0-cpu7 runs happily on core 0 alone. Always derive the list on the unit.
 
 `taskset` pins the whole process (and everything it spawns) regardless of
 whether the build uses OpenMP or ggml's own thread pool, so it's the
@@ -286,6 +309,12 @@ genuinely sets the ceiling. A 4B at Q4 is ~2.5 GB — small enough that
 decode is no longer purely bandwidth-starved on this SoC, so the faster
 int8 kernels (and the `q4_K_8x8` repack they enable) show up in decode too.
 
+**These are 4-thread numbers on an 8-core board.** The A/B ratio is
+unaffected — both sides carried the same handicap — but the absolute
+figures are roughly half of what the board delivers: `--threads 8` is worth
+another 1.71-1.83× on prefill (§ 7.2). Read this table as a comparison
+between builds, not as this SoC's ceiling.
+
 Practical reading: **use the `cix-p1` binary on this board, always**. It is
 the same engine with the same defaults; the only difference is that the CPU
 kernels are compiled for the ISA this SoC actually has. The generic binary
@@ -309,6 +338,69 @@ barely moves decode, which is bounded by DRAM bandwidth instead. Don't
 judge the profile's effect from the REPL's end-of-turn tok/s line alone
 (that's decode-dominated when the prompt is short) — run the sweep above
 and look at the `prefill` numbers specifically.
+
+### 7.2 Thread count: use every A720 core, and do not pin
+
+Measured 11 August 2026 on the Orion O6, same binary and flags as § 9,
+`--threads 4` vs `--threads 8`, nothing else changed:
+
+| model | 580 tok prefill | 2349 tok prefill | decode |
+|---|---:|---:|---:|
+| `qwen3-8b` dense | 13.8 → 24.9 (**1.80×**) | 8.6 → 15.7 (**1.83×**) | 6.9 → 7.8 (1.13×) |
+| `qwen3.5-9b` hybrid | 15.5 → 27.1 (**1.75×**) | 13.3 → 22.7 (**1.71×**) | 5.6 → 6.3 (1.13×) |
+
+Doubling the thread count buys 1.71-1.83× on prefill and ~1.13× on decode.
+The split is the expected one: prefill is compute-bound and scales with
+cores, decode is bandwidth-bound and does not (§ 7).
+
+**1.83× is the theoretical ceiling here, and the dense model hits it
+exactly.** ggml puts a barrier after every operation, so a batch runs at
+`n_threads × slowest_clock`. This board's 8 cores run at 2500, 2500, 2400,
+2400, 2300, 2300, 2200, 2200 MHz; the kernel had placed the 4-thread run on
+the four fastest (0, 5, 6, 7), so the ratio to beat was
+`8 × 2200 / 4 × 2400` = 1.83. Getting 95-100% of that means the prefill
+path on this SoC is **not** yet memory-bandwidth-limited — added cores turn
+almost entirely into work. The hybrid falls slightly short (1.71-1.75×)
+because the Gated DeltaNet recurrence carries a sequential dependency along
+the token axis that parallelizes worse than a plain attention matmul.
+
+**Do not pin to the "big" cores on a board with no A520.** Until this
+measurement `bench/detect_arm_big_cores.sh` recommended
+`taskset -c <highest-clock cores> --threads <that many>`, which on this unit
+means 2 cores out of 8 — roughly a 3× loss. The heuristic is right only when
+the excluded cores are Cortex-A520: those are a different, far weaker
+microarchitecture, and with a per-operation barrier one of them in the pool
+gates the whole batch. A720 "big" and "medium" are the same core with a
+different clock ceiling (12% apart here), so excluding the medium ones
+trades 4 cores for 12% of clock. The script now recommends
+`--threads <all A720>` with no `taskset` when no A520 is present.
+
+**Two traps that cost real measurements on this board**, both worth a check
+before trusting any number:
+
+- **A `taskset` core list copied from another firmware silently pins to one
+  core.** `taskset -c 0,9,10,11` on a unit that exposes cpu0-cpu7 does not
+  fail: `sched_setaffinity` drops the non-existent bits and keeps the
+  intersection, here `{0}`. The symptom is 4 threads at ~25% each and one
+  core at 100% in `htop`. It produced 4.3 tok/s where the same run
+  unpinned gives 15.0. Always derive the list on the unit
+  (`bench/detect_arm_big_cores.sh`, or `lscpu -e=CPU,MAXMHZ`), never carry
+  one over from a document.
+- **A stale server keeps burning a core.** Up to 0.6.80 the engine does not
+  exit on SIGTERM (the `#[tokio::main]` runtime drop waits on the blocking
+  inference task — fixed in 0.6.81), so `pkill -f eullm` leaves the process
+  alive with its ggml threads spinning, ~100% of one core and the model
+  still resident. Use `pkill -9`, and confirm with `pgrep -c -f eullm`
+  before starting a measurement. Note that `htop` shows one row per
+  *thread*: four rows with consecutive PIDs are one process, not four.
+
+Wait for the server to be ready rather than sleeping a fixed interval — a
+21 GB MoE takes minutes to load from cold page cache, and the bench fails
+with a connection error if it starts first:
+
+```bash
+until curl -sf localhost:11434/api/version >/dev/null; do sleep 5; done; echo ready
+```
 
 ## 8. Hybrid/recurrent MoE models (Qwen3.5/3.6) on this profile
 
@@ -489,6 +581,142 @@ quantization where the variable tensors are entirely on the accelerated
 list) over a smaller "IQ4_NL-named" dynamic quant** — file size and ARM
 decode speed are not the same axis for this class of quant.
 
+## 9. Prefill scaling by architecture: dense vs hybrid vs hybrid-MoE
+
+The question this answers: **for a long prompt — RAG, document Q&A, a
+stuffed context — does a hybrid (linear-attention) model actually hold its
+throughput where a dense one collapses, and by how much?** The claim is
+routine in model cards. It had not been measured here, and the answer turns
+out to decide which model belongs on this board.
+
+Measured 11 August 2026, Radxa Orion O6, `eullm 0.6.80`
+`linux-arm64-cix-p1`, CPU only, all three models Q4_K_M, `--threads 8`, no
+`taskset`, `--ctx-size 8192 --batch-size 0` (sequential engine, so all
+three run the same code path — a model carrying an mmproj is otherwise
+forced out of continuous batching), `--cache-type-k f16 --cache-type-v f16`,
+`bench/arm_cpu_bench.py`. One model resident at a time, verified with
+`pgrep -c`. No thermal throttling: every busy core held its `lscpu` maximum
+for the whole run.
+
+| | `qwen3-8b` | `qwen3.5-9b` | `qwen3.6-35b-a3b` |
+|---|---:|---:|---:|
+| architecture | dense | hybrid | hybrid MoE |
+| full-attention layers | 36/36 | 8/32 | 1 in 4 |
+| active params/token | 8B | 9B | ~3B |
+| file size | 5.0 GB | 5.7 GB | 21 GB |
+| **prefill, 580 tok** | 24.9 tok/s | 27.1 tok/s | **39.9 tok/s** |
+| **prefill, 2349 tok** | 15.7 tok/s | 22.7 tok/s | **29.4 tok/s** |
+| loss over that range | **-37%** | **-16%** | **-26%** |
+| **decode, 128 tok** | 7.8 tok/s | 6.3 tok/s | **10.8 tok/s** |
+
+The same A/B at `--threads 4`, where the two 5-6 GB models were swept over
+four prompt lengths rather than two:
+
+| prompt | `qwen3-8b` dense | `qwen3.5-9b` hybrid | ratio |
+|---:|---:|---:|---:|
+| 145 tok | 16.2 | 16.0 | 0.99× |
+| 580 tok | 13.8 | 15.5 | 1.12× |
+| 2349 tok | 8.6 | 13.3 | 1.55× |
+| 4727 tok | 5.6 | 11.1 | **1.98×** |
+| decode | 6.9 | 5.6 | 0.81× |
+
+**The two start level and diverge with length.** At 145 tokens the dense is
+marginally ahead — it is the smaller model, and at that length nothing else
+matters. The crossover is around 500-600 prompt tokens. From there the gap
+widens monotonically to 2× at 4727 tokens and is still opening. The hybrid
+is the *larger* model of the two (9B vs 8B, 5.7 GB vs 5.0 GB), so this is
+not a size effect: it is the 24 of 32 layers that do not pay a quadratic
+cost in sequence length.
+
+### 9.1 Fitting the curve, and what each coefficient means
+
+Two points per model are enough to fit `time = a·n + b·n²` — `a` is
+everything that scales linearly with token count (FFN, linear-attention
+layers, embeddings), `b` is the full-attention term. At `--threads 8`:
+
+| | `a` (s/token) | `b` (s/token²) |
+|---|---:|---:|
+| `qwen3-8b` dense | 0.0324 | **1.33e-5** |
+| `qwen3.5-9b` hybrid | 0.0346 | 4.02e-6 |
+| `qwen3.6-35b-a3b` MoE | **0.0221** | 5.07e-6 |
+
+Each number says exactly what the architecture claims. The two hybrids have
+a quadratic term **2.6-3.3× smaller** than the dense model's, which is the
+linear-attention layers not being there. The MoE has the smallest linear
+term of the three despite being by far the largest model, which is ~3B
+active parameters per token instead of 8-9B.
+
+It also corrects a reading that the raw percentages invite: the MoE's -26%
+looks worse than the hybrid's -16%, but that is a percentage of a much
+higher starting point. Its quadratic coefficient is only 26% above the
+hybrid's and less than half the dense model's.
+
+Extrapolating to 4727 tokens at `--threads 8`:
+
+| | predicted | vs. measured at 4 threads × the measured thread ratio |
+|---|---:|---|
+| `qwen3-8b` dense | 10.5 tok/s (TTFT 451 s) | 10.2 (+3%) |
+| `qwen3.5-9b` hybrid | 18.6 tok/s (TTFT 254 s) | 19.1 (-3%) |
+| `qwen3.6-35b-a3b` MoE | 21.7 tok/s (TTFT 218 s) | not measured |
+
+The two checkable predictions land within 3% of independently measured
+numbers, which is why the third is worth quoting at all.
+
+**One prediction worth testing:** the MoE starts higher but rises faster,
+so the two hybrid curves cross at roughly **11,900 prompt tokens**, beyond
+which `qwen3.5-9b` should be the faster of the two at prefill. That is an
+extrapolation from two points each and should be treated as a hypothesis;
+confirming it needs `--ctx-size 16384` and a point at ~8192 words.
+
+### 9.2 Decode is a flat memory wall at ~37 GB/s
+
+Decode tells a completely different story from prefill, and the numbers
+converge on one explanation:
+
+| | bytes streamed per token | decode | effective bandwidth |
+|---|---:|---:|---:|
+| `qwen3-8b` dense | ~5.0 GB (all weights) | 7.8 tok/s | **39.0 GB/s** |
+| `qwen3.5-9b` hybrid | ~5.7 GB (all weights) | 6.3 tok/s | **35.8 GB/s** |
+
+Two models of different size and different architecture land within 9% of
+each other on effective DRAM bandwidth. That is the memory wall, visible
+directly: decode on this board is not computing, it is waiting for weights.
+It also explains the one place the hybrid loses — it is the bigger file, so
+it streams more per token, and architecture cannot help with that.
+
+Inverting the same relation for the MoE gives ~3.4 GB moved per token at
+10.8 tok/s, consistent with ~3B active parameters at Q4 plus the
+always-resident attention and embedding weights. The MoE wins decode by
+moving less memory, not by being faster.
+
+**This is the number to beat with any accelerator.** Anything that would
+speed up decode on this board has to pull more than ~37 GB/s out of the
+same LPDDR5 — an integrated GPU shares that bus with the CPU, so the
+ceiling is shared too. Before investing in a Vulkan or OpenCL build for the
+onboard Immortalis-G720, measure what the memory subsystem will actually
+give (a STREAM-style test), because the honest headroom is the gap between
+37 GB/s and the board's achievable peak, and nothing more.
+
+### 9.3 What to run on this board
+
+- **Long prompts, RAG, document Q&A → `qwen3.6-35b-a3b`.** Fastest at
+  every prompt length measured, fastest at decode, and by a wide margin the
+  strongest model of the three. 2349 tokens of retrieved context cost 80
+  seconds to first token. That is not interactive, but it is usable for
+  asynchronous or semi-interactive work, which the 4.5 minutes the dense
+  model needs at 4727 tokens is not. Needs ~21 GB resident, so this is a
+  64 GB-board recommendation.
+- **Short prompts, chat, small memory → `qwen3-8b`.** Below ~600 prompt
+  tokens the prefill difference vanishes and it decodes 24% faster than
+  `qwen3.5-9b`.
+- **`qwen3.5-9b`** sits between the two: the right choice when 21 GB is not
+  available but prompts are long, and the only one of the three that reads
+  images.
+- The absolute numbers still say **no interactive RAG on this board**. What
+  changed with this measurement is the margin: the right model is 2-4×
+  faster than the wrong one at the lengths RAG actually uses, and the
+  ranking is not the one file size would suggest.
+
 ## Known open items
 
 - ~~Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get ordinary KV-cache
@@ -513,7 +741,25 @@ decode speed are not the same axis for this class of quant.
   what makes exact-text-prefix matching work reliably when thinking is
   on).
 - Exact big-core clock ceiling (2.6 vs 2.8 GHz) varies by silicon revision —
-  read it on the actual unit, don't assume.
+  read it on the actual unit, don't assume. The unit measured in § 9 reports
+  2500/2500/2400/2400/2300/2300/2200/2200 MHz across its 8 visible A720
+  cores, i.e. four clock tiers, not two.
+- **The `qwen3.5-9b` vs `qwen3.6-35b-a3b` prefill crossover at ~11,900
+  tokens (§ 9.1) is an extrapolation from two points each, not a
+  measurement.** Confirming it needs `--ctx-size 16384` and a prompt of
+  roughly 8192 words. Worth doing: it decides which model to put behind a
+  long-context workload on this board.
+- **Whether the onboard Immortalis-G720 can beat the CPU at decode is
+  unmeasured, and the bar is ~37 GB/s of effective DRAM bandwidth (§ 9.2),
+  not a tok/s figure.** An integrated GPU shares the same LPDDR5 as the CPU
+  cluster, so the question is purely how much of the achievable peak each
+  path extracts. Measure the board's real memory bandwidth first (a
+  STREAM-style test); only if it is well above 37 GB/s is a Vulkan or
+  OpenCL build worth building and testing. Prefill, being compute-bound
+  (§ 7.2), is the more likely place for a GPU to win.
+- A third data point at 4727 tokens for `qwen3.6-35b-a3b` at `--threads 8`
+  would replace the one extrapolated figure in § 9.1's table with a
+  measurement. Roughly four minutes of runtime.
 - Power telemetry is unconfirmed; treat as absent until verified with
   `ls /sys/class/hwmon/*/name` on real hardware.
 - Native ggml threadpool cpumask pinning (beyond `taskset`) isn't exposed
