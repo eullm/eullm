@@ -94,7 +94,28 @@ fi
 echo "Cortex-A720 big    (max ~$((max_freq / 1000)) MHz): ${big[*]}"
 echo "Cortex-A720 medium: ${medium[*]:-none distinguished (same max freq as big - treated as big above)}"
 
-big_csv=$(IFS=,; echo "${big[*]}")
+# What to actually run.
+#
+# The rule is "exclude A520, use every A720" — NOT "use only the fastest
+# A720". big and medium are the same microarchitecture with the same ISA
+# extensions (i8mm, SVE2) and differ only in clock ceiling, so dropping the
+# medium ones throws away real throughput to chase a few percent of clock.
+# A520 is a different, far weaker core, and ggml puts a barrier after every
+# operation, so one A520 in the pool does gate the whole batch — that is the
+# case pinning exists for.
+#
+# Measured on this board (2026-08-11, 8 A720 visible, no A520): going from
+# --threads 4 to --threads 8 gave 1.71-1.80x on prefill across three models,
+# i.e. 95% of the theoretical `n_threads x slowest_clock` ceiling. Pinning to
+# the 2 cores at the single highest clock would have cost about 3x. See
+# docs/arm-cix-p1-cpu-profile.md § 7.2.
+a720_csv=$(IFS=,; echo "${a720_cores[*]}")
 echo ""
-echo "Recommended pinning for this run:"
-echo "  taskset -c $big_csv eullm run <model> --no-ui --threads ${#big[@]} < /dev/null > server.log 2>&1 &"
+if [ "${#a520_cores[@]}" -gt 0 ]; then
+    echo "Recommended for this run (pin away from the A520 cores):"
+    echo "  taskset -c $a720_csv eullm run <model> --no-ui --threads ${#a720_cores[@]} < /dev/null > server.log 2>&1 &"
+else
+    echo "Recommended for this run (no A520 present - every core is an A720,"
+    echo "so pinning would only remove cores; use them all):"
+    echo "  eullm run <model> --no-ui --threads ${#a720_cores[@]} < /dev/null > server.log 2>&1 &"
+fi
