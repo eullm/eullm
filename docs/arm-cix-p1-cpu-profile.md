@@ -124,7 +124,7 @@ relying on what the compiler's `-mcpu=native` probe happens to detect:
 LLAMA_GGML_CPU_ARM_ARCH="armv9.2-a+sve2+bf16+i8mm+dotprod" cargo build --release -p eullm-engine
 ```
 
-### KleidiAI — available, off, and untested here
+### KleidiAI — available, and measured to be off for a reason
 
 Arm's KleidiAI micro-kernel library is wired into ggml's CPU backend and is
 `OFF` by default upstream. Radxa's own llama.cpp guide for this board
@@ -145,16 +145,12 @@ measures nothing. The experiment is:
 
 > `Q4_0` + KleidiAI **vs** `Q4_K_M` as shipped today
 
-and it is genuinely open, because § 8.3 found Q4_K_M the fastest format on
-this hardware precisely because 100% of its tensors reach the ARM repack path
-(`q4_K_8x8`), while a smaller quant that misses those kernels measured
-*slower* despite moving fewer bytes. KleidiAI could put Q4_0 ahead, or the
-repack path could still win. Prefill is where any difference should show
-(§ 7.2), so run the sweep from § 7 rather than judging by the REPL's
-end-of-turn line.
-
-Q4_0 is a lower-quality quantization than Q4_K_M, so a win here is a
-speed-versus-accuracy trade to weigh, not a free upgrade.
+**That experiment has been run — see § 8.4 for the numbers.** The short
+version: KleidiAI costs 1.1% at fixed format and is therefore left off,
+while `Q4_0` turned out to be 23.8% faster than `Q4_K_M` at prompt
+processing for reasons that have nothing to do with KleidiAI. The switch
+above stays as an escape hatch for hardware that has SME, which this SoC
+does not.
 
 ## 3. Verify the ISA path is actually active at runtime
 
@@ -621,6 +617,83 @@ quantization where the variable tensors are entirely on the accelerated
 list) over a smaller "IQ4_NL-named" dynamic quant** — file size and ARM
 decode speed are not the same axis for this class of quant.
 
+**Refined by § 8.4** (2026-08-11): the rule this produced is right but was
+stated one step too narrowly. It is not "prefer Q4_K_M". It is *prefer a
+quantization whose variable tensors are entirely on the accelerated list*,
+and among those the **simpler** block format wins — `Q4_0` measures 23.8%
+faster than `Q4_K_M` at prompt processing on this SoC. Q4_K_M remains the
+right default for the catalog (accuracy, and it is what upstream publishes
+for every model we ship), but the reason it beat `UD-IQ4_NL` was
+acceleration coverage, not something intrinsic to K-quants.
+
+### 8.4 KleidiAI, and the Q4_0 result found while testing it
+
+Arm's KleidiAI library is recommended by Radxa's own llama.cpp guide for
+this board and had never been enabled in our `cix-p1` binary (§ 2). Testing
+it needed a four-cell design rather than a before/after, because "our
+current build" versus "Q4_0 with KleidiAI" changes the quantization *and*
+the kernel library at once and cannot attribute the result to either.
+
+Measured 11 August 2026 on the Orion O6 with upstream `llama-bench`, built
+from the llama.cpp revision this repo vendors (`5f55650a7`) with
+`-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv9.2-a+sve2+bf16+i8mm+dotprod`,
+i.e. the same profile as the published `cix-p1` artifact. `qwen3-4b`,
+`-t 8 -p 512 -n 128`, no `taskset`.
+
+| | file | `pp512` (prefill) | `tg128` (decode) |
+|---|---:|---:|---:|
+| **A** Q4_K_M, KleidiAI OFF *(what we ship)* | 2.32 GiB | 42.14 ± 0.07 | 14.85 ± 0.06 |
+| **B** Q4_K_M, KleidiAI ON *(control)* | 2.32 GiB | 42.13 ± 0.08 | 14.33 ± 0.03 |
+| **C** Q4_0, KleidiAI OFF | 2.21 GiB | **52.15 ± 0.07** | 15.37 ± 0.06 |
+| **D** Q4_0, KleidiAI ON | 2.21 GiB | 51.60 ± 0.11 | 15.00 ± 0.04 |
+
+**The control holds.** B and A agree to one part in four thousand on
+prefill, confirming by measurement what § 2 claims from the source: the
+KleidiAI path in this revision covers `Q4_0`, `Q8_0`, `F16` and `F32` only,
+never K-quants. It also proves both builds compiled ggml identically —
+`build-on` emits many `-march=armv8.2-a+…` lines because KleidiAI targets
+each of its kernels at its own minimum feature set and dispatches at
+runtime, and a reader could reasonably fear ggml itself had been
+downgraded. An unchanged control cell rules that out.
+
+**KleidiAI does not help: -1.1% at fixed format** (D vs C), just outside
+the error bars and in the wrong direction. This is the predicted outcome
+and the prediction's reasoning survives the measurement: KleidiAI's largest
+advantage is SME2, `/proc/cpuinfo` on this unit lists `i8mm`, `sve`, `sve2`
+and no `sme`, so it falls back to the i8mm kernels ggml's repack path
+already uses. The `-march` lines suggest the mechanism for the remaining
+1%: KleidiAI's kernels are compiled at `armv8.2-a+…` baselines while ggml's
+own are compiled at `armv9.2-a+sve2+bf16+i8mm+dotprod`. The specialised
+library loses narrowly to generic code precisely because the generic code
+was targeted at this silicon and it was not.
+
+**Decision: `GGML_CPU_KLEIDIAI` stays off.** The build.rs switch (§ 2) stays
+as an escape hatch for hardware that does have SME.
+
+**Q4_0 is 23.8% faster than Q4_K_M at prompt processing** (C vs A), and
+nothing about the experiment was looking for that. It is the format, not
+the library: `Q4_0` carries one fp16 scale per 32 weights, `Q4_K` a 6-bit
+scale plus a 6-bit min per sub-block plus a superblock scale, so there is
+more arithmetic per weight on the way into the GEMM. Both are on the ARM
+repack list, so this is one accelerated path against another.
+
+Decode moves 3.5%, and that is the file being 4.7% smaller rather than
+anything about kernels — the third independent confirmation in this
+document that decode here is against the memory wall (§ 9.2).
+
+**What this does not license.** The catalog is not changing. `Q4_0` is a
+less accurate quantization than `Q4_K_M` and this measured speed, not
+quality; the perplexity comparison has not been run. The 23.8% was measured
+on a dense 4B, and a MoE's prefill is a different mix (many small
+per-expert matmuls rather than few large ones), so it does not transfer by
+assumption — and no `Q4_0` build is published for `qwen3.6-35b-a3b` anyway.
+
+**Method note worth keeping.** A two-cell test would have compared A
+against D, read +22.4%, and credited it to KleidiAI: a library that
+contributes nothing would have been enabled, a dependency added, and the
+changelog entry would have been false. The two extra cells cost twenty
+minutes.
+
 ## 9. Prefill scaling by architecture: dense vs hybrid vs hybrid-MoE
 
 The question this answers: **for a long prompt — RAG, document Q&A, a
@@ -905,6 +978,20 @@ and the board has the slot for one.
   STREAM-style test); only if it is well above 37 GB/s is a Vulkan or
   OpenCL build worth building and testing. Prefill, being compute-bound
   (§ 7.2), is the more likely place for a GPU to win.
+- **`Q4_0` measures 23.8% faster than `Q4_K_M` at prompt processing (§ 8.4)
+  and we do not know what it costs in accuracy.** That is half the decision
+  and it is unmeasured: `llama-perplexity` builds from the same tree. Until
+  it is run, the catalog stays on Q4_K_M.
+- **Whether that 23.8% transfers to a MoE is unknown**, and it cannot be
+  assumed: a MoE's prefill is many small per-expert matmuls rather than few
+  large ones. Moot for `qwen3.6-35b-a3b` today in any case, since no `Q4_0`
+  build of it is published.
+- **Both KleidiAI-ON runs measured ~3% lower on decode (§ 8.4), including on
+  Q4_K_M, where KleidiAI provably does nothing at prefill.** Either a global
+  side effect of registering its buffer types in ggml, or thermal drift from
+  being last in a ten-minute loop. Settled by re-running the four cells in
+  reverse order: if the effect follows the binary it is KleidiAI, if it
+  follows position in time it is temperature.
 - A third data point at 4727 tokens for `qwen3.6-35b-a3b` at `--threads 8`
   would replace the one extrapolated figure in § 9.1's table with a
   measurement. Roughly four minutes of runtime.
