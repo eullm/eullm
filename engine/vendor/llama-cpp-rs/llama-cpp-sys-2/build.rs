@@ -865,6 +865,33 @@ fn main() {
     }
     println!("cargo:rerun-if-env-changed=LLAMA_GGML_CPU_ARM_ARCH");
 
+    // KleidiAI: Arm's optimised micro-kernel library, wired into ggml's CPU
+    // backend and OFF by default upstream. Radxa's own llama.cpp guide for the
+    // Orion O6 recommends turning it on for Armv9 boards, and our published
+    // `cix-p1` binary has never had it.
+    //
+    // Deliberately outside the aarch64 cross-compile branch above: that branch
+    // only fires when cross-compiling, so a native build on the board itself
+    // would silently ignore an env var placed inside it.
+    //
+    // Read this before expecting a win. In the vendored llama.cpp the KleidiAI
+    // path handles Q4_0, Q8_0, F16 and F32 only (`ggml-cpu/kleidiai/`), not
+    // K-quants — so on a Q4_K_M model, which is everything in our catalog, it
+    // changes nothing. Testing it means comparing Q4_0 + KleidiAI against
+    // Q4_K_M as it is today, and that is not a foregone conclusion: § 8.3 of
+    // docs/arm-cix-p1-cpu-profile.md found Q4_K_M the fastest format on this
+    // hardware precisely because 100% of its tensors hit the ARM repack path.
+    //
+    // Left off by default so no published binary changes shape until that
+    // comparison has been run on real hardware.
+    if env::var("LLAMA_GGML_CPU_KLEIDIAI")
+        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "on" | "true"))
+        .unwrap_or(false)
+    {
+        config.define("GGML_CPU_KLEIDIAI", "ON");
+    }
+    println!("cargo:rerun-if-env-changed=LLAMA_GGML_CPU_KLEIDIAI");
+
     if cfg!(feature = "vulkan") {
         config.define("GGML_VULKAN", "ON");
         match target_os {

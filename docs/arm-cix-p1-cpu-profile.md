@@ -122,6 +122,38 @@ relying on what the compiler's `-mcpu=native` probe happens to detect:
 LLAMA_GGML_CPU_ARM_ARCH="armv9.2-a+sve2+bf16+i8mm+dotprod" cargo build --release -p eullm-engine
 ```
 
+### KleidiAI — available, off, and untested here
+
+Arm's KleidiAI micro-kernel library is wired into ggml's CPU backend and is
+`OFF` by default upstream. Radxa's own llama.cpp guide for this board
+recommends enabling it, and our published `cix-p1` binary has never had it.
+`build.rs` now exposes it, off unless asked for:
+
+```bash
+LLAMA_GGML_CPU_KLEIDIAI=ON \
+LLAMA_GGML_CPU_ARM_ARCH="armv9.2-a+sve2+bf16+i8mm+dotprod" \
+  cargo build --release -p eullm-engine
+```
+
+**Read this before expecting a win.** In the vendored llama.cpp the KleidiAI
+path handles `Q4_0`, `Q8_0`, `F16` and `F32` only
+(`ggml/src/ggml-cpu/kleidiai/kleidiai.cpp`) — **not K-quants**. Every model in
+our catalog is Q4_K_M, so turning the flag on and re-running the same model
+measures nothing. The experiment is:
+
+> `Q4_0` + KleidiAI **vs** `Q4_K_M` as shipped today
+
+and it is genuinely open, because § 8.3 found Q4_K_M the fastest format on
+this hardware precisely because 100% of its tensors reach the ARM repack path
+(`q4_K_8x8`), while a smaller quant that misses those kernels measured
+*slower* despite moving fewer bytes. KleidiAI could put Q4_0 ahead, or the
+repack path could still win. Prefill is where any difference should show
+(§ 7.2), so run the sweep from § 7 rather than judging by the REPL's
+end-of-turn line.
+
+Q4_0 is a lower-quality quantization than Q4_K_M, so a win here is a
+speed-versus-accuracy trade to weigh, not a free upgrade.
+
 ## 3. Verify the ISA path is actually active at runtime
 
 **Correction (from the first real run on an Orion, 2026-07-17):** an
