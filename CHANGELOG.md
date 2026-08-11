@@ -67,6 +67,14 @@ running EuLLM behind an IDE agent, and the sizing work came from watching a
   back to plain text.
 
 ### Fixed
+- **Ctrl+C stops the process, instead of leaving it running invisibly.**
+  The shutdown message printed and the terminal came back, but the process
+  stayed alive until any in-flight work finished — a long prompt could
+  mean minutes. `#[tokio::main]`'s runtime drop waits for every blocking
+  task, and inference runs in exactly those. The process now exits when
+  the command is done: nothing needed the wait, since the audit trail is
+  written per request and models are read-only.
+
 - **Automatic sizing no longer produces a split the loader then refuses.**
   Swapping into a 27B on a 16 GiB card loaded the weights and then failed
   to allocate a context at all, down to 512 tokens: *"allocation succeeded

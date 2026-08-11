@@ -266,8 +266,40 @@ to track regressions or gains against this baseline. `--notes` exists
 specifically so the pinning/thread config used for a given run travels with
 its numbers instead of being tribal knowledge.
 
+### 7.1 A/B against the generic arm64 binary — the profile is worth ~2-3×
+
+Measured 11 August 2026 on the Orion O6, `qwen3-4b` (Q4_K_M), CPU-only,
+`--threads 4`, `--ctx-size 4096`, both builds from the same release, same
+GGUF file, same sweep (`--prefill-word-targets 128 512 --decode-repeats 1`):
+
+| | generic `arm64` | `arm64-cix-p1` | gain |
+|---|---:|---:|---:|
+| prefill, 145 prompt tokens | 8.8 tok/s | **27.1 tok/s** | **3.1×** |
+| prefill, 580 prompt tokens | 11.4 tok/s | **25.5 tok/s** | **2.2×** |
+| decode, 128 tokens | 6.9 tok/s | **12.2 tok/s** | **1.8×** |
+
+The prefill gain is the expected one and lands where predicted. The decode
+gain is *not* what §7's note below predicts, and the discrepancy is
+informative rather than contradictory: that note was written from a dense
+14B, where the weight set is far larger than any cache and DRAM bandwidth
+genuinely sets the ceiling. A 4B at Q4 is ~2.5 GB — small enough that
+decode is no longer purely bandwidth-starved on this SoC, so the faster
+int8 kernels (and the `q4_K_8x8` repack they enable) show up in decode too.
+
+Practical reading: **use the `cix-p1` binary on this board, always**. It is
+the same engine with the same defaults; the only difference is that the CPU
+kernels are compiled for the ISA this SoC actually has. The generic binary
+exists so ARM64 boards *without* these extensions do not SIGILL, not as an
+equivalent alternative.
+
+Still open, and worth one run: the same A/B on the dense 14B, to see how
+much of the decode gain survives when the model no longer fits the caches.
+If it collapses toward 1.0× there, the note below is right for large models
+and this table is right for small ones — which is a more useful statement
+than either alone.
+
 **Why decode tok/s alone can look unchanged even with i8mm confirmed
-active** (observed on the first real run): single-token decode is
+active** (observed on the first real run, on a dense 14B): single-token decode is
 typically memory-bandwidth-bound on CPU, not compute-bound — every token
 requires streaming the *entire* quantized weight set through the core
 once, regardless of how fast the multiply-accumulate itself runs. i8mm/

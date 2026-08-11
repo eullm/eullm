@@ -822,6 +822,16 @@ async fn main() {
             skip_identity,
         ),
     }
+
+    // Exit deterministically instead of returning and letting the runtime
+    // drop do it. `#[tokio::main]`'s drop waits for every in-flight
+    // `spawn_blocking` task, and inference runs in exactly those: after
+    // Ctrl+C the shutdown message printed, `main` returned, and the process
+    // then sat there — invisibly — until a prefill that had minutes left
+    // finished. Nothing here needs the wait: the audit trail is written per
+    // request, models are read-only, and the scheduler holds no state worth
+    // draining. Returning from `main` exits with 0 anyway, so this changes
+    // only the hang.
 }
 
 /// `eullm pull` entry point: if `model` is `None`, open the picker filtered
