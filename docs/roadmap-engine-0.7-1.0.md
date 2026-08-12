@@ -196,60 +196,45 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
 
 ---
 
-- [ ] **0.8-Z · Decodifica speculativa (MTP prima, draft model dopo)** *(P0 sul percorso ARM)*
-  L'unica leva software che alza il decode su hardware limitato dalla banda di
-  memoria, ed è misurabile perché il limite è misurato: su Orion O6 la banda
-  leggibile è 40.1 GB/s e il motore ne estrae l'88-97%, quindi `tok/s ≈ banda /
-  GB attivi per token` e non esiste ottimizzazione che sposti quel rapporto
-  (`docs/arm-cix-p1-cpu-profile.md` § 9.2). La decodifica speculativa lo aggira
-  invece di combatterlo: un draft propone N token e il modello grande li
-  verifica **in un solo passaggio**, quindi si paga un solo attraversamento dei
-  pesi per N token accettati. Guadagno dichiarato a monte 1.5-2×, che su MoE 35B
-  significherebbe passare da 10.8 a 16-20 tok/s **senza toccare l'hardware**.
+- [x] **0.8-Z · Decodifica speculativa** *(chiusa il 2026-08-11: misurata, non applicabile alla MoE)*
+  **Esito: sul modello che ci interessa costa il 38%, non lo guadagna.** Misurato
+  su Orion O6, `qwen3.6-35b-a3b` UD-Q4_K_M, prompt RAG reale da 5547 token,
+  stessa richiesta byte per byte, `llama-server` dal pin che vendorizziamo:
+  `--spec-type none` 10.15 tok/s, `--spec-type ngram-mod` **6.32 tok/s**
+  (14 token di bozza accettati su 182).
 
-  **Vale di più sulla board che sulla GPU**, ed è il motivo per cui è P0 proprio
-  sul percorso a basso consumo: là il decode è al 100% memory-bound e
-  l'ammortamento è puro guadagno, mentre su una scheda discreta il calcolo
-  diventa il limite prima e il moltiplicatore si accorcia. È la voce di roadmap
-  che migliora la configurazione passiva, non quella accelerata.
+  **Il meccanismo, ed è strutturale.** La decodifica speculativa guadagna
+  perché verificare K token in un solo passaggio attraversa i pesi **una volta
+  sola** e li riusa per tutti i token del lotto. Una MoE è costruita sul
+  principio opposto: attiva 8 esperti su 256 e **token diversi attivano esperti
+  diversi**, quindi un lotto da 7 non legge 8 esperti ma fino a 56. Il traffico
+  di memoria che la speculazione dovrebbe ammortizzare si moltiplica invece per
+  la dimensione del lotto. Le due ottimizzazioni si annullano a vicenda.
 
-  **Cosa dà libllama e cosa dobbiamo scrivere noi** (verificato sul pin
-  2026-07-30, non per analogia): `llama.h` espone `llama_context_params.ctx_type
-  = LLAMA_CONTEXT_TYPE_MTP` per creare il context di draft e `llama_n_rs_seq()`
-  per interrogare la finestra di rollback; il resto — ciclo draft/verify/accept,
-  contabilità del rollback sul rifiuto, integrazione con gli slot — vive in
-  `common/speculative.cpp` e `tools/server/server-context.cpp`, che **non
-  linkiamo**. Quindi il supporto a livello di modello c'è e l'orchestrazione è
-  un loop nostro, che è la forma di lavoro già fatta per lo scheduler e i
-  checkpoint.
+  **Non è la bozza a essere sbagliata, è la verifica**, quindi nessuna variante
+  salva il caso: né gli altri tipi `ngram-*`, né MTP, che migliora solo quanti
+  token vengono accettati. Con circa il 70% dei parametri attivi negli esperti,
+  verificare un lotto da 6 costa ~4.5 passi normali: servirebbe accettare più di
+  5 token su 6 in media solo per pareggiare. Con un'accettazione ottimistica di
+  3 su 6 si esce a 0.60×.
 
-  **Vincolo sugli ibridi, che è il caso che ci interessa.** Rifiutare un draft
-  significa riavvolgere anche lo stato ricorrente dei layer Gated DeltaNet, e
-  quello si riavvolge solo entro `n_rs_seq`. Upstream lo deriva esattamente da
-  qui (`cparams.n_rs_seq = params.speculative.need_n_rs_seq()` in
-  `common/common.cpp:1632`) e verifica `draft.size() > llama_n_rs_seq(ctx_tgt)`
-  prima di provarci. Il context di draft va invece a `n_rs_seq = 0`. Costo: i
-  tensori di stato ricorrente scalano `(1 + n_rs_seq)`, quindi un draft da 6-8
-  moltiplica per 7-9 uno stato che sul 9B ibrido è dell'ordine dei 50 MiB —
-  accettabile, ma da misurare sul 35B MoE prima di dare per buono. È esattamente
-  ciò per cui `--rs-seq` esiste già come flag sperimentale: non è un knob di
-  riuso KV, è il parametro della decodifica speculativa, e finalmente lo userebbe
-  qualcosa.
+  **Resta valida su un bersaglio denso**, dove i pesi si riusano davvero lungo
+  il lotto, e non è un caso che l'1.5-2× dichiarato a monte fosse misurato su
+  `Qwen3.5-9B`, che è denso nella parte FFN. **Ma non conviene lo stesso su
+  questo hardware**: il 9B decodifica a 6.3 tok/s a 8 thread, quindi anche
+  prendendo per buono 1.8× arriva a 11.3, cioè dove la MoE sta già oggi senza
+  niente e con un modello più capace. Lo scenario migliore pareggia.
 
-  **Ordine di attacco.** Prima MTP self-draft, che non richiede un secondo
-  modello, non ha problemi di vocabolario e costa ~190 MB di pesi in più; prima
-  sul motore sequenziale a singola sequenza, dove non c'è gestione slot di
-  mezzo; e prima misurato sull'Orion, che è la macchina dove il guadagno conta.
-  Solo dopo il percorso con draft model separato (che impone vocabolario
-  identico fra i due) e l'integrazione nello scheduler batch. Chiude anche un
-  cerchio lasciato aperto: la entry di catalogo `qwen3.5-9b` punta oggi al build
-  **senza** MTP perché quel layer sarebbe peso morto; con questa voce fatta,
-  torna a puntare al build MTP.
+  **Cosa resta a piano**: `--rs-seq` rimane il parametro della decodifica
+  speculativa (upstream lo deriva da `need_n_rs_seq()`), non un knob di riuso
+  KV, e la sua documentazione va letta in quella chiave. La voce si riapre solo
+  se il bersaglio di produzione diventa denso, oppure su hardware dove il decode
+  non è limitato dalla banda.
 
-  **DoD:** guadagno misurato con `bench/arm_cpu_bench.py` su Orion, con e senza,
-  stesso modello e stessi flag; tasso di accettazione riportato; memoria residente
-  confrontata; nessuna regressione sul percorso non speculativo (che resta il
-  default finché il guadagno non è dimostrato sull'hardware).
+  **Nota di metodo.** La formula standard `α·T / (K·D + T)` assume che il costo
+  di verifica non dipenda da K. Su una MoE quell'assunzione è falsa e la formula
+  dà una risposta positiva a un caso che perde il 38%. Mezza giornata di misura
+  ha evitato settimane di implementazione contro un modello sbagliato del costo.
 
 ## 0.9 — Agentic e verticale
 

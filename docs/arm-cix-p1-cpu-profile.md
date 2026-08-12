@@ -931,6 +931,60 @@ GB/s effective, and 46 tok/s of prefill on a 2.44 GB model.
 **What does cross the gap is a discrete card with its own memory** (§ 9.3),
 and the board has the slot for one.
 
+### 9.6 Speculative decoding and MoE cancel each other out
+
+Decode here is memory-bandwidth-bound at 88-97% (§ 9.2), and speculative
+decoding is the standard answer to exactly that: a small draft proposes K
+tokens and the large model verifies them in one forward pass, so one
+traversal of the weights yields several tokens instead of one. It was the
+leading roadmap item for this hardware. It does not work on the model we
+want to serve, and the reason is structural rather than a tuning failure.
+
+Measured 11 August 2026, `qwen3.6-35b-a3b` UD-Q4_K_M, `llama-server` from
+the vendored pin, `-t 8 -c 8192 -np 1`, one real RAG prompt of 5547 tokens
+(a document plus a question whose answer is quoted in it), byte-identical
+between runs:
+
+| | decode | draft tokens accepted |
+|---|---:|---:|
+| `--spec-type none` | **10.15 tok/s** | — |
+| `--spec-type ngram-mod` | **6.32 tok/s** | 14 / 182 |
+
+**Speculation cost 38%.** Not a small gain, not neutral: a large loss.
+
+**Why.** Speculative decoding's saving comes from the verified batch
+reusing one traversal of the weights across all K tokens. A MoE is built on
+the opposite principle: it activates 8 experts of 256 and **different
+tokens activate different experts**, so a batch of 7 reads up to 56 experts
+rather than 8. The memory traffic that speculation is supposed to amortise
+is instead multiplied by the batch size. The two optimisations cancel.
+
+**No variant rescues it, because the cost is on the verify side, not the
+draft side.** The other `ngram-*` strategies change how candidates are
+found; MTP changes how many are accepted. Neither changes what a K-token
+batch costs on a MoE. With roughly 70% of the active parameters in the
+experts, verifying a batch of 6 costs about 4.5 normal steps, so average
+acceptance would have to exceed 5 of 6 merely to break even. At an
+optimistic 3 of 6 the result is 0.60×.
+
+**It remains valid against a dense target**, where the weights genuinely
+are reused across the batch — and it is not a coincidence that the 1.5-2×
+reported upstream was measured on `Qwen3.5-9B`, which is dense in its FFN.
+**It is still not worth doing on this board**: that model decodes at 6.3
+tok/s at 8 threads (§ 9), so even granting the full 1.8× it reaches 11.3,
+which is where the MoE already sits with nothing, using a more capable
+model. The best case ties.
+
+**Method note.** The standard estimate, `α·T / (K·D + T)`, assumes the cost
+of a verification pass does not depend on K. On a MoE that assumption is
+false, and the formula returns a positive answer for a case that measures
+-38%. Half a day of measurement replaced a wrong model of the cost before
+it turned into weeks of implementation.
+
+A side consequence worth recording: `--rs-seq` is the parameter of this
+feature and nothing else (upstream derives it from
+`need_n_rs_seq()`), so with the feature closed it stays at 0.
+
 ## Known open items
 
 - ~~Hybrid/recurrent MoE models (Qwen3.5/3.6) don't get ordinary KV-cache
