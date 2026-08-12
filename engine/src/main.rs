@@ -3050,7 +3050,7 @@ async fn interactive_chat(
         reader.remember(&input);
 
         // Commands
-        if input == "/bye" || input == "/exit" || input == "/quit" {
+        if input == "/bye" || input == "/exit" || input == "/quit" || input == "/q" {
             println!("Bye!");
             return;
         } else if input == "/clear" {
@@ -3059,7 +3059,7 @@ async fn interactive_chat(
             continue;
         } else if input == "/help" {
             println!("Commands:");
-            println!("  /bye              Exit the chat (Ctrl+D does the same)");
+            println!("  /bye, /q          Exit the chat (Ctrl+D does the same)");
             println!("  /clear            Clear conversation history");
             println!(
                 "  /think            Enable reasoning (current: {})",
@@ -3119,6 +3119,28 @@ async fn interactive_chat(
                 println!("System prompt updated.\n");
             }
             continue;
+        } else if input.starts_with('/') && !input[1..].starts_with('/') {
+            // An unrecognised slash command is a typo, not a message.
+            //
+            // Reported from a real session: someone typed `/q` to leave, it
+            // fell through to here as ordinary text, and the model spent a
+            // minute earnestly answering it. Silently sending a mistyped
+            // command to a 4 tok/s model is the worst of both outcomes — the
+            // user waits for something they did not ask for, and nothing on
+            // screen says why.
+            //
+            // `//` is the escape hatch for a message that really does start
+            // with a slash: it is stripped and the rest is sent as typed.
+            let cmd = input.split_whitespace().next().unwrap_or(&input);
+            eprintln!("Unknown command: {cmd}");
+            eprintln!("  /help lists the commands. To send this as a message, start it with // instead.\n");
+            continue;
+        }
+
+        // A message the user deliberately started with a slash: drop the
+        // escaping first one and send the rest.
+        if let Some(rest) = input.strip_prefix("//") {
+            input = rest.to_string();
         }
 
         // Add user message to permanent history. When reasoning is toggled
