@@ -638,7 +638,11 @@ pub enum FitDecision {
 /// went in, and the context allocation failed all the way down to 512
 /// tokens ("allocation succeeded but left only 10% of GPU memory free").
 /// Found on a swap into a 27B on a 16 GiB card.
-const MIN_FREE_TOTAL_RATIO: f64 = 0.12;
+///
+/// `pub(crate)`: also read by `api::ensure_embedding_model`'s much simpler
+/// fits-or-evict check for the embedding slot, so the same floor applies to
+/// both instead of drifting into two numbers that happen to start equal.
+pub(crate) const MIN_FREE_TOTAL_RATIO: f64 = 0.12;
 
 /// Fraction of free VRAM we're willing to use, reserving a slice for
 /// allocator fragmentation and miscellaneous driver overhead. Together with

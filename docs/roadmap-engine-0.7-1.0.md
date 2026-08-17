@@ -165,16 +165,41 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
   dopo unload. Fallback `batch_size=1` semplice e prevedibile. Metriche: token KV
   attivi, cached, riservati, evicted.
 
-- [ ] **0.8-B · Embeddings e reranking in-process** *(P1)*
-  `POST /api/embed`, `POST /v1/embeddings`, `POST /v1/rerank`. I binding espongono
-  già `embeddings_seq_ith`/`embeddings_ith` e i pooling type (incluso `Rank` per il
-  reranking): **secondo model slot in-process**, non worker/processi figli (i modelli
-  embedding sono 100-600 MB e le chiamate sono stateless — un context dedicato con
-  mutex è sufficiente; l'isolamento a processi è materia del gateway, 1.0+).
-  Un modello embedding caricato all'avvio (flag dedicato), pooling coerente col
-  modello, normalizzazione configurabile, batch multipli con ordine preservato,
-  dimensione e modello dichiarati nella risposta. Le chiamate embedding non
-  scaricano né bloccano il modello generativo.
+- [x] **0.8-B-embed · Embeddings in-process** *(fatto 2026-08-17 — reranking resta aperto, vedi sotto)*
+  `POST /api/embed`, `POST /v1/embeddings`. Secondo model slot in-process
+  (`api::EmbeddingSlot`, `inference::embedding::EmbeddingModel`), non
+  worker/processi figli — un `LlamaContext` dedicato per chiamata, aperto e
+  chiuso lì, è sufficiente perché le chiamate sono stateless e i modelli
+  embedding pesano 100 MB-1 GB. Pooling letto dai metadati GGUF del modello
+  (`Unspecified` → llama.cpp usa quello dichiarato dal modello, CLS/mean/...;
+  fallback a mean-pool manuale su `None`), normalizzazione L2 sempre attiva.
+
+  **Due scostamenti deliberati dal piano originale, decisi in conversazione
+  con l'utente il 2026-08-17, non dimenticanze:**
+  - **Nessun flag di avvio per il modello embedding.** Si nomina nel corpo
+    della richiesta, esattamente come il modello generativo — coerente con
+    `swap_model` e più comodo per un RAG che sceglie il modello a runtime.
+  - **Le chiamate embedding POSSONO scaricare il modello generativo, e
+    viceversa** (`AppState::ensure_embedding_model`,
+    `evict_embedding_if_present_for_generation_load`): sulla base che due
+    modelli su una scheda troppo piccola per entrambi non possono
+    coesistere comunque, la scelta è farlo decidere al server invece di
+    fallire il caricamento. La decisione è binaria (entra o evict, mai uno
+    split parziale — un embedder si carica per intero o niente,
+    `fits_in_free_vram` in `api/mod.rs`), non la matematica per-layer di
+    `fit.rs`. Contatore delle eviction in entrambe le direzioni esposto in
+    `/api/version` (`model_swaps`), per notare un pattern di alternanza
+    invece di batch su una scheda piccola.
+
+  Reso possibile anche `--keep-alive` (CLI, default nessuno) e un
+  `keep_alive` per richiesta (Ollama-compatibile: durata, `0` = scarica
+  subito, negativo = mai) — timer di inattività indipendente per lo slot
+  principale e quello embedding, per lasciare la GPU tornare a riposo senza
+  richiedere all'operatore di chiamare `/api/unload` a mano.
+
+  **Aperto:** `POST /v1/rerank` (pooling `Rank`, già esposto dai binding
+  ma non cablato in nessuna rotta) e `--fit`/sizing per-layer condiviso fra
+  i due slot restano fuori da questo giro.
 
 - [ ] **0.8-C · Structured outputs completi** *(P1)*
   `response_format: json_schema` (formato OpenAI, `strict`) via

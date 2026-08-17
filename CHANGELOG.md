@@ -13,6 +13,32 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **`POST /api/embed` and `POST /v1/embeddings`** — text embeddings served
+  from the same binary, with any GGUF embedding model (BGE, E5, and
+  similar). The embedding model loads into its own slot, independent of
+  whatever generation model is loaded: on a card with enough VRAM for both,
+  a RAG pipeline can embed and generate without either one displacing the
+  other. On a smaller card, requesting the embedding model automatically
+  frees VRAM by unloading the generation model first (it reloads on the
+  next generation request), and the reverse happens too — a generation
+  load can evict a resident embedder if it needs the room. Which
+  direction happened, and how often, is in `/api/version`'s new
+  `model_swaps` field.
+- **`--keep-alive <duration>`**, plus a per-request `keep_alive` field
+  (Ollama-compatible) on `/api/generate`, `/api/chat`,
+  `/v1/chat/completions`, `/api/embed` and `/v1/embeddings`. Idle-unloads a
+  model after this long without a request, so a card left untouched
+  actually goes idle instead of holding an active CUDA context (and its
+  higher memory clocks) indefinitely. Unset by default — matches every
+  earlier release, where nothing unloaded a model on its own.
+- **An empty `prompt` on `/api/generate`, or an empty `messages` array on
+  `/api/chat`, now loads (or `keep_alive`-refreshes) the model without
+  generating anything** — Ollama's documented way to warm a model up in
+  advance, which previously fell through to the model as literal input.
+
 ## 0.6.81 — 2026-08-11
 
 ### Changed
