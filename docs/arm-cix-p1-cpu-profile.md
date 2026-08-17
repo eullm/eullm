@@ -7,8 +7,10 @@ thread pinning, and the T4.1 benchmark baseline.
 
 Both on-chip accelerators were since investigated and closed: the Zhouyi NPU
 does not run autoregressive language models at all, and the integrated GPU
-shares the CPU's DRAM and measures slower than this CPU build on both
-prefill and decode. See § 9.5 for the evidence, and § 9.3 for the one thing
+shares the CPU's DRAM, so it cannot exceed a ceiling the CPU path already
+reaches 88-97% of. We have not run the integrated GPU ourselves; the only
+published measurement of it is slower than this CPU build on both prefill
+and decode. See § 9.5 for the evidence, and § 9.3 for the one thing
 that does move the needle on this board, which is a discrete card in its
 PCIe slot.
 
@@ -121,6 +123,34 @@ relying on what the compiler's `-mcpu=native` probe happens to detect:
 ```bash
 LLAMA_GGML_CPU_ARM_ARCH="armv9.2-a+sve2+bf16+i8mm+dotprod" cargo build --release -p eullm-engine
 ```
+
+### KleidiAI — available, and measured to be off for a reason
+
+Arm's KleidiAI micro-kernel library is wired into ggml's CPU backend and is
+`OFF` by default upstream. Radxa's own llama.cpp guide for this board
+recommends enabling it, and our published `cix-p1` binary has never had it.
+`build.rs` now exposes it, off unless asked for:
+
+```bash
+LLAMA_GGML_CPU_KLEIDIAI=ON \
+LLAMA_GGML_CPU_ARM_ARCH="armv9.2-a+sve2+bf16+i8mm+dotprod" \
+  cargo build --release -p eullm-engine
+```
+
+**Read this before expecting a win.** In the vendored llama.cpp the KleidiAI
+path handles `Q4_0`, `Q8_0`, `F16` and `F32` only
+(`ggml/src/ggml-cpu/kleidiai/kleidiai.cpp`) — **not K-quants**. Every model in
+our catalog is Q4_K_M, so turning the flag on and re-running the same model
+measures nothing. The experiment is:
+
+> `Q4_0` + KleidiAI **vs** `Q4_K_M` as shipped today
+
+**That experiment has been run — see § 8.4 for the numbers.** The short
+version: KleidiAI costs 1.1% at fixed format and is therefore left off,
+while `Q4_0` turned out to be 23.8% faster than `Q4_K_M` at prompt
+processing for reasons that have nothing to do with KleidiAI. The switch
+above stays as an escape hatch for hardware that has SME, which this SoC
+does not.
 
 ## 3. Verify the ISA path is actually active at runtime
 
@@ -587,6 +617,83 @@ quantization where the variable tensors are entirely on the accelerated
 list) over a smaller "IQ4_NL-named" dynamic quant** — file size and ARM
 decode speed are not the same axis for this class of quant.
 
+**Refined by § 8.4** (2026-08-11): the rule this produced is right but was
+stated one step too narrowly. It is not "prefer Q4_K_M". It is *prefer a
+quantization whose variable tensors are entirely on the accelerated list*,
+and among those the **simpler** block format wins — `Q4_0` measures 23.8%
+faster than `Q4_K_M` at prompt processing on this SoC. Q4_K_M remains the
+right default for the catalog (accuracy, and it is what upstream publishes
+for every model we ship), but the reason it beat `UD-IQ4_NL` was
+acceleration coverage, not something intrinsic to K-quants.
+
+### 8.4 KleidiAI, and the Q4_0 result found while testing it
+
+Arm's KleidiAI library is recommended by Radxa's own llama.cpp guide for
+this board and had never been enabled in our `cix-p1` binary (§ 2). Testing
+it needed a four-cell design rather than a before/after, because "our
+current build" versus "Q4_0 with KleidiAI" changes the quantization *and*
+the kernel library at once and cannot attribute the result to either.
+
+Measured 11 August 2026 on the Orion O6 with upstream `llama-bench`, built
+from the llama.cpp revision this repo vendors (`5f55650a7`) with
+`-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv9.2-a+sve2+bf16+i8mm+dotprod`,
+i.e. the same profile as the published `cix-p1` artifact. `qwen3-4b`,
+`-t 8 -p 512 -n 128`, no `taskset`.
+
+| | file | `pp512` (prefill) | `tg128` (decode) |
+|---|---:|---:|---:|
+| **A** Q4_K_M, KleidiAI OFF *(what we ship)* | 2.32 GiB | 42.14 ± 0.07 | 14.85 ± 0.06 |
+| **B** Q4_K_M, KleidiAI ON *(control)* | 2.32 GiB | 42.13 ± 0.08 | 14.33 ± 0.03 |
+| **C** Q4_0, KleidiAI OFF | 2.21 GiB | **52.15 ± 0.07** | 15.37 ± 0.06 |
+| **D** Q4_0, KleidiAI ON | 2.21 GiB | 51.60 ± 0.11 | 15.00 ± 0.04 |
+
+**The control holds.** B and A agree to one part in four thousand on
+prefill, confirming by measurement what § 2 claims from the source: the
+KleidiAI path in this revision covers `Q4_0`, `Q8_0`, `F16` and `F32` only,
+never K-quants. It also proves both builds compiled ggml identically —
+`build-on` emits many `-march=armv8.2-a+…` lines because KleidiAI targets
+each of its kernels at its own minimum feature set and dispatches at
+runtime, and a reader could reasonably fear ggml itself had been
+downgraded. An unchanged control cell rules that out.
+
+**KleidiAI does not help: -1.1% at fixed format** (D vs C), just outside
+the error bars and in the wrong direction. This is the predicted outcome
+and the prediction's reasoning survives the measurement: KleidiAI's largest
+advantage is SME2, `/proc/cpuinfo` on this unit lists `i8mm`, `sve`, `sve2`
+and no `sme`, so it falls back to the i8mm kernels ggml's repack path
+already uses. The `-march` lines suggest the mechanism for the remaining
+1%: KleidiAI's kernels are compiled at `armv8.2-a+…` baselines while ggml's
+own are compiled at `armv9.2-a+sve2+bf16+i8mm+dotprod`. The specialised
+library loses narrowly to generic code precisely because the generic code
+was targeted at this silicon and it was not.
+
+**Decision: `GGML_CPU_KLEIDIAI` stays off.** The build.rs switch (§ 2) stays
+as an escape hatch for hardware that does have SME.
+
+**Q4_0 is 23.8% faster than Q4_K_M at prompt processing** (C vs A), and
+nothing about the experiment was looking for that. It is the format, not
+the library: `Q4_0` carries one fp16 scale per 32 weights, `Q4_K` a 6-bit
+scale plus a 6-bit min per sub-block plus a superblock scale, so there is
+more arithmetic per weight on the way into the GEMM. Both are on the ARM
+repack list, so this is one accelerated path against another.
+
+Decode moves 3.5%, and that is the file being 4.7% smaller rather than
+anything about kernels — the third independent confirmation in this
+document that decode here is against the memory wall (§ 9.2).
+
+**What this does not license.** The catalog is not changing. `Q4_0` is a
+less accurate quantization than `Q4_K_M` and this measured speed, not
+quality; the perplexity comparison has not been run. The 23.8% was measured
+on a dense 4B, and a MoE's prefill is a different mix (many small
+per-expert matmuls rather than few large ones), so it does not transfer by
+assumption — and no `Q4_0` build is published for `qwen3.6-35b-a3b` anyway.
+
+**Method note worth keeping.** A two-cell test would have compared A
+against D, read +22.4%, and credited it to KleidiAI: a library that
+contributes nothing would have been enabled, a dependency added, and the
+changelog entry would have been false. The two extra cells cost twenty
+minutes.
+
 ## 9. Prefill scaling by architecture: dense vs hybrid vs hybrid-MoE
 
 The question this answers: **for a long prompt — RAG, document Q&A, a
@@ -803,6 +910,18 @@ thread count includes the four A520s, and ggml's per-operation barrier lets
 the slowest core gate every batch. So the published 2.3× "Vulkan wins" is
 measured against a configuration problem, not against this SoC's CPU.
 
+**We have never run the integrated GPU ourselves, and that limitation
+should be carried wherever this conclusion is.** The table above is one
+third party's Vulkan numbers set against our own CPU numbers, on the same
+board model and the same model file but not the same machine and not the
+same measurement. The published recipe requires replacing the OS with
+Debian 13, adding CIX's package repository and installing their
+closed-source drivers (the open-source ones "will not work"), which is a
+system change we were not willing to make to the unit the rest of these
+measurements run on. What does not depend on measuring it is the shared-bus
+argument: whatever the driver does, the memory is the same memory, and the
+CPU path already reaches 88-97% of it.
+
 None of this rules out the GPU winning on some workload — prefill is
 compute-bound (§ 7.2) and is where an accelerator could in principle
 contribute. It rules out the *reason* usually given for reaching for it,
@@ -811,6 +930,60 @@ GB/s effective, and 46 tok/s of prefill on a 2.44 GB model.
 
 **What does cross the gap is a discrete card with its own memory** (§ 9.3),
 and the board has the slot for one.
+
+### 9.6 Speculative decoding and MoE cancel each other out
+
+Decode here is memory-bandwidth-bound at 88-97% (§ 9.2), and speculative
+decoding is the standard answer to exactly that: a small draft proposes K
+tokens and the large model verifies them in one forward pass, so one
+traversal of the weights yields several tokens instead of one. It was the
+leading roadmap item for this hardware. It does not work on the model we
+want to serve, and the reason is structural rather than a tuning failure.
+
+Measured 11 August 2026, `qwen3.6-35b-a3b` UD-Q4_K_M, `llama-server` from
+the vendored pin, `-t 8 -c 8192 -np 1`, one real RAG prompt of 5547 tokens
+(a document plus a question whose answer is quoted in it), byte-identical
+between runs:
+
+| | decode | draft tokens accepted |
+|---|---:|---:|
+| `--spec-type none` | **10.15 tok/s** | — |
+| `--spec-type ngram-mod` | **6.32 tok/s** | 14 / 182 |
+
+**Speculation cost 38%.** Not a small gain, not neutral: a large loss.
+
+**Why.** Speculative decoding's saving comes from the verified batch
+reusing one traversal of the weights across all K tokens. A MoE is built on
+the opposite principle: it activates 8 experts of 256 and **different
+tokens activate different experts**, so a batch of 7 reads up to 56 experts
+rather than 8. The memory traffic that speculation is supposed to amortise
+is instead multiplied by the batch size. The two optimisations cancel.
+
+**No variant rescues it, because the cost is on the verify side, not the
+draft side.** The other `ngram-*` strategies change how candidates are
+found; MTP changes how many are accepted. Neither changes what a K-token
+batch costs on a MoE. With roughly 70% of the active parameters in the
+experts, verifying a batch of 6 costs about 4.5 normal steps, so average
+acceptance would have to exceed 5 of 6 merely to break even. At an
+optimistic 3 of 6 the result is 0.60×.
+
+**It remains valid against a dense target**, where the weights genuinely
+are reused across the batch — and it is not a coincidence that the 1.5-2×
+reported upstream was measured on `Qwen3.5-9B`, which is dense in its FFN.
+**It is still not worth doing on this board**: that model decodes at 6.3
+tok/s at 8 threads (§ 9), so even granting the full 1.8× it reaches 11.3,
+which is where the MoE already sits with nothing, using a more capable
+model. The best case ties.
+
+**Method note.** The standard estimate, `α·T / (K·D + T)`, assumes the cost
+of a verification pass does not depend on K. On a MoE that assumption is
+false, and the formula returns a positive answer for a case that measures
+-38%. Half a day of measurement replaced a wrong model of the cost before
+it turned into weeks of implementation.
+
+A side consequence worth recording: `--rs-seq` is the parameter of this
+feature and nothing else (upstream derives it from
+`need_n_rs_seq()`), so with the feature closed it stays at 0.
 
 ## Known open items
 
@@ -844,6 +1017,13 @@ and the board has the slot for one.
   measurement.** Confirming it needs `--ctx-size 16384` and a prompt of
   roughly 8192 words. Worth doing: it decides which model to put behind a
   long-context workload on this board.
+- **The integrated GPU has never been run on our unit at all (§ 9.5).** The
+  comparison on record sets a third party's Vulkan numbers against our own
+  CPU numbers, which is corroboration and not a measurement of ours. Running
+  it means replacing the OS with Debian 13 and installing CIX's closed-source
+  drivers on the unit every other measurement here depends on. Worth doing if
+  the conclusion is ever challenged; the shared-bus argument does not depend
+  on it.
 - **Whether the onboard Immortalis-G720 can beat the CPU at decode is
   unmeasured, and the bar is ~37 GB/s of effective DRAM bandwidth (§ 9.2),
   not a tok/s figure.** An integrated GPU shares the same LPDDR5 as the CPU
@@ -852,6 +1032,20 @@ and the board has the slot for one.
   STREAM-style test); only if it is well above 37 GB/s is a Vulkan or
   OpenCL build worth building and testing. Prefill, being compute-bound
   (§ 7.2), is the more likely place for a GPU to win.
+- **`Q4_0` measures 23.8% faster than `Q4_K_M` at prompt processing (§ 8.4)
+  and we do not know what it costs in accuracy.** That is half the decision
+  and it is unmeasured: `llama-perplexity` builds from the same tree. Until
+  it is run, the catalog stays on Q4_K_M.
+- **Whether that 23.8% transfers to a MoE is unknown**, and it cannot be
+  assumed: a MoE's prefill is many small per-expert matmuls rather than few
+  large ones. Moot for `qwen3.6-35b-a3b` today in any case, since no `Q4_0`
+  build of it is published.
+- **Both KleidiAI-ON runs measured ~3% lower on decode (§ 8.4), including on
+  Q4_K_M, where KleidiAI provably does nothing at prefill.** Either a global
+  side effect of registering its buffer types in ggml, or thermal drift from
+  being last in a ten-minute loop. Settled by re-running the four cells in
+  reverse order: if the effect follows the binary it is KleidiAI, if it
+  follows position in time it is temperature.
 - A third data point at 4727 tokens for `qwen3.6-35b-a3b` at `--threads 8`
   would replace the one extrapolated figure in § 9.1's table with a
   measurement. Roughly four minutes of runtime.

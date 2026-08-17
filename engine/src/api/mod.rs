@@ -30,6 +30,7 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
+use crate::inference::embedding::EmbeddingModel;
 use crate::inference::{
     BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig, SchedulerHandle,
 };
@@ -44,6 +45,14 @@ pub struct ModelSlot {
     pub engine: Option<Arc<InferenceEngine>>,
     /// Continuous batching scheduler (preferred when available).
     pub scheduler: Option<SchedulerHandle>,
+}
+
+/// The embedding slot — independent of `ModelSlot` on purpose. See
+/// `AppState::ensure_embedding_model` for why this coexists with the
+/// generation model rather than sharing its slot.
+pub struct EmbeddingSlot {
+    pub model_name: String,
+    pub model: Arc<EmbeddingModel>,
 }
 
 /// Shared state for API handlers.
@@ -153,6 +162,35 @@ pub struct AppState {
     /// answer would break `eullm run ./model.gguf` on the first model swap
     /// back to it.
     pub launch_model: Option<(String, PathBuf)>,
+
+    /// Second, independent model slot for text embeddings — see
+    /// `ensure_embedding_model`. `None` until the first `/v1/embeddings` or
+    /// `/api/embed` request names a model.
+    pub embedding: tokio::sync::RwLock<Option<EmbeddingSlot>>,
+
+    /// How many times a model was evicted to make VRAM room for the *other*
+    /// slot (generation displacing the embedder, or the embedder displacing
+    /// generation), in either direction. Not itself a problem — an
+    /// ingestion run that evicts the LLM once and restores it once is
+    /// exactly the intended use — but a steady-state rate of one eviction
+    /// per request means a caller on a card too small for both is
+    /// alternating instead of batching, paying a full model load on every
+    /// call. Surfaced in `/api/version` (`model_swaps`) so that pattern is
+    /// visible over time rather than only as an unexplained slowdown.
+    pub cross_slot_evictions: std::sync::atomic::AtomicU64,
+
+    /// Idle-unload deadline for the main slot — `None` means no timer is
+    /// running (slot empty, or the model that loaded it asked to be kept
+    /// forever). Reset on every request that touches the slot; checked by
+    /// the background task spawned in `serve()`. See `KeepAlive`.
+    main_deadline: tokio::sync::Mutex<Option<tokio::time::Instant>>,
+    /// Same as `main_deadline`, for the embedding slot.
+    embedding_deadline: tokio::sync::Mutex<Option<tokio::time::Instant>>,
+    /// Applied when a request does not set its own `keep_alive` field —
+    /// see `RuntimeOpts`/`ServeConfig::keep_alive`. `None` disables the
+    /// idle-unload timer by default (a request can still opt in with an
+    /// explicit `keep_alive`).
+    pub default_keep_alive: Option<std::time::Duration>,
 }
 
 /// Why a model could not be made ready.
@@ -268,6 +306,13 @@ impl AppState {
         // causing OOM or a C-level crash in llama.cpp.
         self.unload_current().await?;
         tracing::info!("Previous model fully unloaded");
+
+        // An embedder left resident from an earlier ingestion run would
+        // otherwise shrink the free VRAM `--fit` measures below, sizing this
+        // load as if the card were smaller than it actually is once the
+        // embedder itself is later evicted by `ensure_embedding_model`. See
+        // `evict_embedding_if_present_for_generation_load`.
+        self.evict_embedding_if_present_for_generation_load().await;
 
         // ── 2. Load the new model ───────────────────────────────────
         // Gemma 4 requires f16 KV cache regardless of the server's configured
@@ -537,6 +582,177 @@ impl AppState {
         Ok(())
     }
 
+    /// Ensure the named embedding model is loaded, loading or swapping it in
+    /// if needed, and return a handle to it.
+    ///
+    /// The residency decision — coexist with the generation model, or evict
+    /// it — is made here rather than left to the caller, because the
+    /// caller (a RAG pipeline) does not know how much VRAM the card has:
+    /// the same request works unchanged on a 12 GB card (where the two
+    /// cannot fit together) and a 16 GB one (where they can), and only this
+    /// process can tell which situation it is in right now.
+    ///
+    /// 1. Already loaded under this name → return it, no eviction, no load.
+    /// 2. Not loaded, and it fits in free VRAM alongside whatever is in the
+    ///    main slot → load it into the embedding slot; the main slot is
+    ///    untouched.
+    /// 3. Not loaded, and it does not fit → evict the main slot first (a
+    ///    generation request will reload it later; `resolve_model` and the
+    ///    embedded chat UI both work unchanged against an empty main slot),
+    ///    then load the embedder, which now has the whole card.
+    ///
+    /// On a non-CUDA build `fit::vram_bytes()` cannot answer "does it fit",
+    /// so this always takes the coexist path (case 2) and lets a real
+    /// allocation failure surface as a normal load error — the same
+    /// posture `--fit` itself takes on those builds.
+    pub async fn ensure_embedding_model(
+        &self,
+        name: &str,
+        n_ctx: u32,
+    ) -> Result<Arc<EmbeddingModel>, ModelError> {
+        let _swap_guard = self.swap_lock.lock().await;
+
+        let normalized = normalize_model_name(name);
+        {
+            let slot = self.embedding.read().await;
+            if let Some(ref loaded) = *slot
+                && model_identity_key(&loaded.model_name) == model_identity_key(&normalized)
+            {
+                return Ok(loaded.model.clone());
+            }
+        }
+
+        let gguf_path = self.resolve_model(&normalized)?;
+        let weights_bytes = std::fs::metadata(&gguf_path).map(|m| m.len()).unwrap_or(0);
+
+        let main_loaded = self.slot.read().await.model_name.is_some();
+        let fits_alongside = fits_in_free_vram(weights_bytes).unwrap_or(true);
+        if main_loaded && !fits_alongside {
+            tracing::info!(
+                "Embedding model {} does not fit alongside the loaded generation model — \
+                 evicting it to make room (will reload on the next generation request)",
+                crate::audit::sanitize_for_log(&normalized)
+            );
+            self.unload_current().await?;
+            self.cross_slot_evictions
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        tracing::info!(
+            "Loading embedding model {} ({})",
+            crate::audit::sanitize_for_log(&normalized),
+            gguf_path.display()
+        );
+        let threads = self.threads;
+        let model = tokio::task::spawn_blocking(move || EmbeddingModel::load(&gguf_path, threads, n_ctx))
+            .await
+            .map_err(|e| ModelError::LoadFailed(format!("Task join error: {e}")))?
+            .map_err(|e| ModelError::LoadFailed(format!("Failed to load embedding model: {e}")))?;
+        let model = Arc::new(model);
+
+        {
+            let mut slot = self.embedding.write().await;
+            *slot = Some(EmbeddingSlot {
+                model_name: normalized.clone(),
+                model: model.clone(),
+            });
+        }
+        tracing::info!(
+            "Embedding model ready → {}",
+            crate::audit::sanitize_for_log(&normalized)
+        );
+        Ok(model)
+    }
+
+    /// The mirror of the eviction inside `ensure_embedding_model`: called
+    /// from `swap_model` before sizing a generation load, so an embedder
+    /// left resident from a prior ingestion run does not silently shrink
+    /// the VRAM budget `--fit` sizes against. Cheap when nothing is loaded
+    /// (`RwLock::read` + an `Option` check) and a no-op unless `--fit` is
+    /// on, since only `--fit` reads free VRAM to make a sizing decision in
+    /// the first place — without it, evicting the embedder would trade a
+    /// real, working configuration for a guess.
+    async fn evict_embedding_if_present_for_generation_load(&self) {
+        if !self.fit {
+            return;
+        }
+        let was_loaded = self.embedding.read().await.is_some();
+        if !was_loaded {
+            return;
+        }
+        tracing::info!(
+            "Generation request — evicting the resident embedding model to free VRAM for sizing \
+             (reload it with a later /v1/embeddings or /api/embed request)"
+        );
+        *self.embedding.write().await = None;
+        self.cross_slot_evictions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Reset the main slot's idle-unload deadline. Called on every request
+    /// that uses the main slot (after `ensure_model` in `routes.rs`), so an
+    /// active conversation is never unloaded out from under it. `Immediate`
+    /// unloads right away instead of scheduling a deadline — see
+    /// `KeepAlive`.
+    pub async fn touch_main_slot(&self, keep_alive: KeepAlive) {
+        touch_deadline(&self.main_deadline, keep_alive, self.default_keep_alive);
+        if keep_alive == KeepAlive::Immediate {
+            let _ = self.unload().await;
+        }
+    }
+
+    /// Same as `touch_main_slot`, for the embedding slot.
+    pub async fn touch_embedding_slot(&self, keep_alive: KeepAlive) {
+        touch_deadline(
+            &self.embedding_deadline,
+            keep_alive,
+            self.default_keep_alive,
+        );
+        if keep_alive == KeepAlive::Immediate {
+            *self.embedding.write().await = None;
+        }
+    }
+
+    /// Background loop spawned once from `serve()`: every 30 seconds, unload
+    /// either slot whose idle deadline has passed. 30s is coarse on purpose
+    /// — this is a power-saving idle timer, not a latency-sensitive path,
+    /// and checking every request would mean taking both slot locks on
+    /// every single generation/embedding call for a comparison that is
+    /// false almost all the time.
+    async fn run_idle_unload_loop(self: Arc<Self>) {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let now = tokio::time::Instant::now();
+
+            let main_expired = {
+                let mut deadline = self.main_deadline.lock().await;
+                let expired = deadline.is_some_and(|d| now >= d);
+                if expired {
+                    *deadline = None;
+                }
+                expired
+            };
+            if main_expired {
+                tracing::info!("keep_alive expired — unloading idle generation model");
+                let _ = self.unload().await;
+            }
+
+            let embedding_expired = {
+                let mut deadline = self.embedding_deadline.lock().await;
+                let expired = deadline.is_some_and(|d| now >= d);
+                if expired {
+                    *deadline = None;
+                }
+                expired
+            };
+            if embedding_expired {
+                tracing::info!("keep_alive expired — unloading idle embedding model");
+                *self.embedding.write().await = None;
+            }
+        }
+    }
+
     /// Resolve a model name to a GGUF file path.
     ///
     /// Search order:
@@ -645,6 +861,258 @@ fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
     None
 }
 
+/// Whether `additional_bytes` fits in currently free VRAM, applying the same
+/// floor `fit.rs` reserves for a normal model load
+/// (`fit::MIN_FREE_TOTAL_RATIO`) plus a flat reserve for the embedder's own
+/// small compute buffer — 256 MiB rather than `fit.rs`'s 640 MiB, since an
+/// embedding model's context and micro-batch are both a fraction of an LLM's.
+///
+/// Deliberately not the layer-by-layer machinery in `fit.rs`: an embedding
+/// model loads fully onto the GPU or not at all (see `EmbeddingModel::load`),
+/// so this only ever needs a yes/no answer, never a partial split.
+///
+/// `None` when VRAM cannot be probed at all (non-CUDA build) — the caller
+/// decides what "unknown" means for it; `ensure_embedding_model` treats it as
+/// "assume yes" so a build that cannot measure VRAM behaves as it always has,
+/// letting a real allocation failure surface as a normal load error.
+fn fits_in_free_vram(additional_bytes: u64) -> Option<bool> {
+    const EMBEDDING_COMPUTE_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
+    let (free, total) = crate::fit::vram_bytes()?;
+    let floor = (total as f64 * crate::fit::MIN_FREE_TOTAL_RATIO) as u64;
+    let usable = free
+        .saturating_sub(floor)
+        .saturating_sub(EMBEDDING_COMPUTE_RESERVE_BYTES);
+    Some(additional_bytes <= usable)
+}
+
+/// How long a loaded model should be kept resident after a request, decoded
+/// from a request's `keep_alive` field (Ollama's field of the same name and
+/// meaning) — a pure function over the parsed JSON value, testable without a
+/// running server, per the perimeter-config convention in
+/// `engine/CLAUDE.md` (even though this is not a perimeter setting, the same
+/// reason applies: precedence logic belongs in a function that can be
+/// tested directly).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeepAlive {
+    /// No `keep_alive` in the request — use the server's `--keep-alive`
+    /// default (`AppState::default_keep_alive`), which may itself be "never
+    /// idle-unload" if the server was started without the flag.
+    Default,
+    /// `keep_alive: -1` (or any negative number/duration) — never
+    /// idle-unload this load; the deadline is cleared rather than set.
+    Forever,
+    /// `keep_alive: 0` — unload right after this request completes, instead
+    /// of waiting for the idle timer.
+    Immediate,
+    /// A positive duration to keep the model resident, counted from the end
+    /// of this request.
+    For(std::time::Duration),
+}
+
+/// Parse a request body's `keep_alive` field. Accepts what Ollama accepts:
+/// a bare number of seconds (`300`), a duration string with a unit
+/// (`"5m"`, `"30s"`, `"2h"`), or a plain numeric string (`"300"`). An
+/// absent field, `null`, or anything unparseable falls back to `Default`
+/// rather than erroring — a malformed `keep_alive` should not fail the
+/// request it rides along with.
+pub fn parse_keep_alive(value: Option<&serde_json::Value>) -> KeepAlive {
+    let Some(value) = value else {
+        return KeepAlive::Default;
+    };
+    let seconds = if let Some(n) = value.as_f64() {
+        Some(n)
+    } else if let Some(s) = value.as_str() {
+        parse_duration_string(s)
+    } else {
+        None
+    };
+    match seconds {
+        None => KeepAlive::Default,
+        Some(s) if s < 0.0 => KeepAlive::Forever,
+        Some(0.0) => KeepAlive::Immediate,
+        Some(s) => KeepAlive::For(std::time::Duration::from_secs_f64(s)),
+    }
+}
+
+/// Parse `--keep-alive`'s CLI value into a duration, for `main.rs` to build
+/// `ServeConfig::keep_alive` — the same duration grammar `parse_keep_alive`
+/// accepts on a request's `keep_alive` field ("5m", "30s", "300"), minus the
+/// 0/negative special cases: a *default* keep-alive of "unload immediately"
+/// or "never" is nonsensical (the former means every load evicts itself, the
+/// latter is just the flag being absent), so those are rejected here rather
+/// than silently accepted and misread as `Duration::ZERO`.
+pub fn parse_keep_alive_flag(s: &str) -> Result<std::time::Duration, String> {
+    match parse_duration_string(s) {
+        Some(secs) if secs > 0.0 => Ok(std::time::Duration::from_secs_f64(secs)),
+        Some(_) => Err(format!(
+            "--keep-alive must be a positive duration, got '{s}' \
+             (0 or negative only make sense as a per-request keep_alive override)"
+        )),
+        None => Err(format!(
+            "--keep-alive: cannot parse '{s}' as a duration — expected e.g. '5m', '30s', '2h', or a bare number of seconds"
+        )),
+    }
+}
+
+/// `"300"` → 300.0, `"5m"` → 300.0, `"1.5h"` → 5400.0. Returns `None` for
+/// anything that is not a bare number optionally followed by one of
+/// `s`/`m`/`h`.
+fn parse_duration_string(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if let Ok(n) = s.parse::<f64>() {
+        return Some(n);
+    }
+    let (number, unit) = s.split_at(s.len() - 1);
+    let n: f64 = number.parse().ok()?;
+    match unit {
+        "s" => Some(n),
+        "m" => Some(n * 60.0),
+        "h" => Some(n * 3600.0),
+        _ => None,
+    }
+}
+
+/// Shared implementation behind `touch_main_slot`/`touch_embedding_slot`:
+/// resolve `keep_alive` (falling back to `default` when it is `Default`)
+/// into a new deadline, or clear it for `Forever`/`Immediate` (the caller
+/// handles the actual unload for `Immediate`).
+fn touch_deadline(
+    deadline: &tokio::sync::Mutex<Option<tokio::time::Instant>>,
+    keep_alive: KeepAlive,
+    default: Option<std::time::Duration>,
+) {
+    let resolved = match keep_alive {
+        KeepAlive::Default => default.map(KeepAlive::For).unwrap_or(KeepAlive::Forever),
+        other => other,
+    };
+    let new_deadline = match resolved {
+        KeepAlive::For(d) => Some(tokio::time::Instant::now() + d),
+        KeepAlive::Forever | KeepAlive::Immediate | KeepAlive::Default => None,
+    };
+    // `try_lock`: this runs on the hot request path (once per request, to
+    // reset the idle timer) and must never block a response on the idle
+    // loop's own lock acquisition, which happens at most once every 30s and
+    // holds the lock only briefly. Losing a single deadline reset to a rare
+    // collision is harmless — the next request resets it again, and the
+    // idle loop only unloads a slot that has had no reset for the entire
+    // keep_alive window.
+    if let Ok(mut guard) = deadline.try_lock() {
+        *guard = new_deadline;
+    }
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn v(s: &str) -> serde_json::Value {
+        serde_json::from_str(s).expect("valid json literal")
+    }
+
+    #[test]
+    fn an_absent_field_is_the_server_default() {
+        assert_eq!(parse_keep_alive(None), KeepAlive::Default);
+    }
+
+    #[test]
+    fn a_bare_number_is_seconds() {
+        assert_eq!(
+            parse_keep_alive(Some(&v("300"))),
+            KeepAlive::For(Duration::from_secs(300))
+        );
+    }
+
+    #[test]
+    fn duration_strings_match_ollamas_grammar() {
+        assert_eq!(
+            parse_keep_alive(Some(&v("\"30s\""))),
+            KeepAlive::For(Duration::from_secs(30))
+        );
+        assert_eq!(
+            parse_keep_alive(Some(&v("\"5m\""))),
+            KeepAlive::For(Duration::from_secs(300))
+        );
+        assert_eq!(
+            parse_keep_alive(Some(&v("\"2h\""))),
+            KeepAlive::For(Duration::from_secs(7200))
+        );
+        // A numeric string with no unit is still seconds.
+        assert_eq!(
+            parse_keep_alive(Some(&v("\"300\""))),
+            KeepAlive::For(Duration::from_secs(300))
+        );
+    }
+
+    /// `0` means "unload right after this request" — distinct from an
+    /// absent field, which means "use the server default" and may well
+    /// keep the model resident.
+    #[test]
+    fn zero_means_immediate() {
+        assert_eq!(parse_keep_alive(Some(&v("0"))), KeepAlive::Immediate);
+        assert_eq!(parse_keep_alive(Some(&v("\"0\""))), KeepAlive::Immediate);
+    }
+
+    /// Negative, in either form, means "never idle-unload this load" —
+    /// Ollama's `-1`.
+    #[test]
+    fn negative_means_forever() {
+        assert_eq!(parse_keep_alive(Some(&v("-1"))), KeepAlive::Forever);
+        assert_eq!(parse_keep_alive(Some(&v("\"-1\""))), KeepAlive::Forever);
+    }
+
+    /// A malformed value must not fail the request it rides along with —
+    /// it falls back to the server default rather than erroring.
+    #[test]
+    fn garbage_falls_back_to_default_rather_than_erroring() {
+        assert_eq!(parse_keep_alive(Some(&v("\"banana\""))), KeepAlive::Default);
+        assert_eq!(parse_keep_alive(Some(&v("null"))), KeepAlive::Default);
+        assert_eq!(parse_keep_alive(Some(&v("true"))), KeepAlive::Default);
+    }
+
+    #[test]
+    fn the_cli_flag_parser_accepts_only_a_positive_duration() {
+        assert_eq!(
+            parse_keep_alive_flag("5m").unwrap(),
+            Duration::from_secs(300)
+        );
+        assert!(
+            parse_keep_alive_flag("0").is_err(),
+            "0 as a *default* keep-alive is nonsensical — every load would evict itself"
+        );
+        assert!(parse_keep_alive_flag("-1").is_err());
+        assert!(parse_keep_alive_flag("banana").is_err());
+    }
+
+    #[test]
+    fn touch_deadline_resolves_default_against_the_servers_own_default() {
+        let deadline = tokio::sync::Mutex::new(None);
+        // No server default configured (`None`) → Default resolves to
+        // Forever, i.e. no timer at all — matches every release before
+        // --keep-alive existed, where nothing unloaded a model on its own.
+        touch_deadline(&deadline, KeepAlive::Default, None);
+        assert!(
+            deadline.try_lock().unwrap().is_none(),
+            "no --keep-alive configured means Default must not start a timer"
+        );
+
+        // A server default of 5 minutes turns Default into an actual deadline.
+        touch_deadline(&deadline, KeepAlive::Default, Some(Duration::from_secs(300)));
+        assert!(deadline.try_lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn touch_deadline_forever_and_immediate_both_clear_any_running_timer() {
+        let deadline = tokio::sync::Mutex::new(Some(tokio::time::Instant::now()));
+        touch_deadline(&deadline, KeepAlive::Forever, Some(Duration::from_secs(300)));
+        assert!(deadline.try_lock().unwrap().is_none());
+
+        let deadline = tokio::sync::Mutex::new(Some(tokio::time::Instant::now()));
+        touch_deadline(&deadline, KeepAlive::Immediate, Some(Duration::from_secs(300)));
+        assert!(deadline.try_lock().unwrap().is_none());
+    }
+}
+
 /// Normalize an Ollama-style model name for EULLM's store.
 ///
 /// Ollama uses `name:tag` (e.g. `qwen3:14b`), but EULLM stores models
@@ -717,6 +1185,11 @@ pub struct ServeConfig {
     /// it was launched with a model (`eullm run`). `None` for headless `serve`,
     /// which starts with an empty slot. See `AppState::launch_model`.
     pub launch_model: Option<(String, PathBuf)>,
+    /// Default idle-unload duration for a load whose request did not set its
+    /// own `keep_alive` — see `AppState::default_keep_alive`. `None` (the
+    /// default) means never idle-unload automatically, matching every
+    /// release before this flag existed.
+    pub keep_alive: Option<std::time::Duration>,
 }
 
 /// Start the API server on the given port with graceful shutdown support.
@@ -862,6 +1335,15 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         web_policy,
         allow_model_paths,
         launch_model: cfg.launch_model,
+        embedding: tokio::sync::RwLock::new(None),
+        cross_slot_evictions: std::sync::atomic::AtomicU64::new(0),
+        main_deadline: tokio::sync::Mutex::new(None),
+        embedding_deadline: tokio::sync::Mutex::new(None),
+        default_keep_alive: cfg.keep_alive,
+    });
+    let idle_unload_state = state.clone();
+    tokio::spawn(async move {
+        idle_unload_state.run_idle_unload_loop().await;
     });
     let api_port = cfg.port;
     let ui_port_opt = cfg.ui_port;
@@ -1318,6 +1800,11 @@ mod http_tests {
             web_policy: crate::tools::guard::WebPolicy::from_env(),
             allow_model_paths: false,
             launch_model: None,
+            embedding: tokio::sync::RwLock::new(None),
+            cross_slot_evictions: std::sync::atomic::AtomicU64::new(0),
+            main_deadline: tokio::sync::Mutex::new(None),
+            embedding_deadline: tokio::sync::Mutex::new(None),
+            default_keep_alive: None,
         });
 
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
@@ -1448,6 +1935,80 @@ mod http_tests {
             Some(env!("CARGO_PKG_VERSION")),
             "/api/version must report the crate version"
         );
+        assert_eq!(
+            body["model_swaps"].as_u64(),
+            Some(0),
+            "a fresh server has evicted nothing yet"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn embedding_endpoints_refuse_an_unknown_model_by_name() {
+        // Same shape as `an_unknown_model_is_refused_by_name_and_not_with_a_500`
+        // for generation: a model name that resolves to nothing is a client
+        // mistake and must read like one on both embedding endpoints, not as
+        // a generic 500.
+        let tmp = std::env::temp_dir().join(format!("eullm-embed-404-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        for path in ["/api/embed", "/v1/embeddings"] {
+            let (status, body) = post_json(
+                &format!("{base}{path}"),
+                serde_json::json!({ "model": "this-model-does-not-exist", "input": "hi" }),
+            )
+            .await;
+            assert!(
+                status.is_client_error(),
+                "{path}: expected a client error, got {status}"
+            );
+            assert!(
+                body.contains("this-model-does-not-exist"),
+                "{path}: the refusal must name the model the caller asked for, got: {body}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn embedding_endpoints_require_input() {
+        let tmp = std::env::temp_dir().join(format!("eullm-embed-noinput-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        // Refused before any model resolution is attempted — a malformed
+        // request should not trigger a load/swap on its way to being
+        // rejected.
+        let (status, _) = post_json(
+            &format!("{base}/api/embed"),
+            serde_json::json!({ "model": "a-pulled-model" }),
+        )
+        .await;
+        assert_eq!(status, 400);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn generate_with_no_model_field_and_nothing_loaded_still_503s_before_the_warm_load_check() {
+        // The empty-prompt warm-load short-circuit sits after `ensure_model`
+        // on purpose (see `generate`'s comment): it must not bypass "no
+        // model available" and answer a fabricated "loaded" response for a
+        // server with nothing loaded and no model named.
+        let tmp = std::env::temp_dir().join(format!("eullm-warmload-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = ModelStore::at(tmp.clone());
+        let base = spawn(store).await;
+
+        let (status, body) = post_json(
+            &format!("{base}/api/generate"),
+            serde_json::json!({ "prompt": "" }),
+        )
+        .await;
+        assert_eq!(status, 503);
+        assert!(body.contains("No model loaded"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

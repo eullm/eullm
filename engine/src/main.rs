@@ -322,6 +322,23 @@ struct RuntimeOpts {
     /// nonsense rather than an error.
     #[arg(long, value_name = "PATH")]
     mmproj: Option<PathBuf>,
+
+    /// How long to keep a model resident after its last use, before
+    /// unloading it to free VRAM/RAM. Accepts a duration ("5m", "30s",
+    /// "2h") or a bare number of seconds. Applies to both the generation
+    /// model and the embedding model (loaded on demand by naming it in a
+    /// `/v1/embeddings` or `/api/embed` request), independently, and is a
+    /// *default*: a request's own `keep_alive` field overrides it for that
+    /// load.
+    ///
+    /// Unset by default — matches every release before this flag existed,
+    /// where nothing unloaded a model on its own. Set it to make an
+    /// idle GPU actually go idle: without it, a model loaded once and left
+    /// untouched keeps the card's memory clocks up indefinitely (see
+    /// `docs/arm-cix-p1-cpu-profile.md`'s note on why VRAM occupancy itself
+    /// isn't the cost — an active CUDA context is).
+    #[arg(long, value_name = "DURATION")]
+    keep_alive: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -609,7 +626,14 @@ async fn main() {
                 logfile,
                 rust_debug,
                 mmproj,
+                keep_alive,
             } = opts;
+            let keep_alive = keep_alive.as_deref().map(|s| {
+                api::parse_keep_alive_flag(s).unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                })
+            });
             // Automatic sizing resolves here, once, for both subcommands.
             // `--no-fit` is the only thing that turns it off: an explicit
             // `--gpu-layers` becomes a CEILING instead (see
@@ -710,6 +734,7 @@ async fn main() {
                 image,
                 rust_debug,
                 mmproj,
+                keep_alive,
             )
             .await;
         }
@@ -747,7 +772,14 @@ async fn main() {
                 logfile,
                 rust_debug,
                 mmproj,
+                keep_alive,
             } = opts;
+            let keep_alive = keep_alive.as_deref().map(|s| {
+                api::parse_keep_alive_flag(s).unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                })
+            });
             // Automatic sizing resolves here, once, for both subcommands:
             // an explicit --gpu-layers is an explicit choice and turns it
             // off, --no-fit turns it off outright, and `fit` stays true for
@@ -804,6 +836,7 @@ async fn main() {
                 checkpoint_min_step,
                 rust_debug,
                 mmproj,
+                keep_alive,
             )
             .await;
         }
@@ -1751,6 +1784,7 @@ async fn cmd_run(
     image: Option<PathBuf>,
     rust_debug: bool,
     mmproj: Option<PathBuf>,
+    keep_alive: Option<std::time::Duration>,
 ) {
     // `--image` is a one-shot multimodal probe: load, send the bytes + prompt,
     // print the output, exit. Forces sequential mode (the scheduler does not
@@ -2261,6 +2295,7 @@ async fn cmd_run(
             store: api_store,
             ui_port,
             launch_model: api_launch_model,
+            keep_alive,
         })
         .await
         {
@@ -2322,6 +2357,7 @@ async fn cmd_serve(
     checkpoint_min_step: u32,
     rust_debug: bool,
     mmproj: Option<PathBuf>,
+    keep_alive: Option<std::time::Duration>,
 ) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
@@ -2371,6 +2407,7 @@ async fn cmd_serve(
         // Headless serve starts with an empty slot: there is no launch model to
         // grandfather in, so every name goes through the normal resolution.
         launch_model: None,
+        keep_alive,
     })
     .await
     {
@@ -3050,7 +3087,7 @@ async fn interactive_chat(
         reader.remember(&input);
 
         // Commands
-        if input == "/bye" || input == "/exit" || input == "/quit" {
+        if input == "/bye" || input == "/exit" || input == "/quit" || input == "/q" {
             println!("Bye!");
             return;
         } else if input == "/clear" {
@@ -3059,7 +3096,7 @@ async fn interactive_chat(
             continue;
         } else if input == "/help" {
             println!("Commands:");
-            println!("  /bye              Exit the chat (Ctrl+D does the same)");
+            println!("  /bye, /q          Exit the chat (Ctrl+D does the same)");
             println!("  /clear            Clear conversation history");
             println!(
                 "  /think            Enable reasoning (current: {})",
@@ -3119,6 +3156,28 @@ async fn interactive_chat(
                 println!("System prompt updated.\n");
             }
             continue;
+        } else if input.starts_with('/') && !input[1..].starts_with('/') {
+            // An unrecognised slash command is a typo, not a message.
+            //
+            // Reported from a real session: someone typed `/q` to leave, it
+            // fell through to here as ordinary text, and the model spent a
+            // minute earnestly answering it. Silently sending a mistyped
+            // command to a 4 tok/s model is the worst of both outcomes — the
+            // user waits for something they did not ask for, and nothing on
+            // screen says why.
+            //
+            // `//` is the escape hatch for a message that really does start
+            // with a slash: it is stripped and the rest is sent as typed.
+            let cmd = input.split_whitespace().next().unwrap_or(&input);
+            eprintln!("Unknown command: {cmd}");
+            eprintln!("  /help lists the commands. To send this as a message, start it with // instead.\n");
+            continue;
+        }
+
+        // A message the user deliberately started with a slash: drop the
+        // escaping first one and send the rest.
+        if let Some(rest) = input.strip_prefix("//") {
+            input = rest.to_string();
         }
 
         // Add user message to permanent history. When reasoning is toggled

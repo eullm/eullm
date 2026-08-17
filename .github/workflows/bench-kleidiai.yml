@@ -1,0 +1,111 @@
+name: Bench KleidiAI (manual)
+
+# Builds upstream's `llama-bench` twice from the llama.cpp revision we vendor,
+# once with GGML_CPU_KLEIDIAI=OFF and once with ON, for the CIX P1 ISA profile,
+# and uploads both binaries.
+#
+# Why this exists: Radxa's llama.cpp guide for the Orion O6 recommends enabling
+# KleidiAI, and our published `cix-p1` binary has never had it. Answering
+# "should we?" needs an A/B on the board itself, and the board is not a build
+# machine: no cmake, no root to install one. This job does the compiling on
+# GitHub's native arm64 runners and hands back two binaries to run there.
+#
+# `llama-bench` rather than eullm on purpose. The question is about ggml's CPU
+# kernels, so upstream's own benchmark isolates it, reports prompt-processing
+# and token-generation separately with a standard deviation, and builds in a
+# fraction of the time our engine does.
+#
+# Deliberately NOT part of release-engine.yml. That workflow publishes whatever
+# lands in `artifacts/*/*`, by design (see the release-and-ci skill), so a job
+# added there would attach a diagnostic binary to every release.
+#
+# Deliberately no sccache either. This is a manual, occasional diagnostic, not
+# a release path; the shared S3 bucket exists to make tagged builds fast, and a
+# job run a handful of times a year has nothing to gain from warming it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      arm_arch:
+        description: "GGML_CPU_ARM_ARCH value (default: the CIX P1 profile)"
+        default: "armv9.2-a+sve2+bf16+i8mm+dotprod"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The llama.cpp we vendor, at the exact pin we ship, so the result
+          # transfers to our binary instead of describing some other revision.
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y cmake build-essential
+
+      - name: Record the revision under test
+        working-directory: engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp
+        run: |
+          git log -1 --format='llama.cpp pin %H %ad %s' --date=short
+
+      - name: Build llama-bench (KleidiAI OFF)
+        working-directory: engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp
+        run: |
+          # GGML_NATIVE=OFF so the runner's own core does not decide the ISA:
+          # this must target the CIX P1, not whatever GitHub scheduled us on.
+          # LLAMA_CURL=OFF drops a libcurl dependency the benchmark never uses
+          # and that the target board may not have.
+          cmake -B build-off -DCMAKE_BUILD_TYPE=Release \
+                -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+                -DGGML_CPU_ARM_ARCH='${{ inputs.arm_arch }}' \
+                -DGGML_CPU_KLEIDIAI=OFF
+          cmake --build build-off -j"$(nproc)" --target llama-bench
+
+      - name: Build llama-bench (KleidiAI ON)
+        working-directory: engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp
+        run: |
+          cmake -B build-on -DCMAKE_BUILD_TYPE=Release \
+                -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+                -DGGML_CPU_ARM_ARCH='${{ inputs.arm_arch }}' \
+                -DGGML_CPU_KLEIDIAI=ON
+          cmake --build build-on -j"$(nproc)" --target llama-bench
+
+      - name: Prove the two builds actually differ
+        working-directory: engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp
+        run: |
+          # An accepted-but-ignored CMake option would hand back two identical
+          # binaries and an afternoon of benchmarking would measure nothing.
+          # KleidiAI compiles its own translation units and links Arm's `kai_*`
+          # kernels, so their presence is the check, not the cache variable.
+          off_objs=$(find build-off -iname '*kleidiai*' | wc -l)
+          on_objs=$(find build-on  -iname '*kleidiai*' | wc -l)
+          echo "kleidiai objects: OFF=$off_objs ON=$on_objs"
+          if [ "$on_objs" -eq 0 ]; then
+            echo "::error::GGML_CPU_KLEIDIAI=ON produced no KleidiAI objects — the option was accepted and ignored. Benchmarking these two binaries would compare identical code."
+            exit 1
+          fi
+          if [ "$off_objs" -ne 0 ]; then
+            echo "::error::GGML_CPU_KLEIDIAI=OFF produced KleidiAI objects — the baseline is not a baseline."
+            exit 1
+          fi
+          echo "kai_ symbols in the ON build: $(nm -D --defined-only build-on/bin/llama-bench 2>/dev/null | grep -c kai_ || true)"
+
+      - name: Stage binaries
+        working-directory: engine/vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp
+        run: |
+          mkdir -p ../../../../../out
+          cp build-off/bin/llama-bench ../../../../../out/llama-bench-kleidiai-off
+          cp build-on/bin/llama-bench  ../../../../../out/llama-bench-kleidiai-on
+          chmod +x ../../../../../out/llama-bench-kleidiai-*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llama-bench-cix-p1-kleidiai-ab
+          path: out/llama-bench-kleidiai-*
+          if-no-files-found: error

@@ -98,6 +98,7 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `--daemon` | false | Run as a background daemon |
 | `--pidfile` | `/tmp/eullm.pid` | PID file path (with `--daemon`) |
 | `--logfile` | `~/.eullm/logs/eullm.log` | Daemon log file (with `--daemon`). Set `--pidfile` alone and the log stays beside it |
+| `--keep-alive` | (unset) | Idle-unload a model this many seconds/minutes/hours after its last use (e.g. `5m`). Unset = never automatic; a request's own `keep_alive` field overrides it for that load. Applies to the generation model and the embedding model independently |
 
 #### Automatic GPU sizing
 
@@ -432,6 +433,48 @@ Approximate VRAM usage with F16 KV cache (default). Actual values depend on mode
 | 8B Q4 | 8 | 16384 | 2048 | ~7 GB |
 | 70B Q4 | 16 | 65536 | 4096 | ~45 GB |
 
+## Text Embeddings and the Embedding Slot
+
+`POST /api/embed` (Ollama) and `POST /v1/embeddings` (OpenAI) embed one or
+more texts with any GGUF text-embedding model — BGE, E5, and similar.
+Naming a model in the request loads it the first time it is requested,
+exactly like the generation model:
+
+```bash
+curl -s http://localhost:11434/api/embed -d '{
+  "model": "bge-m3",
+  "input": ["first chunk", "second chunk"]
+}'
+```
+
+The embedding model lives in a **second, independent slot** — it does not
+replace whatever generation model is loaded. Both are kept resident when
+they fit; this is a decision the server makes for itself on every embedding
+request, not something the caller has to reason about:
+
+- If the embedding model fits in currently free VRAM alongside the loaded
+  generation model, it is loaded next to it. Both stay resident.
+- If it does not fit, the generation model is evicted first (it reloads
+  automatically on the next generation request), and the embedder gets the
+  whole card.
+- The reverse also holds: a generation request with `--fit` enabled evicts
+  a resident embedder first if the sizing needs the VRAM back.
+
+On a build with no VRAM probe (non-CUDA), the server always tries to keep
+both resident and lets a genuine out-of-memory surface as a normal load
+error — the same posture `--fit` itself takes there.
+
+How many times either direction of eviction has happened is in
+`/api/version`'s `model_swaps` field — a rate of roughly one per request
+means a card too small for both is being asked to alternate rather than
+batch (do all ingestion, then all generation, rather than interleaving).
+
+Pooling is read from the model's own GGUF metadata (CLS for BGE, mean for
+E5, and so on) rather than guessed; a model that declares no pooling type
+falls back to mean-pooling its per-token embeddings. Output vectors are
+L2-normalized. Rerankers (RANK-pooling models) are out of scope for this
+endpoint — normalizing a single relevance score would collapse it.
+
 ## API Reference
 
 The Engine exposes two sets of endpoints: the native EULLM API (Ollama-compatible) and an OpenAI-compatible API. CORS is enabled for browser-based tools.
@@ -588,6 +631,25 @@ curl -X POST http://localhost:11434/api/pull \
   -d '{"name": "eullm/legal-it-7b"}'
 ```
 
+#### `POST /api/embed`
+
+Embed one or more texts. `input` accepts a single string or an array. See
+[Text Embeddings and the Embedding Slot](#text-embeddings-and-the-embedding-slot)
+for how this coexists with the generation model.
+
+```bash
+curl -X POST http://localhost:11434/api/embed \
+  -H "Content-Type: application/json" \
+  -d '{"model": "bge-m3", "input": ["first chunk", "second chunk"]}'
+```
+
+```json
+{
+  "model": "bge-m3",
+  "embeddings": [[0.013, -0.021, ...], [0.008, 0.044, ...]]
+}
+```
+
 ### OpenAI-Compatible API
 
 These endpoints allow using EULLM as a drop-in backend for any tool that supports the OpenAI API: Open WebUI, LangChain, LlamaIndex, n8n, Flowise, etc.
@@ -648,6 +710,29 @@ curl -N http://localhost:11434/v1/chat/completions \
   }
 }
 ```
+
+#### `POST /v1/embeddings`
+
+Embed one or more texts in OpenAI format. Same underlying embedding slot as
+`/api/embed`.
+
+```bash
+curl -X POST http://localhost:11434/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model": "bge-m3", "input": "first chunk"}'
+```
+
+```json
+{
+  "object": "list",
+  "data": [{"object": "embedding", "embedding": [0.013, -0.021, ...], "index": 0}],
+  "model": "bge-m3",
+  "usage": {"prompt_tokens": 0, "total_tokens": 0}
+}
+```
+
+`usage` is honestly reported as zero rather than a fabricated token count —
+the embedding path does not run a text tokenizer count today.
 
 ## Model Catalog
 

@@ -127,6 +127,7 @@ pub fn api_routes() -> Router<S> {
         .route("/pull", post(pull_model))
         .route("/version", get(version))
         .route("/unload", post(unload_model))
+        .route("/embed", post(embed))
 }
 
 /// OpenAI-compatible routes (`/v1/*`).
@@ -134,6 +135,7 @@ pub fn openai_routes() -> Router<S> {
     Router::new()
         .route("/models", get(list_models_openai))
         .route("/chat/completions", post(chat_completions))
+        .route("/embeddings", post(embeddings_openai))
 }
 
 // ── Model slot and dynamic swap ──────────────────────────────────────────────
@@ -585,6 +587,12 @@ async fn version(State(state): State<S>) -> Json<Value> {
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "api_port": state.api_port,
+        // EULLM extension: how many times a model was evicted to make VRAM
+        // room for the other slot (generation <-> embedding). See
+        // `AppState::cross_slot_evictions`.
+        "model_swaps": state
+            .cross_slot_evictions
+            .load(std::sync::atomic::Ordering::Relaxed),
     }))
 }
 
@@ -605,6 +613,180 @@ async fn unload_model(State(state): State<S>) -> (StatusCode, Json<Value>) {
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": format!("Failed to unload model: {e}") })),
         ),
+    }
+}
+
+/// Default embedding context — a request may override it with
+/// `options.num_ctx`. 2048 comfortably covers a single RAG chunk (the usual
+/// unit these are called on) without paying for a window sized to the
+/// generation model's much longer conversations.
+const DEFAULT_EMBEDDING_CTX: u32 = 2048;
+
+/// `input`, in either shape the two embedding endpoints accept: one string,
+/// or an array of strings. Ollama and OpenAI both accept both forms.
+fn parse_embedding_input(body: &Value) -> Result<Vec<String>, (StatusCode, Json<Value>)> {
+    let bad_input = || {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "\"input\" must be a string or an array of strings" })),
+        )
+    };
+    match body.get("input") {
+        Some(Value::String(s)) => Ok(vec![s.clone()]),
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|v| v.as_str().map(str::to_string).ok_or_else(bad_input))
+            .collect(),
+        _ => Err(bad_input()),
+    }
+}
+
+/// `POST /api/embed` — Ollama-compatible.
+///
+/// Request: `{"model": "...", "input": "text" | ["text", ...], "keep_alive": ...}`.
+/// Response: `{"model": "...", "embeddings": [[...], ...]}`.
+async fn embed(
+    State(state): State<S>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let requested = body.get("model").and_then(|v| v.as_str()).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "\"model\" is required" })),
+        )
+    })?;
+    let inputs = parse_embedding_input(&body)?;
+    let n_ctx = body
+        .get("options")
+        .and_then(|o| o.get("num_ctx"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(DEFAULT_EMBEDDING_CTX);
+
+    let keep_alive = super::parse_keep_alive(body.get("keep_alive"));
+    let model = state
+        .ensure_embedding_model(requested, n_ctx)
+        .await
+        .map_err(embedding_model_error)?;
+    state.touch_embedding_slot(keep_alive).await;
+
+    let embeddings = model.embed(&inputs).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Embedding failed: {e}") })),
+        )
+    })?;
+
+    Ok(Json(json!({
+        "model": requested,
+        "embeddings": embeddings,
+    })))
+}
+
+/// `POST /v1/embeddings` — OpenAI-compatible.
+///
+/// Request: `{"model": "...", "input": "text" | ["text", ...]}`.
+/// Response: `{"object": "list", "data": [{"object":"embedding","embedding":[...],"index":N}, ...], "model": "...", "usage": {...}}`.
+async fn embeddings_openai(
+    State(state): State<S>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let requested = body.get("model").and_then(|v| v.as_str()).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "\"model\" is required" })),
+        )
+    })?;
+    let inputs = parse_embedding_input(&body)?;
+    let n_ctx = body
+        .get("options")
+        .and_then(|o| o.get("num_ctx"))
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32)
+        .unwrap_or(DEFAULT_EMBEDDING_CTX);
+
+    let keep_alive = super::parse_keep_alive(body.get("keep_alive"));
+    let model = state
+        .ensure_embedding_model(requested, n_ctx)
+        .await
+        .map_err(embedding_model_error)?;
+    state.touch_embedding_slot(keep_alive).await;
+
+    let embeddings = model.embed(&inputs).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("Embedding failed: {e}") })),
+        )
+    })?;
+
+    let data: Vec<Value> = embeddings
+        .into_iter()
+        .enumerate()
+        .map(|(i, v)| json!({ "object": "embedding", "embedding": v, "index": i }))
+        .collect();
+
+    Ok(Json(json!({
+        "object": "list",
+        "data": data,
+        "model": requested,
+        // No tokenizer count is surfaced by `EmbeddingModel::embed` today —
+        // an honest 0 rather than a fabricated token count. Ollama's own
+        // `/api/embed` has the same gap; OpenAI clients that only check the
+        // response shape (not the count) are unaffected.
+        "usage": { "prompt_tokens": 0, "total_tokens": 0 },
+    })))
+}
+
+/// `ModelError` → the same 404-vs-500 split `ensure_model` uses (see its
+/// comment): a model that does not exist is a client mistake, one that
+/// exists but would not load is ours.
+fn embedding_model_error(e: crate::api::ModelError) -> (StatusCode, Json<Value>) {
+    match e {
+        crate::api::ModelError::NotFound(msg) => {
+            (StatusCode::NOT_FOUND, Json(json!({ "error": msg })))
+        }
+        crate::api::ModelError::LoadFailed(msg) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": msg })),
+        ),
+    }
+}
+
+#[cfg(test)]
+mod embedding_input_tests {
+    use super::*;
+
+    #[test]
+    fn a_single_string_becomes_one_input() {
+        let body = json!({ "input": "hello" });
+        assert_eq!(parse_embedding_input(&body).unwrap(), vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn an_array_of_strings_is_preserved_in_order() {
+        let body = json!({ "input": ["a", "b", "c"] });
+        assert_eq!(
+            parse_embedding_input(&body).unwrap(),
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_missing_input_field_is_rejected() {
+        let body = json!({ "model": "bge" });
+        assert!(parse_embedding_input(&body).is_err());
+    }
+
+    #[test]
+    fn a_non_string_array_element_is_rejected() {
+        let body = json!({ "input": ["a", 5, "c"] });
+        assert!(parse_embedding_input(&body).is_err());
+    }
+
+    #[test]
+    fn a_wrong_shaped_input_is_rejected() {
+        let body = json!({ "input": 42 });
+        assert!(parse_embedding_input(&body).is_err());
     }
 }
 
@@ -743,12 +925,30 @@ async fn generate(
     let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
+    let keep_alive = super::parse_keep_alive(body.get("keep_alive"));
+    state.touch_main_slot(keep_alive).await;
 
     let prompt = body
         .get("prompt")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // An empty prompt is Ollama's documented way to load a model (or apply a
+    // `keep_alive` to one already loaded) without generating anything —
+    // `ensure_model` above already did the loading/swap, so there is nothing
+    // left to do. Returning here, before `GenerateRequest` is built, is what
+    // makes this genuinely free: it never reaches the scheduler or engine.
+    if prompt.is_empty() {
+        return Ok(Json(json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "response": "",
+            "done": true,
+            "done_reason": "load",
+        }))
+        .into_response());
+    }
 
     let sp = parse_generate_params(&body);
     let raw = body.get("raw").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -892,12 +1092,30 @@ async fn chat(
     let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
+    let keep_alive = super::parse_keep_alive(body.get("keep_alive"));
+    state.touch_main_slot(keep_alive).await;
 
     let messages = body
         .get("messages")
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
+
+    // Same warm-load shape as `/api/generate` with an empty prompt: an empty
+    // `messages` array asks only for the load (and, with it, a `keep_alive`)
+    // to happen. Ollama-specific — `/v1/chat/completions` (OpenAI) has no
+    // such convention and requires non-empty messages, so this stays out of
+    // `chat_completions`.
+    if messages.is_empty() {
+        return Ok(Json(json!({
+            "model": model,
+            "created_at": chrono::Utc::now().to_rfc3339(),
+            "message": { "role": "assistant", "content": "" },
+            "done": true,
+            "done_reason": "load",
+        }))
+        .into_response());
+    }
 
     let messages = inject_web_content(
         messages,
@@ -1282,6 +1500,11 @@ async fn chat_completions(
     let (override_batch_size, override_ctx_size) = parse_slot_overrides(&body)?;
     let snap = ensure_model(&state, requested, override_batch_size, override_ctx_size).await?;
     let model = snap.model_name.clone();
+    // `keep_alive` is an EULLM/Ollama extension to the OpenAI shape, not part
+    // of it — accepted here too so the idle-unload timer works the same way
+    // regardless of which endpoint a client happens to use.
+    let keep_alive = super::parse_keep_alive(body.get("keep_alive"));
+    state.touch_main_slot(keep_alive).await;
 
     let messages = body
         .get("messages")

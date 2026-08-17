@@ -165,16 +165,41 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
   dopo unload. Fallback `batch_size=1` semplice e prevedibile. Metriche: token KV
   attivi, cached, riservati, evicted.
 
-- [ ] **0.8-B · Embeddings e reranking in-process** *(P1)*
-  `POST /api/embed`, `POST /v1/embeddings`, `POST /v1/rerank`. I binding espongono
-  già `embeddings_seq_ith`/`embeddings_ith` e i pooling type (incluso `Rank` per il
-  reranking): **secondo model slot in-process**, non worker/processi figli (i modelli
-  embedding sono 100-600 MB e le chiamate sono stateless — un context dedicato con
-  mutex è sufficiente; l'isolamento a processi è materia del gateway, 1.0+).
-  Un modello embedding caricato all'avvio (flag dedicato), pooling coerente col
-  modello, normalizzazione configurabile, batch multipli con ordine preservato,
-  dimensione e modello dichiarati nella risposta. Le chiamate embedding non
-  scaricano né bloccano il modello generativo.
+- [x] **0.8-B-embed · Embeddings in-process** *(fatto 2026-08-17 — reranking resta aperto, vedi sotto)*
+  `POST /api/embed`, `POST /v1/embeddings`. Secondo model slot in-process
+  (`api::EmbeddingSlot`, `inference::embedding::EmbeddingModel`), non
+  worker/processi figli — un `LlamaContext` dedicato per chiamata, aperto e
+  chiuso lì, è sufficiente perché le chiamate sono stateless e i modelli
+  embedding pesano 100 MB-1 GB. Pooling letto dai metadati GGUF del modello
+  (`Unspecified` → llama.cpp usa quello dichiarato dal modello, CLS/mean/...;
+  fallback a mean-pool manuale su `None`), normalizzazione L2 sempre attiva.
+
+  **Due scostamenti deliberati dal piano originale, decisi in conversazione
+  con l'utente il 2026-08-17, non dimenticanze:**
+  - **Nessun flag di avvio per il modello embedding.** Si nomina nel corpo
+    della richiesta, esattamente come il modello generativo — coerente con
+    `swap_model` e più comodo per un RAG che sceglie il modello a runtime.
+  - **Le chiamate embedding POSSONO scaricare il modello generativo, e
+    viceversa** (`AppState::ensure_embedding_model`,
+    `evict_embedding_if_present_for_generation_load`): sulla base che due
+    modelli su una scheda troppo piccola per entrambi non possono
+    coesistere comunque, la scelta è farlo decidere al server invece di
+    fallire il caricamento. La decisione è binaria (entra o evict, mai uno
+    split parziale — un embedder si carica per intero o niente,
+    `fits_in_free_vram` in `api/mod.rs`), non la matematica per-layer di
+    `fit.rs`. Contatore delle eviction in entrambe le direzioni esposto in
+    `/api/version` (`model_swaps`), per notare un pattern di alternanza
+    invece di batch su una scheda piccola.
+
+  Reso possibile anche `--keep-alive` (CLI, default nessuno) e un
+  `keep_alive` per richiesta (Ollama-compatibile: durata, `0` = scarica
+  subito, negativo = mai) — timer di inattività indipendente per lo slot
+  principale e quello embedding, per lasciare la GPU tornare a riposo senza
+  richiedere all'operatore di chiamare `/api/unload` a mano.
+
+  **Aperto:** `POST /v1/rerank` (pooling `Rank`, già esposto dai binding
+  ma non cablato in nessuna rotta) e `--fit`/sizing per-layer condiviso fra
+  i due slot restano fuori da questo giro.
 
 - [ ] **0.8-C · Structured outputs completi** *(P1)*
   `response_format: json_schema` (formato OpenAI, `strict`) via
@@ -195,6 +220,46 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
   opportunisticamente, route per route, quando una feature le tocca comunque.
 
 ---
+
+- [x] **0.8-Z · Decodifica speculativa** *(chiusa il 2026-08-11: misurata, non applicabile alla MoE)*
+  **Esito: sul modello che ci interessa costa il 38%, non lo guadagna.** Misurato
+  su Orion O6, `qwen3.6-35b-a3b` UD-Q4_K_M, prompt RAG reale da 5547 token,
+  stessa richiesta byte per byte, `llama-server` dal pin che vendorizziamo:
+  `--spec-type none` 10.15 tok/s, `--spec-type ngram-mod` **6.32 tok/s**
+  (14 token di bozza accettati su 182).
+
+  **Il meccanismo, ed è strutturale.** La decodifica speculativa guadagna
+  perché verificare K token in un solo passaggio attraversa i pesi **una volta
+  sola** e li riusa per tutti i token del lotto. Una MoE è costruita sul
+  principio opposto: attiva 8 esperti su 256 e **token diversi attivano esperti
+  diversi**, quindi un lotto da 7 non legge 8 esperti ma fino a 56. Il traffico
+  di memoria che la speculazione dovrebbe ammortizzare si moltiplica invece per
+  la dimensione del lotto. Le due ottimizzazioni si annullano a vicenda.
+
+  **Non è la bozza a essere sbagliata, è la verifica**, quindi nessuna variante
+  salva il caso: né gli altri tipi `ngram-*`, né MTP, che migliora solo quanti
+  token vengono accettati. Con circa il 70% dei parametri attivi negli esperti,
+  verificare un lotto da 6 costa ~4.5 passi normali: servirebbe accettare più di
+  5 token su 6 in media solo per pareggiare. Con un'accettazione ottimistica di
+  3 su 6 si esce a 0.60×.
+
+  **Resta valida su un bersaglio denso**, dove i pesi si riusano davvero lungo
+  il lotto, e non è un caso che l'1.5-2× dichiarato a monte fosse misurato su
+  `Qwen3.5-9B`, che è denso nella parte FFN. **Ma non conviene lo stesso su
+  questo hardware**: il 9B decodifica a 6.3 tok/s a 8 thread, quindi anche
+  prendendo per buono 1.8× arriva a 11.3, cioè dove la MoE sta già oggi senza
+  niente e con un modello più capace. Lo scenario migliore pareggia.
+
+  **Cosa resta a piano**: `--rs-seq` rimane il parametro della decodifica
+  speculativa (upstream lo deriva da `need_n_rs_seq()`), non un knob di riuso
+  KV, e la sua documentazione va letta in quella chiave. La voce si riapre solo
+  se il bersaglio di produzione diventa denso, oppure su hardware dove il decode
+  non è limitato dalla banda.
+
+  **Nota di metodo.** La formula standard `α·T / (K·D + T)` assume che il costo
+  di verifica non dipenda da K. Su una MoE quell'assunzione è falsa e la formula
+  dà una risposta positiva a un caso che perde il 38%. Mezza giornata di misura
+  ha evitato settimane di implementazione contro un modello sbagliato del costo.
 
 ## 0.9 — Agentic e verticale
 
