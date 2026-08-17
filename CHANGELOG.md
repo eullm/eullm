@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.6.82 — 2026-08-17
 
 ### Added
 - **`POST /api/embed` and `POST /v1/embeddings`** — text embeddings served
