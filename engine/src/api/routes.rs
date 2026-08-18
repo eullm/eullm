@@ -23,6 +23,8 @@ use futures_util::stream::Stream;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use crate::inference::embedding::DEFAULT_EMBEDDING_CTX;
+
 use super::AppState;
 use crate::audit::{AuditEntry, AuditLogger};
 use crate::inference::{
@@ -615,12 +617,6 @@ async fn unload_model(State(state): State<S>) -> (StatusCode, Json<Value>) {
         ),
     }
 }
-
-/// Default embedding context — a request may override it with
-/// `options.num_ctx`. 2048 comfortably covers a single RAG chunk (the usual
-/// unit these are called on) without paying for a window sized to the
-/// generation model's much longer conversations.
-const DEFAULT_EMBEDDING_CTX: u32 = 2048;
 
 /// `input`, in either shape the two embedding endpoints accept: one string,
 /// or an array of strings. Ollama and OpenAI both accept both forms.

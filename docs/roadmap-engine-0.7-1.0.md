@@ -179,6 +179,12 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
   - **Nessun flag di avvio per il modello embedding.** Si nomina nel corpo
     della richiesta, esattamente come il modello generativo — coerente con
     `swap_model` e più comodo per un RAG che sceglie il modello a runtime.
+    *Aggiornamento 2026-08-18:* un flag di avvio è arrivato comunque, ma per
+    un caso d'uso diverso — vedi `--embedding-model` più sotto. Il caricamento
+    "a chiamata" nominando il modello nel corpo resta il default e funziona
+    esattamente come descritto qui; il flag aggiunge solo un modo per
+    saltare il caricamento a chiamata quando l'operatore vuole il companion
+    sempre residente.
   - **Le chiamate embedding POSSONO scaricare il modello generativo, e
     viceversa** (`AppState::ensure_embedding_model`,
     `evict_embedding_if_present_for_generation_load`): sulla base che due
@@ -198,8 +204,38 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
   richiedere all'operatore di chiamare `/api/unload` a mano.
 
   **Aperto:** `POST /v1/rerank` (pooling `Rank`, già esposto dai binding
-  ma non cablato in nessuna rotta) e `--fit`/sizing per-layer condiviso fra
-  i due slot restano fuori da questo giro.
+  ma non cablato in nessuna rotta) resta fuori da questo giro. Il sizing
+  per-layer condiviso fra i due slot resta parziale: `--embedding-model`
+  (2026-08-18) protegge solo un margine fisso per il compute buffer
+  (`fit::EMBEDDING_COMPUTE_RESERVE_BYTES`) prima che `--fit` sizzi il
+  modello generativo — non uno split per-layer condiviso fra i due, che
+  resta fuori da questo giro.
+
+- [x] **0.8-B-embed-companion · `--embedding-model` — companion riservato**
+  *(fatto 2026-08-18)* Flag di avvio (`eullm run`/`eullm serve`) che carica
+  un modello di embedding subito, come **companion riservato**: caricandolo
+  per primo, il suo peso conta già come VRAM occupata quando `--fit` legge
+  la VRAM libera per dimensionare il modello generativo — nessuna
+  sottrazione esplicita necessaria lì. `--fit` protegge in più un margine
+  fisso (`EMBEDDING_COMPUTE_RESERVE_BYTES`) per il `LlamaContext` che una
+  chiamata di embedding apre e chiude ad ogni richiesta, non tenuto aperto
+  in permanenza (`fit::run_fit`/`run_fit_headless`/`run_moe_fit` prendono un
+  parametro `reserve_bytes`), sia al lancio sia a ogni successivo swap del
+  modello generativo via richiesta (`AppState::reserved_embedding_bytes`,
+  `EmbeddingSlot::is_reserved_companion`). Sottrarre anche il peso
+  dell'embedder in questo secondo passaggio sarebbe stato un doppio
+  conteggio — già riflesso nella VRAM libera letta a runtime — e avrebbe
+  sotto-offloadato il modello generativo senza motivo; scartato durante
+  l'implementazione. Un companion riservato non viene mai evictato per fare
+  spazio a un caricamento generativo — a differenza di un embedder caricato
+  a chiamata, che resta soggetto a
+  `evict_embedding_if_present_for_generation_load` come prima. Se la
+  riserva lascerebbe il modello generativo senza margine VRAM, l'avvio
+  procede comunque con un warning e la riserva viene scartata (l'embedder
+  resta caricato ma torna al comportamento a chiamata). Motivazione: un
+  team RAG (i3k-rag-engine) non aveva un modo affidabile per sapere se
+  entrambi i modelli fossero residenti insieme, perché il caricamento "a
+  chiamata" dipendeva dall'ordine con cui i due processi venivano avviati.
 
 - [ ] **0.8-C · Structured outputs completi** *(P1)*
   `response_format: json_schema` (formato OpenAI, `strict`) via

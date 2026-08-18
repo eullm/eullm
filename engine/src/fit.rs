@@ -665,6 +665,20 @@ const VRAM_SAFETY_FRACTION: f64 = 0.97;
 /// buffer-size log line) before trusting this at a tight fit.
 const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 640.0 * 1024.0 * 1024.0;
 
+/// The same kind of flat reserve as `COMPUTE_BUFFER_RESERVE_BYTES`, but for
+/// an embedding model's own compute buffer rather than a generation model's
+/// — smaller because an embedding context's batch and micro-batch are both
+/// a fraction of a generation model's (`EmbeddingModel::load` uses the
+/// embedder's own small `n_ctx`, not `--ctx-size`).
+///
+/// `pub(crate)`: shared by two different reservations that must agree on
+/// what "the embedder's own overhead" costs — `api::fits_in_free_vram`'s
+/// runtime coexistence check for an ad-hoc `/api/embed`-loaded model, and
+/// `run_fit`/`run_fit_headless`/`run_moe_fit`'s `reserve_bytes` parameter,
+/// which protects a launch-time `--embedding-model` companion's footprint
+/// before the generation model's own sizing ever sees the VRAM it needs.
+pub(crate) const EMBEDDING_COMPUTE_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Coarse KV reserve used only when the GGUF header doesn't expose the
 /// attention dims: ~128 B per token per layer (a rough F16 ballpark for
 /// 7-8B-class models). The exact path below supersedes this whenever the
@@ -928,6 +942,7 @@ pub fn run_fit(
     strict: bool,
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
+    reserve_bytes: u64,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -936,6 +951,7 @@ pub fn run_fit(
         strict,
         kv_bytes_per_elem_k,
         kv_bytes_per_elem_v,
+        reserve_bytes,
         /* allow_prompt */ true,
         /* announce */ true,
     )
@@ -954,6 +970,7 @@ pub fn run_fit_headless(
     strict: bool,
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
+    reserve_bytes: u64,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -962,6 +979,7 @@ pub fn run_fit_headless(
         strict,
         kv_bytes_per_elem_k,
         kv_bytes_per_elem_v,
+        reserve_bytes,
         /* allow_prompt */ false,
         /* announce */ false,
     )
@@ -975,10 +993,22 @@ fn run_fit_impl(
     strict: bool,
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
+    // Subtracted from free VRAM before this model is sized, protecting a
+    // launch-time `--embedding-model` companion's per-call compute buffer
+    // (`EMBEDDING_COMPUTE_RESERVE_BYTES`) so it is never counted as space
+    // available to this load — the companion's weights need no separate
+    // bookkeeping here, since it always loads before this runs and so
+    // already shows up as used VRAM in the free-VRAM figure this reads.
+    // Zero from every call site except the initial `eullm run`/`eullm
+    // serve` launch when that flag was given — a later `swap_model`
+    // reserves it too, but only while the resident embedder is the
+    // reserved companion and not an ad-hoc one (see
+    // `EmbeddingSlot::is_reserved_companion`).
+    reserve_bytes: u64,
     allow_prompt: bool,
     announce: bool,
 ) -> FitOutcome {
-    let vram = vram_bytes();
+    let vram = vram_bytes().map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
     let free_vram = vram.map(|(free, _)| free);
     let info = read_gguf_info(model_path);
     let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
@@ -1092,11 +1122,16 @@ fn run_fit_impl(
 /// continue anyway?" question left to ask. Only when this returns
 /// [`MoeFitDecision::NotMoe`] does the dense `run_fit` flow — with its
 /// prompt and its `--fit-strict` handling — take over.
+///
+/// `reserve_bytes`: see the identical parameter on `run_fit_impl` — same
+/// purpose (protect a launch-time embedding companion's footprint), applied
+/// here before the MoE decision instead of the dense one.
 pub fn run_moe_fit(
     model_path: &Path,
     ctx_size: u32,
     kv_bytes_per_elem_k: f64,
     kv_bytes_per_elem_v: f64,
+    reserve_bytes: u64,
 ) -> MoeFitDecision {
     let info = read_gguf_info(model_path);
     let file_size = std::fs::metadata(model_path).map(|m| m.len()).unwrap_or(0);
@@ -1104,9 +1139,10 @@ pub fn run_moe_fit(
         (Some(i), size) if size > 0 => read_gguf_moe_layout(model_path, size, i.n_layers),
         _ => None,
     };
+    let vram = vram_bytes().map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
 
     compute_moe_fit(
-        vram_bytes(),
+        vram,
         info.as_ref(),
         layout.as_ref(),
         ctx_size,

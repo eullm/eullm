@@ -53,6 +53,15 @@ pub struct ModelSlot {
 pub struct EmbeddingSlot {
     pub model_name: String,
     pub model: Arc<EmbeddingModel>,
+    /// Whether this slot was populated by `--embedding-model` at launch
+    /// (`true`) or loaded ad hoc by a runtime `/api/embed`/`/v1/embeddings`
+    /// request (`false`). The distinction is what `--embedding-model` is
+    /// *for*: a reserved companion is never evicted just because the
+    /// generation model is being swapped (`swap_model`'s own `--fit`
+    /// reserves its footprint instead, so it keeps its place), where an ad
+    /// hoc embedder has no such guarantee and is evicted on any generation
+    /// swap that needs the room back (`evict_embedding_if_present_for_generation_load`).
+    pub is_reserved_companion: bool,
 }
 
 /// Shared state for API handlers.
@@ -348,8 +357,9 @@ impl AppState {
         if self.fit {
             let kv_bpe_k = crate::inference::cache_type_bytes_per_elem(&cache_type_k);
             let kv_bpe_v = crate::inference::cache_type_bytes_per_elem(&cache_type_v);
+            let reserve_bytes = self.reserved_embedding_bytes().await;
             let moe_decision = if !cpu_moe && n_cpu_moe == 0 {
-                crate::fit::run_moe_fit(&gguf_path, effective_ctx, kv_bpe_k, kv_bpe_v)
+                crate::fit::run_moe_fit(&gguf_path, effective_ctx, kv_bpe_k, kv_bpe_v, reserve_bytes)
             } else {
                 crate::fit::MoeFitDecision::NotMoe
             };
@@ -377,6 +387,7 @@ impl AppState {
                     self.fit_strict,
                     kv_bpe_k,
                     kv_bpe_v,
+                    reserve_bytes,
                 ) {
                     crate::fit::FitOutcome::Proceed(n) => gpu_layers = n,
                     crate::fit::FitOutcome::Abort => {
@@ -655,6 +666,11 @@ impl AppState {
             *slot = Some(EmbeddingSlot {
                 model_name: normalized.clone(),
                 model: model.clone(),
+                // Never reserved: a model loaded ad hoc by a runtime request
+                // has no launch-time guarantee behind it. Only
+                // `--embedding-model` produces a reserved companion — see
+                // `EmbeddingSlot::is_reserved_companion`.
+                is_reserved_companion: false,
             });
         }
         tracing::info!(
@@ -672,8 +688,25 @@ impl AppState {
     /// on, since only `--fit` reads free VRAM to make a sizing decision in
     /// the first place — without it, evicting the embedder would trade a
     /// real, working configuration for a guess.
+    ///
+    /// Skips a **reserved companion** (`EmbeddingSlot::is_reserved_companion`
+    /// — populated via `--embedding-model` at launch): that is exactly the
+    /// case `--embedding-model` exists to guarantee against — the whole
+    /// point of reserving its footprint up front is that it survives a
+    /// later chat-model swap instead of being kicked out for one. Its
+    /// footprint is subtracted from free VRAM by the caller
+    /// (`swap_model`'s `reserve_bytes`) instead of it being evicted.
     async fn evict_embedding_if_present_for_generation_load(&self) {
         if !self.fit {
+            return;
+        }
+        let is_reserved = self
+            .embedding
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|s| s.is_reserved_companion);
+        if is_reserved {
             return;
         }
         let was_loaded = self.embedding.read().await.is_some();
@@ -687,6 +720,33 @@ impl AppState {
         *self.embedding.write().await = None;
         self.cross_slot_evictions
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The VRAM footprint to protect for a **reserved companion** (see
+    /// `EmbeddingSlot::is_reserved_companion`) before sizing a generation
+    /// load — `0` when no reserved companion is resident, which is every
+    /// server that never used `--embedding-model` and every ad hoc
+    /// `/api/embed`-loaded embedder (those are evicted outright instead,
+    /// see `evict_embedding_if_present_for_generation_load`).
+    ///
+    /// Deliberately **not** `weights_bytes + EMBEDDING_COMPUTE_RESERVE_BYTES`:
+    /// a reserved companion is always already loaded by the time this runs
+    /// (eagerly, at launch — see `main.rs`), so its weights already show up
+    /// as used memory in the free-VRAM figure `--fit` reads. Adding
+    /// `weights_bytes` again would subtract its footprint twice and
+    /// under-offload the generation model for no reason. Only the
+    /// compute-buffer margin is genuinely not yet reflected — `embed()`
+    /// opens its `LlamaContext`, and the VRAM it needs, per call rather than
+    /// holding it open — so that is the only part worth protecting ahead of
+    /// time.
+    async fn reserved_embedding_bytes(&self) -> u64 {
+        self.embedding
+            .read()
+            .await
+            .as_ref()
+            .filter(|s| s.is_reserved_companion)
+            .map(|_| crate::fit::EMBEDDING_COMPUTE_RESERVE_BYTES)
+            .unwrap_or(0)
     }
 
     /// Reset the main slot's idle-unload deadline. Called on every request
@@ -876,12 +936,11 @@ fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
 /// "assume yes" so a build that cannot measure VRAM behaves as it always has,
 /// letting a real allocation failure surface as a normal load error.
 fn fits_in_free_vram(additional_bytes: u64) -> Option<bool> {
-    const EMBEDDING_COMPUTE_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
     let (free, total) = crate::fit::vram_bytes()?;
     let floor = (total as f64 * crate::fit::MIN_FREE_TOTAL_RATIO) as u64;
     let usable = free
         .saturating_sub(floor)
-        .saturating_sub(EMBEDDING_COMPUTE_RESERVE_BYTES);
+        .saturating_sub(crate::fit::EMBEDDING_COMPUTE_RESERVE_BYTES);
     Some(additional_bytes <= usable)
 }
 
@@ -1190,6 +1249,16 @@ pub struct ServeConfig {
     /// default) means never idle-unload automatically, matching every
     /// release before this flag existed.
     pub keep_alive: Option<std::time::Duration>,
+    /// An embedding model already loaded via `--embedding-model`, ready to
+    /// seed the embedding slot at startup instead of waiting for the first
+    /// `/api/embed`/`/v1/embeddings` request. Its
+    /// `EmbeddingSlot::is_reserved_companion` must be `true` — the caller
+    /// (`cmd_run`/`cmd_serve`) already reserved its footprint against the
+    /// generation model's own `--fit` sizing before loading it, and that
+    /// guarantee only means anything if it is then treated as reserved here
+    /// too. `None` when `--embedding-model` was not given — the ordinary
+    /// case, unaffected by any of this.
+    pub launch_embedding: Option<EmbeddingSlot>,
 }
 
 /// Start the API server on the given port with graceful shutdown support.
@@ -1335,7 +1404,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         web_policy,
         allow_model_paths,
         launch_model: cfg.launch_model,
-        embedding: tokio::sync::RwLock::new(None),
+        embedding: tokio::sync::RwLock::new(cfg.launch_embedding),
         cross_slot_evictions: std::sync::atomic::AtomicU64::new(0),
         main_deadline: tokio::sync::Mutex::new(None),
         embedding_deadline: tokio::sync::Mutex::new(None),
