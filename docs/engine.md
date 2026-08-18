@@ -99,6 +99,7 @@ eullm run ./model.gguf --threads 8         # Limit CPU threads
 | `--pidfile` | `/tmp/eullm.pid` | PID file path (with `--daemon`) |
 | `--logfile` | `~/.eullm/logs/eullm.log` | Daemon log file (with `--daemon`). Set `--pidfile` alone and the log stays beside it |
 | `--keep-alive` | (unset) | Idle-unload a model this many seconds/minutes/hours after its last use (e.g. `5m`). Unset = never automatic; a request's own `keep_alive` field overrides it for that load. Applies to the generation model and the embedding model independently |
+| `--embedding-model` | (unset) | Load a text-embedding model (GGUF path or store name) at startup as a **reserved companion**: its VRAM is subtracted from free VRAM before `--fit` sizes the generation model, so both stay resident together instead of depending on load order. See [Text Embeddings and the Embedding Slot](#text-embeddings-and-the-embedding-slot) |
 
 #### Automatic GPU sizing
 
@@ -468,6 +469,29 @@ How many times either direction of eviction has happened is in
 `/api/version`'s `model_swaps` field — a rate of roughly one per request
 means a card too small for both is being asked to alternate rather than
 batch (do all ingestion, then all generation, rather than interleaving).
+
+The eviction dance above assumes the embedding model was loaded on demand,
+by naming it in a request. `--embedding-model <path-or-name>` skips that:
+the embedder loads at startup and becomes a **reserved companion** — it
+loads first, so its weights already count as used VRAM by the time `--fit`
+reads free VRAM to size the generation model, on both `eullm run` and
+`eullm serve`; `--fit` additionally keeps a small compute-buffer margin free
+on top, for the `LlamaContext` an embedding call opens and closes per
+request, both at launch and again on every later generation-model swap. A reserved
+companion is never evicted to make room for a generation load; it keeps its
+place for the life of the process. If reserving its space would leave the
+generation model no room at all, the launch proceeds anyway with a warning:
+the reservation is dropped and the embedder falls back to the normal
+evict-on-demand behavior described above, exactly as if the flag had not
+been given.
+
+```bash
+eullm run legal-it-7b --fit --embedding-model bge-m3
+```
+
+Use this when a companion (e.g. bge-m3 for a RAG pipeline) should always be
+resident alongside the generation model whenever the card has room for both,
+rather than depending on which model happens to be requested first.
 
 Pooling is read from the model's own GGUF metadata (CLS for BGE, mean for
 E5, and so on) rather than guessed; a model that declares no pooling type

@@ -18,6 +18,14 @@ use std::pin::pin;
 use llama_cpp_2::EmbeddingsError;
 use llama_cpp_2::context::params::{LlamaContextParams, LlamaPoolingType};
 use llama_cpp_2::llama_backend::LlamaBackend;
+
+/// Default embedding context. A request to `/api/embed`/`/v1/embeddings` may
+/// override it with `options.num_ctx`; a launch-time `--embedding-model`
+/// (see `main.rs`) has no per-request body to read one from, so it uses this
+/// directly. 2048 comfortably covers a single RAG chunk — the usual unit
+/// these are called on — without paying for a window sized to the
+/// generation model's much longer conversations.
+pub const DEFAULT_EMBEDDING_CTX: u32 = 2048;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};

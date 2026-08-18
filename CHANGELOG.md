@@ -13,6 +13,22 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **`--embedding-model <path-or-name>`** — load a text-embedding model at
+  startup, on both `eullm run` and `eullm serve`, as a **reserved
+  companion**: it loads first, so its weights already count as used VRAM by
+  the time `--fit` sizes the generation model, and `--fit` keeps a small
+  compute-buffer margin free on top for it — so both stay resident together
+  whenever the card has room, instead of depending on which of two
+  independently-launched processes claims VRAM first. A reserved companion
+  is never evicted to free room for a generation load, unlike an embedding
+  model loaded on demand by naming it in a request. If reserving that
+  margin would leave the generation model no headroom at all, the launch
+  proceeds anyway with a warning and the embedder falls back to loading on
+  demand, exactly as if the flag had not been given.
+
 ## 0.6.82 — 2026-08-17
 
 ### Added

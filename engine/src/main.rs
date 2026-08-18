@@ -339,6 +339,45 @@ struct RuntimeOpts {
     /// isn't the cost — an active CUDA context is).
     #[arg(long, value_name = "DURATION")]
     keep_alive: Option<String>,
+
+    /// Load a text-embedding model (BGE, E5, and similar) at startup and
+    /// reserve VRAM for it before sizing the generation model, so both stay
+    /// resident together instead of leaving it to chance whether `--fit`'s
+    /// own safety margin happens to be enough.
+    ///
+    /// Without this flag, an embedding model named in a `/v1/embeddings` or
+    /// `/api/embed` request still loads on demand — see `docs/engine.md`'s
+    /// "Text Embeddings and the Embedding Slot" — but nothing is reserved
+    /// for it ahead of time: on a card where the generation model's own
+    /// `--fit` sizing consumes past what a small embedder needs, the first
+    /// embedding request evicts the generation model to make room, and it
+    /// reloads on the next generation request. Fine for a card too small
+    /// for both anyway; wasteful churn for one that has room for both but
+    /// where `--fit`'s margin, sized for the generation model alone, was
+    /// never told to leave any extra behind.
+    ///
+    /// With this flag, the embedding model is treated as a **reserved
+    /// companion**: it loads first, so its weights already show up as used
+    /// VRAM by the time `--fit` reads free VRAM to size the generation
+    /// model — no separate bookkeeping needed there — and `--fit` also
+    /// keeps a small compute-buffer margin free on top of that, for the
+    /// `LlamaContext` an embedding call opens and closes per request. A
+    /// later chat-model swap (a different model named in a request)
+    /// protects the same margin again rather than evicting the companion —
+    /// it keeps its place across the process's lifetime, not just at
+    /// launch.
+    ///
+    /// Accepts a GGUF path or a name already in the model store, the same
+    /// two forms `--mmproj` accepts — trusted like any other CLI argument,
+    /// unlike a request's `model` field, which is gated by
+    /// `EULLM_ALLOW_MODEL_PATHS` (see `docs/engine.md`). If reserving its
+    /// space would leave the generation model no room at all, the launch
+    /// proceeds anyway with a warning: the embedder falls back to loading
+    /// on demand, exactly as if this flag had not been given, rather than
+    /// refusing to start over a sizing decision automatic sizing already
+    /// makes gracefully everywhere else.
+    #[arg(long, value_name = "PATH_OR_NAME")]
+    embedding_model: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -627,6 +666,7 @@ async fn main() {
                 rust_debug,
                 mmproj,
                 keep_alive,
+                embedding_model,
             } = opts;
             let keep_alive = keep_alive.as_deref().map(|s| {
                 api::parse_keep_alive_flag(s).unwrap_or_else(|e| {
@@ -735,6 +775,7 @@ async fn main() {
                 rust_debug,
                 mmproj,
                 keep_alive,
+                embedding_model,
             )
             .await;
         }
@@ -773,6 +814,7 @@ async fn main() {
                 rust_debug,
                 mmproj,
                 keep_alive,
+                embedding_model,
             } = opts;
             let keep_alive = keep_alive.as_deref().map(|s| {
                 api::parse_keep_alive_flag(s).unwrap_or_else(|e| {
@@ -837,6 +879,7 @@ async fn main() {
                 rust_debug,
                 mmproj,
                 keep_alive,
+                embedding_model,
             )
             .await;
         }
@@ -1785,6 +1828,7 @@ async fn cmd_run(
     rust_debug: bool,
     mmproj: Option<PathBuf>,
     keep_alive: Option<std::time::Duration>,
+    embedding_model: Option<String>,
 ) {
     // `--image` is a one-shot multimodal probe: load, send the bytes + prompt,
     // print the output, exit. Forces sequential mode (the scheduler does not
@@ -1835,6 +1879,81 @@ async fn cmd_run(
     let mut kv_v_mib: f64 = 0.0;
 
     let resolved_threads = threads.unwrap_or_else(inference::default_thread_count);
+
+    // --embedding-model: load the companion embedding model now, before the
+    // generation model's own --fit sizing runs below, and reserve its VRAM
+    // off the top — see the flag's doc comment on `RuntimeOpts` for the
+    // rationale. `embedding_reserve_bytes` feeds the fit calls further down;
+    // `launch_embedding` becomes `ServeConfig.launch_embedding`.
+    let mut launch_embedding: Option<api::EmbeddingSlot> = None;
+    let mut embedding_reserve_bytes: u64 = 0;
+    if let Some(ref emb_arg) = embedding_model {
+        let emb_path = resolve_model_path(emb_arg, store).unwrap_or_else(|| {
+            eprintln!("Error: embedding model '{emb_arg}' not found.");
+            std::process::exit(1);
+        });
+        match inference::embedding::EmbeddingModel::load(
+            &emb_path,
+            resolved_threads,
+            inference::embedding::DEFAULT_EMBEDDING_CTX,
+        ) {
+            Ok(model) => {
+                let weights_bytes = std::fs::metadata(&emb_path).map(|m| m.len()).unwrap_or(0);
+                let emb_name = emb_path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| emb_arg.clone());
+                // Only the compute-buffer margin is reserved here — the
+                // model is already loaded above, so its weights already
+                // show up as used VRAM in the free-VRAM figure `--fit`
+                // reads next; reserving them again would subtract the
+                // embedder's footprint twice. See
+                // `AppState::reserved_embedding_bytes` for the full
+                // rationale (the same reservation runs again on every later
+                // generation-model swap).
+                embedding_reserve_bytes = fit::EMBEDDING_COMPUTE_RESERVE_BYTES;
+                println!(
+                    "Embedding model loaded: {} ({weights_bytes} bytes on GPU, {} MiB kept free \
+                     for its per-call compute buffer)",
+                    emb_path.display(),
+                    embedding_reserve_bytes / (1024 * 1024)
+                );
+                launch_embedding = Some(api::EmbeddingSlot {
+                    model_name: emb_name,
+                    model: Arc::new(model),
+                    is_reserved_companion: true,
+                });
+            }
+            Err(e) => {
+                eprintln!("Error loading embedding model: {e}");
+                std::process::exit(1);
+            }
+        }
+
+        // If reserving the embedder's space would leave the generation
+        // model no VRAM headroom at all, proceed anyway: drop the
+        // reservation and let the embedder fall back to the ordinary
+        // evict-on-generation-load path, exactly as if this flag had not
+        // been given, rather than refusing to start over a sizing decision
+        // automatic sizing already makes gracefully everywhere else.
+        if let Some((free, total)) = fit::vram_bytes() {
+            let floor = (total as f64 * fit::MIN_FREE_TOTAL_RATIO) as u64;
+            let usable_before_reserve = free.saturating_sub(floor);
+            if embedding_reserve_bytes >= usable_before_reserve {
+                println!(
+                    "[EULLM] Warning: reserving {} MiB for the embedding model would leave the \
+                     generation model no VRAM headroom. Proceeding without the reservation — \
+                     the embedding model stays loaded but will be evicted like any on-demand \
+                     one when the generation model is sized.",
+                    embedding_reserve_bytes / (1024 * 1024)
+                );
+                if let Some(ref mut slot) = launch_embedding {
+                    slot.is_reserved_companion = false;
+                }
+                embedding_reserve_bytes = 0;
+            }
+        }
+    }
 
     // Canonical, addressable name shown in the banner and the API model slot —
     // the same string the user types into `eullm run` and sees in `eullm list`
@@ -1965,7 +2084,13 @@ async fn cmd_run(
             let kv_bpe_k = inference::cache_type_bytes_per_elem(&cache_type_k);
             let kv_bpe_v = inference::cache_type_bytes_per_elem(&cache_type_v);
             let moe_decision = if !cpu_moe && n_cpu_moe == 0 {
-                fit::run_moe_fit(&gguf_path, ctx_size, kv_bpe_k, kv_bpe_v)
+                fit::run_moe_fit(
+                    &gguf_path,
+                    ctx_size,
+                    kv_bpe_k,
+                    kv_bpe_v,
+                    embedding_reserve_bytes,
+                )
             } else {
                 fit::MoeFitDecision::NotMoe
             };
@@ -1993,10 +2118,24 @@ async fn cmd_run(
                 // that interrupts every launch of a model too big for the
                 // card is its own kind of failure.
                 _ => match if fit_explicit {
-                    fit::run_fit(&gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v)
+                    fit::run_fit(
+                        &gguf_path,
+                        gpu_layers,
+                        ctx_size,
+                        fit_strict,
+                        kv_bpe_k,
+                        kv_bpe_v,
+                        embedding_reserve_bytes,
+                    )
                 } else {
                     fit::run_fit_headless(
-                        &gguf_path, gpu_layers, ctx_size, fit_strict, kv_bpe_k, kv_bpe_v,
+                        &gguf_path,
+                        gpu_layers,
+                        ctx_size,
+                        fit_strict,
+                        kv_bpe_k,
+                        kv_bpe_v,
+                        embedding_reserve_bytes,
                     )
                 } {
                     fit::FitOutcome::Proceed(n) => gpu_layers = n,
@@ -2296,6 +2435,7 @@ async fn cmd_run(
             ui_port,
             launch_model: api_launch_model,
             keep_alive,
+            launch_embedding,
         })
         .await
         {
@@ -2358,6 +2498,7 @@ async fn cmd_serve(
     rust_debug: bool,
     mmproj: Option<PathBuf>,
     keep_alive: Option<std::time::Duration>,
+    embedding_model: Option<String>,
 ) {
     ensure_port_available(port, replace).await;
     if let Some(p) = ui_port {
@@ -2365,6 +2506,44 @@ async fn cmd_serve(
     }
 
     let threads = threads.unwrap_or_else(inference::default_thread_count);
+    let store = ModelStore::default_store().expect("model store");
+
+    // --embedding-model: load the companion embedding model now. There is no
+    // generation model loaded yet to size against, so the reservation only
+    // starts to matter once one is loaded later via a request's "model"
+    // field, through `AppState::reserved_embedding_bytes` inside
+    // `swap_model`. See the flag's doc comment on `RuntimeOpts`.
+    let launch_embedding = embedding_model.map(|emb_arg| {
+        let emb_path = resolve_model_path(&emb_arg, &store).unwrap_or_else(|| {
+            eprintln!("Error: embedding model '{emb_arg}' not found.");
+            std::process::exit(1);
+        });
+        let model = inference::embedding::EmbeddingModel::load(
+            &emb_path,
+            threads,
+            inference::embedding::DEFAULT_EMBEDDING_CTX,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Error loading embedding model: {e}");
+            std::process::exit(1);
+        });
+        let weights_bytes = std::fs::metadata(&emb_path).map(|m| m.len()).unwrap_or(0);
+        let emb_name = emb_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or(emb_arg);
+        println!(
+            "Embedding model loaded: {} ({weights_bytes} bytes on GPU, {} MiB kept free for its \
+             per-call compute buffer)",
+            emb_path.display(),
+            fit::EMBEDDING_COMPUTE_RESERVE_BYTES / (1024 * 1024)
+        );
+        api::EmbeddingSlot {
+            model_name: emb_name,
+            model: Arc::new(model),
+            is_reserved_companion: true,
+        }
+    });
 
     println!("eullm ready (no model loaded — send a request with a \"model\" field to load one).");
     println!("  API (EULLM):   http://localhost:{port}/api");
@@ -2376,8 +2555,6 @@ async fn cmd_serve(
         println!("  Rust debug:    enabled (NaN/Inf logit check active — extra per-token cost)");
     }
     println!("\nPress Ctrl+C to stop.\n");
-
-    let store = ModelStore::default_store().expect("model store");
 
     if let Err(e) = api::serve(api::ServeConfig {
         port,
@@ -2408,6 +2585,7 @@ async fn cmd_serve(
         // grandfather in, so every name goes through the normal resolution.
         launch_model: None,
         keep_alive,
+        launch_embedding,
     })
     .await
     {
