@@ -13,23 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
-
-### Added
-- **`--embedding-model <path-or-name>`** — load a text-embedding model at
-  startup, on both `eullm run` and `eullm serve`, as a **reserved
-  companion**: it loads first, so its weights already count as used VRAM by
-  the time `--fit` sizes the generation model, and `--fit` keeps a small
-  compute-buffer margin free on top for it — so both stay resident together
-  whenever the card has room, instead of depending on which of two
-  independently-launched processes claims VRAM first. A reserved companion
-  is never evicted to free room for a generation load, unlike an embedding
-  model loaded on demand by naming it in a request. If reserving that
-  margin would leave the generation model no headroom at all, the launch
-  proceeds anyway with a warning and the embedder falls back to loading on
-  demand, exactly as if the flag had not been given.
-
-## 0.6.82 — 2026-08-17
+## 0.6.90 — 2026-08-18
 
 ### Added
 - **`POST /api/embed` and `POST /v1/embeddings`** — text embeddings served
@@ -43,6 +27,18 @@ something changed, less so for understanding what it means.
   load can evict a resident embedder if it needs the room. Which
   direction happened, and how often, is in `/api/version`'s new
   `model_swaps` field.
+- **`--embedding-model <path-or-name>`** — load a text-embedding model at
+  startup, on both `eullm run` and `eullm serve`, as a **reserved
+  companion**: it loads first, so its weights already count as used VRAM by
+  the time `--fit` sizes the generation model, and `--fit` keeps a small
+  compute-buffer margin free on top for it — so both stay resident together
+  whenever the card has room, instead of depending on which of two
+  independently-launched processes claims VRAM first. A reserved companion
+  is never evicted to free room for a generation load, unlike an embedding
+  model loaded on demand by naming it in a request. If reserving that
+  margin would leave the generation model no headroom at all, the launch
+  proceeds anyway with a warning and the embedder falls back to loading on
+  demand, exactly as if the flag had not been given.
 - **`--keep-alive <duration>`**, plus a per-request `keep_alive` field
   (Ollama-compatible) on `/api/generate`, `/api/chat`,
   `/v1/chat/completions`, `/api/embed` and `/v1/embeddings`. Idle-unloads a
@@ -54,6 +50,21 @@ something changed, less so for understanding what it means.
   `/api/chat`, now loads (or `keep_alive`-refreshes) the model without
   generating anything** — Ollama's documented way to warm a model up in
   advance, which previously fell through to the model as literal input.
+
+### Fixed
+- **A mistyped slash command in the terminal chat is no longer sent to the
+  model as a message.** `/q` (and any other unrecognised `/`-prefixed line)
+  now prints the command and points at `/help` instead of being answered by
+  the model at a few tokens per second with no indication of what happened.
+  `/q` also now works as an exit command, alongside `/bye`, `/exit` and
+  `/quit`. A message that genuinely starts with a literal `/` still goes
+  through — type `//` and the first slash is stripped.
+- **The model picker now shows directories with no `manifest.json`.**
+  Reorganizing a loose `models/x.gguf` into `models/x/x.gguf`, an
+  interrupted pull, a restored backup, or a directory copied from another
+  machine all used to vanish from the picker, even though `eullm list` and
+  running the model by path both still worked. The picker now finds these
+  too — skipping any `mmproj*.gguf` sitting alongside them.
 
 ## 0.6.81 — 2026-08-11
 
