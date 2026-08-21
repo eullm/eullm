@@ -16,6 +16,7 @@ pub mod scheduler;
 use std::num::NonZeroU32;
 use std::path::PathBuf;
 use std::pin::pin;
+use std::sync::Arc;
 
 // Re-export KvCacheType for use in CLI and API.
 pub use llama_cpp_2::context::params::KvCacheType;
@@ -33,6 +34,34 @@ pub const fn has_gpu_backend() -> bool {
         || cfg!(feature = "rocm")
         || cfg!(feature = "vulkan")
         || cfg!(feature = "metal")
+}
+
+/// Initialize the one `LlamaBackend` this process will ever create, shared
+/// by every model it loads — a generation model (sequential or scheduler),
+/// an `EmbeddingModel`, and any later swap of either.
+///
+/// `LlamaBackend::init()` marks a process-wide `AtomicBool` and returns
+/// `Err(BackendAlreadyInitialized)` on a second call while the first
+/// instance is still alive (llama.cpp's own backend init is a one-time
+/// global, not a per-model resource) — so a design where the generation
+/// engine and the embedding model each created their own backend could
+/// never actually have both loaded at once. That was the case until this
+/// function existed: the very feature `--embedding-model` and `/api/embed`
+/// exist for — a chat model and an embedder resident together — failed on
+/// its first real request with exactly that error, because the chat
+/// model's backend was still alive when the embedder tried to init a
+/// second one. Call this once, at process startup, before loading anything,
+/// and hand the same `Arc` to every loader instead.
+///
+/// Also silences llama.cpp's own log lines (CUDA graph warmup etc.) once,
+/// here, rather than per-model-load: `void_logs` takes `&mut LlamaBackend`,
+/// which a shared, already-cloned `Arc` can no longer offer.
+pub fn init_shared_backend()
+-> Result<std::sync::Arc<LlamaBackend>, Box<dyn std::error::Error + Send + Sync>> {
+    tracing::info!("Initializing llama.cpp backend...");
+    let mut backend = LlamaBackend::init()?;
+    backend.void_logs();
+    Ok(std::sync::Arc::new(backend))
 }
 
 /// Report the binary's GPU capability and return the layer count that may
@@ -1228,7 +1257,7 @@ pub(crate) fn render_jinja_chat_template(
 ///
 /// Thread-safe: generation acquires a mutex on the context.
 pub struct InferenceEngine {
-    backend: LlamaBackend,
+    backend: Arc<LlamaBackend>,
     model: LlamaModel,
     config: InferenceConfig,
     /// Mutex around context because llama.cpp context is not thread-safe.
@@ -1329,8 +1358,17 @@ impl InferenceEngine {
     }
 
     /// Load a GGUF model and prepare the inference engine.
+    ///
+    /// `backend` is shared with every other model this process loads (a
+    /// scheduler-loaded generation model, an `EmbeddingModel`) rather than
+    /// created fresh here: `LlamaBackend::init()` marks a process-wide
+    /// `AtomicBool` and fails with `BackendAlreadyInitialized` on a second
+    /// call while the first instance is still alive, so two independently
+    /// initialized backends can never coexist in one process. See
+    /// `main.rs`, which creates the one instance the whole process shares.
     pub fn load(
         mut config: InferenceConfig,
+        backend: Arc<LlamaBackend>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if !config.model_path.exists() {
             return Err(format!("Model file not found: {}", config.model_path.display()).into());
@@ -1340,13 +1378,6 @@ impl InferenceEngine {
         // no GPU backend this is 0, and asking for more offloads onto a
         // backend we do not support. See `check_gpu_support`.
         let gpu_layers = check_gpu_support(config.gpu_layers);
-
-        tracing::info!("Initializing llama.cpp backend...");
-        let mut backend = LlamaBackend::init()?;
-        // Suppress llama.cpp/ggml internal log messages (CUDA graph warmup etc.)
-        // so they don't pollute the interactive REPL or API response streams.
-        // EULLM uses tracing for its own structured logging.
-        backend.void_logs();
 
         let model_params = if gpu_layers >= 0 {
             LlamaModelParams::default().with_n_gpu_layers(gpu_layers as u32)

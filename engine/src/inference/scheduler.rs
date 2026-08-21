@@ -374,6 +374,7 @@ impl BatchScheduler {
     /// handle being ready for inference when this method returns.
     pub fn start(
         self,
+        backend: Arc<LlamaBackend>,
     ) -> Result<(SchedulerHandle, ModelReadyInfo), Box<dyn std::error::Error + Send + Sync>> {
         // Validate model exists before spawning the thread.
         if !self.config.model_path.exists() {
@@ -416,6 +417,7 @@ impl BatchScheduler {
                         notify_mutex_clone,
                         shutdown_clone,
                         ready_tx,
+                        backend,
                     )
                 })) {
                     Ok(Ok(())) => {}
@@ -709,6 +711,7 @@ fn finish_sequence_clean(
 
 // ── Scheduler loop (runs on a dedicated thread) ─────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn run_scheduler_loop(
     config: InferenceConfig,
     sched_config: SchedulerConfig,
@@ -717,20 +720,20 @@ fn run_scheduler_loop(
     notify_mutex: Arc<std::sync::Mutex<()>>,
     shutdown: Arc<AtomicBool>,
     ready_tx: std::sync::mpsc::Sender<Result<(ModelReadyInfo, std::sync::Weak<SharedModel>), String>>,
+    // Shared across every model this process loads — a generation engine here,
+    // an `EmbeddingModel`, and a second scheduler load on model swap all use
+    // the SAME `LlamaBackend` instance rather than each creating their own:
+    // `LlamaBackend::init()` marks a process-wide `AtomicBool` and returns
+    // `BackendAlreadyInitialized` on a second call while the first is still
+    // alive, so two independently-initialized backends can never coexist in
+    // one process. See `main.rs`, which creates the one instance the whole
+    // process shares.
+    backend: Arc<LlamaBackend>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Use the RETURNED value, never `config.gpu_layers` — on a binary with no
     // GPU backend this is 0. See `super::check_gpu_support` for what asking
     // for more did on Intel Macs.
     let gpu_layers = super::check_gpu_support(config.gpu_layers);
-
-    tracing::info!("Initializing llama.cpp backend (scheduler)...");
-    let mut backend = LlamaBackend::init()?;
-    // NOTE: backend.void_logs() is intentionally deferred until AFTER the
-    // context is created.  During model load and KV cache allocation, llama.cpp
-    // prints useful diagnostics (VRAM offload, tensor sizes, OOM details) that
-    // help users diagnose failures like out-of-VRAM context allocation.
-    // Once the context is up, void_logs() is called to suppress the repetitive
-    // per-decode messages (CUDA graph warmup etc.) that pollute interactive output.
 
     let model_params = if gpu_layers >= 0 {
         LlamaModelParams::default().with_n_gpu_layers(gpu_layers as u32)
@@ -865,9 +868,11 @@ fn run_scheduler_loop(
         }
     };
 
-    // Context created successfully — now suppress repetitive per-decode
-    // llama.cpp messages (CUDA graph warmup, etc.) to keep output clean.
-    backend.void_logs();
+    // llama.cpp's own log lines (CUDA graph warmup etc.) are silenced once,
+    // process-wide, when the shared backend is created — see `main.rs` —
+    // rather than per-load here, since `void_logs` takes `&mut LlamaBackend`
+    // and this backend is now shared (`Arc`) across every model in the
+    // process.
 
     let mut active: Vec<ActiveSequence> = Vec::with_capacity(sched_config.max_batch_size);
     // Pool of idle sequence slots in range [0, max_batch_size), each carrying
