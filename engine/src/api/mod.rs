@@ -30,6 +30,8 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
+use llama_cpp_2::llama_backend::LlamaBackend;
+
 use crate::inference::embedding::EmbeddingModel;
 use crate::inference::{
     BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig, SchedulerHandle,
@@ -66,6 +68,14 @@ pub struct EmbeddingSlot {
 
 /// Shared state for API handlers.
 pub struct AppState {
+    /// The one `LlamaBackend` this process created (see
+    /// `inference::init_shared_backend`), shared by every model load —
+    /// the launch model, every later `swap_model`, and every embedding
+    /// model. `LlamaBackend::init()` is a process-wide one-time marker;
+    /// a second independent instance fails with `BackendAlreadyInitialized`
+    /// while the first is still alive, so this must be the same `Arc` the
+    /// launch model itself loaded with, not a fresh one.
+    pub backend: Arc<LlamaBackend>,
     /// Mutable model slot — protected by RwLock for concurrent reads,
     /// exclusive writes during model swap.
     pub slot: tokio::sync::RwLock<ModelSlot>,
@@ -450,6 +460,7 @@ impl AppState {
         // The scheduler never shrinks: if its context does not fit, the whole
         // swap fails, so requested and actual are always the same there.
         let requested_ctx_size = override_ctx_size.unwrap_or(self.ctx_size);
+        let backend_for_swap = self.backend.clone();
 
         let (new_engine, new_scheduler, ready_info, effective_ctx_size) =
             tokio::task::spawn_blocking(move || {
@@ -462,14 +473,14 @@ impl AppState {
                         debug_logit_check: rust_debug_for_swap,
                     };
                     let sched = BatchScheduler::new(config, sched_config);
-                    match sched.start() {
+                    match sched.start(backend_for_swap) {
                         Ok((handle, model_info)) => {
                             Ok((None, Some(handle), Some(model_info), requested_ctx_size))
                         }
                         Err(e) => Err(format!("Failed to start scheduler: {e}")),
                     }
                 } else {
-                    match InferenceEngine::load(config) {
+                    match InferenceEngine::load(config, backend_for_swap) {
                         Ok(eng) => {
                             // Read it here, on the blocking thread that already
                             // owns the model, rather than after the move into the
@@ -655,8 +666,11 @@ impl AppState {
             gguf_path.display()
         );
         let threads = self.threads;
-        let model = tokio::task::spawn_blocking(move || EmbeddingModel::load(&gguf_path, threads, n_ctx))
-            .await
+        let backend_for_load = self.backend.clone();
+        let model = tokio::task::spawn_blocking(move || {
+            EmbeddingModel::load(&gguf_path, threads, n_ctx, backend_for_load)
+        })
+        .await
             .map_err(|e| ModelError::LoadFailed(format!("Task join error: {e}")))?
             .map_err(|e| ModelError::LoadFailed(format!("Failed to load embedding model: {e}")))?;
         let model = Arc::new(model);
@@ -1202,6 +1216,10 @@ pub(crate) fn model_identity_key(name: &str) -> String {
 
 /// Configuration for starting the API server.
 pub struct ServeConfig {
+    /// The one `LlamaBackend` the process created at startup — see
+    /// `AppState::backend`. Every model this server ever loads, launch
+    /// model included, must share this same instance.
+    pub backend: Arc<LlamaBackend>,
     pub port: u16,
     /// See `AppState::fallback_mmproj`.
     pub mmproj: Option<PathBuf>,
@@ -1372,6 +1390,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let state = Arc::new(AppState {
+        backend: cfg.backend,
         fallback_mmproj: cfg.mmproj.clone(),
         slot: tokio::sync::RwLock::new(ModelSlot {
             model_name: cfg.model_name,
@@ -1827,6 +1846,21 @@ mod http_tests {
         ModelStore::at(dir.to_path_buf())
     }
 
+    /// The one `LlamaBackend` shared by every `spawn()` call in this test
+    /// binary. `LlamaBackend::init()` marks a process-wide `AtomicBool` and
+    /// fails on a second call while the first instance is still alive, and
+    /// these tests run in parallel by default — a fresh `init()` per test
+    /// would make the second test to reach it fail with
+    /// `BackendAlreadyInitialized`, not a real bug in either test.
+    fn test_backend() -> Arc<LlamaBackend> {
+        static BACKEND: std::sync::OnceLock<Arc<LlamaBackend>> = std::sync::OnceLock::new();
+        BACKEND
+            .get_or_init(|| {
+                crate::inference::init_shared_backend().expect("llama backend init")
+            })
+            .clone()
+    }
+
     /// Start the API on 127.0.0.1:0 and return its base URL.
     ///
     /// Port 0 rather than a fixed one: these run in parallel with every other
@@ -1837,6 +1871,7 @@ mod http_tests {
         // their defaults instead of reading a developer's real `.env`.
         let absent = std::path::Path::new("/nonexistent/eullm-test/.env");
         let state = Arc::new(AppState {
+            backend: test_backend(),
             fallback_mmproj: None,
             slot: tokio::sync::RwLock::new(ModelSlot {
                 model_name: None,

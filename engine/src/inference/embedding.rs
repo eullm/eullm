@@ -14,6 +14,7 @@
 
 use std::path::Path;
 use std::pin::pin;
+use std::sync::Arc;
 
 use llama_cpp_2::EmbeddingsError;
 use llama_cpp_2::context::params::{LlamaContextParams, LlamaPoolingType};
@@ -30,14 +31,15 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel};
 
-/// A loaded embedding model: its own `LlamaBackend` and `LlamaModel`, kept
-/// alive independently of whatever generation model is loaded in the main
-/// slot. Each `embed()` call opens and drops its own `LlamaContext` — the
+/// A loaded embedding model: a `LlamaModel` bound to the process-wide shared
+/// `LlamaBackend` (see `load`), kept alive independently of whatever
+/// generation model is loaded in the main slot. Each `embed()` call opens
+/// and drops its own `LlamaContext` — the
 /// context is cheap relative to the model weights, and a short-lived context
 /// means an embedding request never competes with a concurrent one for a
 /// shared KV cache.
 pub struct EmbeddingModel {
-    backend: LlamaBackend,
+    backend: Arc<LlamaBackend>,
     model: LlamaModel,
     threads: u32,
     /// Context window used to embed one input. Inputs longer than this are
@@ -54,17 +56,26 @@ impl EmbeddingModel {
     /// are small enough (typically 100 MB-1 GB) that a partial CPU/GPU split
     /// is not worth the complexity `--fit` applies to a multi-gigabyte LLM;
     /// full offload or full CPU are the only two shapes this needs.
+    ///
+    /// `backend` is shared with whatever generation model is loaded in this
+    /// process (or loaded later) rather than created fresh here:
+    /// `LlamaBackend::init()` marks a process-wide `AtomicBool` and fails
+    /// with `BackendAlreadyInitialized` on a second call while the first
+    /// instance is still alive — two independently-initialized backends can
+    /// never coexist in one process, which used to make the whole point of
+    /// this second model slot (staying resident alongside a loaded
+    /// generation model) fail with exactly that error on the first request
+    /// that tried it. See `main.rs`/`AppState`, which own the one instance
+    /// the whole process shares.
     pub fn load(
         path: &Path,
         threads: u32,
         n_ctx: u32,
+        backend: Arc<LlamaBackend>,
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if !path.exists() {
             return Err(format!("Embedding model file not found: {}", path.display()).into());
         }
-
-        let mut backend = LlamaBackend::init()?;
-        backend.void_logs();
 
         let gpu_layers = crate::inference::check_gpu_support(-1);
         let model_params = if gpu_layers >= 0 {

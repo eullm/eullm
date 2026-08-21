@@ -237,6 +237,25 @@ pipeline RAG (generazione + embedding + reranking) servita da un solo processo.
   entrambi i modelli fossero residenti insieme, perché il caricamento "a
   chiamata" dipendeva dall'ordine con cui i due processi venivano avviati.
 
+  **Bug critico trovato in produzione e corretto in 0.7.0 (2026-08-21):**
+  la coesistenza — l'intero motivo per cui questa feature e `--embedding-model`
+  esistono — non aveva **mai** funzionato. Il modello di generazione e il
+  modello di embedding inizializzavano ciascuno il proprio `LlamaBackend`
+  (`inference/scheduler.rs`, `inference/mod.rs`, `inference/embedding.rs`),
+  ma llama.cpp/llama-cpp-2 permette **un solo backend vivo per processo**
+  (`LLAMA_BACKEND_INITIALIZED`, un `AtomicBool` globale — un secondo
+  `LlamaBackend::init()` mentre il primo è ancora attivo fallisce sempre con
+  `BackendAlreadyInitialized`). Il percorso "evict" (i due modelli non
+  entrano insieme, uno sfratta l'altro) funzionava per puro caso, perché lì
+  c'è sempre un solo backend vivo alla volta; il percorso "coexist" — quello
+  che il team RAG (i3k-rag-engine) ha effettivamente colpito in produzione,
+  scheda con VRAM sufficiente per entrambi — falliva sulla primissima
+  richiesta che tentava di caricare l'embedder mentre il modello di chat era
+  già residente. Corretto condividendo un solo `LlamaBackend` (creato una
+  volta a `main.rs`, `inference::init_shared_backend`) tra generazione,
+  embedding e ogni swap successivo, invece di farne inizializzare uno
+  ciascuno.
+
 - [ ] **0.8-C · Structured outputs completi** *(P1)*
   `response_format: json_schema` (formato OpenAI, `strict`) via
   `json-schema-to-grammar` **già presente in libcommon** — esporre con wrapper C,

@@ -1880,6 +1880,17 @@ async fn cmd_run(
 
     let resolved_threads = threads.unwrap_or_else(inference::default_thread_count);
 
+    // The one `LlamaBackend` this process will ever create — shared by the
+    // embedding model below and by the generation model further down (and
+    // by any later swap of either). See `inference::init_shared_backend`
+    // for why: two independently-initialized backends can never coexist in
+    // one process, which used to make bge and a loaded chat model fail on
+    // the first request that tried to use both.
+    let backend = inference::init_shared_backend().unwrap_or_else(|e| {
+        eprintln!("Error initializing llama.cpp backend: {e}");
+        std::process::exit(1);
+    });
+
     // --embedding-model: load the companion embedding model now, before the
     // generation model's own --fit sizing runs below, and reserve its VRAM
     // off the top — see the flag's doc comment on `RuntimeOpts` for the
@@ -1896,6 +1907,7 @@ async fn cmd_run(
             &emb_path,
             resolved_threads,
             inference::embedding::DEFAULT_EMBEDDING_CTX,
+            backend.clone(),
         ) {
             Ok(model) => {
                 let weights_bytes = std::fs::metadata(&emb_path).map(|m| m.len()).unwrap_or(0);
@@ -2243,7 +2255,7 @@ async fn cmd_run(
                 debug_logit_check: rust_debug,
             };
             let sched = BatchScheduler::new(config, sched_config);
-            match sched.start() {
+            match sched.start(backend.clone()) {
                 Ok((handle, model_info)) => {
                     n_ctx_train = model_info.n_ctx_train;
                     kv_k_mib = model_info.kv_k_mib;
@@ -2258,7 +2270,7 @@ async fn cmd_run(
             }
         } else {
             // ── Sequential mode ────────────────────────────────────
-            match InferenceEngine::load(config) {
+            match InferenceEngine::load(config, backend.clone()) {
                 Ok(eng) => {
                     let info = eng.ready_info();
                     n_ctx_train = info.n_ctx_train;
@@ -2436,6 +2448,7 @@ async fn cmd_run(
             launch_model: api_launch_model,
             keep_alive,
             launch_embedding,
+            backend,
         })
         .await
         {
@@ -2508,6 +2521,14 @@ async fn cmd_serve(
     let threads = threads.unwrap_or_else(inference::default_thread_count);
     let store = ModelStore::default_store().expect("model store");
 
+    // The one `LlamaBackend` this process will ever create — shared by the
+    // embedding model below and by every generation model this server loads
+    // later via `swap_model`. See `inference::init_shared_backend`.
+    let backend = inference::init_shared_backend().unwrap_or_else(|e| {
+        eprintln!("Error initializing llama.cpp backend: {e}");
+        std::process::exit(1);
+    });
+
     // --embedding-model: load the companion embedding model now. There is no
     // generation model loaded yet to size against, so the reservation only
     // starts to matter once one is loaded later via a request's "model"
@@ -2522,6 +2543,7 @@ async fn cmd_serve(
             &emb_path,
             threads,
             inference::embedding::DEFAULT_EMBEDDING_CTX,
+            backend.clone(),
         )
         .unwrap_or_else(|e| {
             eprintln!("Error loading embedding model: {e}");
@@ -2586,6 +2608,7 @@ async fn cmd_serve(
         launch_model: None,
         keep_alive,
         launch_embedding,
+        backend,
     })
     .await
     {
