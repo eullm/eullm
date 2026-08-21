@@ -13,6 +13,24 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.0 — 2026-08-21
+
+### Fixed
+- **The embedding model could fail to load with `Failed to load embedding
+  model: BackendAlreadyInitialized` whenever a generation model was already
+  loaded** — in practice, whenever `--embedding-model` or `/api/embed`/
+  `/v1/embeddings` tried to do the one thing they exist for: run alongside a
+  resident chat model on a card with room for both. The generation model and
+  the embedding model each initialized their own `llama.cpp` backend, but
+  llama.cpp allows only one live backend per process — a second
+  initialization while the first is still active always fails. This affected
+  every release since 0.6.82 (when in-process embeddings first shipped)
+  whenever a card had room to keep both models resident at once; a card too
+  small for both never hit it, because the coexistence path is exactly the
+  one that was broken. Fixed by initializing one `llama.cpp` backend at
+  process startup and sharing it across every model the process loads —
+  the launch model, every later model swap, and the embedding slot.
+
 ## 0.6.90 — 2026-08-18
 
 ### Added
