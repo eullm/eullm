@@ -13,6 +13,18 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.1 — 2026-08-22
+
+### Changed
+- **Bumped the pinned `llama.cpp` from tag `b10200` (2026-07-30) to `b10405`
+  (2026-08-12), and re-vendored the Rust bindings (`llama-cpp-rs`) cleanly
+  against upstream's own current release — the three C-API compatibility
+  patches carried by hand since 0.6.70 (`load_mode`, `mtmd_input_text`'s
+  length field, the multimodal bitmap helper's return type) are gone,
+  superseded by upstream's own equivalent code. Brings every upstream fix
+  and model architecture addition from that window. No flag, default, or
+  observable behaviour changes.
+
 ## 0.7.0 — 2026-08-21
 
 ### Fixed
