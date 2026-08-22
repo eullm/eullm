@@ -64,6 +64,7 @@ pub(crate) fn build_sampler(
     // Repeat penalty (Ollama default: 1.1, last 64 tokens).
     if request.repeat_penalty != 1.0 {
         chain.push(LlamaSampler::penalties(
+            model.n_vocab(),
             request.repeat_last_n,
             request.repeat_penalty,
             0.0,

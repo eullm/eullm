@@ -11,6 +11,7 @@ use crate::context::params::LlamaContextParams;
 use crate::context::LlamaContext;
 use crate::llama_backend::LlamaBackend;
 use crate::model::params::LlamaModelParams;
+use crate::sampling::LlamaSampler;
 use crate::token::LlamaToken;
 use crate::token_type::{LlamaTokenAttr, LlamaTokenAttrs};
 use crate::{
@@ -689,6 +690,22 @@ impl LlamaModel {
         unsafe { llama_cpp_sys_2::llama_n_embd(self.model.as_ptr()) }
     }
 
+    /// The model's *output* embedding width (`n_embd_out`). This is the width
+    /// llama.cpp actually extracts embeddings at — `n_embd` and `n_embd_out`
+    /// diverge when `{arch}.embedding_length_out` is present (deepstack models
+    /// like qwen3vl). Returns a `c_int` for maximum compatibility.
+    #[must_use]
+    pub fn n_embd_out(&self) -> c_int {
+        unsafe { llama_cpp_sys_2::llama_model_n_embd_out(self.model.as_ptr()) }
+    }
+
+    /// The model's classification output width (`n_cls_out`, default 1) — the
+    /// width of a RANK-pooled embeddings read (llama.h:1029).
+    #[must_use]
+    pub fn n_cls_out(&self) -> u32 {
+        unsafe { llama_cpp_sys_2::llama_model_n_cls_out(self.model.as_ptr()) }
+    }
+
     /// Returns the total size of all the tensors in the model in bytes.
     pub fn size(&self) -> u64 {
         unsafe { llama_cpp_sys_2::llama_model_size(self.model.as_ptr()) }
@@ -913,6 +930,89 @@ impl LlamaModel {
         let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
 
         Ok(LlamaContext::new(self, context, params.embeddings()))
+    }
+
+    /// Create a new context bound to another context via llama.cpp's `ctx_other` field.
+    ///
+    /// This is required for MTP speculative decoding when the target model's
+    /// architecture uses `LLM_ARCH_GEMMA4_ASSISTANT`, which asserts that the draft
+    /// context references the target context so KV state can be shared.
+    ///
+    /// # Errors
+    ///
+    /// See [`LlamaContextLoadError`].
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new_context_with_ctx_other<'a>(
+        &'a self,
+        _: &LlamaBackend,
+        params: LlamaContextParams,
+        ctx_other: &LlamaContext<'_>,
+    ) -> Result<LlamaContext<'a>, LlamaContextLoadError> {
+        let mut context_params = params.context_params;
+        context_params.ctx_other = ctx_other.context.as_ptr();
+        let context = unsafe {
+            llama_cpp_sys_2::llama_new_context_with_model(self.model.as_ptr(), context_params)
+        };
+        let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
+
+        Ok(LlamaContext::new(self, context, params.embeddings()))
+    }
+
+    /// Creates a new context with backend samplers attached for specific sequences.
+    ///
+    /// Ownership of the samplers is transferred to the context, ensuring they remain
+    /// alive for the context's lifetime. Only samplers that support backend execution
+    /// (greedy, dist, temp, top_k, top_p, min_p, logit_bias) will run on the backend.
+    ///
+    /// # Arguments
+    ///
+    /// * `params` - Context parameters
+    /// * `samplers` - Iterator of `(seq_id, sampler)` pairs where sampler must be a chain
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let sampler = LlamaSampler::chain([
+    ///     LlamaSampler::min_p(0.01, 64),
+    ///     LlamaSampler::temp(0.1),
+    ///     LlamaSampler::dist(42),
+    /// ], false);
+    ///
+    /// let ctx = model.new_context_with_samplers(
+    ///     &backend,
+    ///     ctx_params,
+    ///     [(0, sampler)],
+    /// )?;
+    /// ```
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn new_context_with_samplers<'a>(
+        &'a self,
+        _: &LlamaBackend,
+        params: LlamaContextParams,
+        samplers: impl IntoIterator<Item = (i32, LlamaSampler)>,
+    ) -> Result<LlamaContext<'a>, LlamaContextLoadError> {
+        let samplers: Vec<_> = samplers.into_iter().collect();
+        let mut context_params = params.context_params;
+
+        let mut sampler_configs: Vec<llama_cpp_sys_2::llama_sampler_seq_config> = samplers
+            .iter()
+            .map(|(seq_id, sampler)| llama_cpp_sys_2::llama_sampler_seq_config {
+                seq_id: *seq_id,
+                sampler: sampler.sampler,
+            })
+            .collect();
+
+        if !sampler_configs.is_empty() {
+            context_params.samplers = sampler_configs.as_mut_ptr();
+            context_params.n_samplers = sampler_configs.len();
+        }
+
+        let context = unsafe {
+            llama_cpp_sys_2::llama_new_context_with_model(self.model.as_ptr(), context_params)
+        };
+        let context = NonNull::new(context).ok_or(LlamaContextLoadError::NullReturn)?;
+
+        Ok(LlamaContext::with_samplers(self, context, params.embeddings(), samplers))
     }
 
     /// Apply the models chat template to some messages.

@@ -296,7 +296,6 @@ impl LlamaSampler {
     }
 
     /// Grammar sampler
-    #[cfg(feature = "common")]
     #[must_use]
     pub fn grammar(
         model: &LlamaModel,
@@ -306,8 +305,17 @@ impl LlamaSampler {
         let (grammar_str, grammar_root) =
             Self::sanitize_grammar_strings(grammar_str, grammar_root)?;
 
+        #[cfg(feature = "common")]
         let sampler = unsafe {
             llama_cpp_sys_2::llama_rs_sampler_init_grammar(
+                model.vocab_ptr(),
+                grammar_str.as_ptr(),
+                grammar_root.as_ptr(),
+            )
+        };
+        #[cfg(not(feature = "common"))]
+        let sampler = unsafe {
+            llama_cpp_sys_2::llama_sampler_init_grammar(
                 model.vocab_ptr(),
                 grammar_str.as_ptr(),
                 grammar_root.as_ptr(),
@@ -364,7 +372,12 @@ impl LlamaSampler {
     /// Trigger patterns are regular expressions matched from the start of the
     /// generation output. The grammar sampler will be fed content starting from
     /// the first match group.
-    #[cfg(feature = "common")]
+    ///
+    /// Without the `common` feature there is no C++ shim to catch exceptions,
+    /// and `llama.cpp` builds a `std::regex` from each trigger pattern, so an
+    /// invalid pattern aborts instead of returning
+    /// [`GrammarError::NullGrammar`]. An unparseable grammar is reported with a
+    /// null pointer either way.
     #[must_use]
     pub fn grammar_lazy_patterns(
         model: &LlamaModel,
@@ -380,8 +393,21 @@ impl LlamaSampler {
         let mut trigger_pattern_ptrs: Vec<*const c_char> =
             trigger_patterns.iter().map(|cs| cs.as_ptr()).collect();
 
+        #[cfg(feature = "common")]
         let sampler = unsafe {
             llama_cpp_sys_2::llama_rs_sampler_init_grammar_lazy_patterns(
+                model.vocab_ptr(),
+                grammar_str.as_ptr(),
+                grammar_root.as_ptr(),
+                trigger_pattern_ptrs.as_mut_ptr(),
+                trigger_pattern_ptrs.len(),
+                trigger_tokens.as_ptr().cast(),
+                trigger_tokens.len(),
+            )
+        };
+        #[cfg(not(feature = "common"))]
+        let sampler = unsafe {
+            llama_cpp_sys_2::llama_sampler_init_grammar_lazy_patterns(
                 model.vocab_ptr(),
                 grammar_str.as_ptr(),
                 grammar_root.as_ptr(),
@@ -399,21 +425,16 @@ impl LlamaSampler {
         }
     }
 
-    /// `LLGuidance` sampler for constrained decoding.
+    /// Builds the `toktrie` tokenizer environment for `model`.
     ///
-    /// Uses the `llguidance` and `toktrie` Rust crates to enforce grammar constraints
-    /// during token sampling. Supports JSON schema, regex, Lark, and other grammar types.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`GrammarError`] if the grammar is invalid or the sampler cannot be initialized.
+    /// Use this to construct your own `llguidance::ParserFactory` (with any slice
+    /// regexes, inference capabilities, or other configuration llguidance supports) and,
+    /// from it, a `llguidance::Matcher` to convert into a `LlamaSampler` via
+    /// `LlamaSampler::from` (or `.into()`).
     #[cfg(feature = "llguidance")]
-    pub fn llguidance(
-        model: &LlamaModel,
-        grammar_kind: &str,
-        grammar_data: &str,
-    ) -> Result<Self, GrammarError> {
-        crate::llguidance_sampler::create_llg_sampler(model, grammar_kind, grammar_data)
+    #[must_use]
+    pub fn llguidance_tok_env(model: &LlamaModel) -> toktrie::TokEnv {
+        crate::llguidance_sampler::llguidance_build_tok_env(model)
     }
 
     fn sanitize_grammar_strings(
@@ -489,10 +510,6 @@ impl LlamaSampler {
         let sampler = unsafe {
             llama_cpp_sys_2::llama_sampler_init_dry(
                 model.vocab_ptr(),
-                model
-                    .n_ctx_train()
-                    .try_into()
-                    .expect("n_ctx_train exceeds i32::MAX"),
                 multiplier,
                 base,
                 allowed_length,
@@ -507,13 +524,16 @@ impl LlamaSampler {
     /// Penalizes tokens for being present in the context.
     ///
     /// Parameters:
-    /// - ``penalty_last_n``: last n tokens to penalize (0 = disable penalty, -1 = context size)
-    /// - ``penalty_repeat``: 1.0 = disabled
-    /// - ``penalty_freq``: 0.0 = disabled
-    /// - ``penalty_present``: 0.0 = disabled
+    /// - ``n_vocab``: [`LlamaModel::n_vocab`]
+    /// - ``penalty_last_n``: last n tokens to penalize (0 = disable penalty). Negative values are
+    ///   clamped to 0; they no longer select the context size.
+    /// - ``penalty_repeat``: must be > 0.0, 1.0 = disabled
+    /// - ``penalty_freq``: must be finite, 0.0 = disabled
+    /// - ``penalty_present``: must be finite, 0.0 = disabled
     #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub fn penalties(
+        n_vocab: i32,
         penalty_last_n: i32,
         penalty_repeat: f32,
         penalty_freq: f32,
@@ -521,6 +541,7 @@ impl LlamaSampler {
     ) -> Self {
         let sampler = unsafe {
             llama_cpp_sys_2::llama_sampler_init_penalties(
+                n_vocab,
                 penalty_last_n,
                 penalty_repeat,
                 penalty_freq,
