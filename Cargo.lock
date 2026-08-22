@@ -566,7 +566,7 @@ checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "eullm-engine"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "assert_cmd",
  "async-stream",
@@ -1147,7 +1147,7 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 
 [[package]]
 name = "llama-cpp-2"
-version = "0.1.151"
+version = "0.1.154"
 dependencies = [
  "encoding_rs",
  "enumflags2",
@@ -1162,7 +1162,7 @@ dependencies = [
 
 [[package]]
 name = "llama-cpp-sys-2"
-version = "0.1.151"
+version = "0.1.154"
 dependencies = [
  "bindgen",
  "cc",

@@ -478,10 +478,10 @@ impl MtmdBitmap {
         placeholder: bool,
     ) -> Result<Self, MtmdBitmapError> {
         let path_cstr = CString::new(path)?;
-        // Upstream's helper now returns a wrapper struct (bitmap + an optional
-        // video decoding context) instead of a bare pointer. This crate does not
-        // build with MTMD_VIDEO enabled, so `video_ctx` is always null here and
-        // only the bitmap needs handling.
+        // This helper now returns a wrapper struct (bitmap + an optional video
+        // decoding context) instead of a bare pointer. `video_ctx` is only set
+        // when MTMD_VIDEO is enabled at compile time; this crate does not build
+        // with it on, so it is always null here and only the bitmap matters.
         let wrapper = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_file(
                 ctx.context.as_ptr(),

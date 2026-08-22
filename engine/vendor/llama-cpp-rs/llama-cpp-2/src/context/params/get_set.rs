@@ -1,7 +1,8 @@
 use std::num::NonZeroU32;
 
 use super::{
-    KvCacheType, LlamaAttentionType, LlamaContextParams, LlamaPoolingType, RopeScalingType,
+    KvCacheType, LlamaAttentionType, LlamaContextParams, LlamaContextType, LlamaPoolingType,
+    RopeScalingType,
 };
 
 impl LlamaContextParams {
@@ -128,43 +129,33 @@ impl LlamaContextParams {
         self.context_params.n_seq_max
     }
 
-    /// Set the number of recurrent-state snapshots kept per sequence, bounding
-    /// how far a hybrid/recurrent architecture (Mamba-style SSM layers, e.g.
-    /// Qwen3.5/3.6's hybrid attention+SSM design) can roll back its recurrent
-    /// state. `0` (the `llama_context_default_params()` default) means no
-    /// rollback at all: any partial trim of that architecture's recurrent
-    /// state is rejected outright, regardless of how far back it is. Ignored
-    /// (clamped to 0) by architectures that don't support recurrent-state
-    /// rollback (`llm_arch_supports_rs_rollback` in `llama-arch.cpp`) -
-    /// setting this on an unsupported architecture is a harmless no-op.
-    /// \[EXPERIMENTAL\] per the upstream header comment on this field.
+    /// Set the number of recurrent-state rollback snapshots per sequence.
     ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use llama_cpp_2::context::params::LlamaContextParams;
-    /// let params = LlamaContextParams::default()
-    ///     .with_n_rs_seq(16);
-    /// assert_eq!(params.n_rs_seq(), 16);
-    /// ```
+    /// MTP speculative decoding uses this on the target context so llama.cpp can
+    /// roll recurrent state back after partially accepted drafts.
     #[must_use]
     pub fn with_n_rs_seq(mut self, n_rs_seq: u32) -> Self {
         self.context_params.n_rs_seq = n_rs_seq;
         self
     }
 
-    /// Get the number of recurrent-state snapshots kept per sequence.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use llama_cpp_2::context::params::LlamaContextParams;
-    /// let params = LlamaContextParams::default();
-    /// assert_eq!(params.n_rs_seq(), 0);
-    /// ```
+    /// Get the number of recurrent-state rollback snapshots per sequence.
     #[must_use]
     pub fn n_rs_seq(&self) -> u32 {
         self.context_params.n_rs_seq
+    }
+
+    /// Set the llama.cpp context type.
+    #[must_use]
+    pub fn with_context_type(mut self, context_type: LlamaContextType) -> Self {
+        self.context_params.ctx_type = context_type.into();
+        self
+    }
+
+    /// Get the llama.cpp context type.
+    #[must_use]
+    pub fn context_type(&self) -> LlamaContextType {
+        self.context_params.ctx_type.into()
     }
 
     /// Set the number of threads

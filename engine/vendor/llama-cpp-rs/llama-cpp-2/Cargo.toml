@@ -1,17 +1,28 @@
-# Vendored at utilityai/llama-cpp-rs main @ 8625c7c4, with local patches on top
-# to track the llama.cpp submodule pin past what upstream itself has bumped to
-# (see H3-P in docs/backlog-fix-e-hardening.md): as of 2026-07-31 upstream's own
-# `main` still pins llama.cpp at the same commit EuLLM started from, so there is
-# no newer upstream commit to re-vendor from yet. The three local patches, both
-# in this file's `model/params.rs` and in `mtmd.rs`, port the crate onto
-# llama.cpp's `load_mode` enum (replacing the removed `use_mlock`/`use_mmap`
-# fields), `mtmd_input_text.text_len`, and the `mtmd_helper_bitmap_wrapper`
-# return type — see the comments at each call site for the mapping. Drop these
-# patches the day upstream's own bump reaches or passes our pin.
+# Vendored at utilityai/llama-cpp-rs main @ 09fc815d (2026-08-18), which pins
+# llama.cpp at e79e4bf6 (b10405) — replacing the 2026-07-31 vendoring at
+# 8625c7c4 (see H3-P/H3-R/H3-Y in docs/backlog-fix-e-hardening.md). Upstream
+# has since caught up past and superseded the three local API patches that
+# base needed (load_mode, mtmd_input_text.text_len,
+# mtmd_helper_bitmap_wrapper); none remain.
+#
+# EuLLM ALSO carries whole functionality upstream doesn't have, on top of
+# whichever base this comment names — every one of these must be re-applied
+# by hand on the next re-vendor, the same way the API patches used to be.
+# H3-Y lost these once (overwritten model.rs/wrapper_common.* wholesale,
+# caught only at `cargo build`) precisely because this comment didn't list
+# them yet. Keep this list current on every EuLLM addition to
+# `llama-cpp-2`/`llama-cpp-sys-2`, not just API-compat patches:
+#   - `model.rs`: `chat_parse`, `apply_jinja_chat_template`,
+#     `apply_chat_template_oaicompat` (+ `JinjaChatTemplateResult`,
+#     `OaiChatTemplateResult`) — the OpenAI tool-calling path (H4-A).
+#   - `lib.rs`: `JinjaChatTemplateError`, the error type the three above use.
+#   - `llama-cpp-sys-2/wrapper_common.h` + `.cpp`: the C wrapper functions
+#     backing the three above — `llama_rs_apply_chat_template`,
+#     `llama_rs_apply_chat_template_oai`, `llama_rs_chat_parse`.
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"
-version = "0.1.151"
+version = "0.1.154"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/utilityai/llama-cpp-rs"
@@ -20,11 +31,11 @@ repository = "https://github.com/utilityai/llama-cpp-rs"
 
 [dependencies]
 enumflags2 = "0.7.12"
-llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.151" }
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.154" }
 # EuLLM vendoring: this crate lives under the workspace root (so Cargo treats
 # it as a member) but the EuLLM root defines no [workspace.dependencies]; the
 # upstream `{ workspace = true }` inheritance is de-inlined to upstream's exact
-# values (utilityai/llama-cpp-rs main @ 8625c7c4 [workspace.dependencies]).
+# values (utilityai/llama-cpp-rs main @ 09fc815d [workspace.dependencies]).
 thiserror = "2"
 tracing = "0.1"
 tracing-core = "0.1"
@@ -54,6 +65,7 @@ openmp = ["llama-cpp-sys-2/openmp"]
 # enabled. Useful for self-contained downstream binaries.
 static-openmp = ["llama-cpp-sys-2/static-openmp"]
 rocm = ["llama-cpp-sys-2/rocm"]
+mkl = ["llama-cpp-sys-2/mkl"]
 sampler = []
 # Only has an impact on Android.
 android-shared-stdcxx = ["llama-cpp-sys-2/shared-stdcxx"]
@@ -69,7 +81,7 @@ dynamic-backends = ["llama-cpp-sys-2/dynamic-backends"]
 
 
 [target.'cfg(all(target_os = "macos", any(target_arch = "aarch64", target_arch = "arm64")))'.dependencies]
-llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.151", features = [
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.154", features = [
     "metal",
 ] }
 

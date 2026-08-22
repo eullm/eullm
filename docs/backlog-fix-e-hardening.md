@@ -2132,6 +2132,103 @@ diligenza manuale.
   applicata dal template DeepSeek-R1 hardcoded. Da validare su rc17 che i
   due Qwen3.6 mostrino il box Reasoning dal web come già fa gemma-4.
 
+- [ ] **H3-Y · Bump di `llama.cpp` a `b10405`: ri-vendorizzazione pulita di
+  `llama-cpp-rs`, senza patch a mano — in attesa di validazione su hardware
+  reale** *(P2)*
+  Il pin era fermo a `5f55650`/`b10200` (30 luglio, H3-R) da 386 build/23
+  giorni, in violazione della regola "bump spesso, mai un salto grande" di
+  `engine/CLAUDE.md`. Occasione diretta: durante la diagnosi di un OOM di
+  eullm a 62/65 layer + contesto 4096 su un GGUF Qwen3.8-27B community,
+  dove `llama-cli` (build locale dell'utente, `b10586`) allo stesso file/
+  layer/contesto non va in OOM — un divario reale (una causa parziale,
+  `n_ubatch` default 1024 in eullm contro 512 upstream non impostato, non
+  bastava da sola a spiegarlo: `--n-batch 512` non risolveva). Restare
+  fermi al pin vecchio impediva di isolare se il divario fosse un bug
+  nostro o un comportamento già corretto a monte.
+
+  A differenza di H3-R, stavolta `utilityai/llama-cpp-rs` aveva già
+  raggiunto e superato il nostro pin: `main @ 09fc815d` (18 agosto) segue
+  llama.cpp `e79e4bf6`/`b10405`. Ri-vendorizzazione pulita, non patch a
+  mano: i 3 cambi API portati manualmente in H3-R (`load_mode`,
+  `mtmd_input_text.text_len`, `mtmd_helper_bitmap_wrapper`) sono ora nativi
+  a monte e sono stati eliminati. Copiati da zero tutti i file di
+  `llama-cpp-2/src` e `llama-cpp-sys-2` che non portavano personalizzazioni
+  EuLLM (14 file su `llama-cpp-2`, verificati privi di marcatori EuLLM
+  prima della sovrascrittura), incluse due novità a monte non ancora usate
+  qui: `speculative.rs` (decodifica speculativa MTP nativa upstream —
+  tema toccato in una discussione precedente su MTP per Qwen3.8-27B, non
+  ancora collegato al motore) e una suite di test in `llama-cpp-2/tests`.
+
+  `build.rs` (il file a più alto rischio, 635 righe di diff) è stato
+  riconciliato a mano riga per riga, non sovrascritto: adottate le aggiunte
+  a monte pure (fix estensione libreria Windows MSVC/GNU, il helper
+  `library_file_exists` con fallback `llama-common`→`common`, il supporto
+  cross-compile Android NDK+Vulkan generalizzato in `AndroidToolchain`, il
+  forwarding generico delle variabili `GGML_*` come define CMake, l'export
+  `DEP_LLAMA_GGML_CMAKE_DIR`, la nuova feature opzionale `mkl` mai
+  abilitata da noi), mentre sono state preservate intatte tutte le
+  personalizzazioni EuLLM: il fix Metal-sempre-attivo-su-Apple (issue
+  #140), `LLAMA_GGML_CPU_ARM_ARCH`/KleidiAI per ARM, la disattivazione di
+  NCCL per il target single-GPU, e il messaggio d'errore esplicito quando
+  il submodule `llama.cpp` non è stato inizializzato.
+
+  **Scoperta durante la ri-vendorizzazione, non prevista dal piano**: tre
+  funzioni Rust proprie di EuLLM in `model.rs` (`chat_parse`,
+  `apply_jinja_chat_template`, `apply_chat_template_oaicompat` — la base
+  del tool calling OpenAI di H4-A, con le loro FFI `llama_rs_apply_chat_
+  template`/`llama_rs_apply_chat_template_oai`/`llama_rs_chat_parse` in
+  `wrapper_common.cpp`/`.h`) non erano documentate nel commento di
+  vendoring in cima a `llama-cpp-2/Cargo.toml`, che citava solo le 3 patch
+  API di H3-R. La prima sovrascrittura in blocco le ha cancellate,
+  scoperto subito dai 7 errori di compilazione in `inference/mod.rs`
+  (`chat_parse`/`apply_chat_template_oaicompat`/`apply_jinja_chat_template`
+  non trovate). Recuperate da `git show HEAD:...` e riportate a mano sopra
+  la nuova base upstream. Lezione per il prossimo bump: il commento di
+  vendoring va tenuto aggiornato con *ogni* aggiunta EuLLM a
+  `llama-cpp-2`/`llama-cpp-sys-2`, non solo le patch API pure, altrimenti
+  la prossima ri-vendorizzazione ripete la stessa scoperta a compile-time.
+
+  Cambio d'API upstream indipendente, non una patch nostra: la firma C di
+  `llama_sampler_init_penalties` ha riguadagnato il parametro `n_vocab`
+  (primo argomento) che il nostro unico call site
+  (`inference/sampling.rs`) non passava più; corretto con `model.n_vocab()`,
+  già disponibile nello scope della funzione.
+
+  Pin del submodule aggiornato a `e79e4bf6` (`b10405`) — non spinto fino
+  all'assoluto ultimo tag disponibile (`b10586`, quello del build locale
+  dell'utente) perché `b10405` è il commit che `utilityai/llama-cpp-rs`
+  ha effettivamente validato nel suo `main`; andare oltre avrebbe
+  significato ri-patchare a mano proprio quello che questo bump elimina.
+  Validato finora, in locale, senza GPU disponibile in questo ambiente:
+  `cargo build` pulito sia con `--no-default-features` sia con le feature
+  di default (`multimodal`); `cargo clippy --no-deps` pulito su
+  `--no-default-features`; le 286 unit test di `eullm-engine` passano.
+
+  Nota a margine, non azionabile: un doctest a monte in `model/params.rs`
+  (`LlamaModelParams` default, riga 635) fallisce con questo pin —
+  `use_mmap()` risulta `false` invece di `true` — perché llama.cpp ha
+  cambiato il default di `load_mode` da `LLAMA_LOAD_MODE_MMAP` fisso a
+  `LLAMA_LOAD_MODE_AUTO` (auto-rilevato in base alle capacità del device);
+  il getter Rust del binding non riconosce ancora `AUTO` come "mmap
+  effettivamente attivo". A livello di comportamento reale non cambia
+  nulla per noi: `llama-model.cpp` risolve `AUTO` in mmap acceso su
+  qualunque device che lo supporti (tutti i nostri backend), quindi non è
+  la causa del divario di VRAM sotto indagine (mmap incide sul RAM di
+  host in fase di caricamento, non sui buffer VRAM del contesto). Non
+  patchato: patchare il doctest a monte contraddirebbe l'obiettivo di una
+  vendorizzazione pulita e senza patch locali; `cargo test` di questo
+  repository non lo raggiunge comunque (nessuna tabella `[workspace]` in
+  `engine/Cargo.toml`, quindi CI non esegue i doctest delle crate
+  vendorizzate). Da tenere d'occhio al prossimo bump, non da agire ora.
+
+  **Da validare su hardware reale** (RTX 5070 Ti dell'utente): ricaricare
+  ogni famiglia di modelli disponibile localmente, incluso il template di
+  ragionamento DeepSeek e un modello multimodale, e soprattutto ripetere il
+  confronto eullm-vs-llama-cli che ha motivato il bump (62/65 layer,
+  contesto 4096, stesso file Qwen3.8-27B) per stabilire se il divario di
+  VRAM osservato è cambiato, sparito, o resta un problema nostro da
+  investigare oltre il semplice allineamento di versione.
+
 - [x] **H4-A · Tool calling sull'endpoint OpenAI: `tools` ignorato,
   niente `tool_calls` né `reasoning_content`** *(P1 — issue #334,
   regressione di aspettativa rispetto a llama-server)*

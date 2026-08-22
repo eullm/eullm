@@ -7,6 +7,7 @@ use std::slice;
 
 use crate::llama_batch::LlamaBatch;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
+use crate::sampling::LlamaSampler;
 use crate::timing::LlamaTimings;
 use crate::token::data::LlamaTokenData;
 use crate::token::data_array::LlamaTokenDataArray;
@@ -28,6 +29,8 @@ pub struct LlamaContext<'a> {
     pub model: &'a LlamaModel,
     initialized_logits: Vec<i32>,
     embeddings_enabled: bool,
+    /// Backend samplers kept alive for the context's lifetime.
+    _backend_samplers: Vec<(i32, LlamaSampler)>,
 }
 
 impl Debug for LlamaContext<'_> {
@@ -49,6 +52,22 @@ impl<'model> LlamaContext<'model> {
             model: llama_model,
             initialized_logits: Vec::new(),
             embeddings_enabled,
+            _backend_samplers: Vec::new(),
+        }
+    }
+
+    pub(crate) fn with_samplers(
+        llama_model: &'model LlamaModel,
+        llama_context: NonNull<llama_cpp_sys_2::llama_context>,
+        embeddings_enabled: bool,
+        backend_samplers: Vec<(i32, LlamaSampler)>,
+    ) -> Self {
+        Self {
+            context: llama_context,
+            model: llama_model,
+            initialized_logits: Vec::new(),
+            embeddings_enabled,
+            _backend_samplers: backend_samplers,
         }
     }
 
@@ -121,7 +140,9 @@ impl<'model> LlamaContext<'model> {
     /// # Returns
     ///
     /// A slice containing the embeddings for the last decoded batch.
-    /// The size corresponds to the `n_embd` parameter of the context's model.
+    /// The size is the pooling-derived output width: `n_cls_out` for RANK,
+    /// `n_embd_out` otherwise — NOT `n_embd` (llama.h:1029 /
+    /// llama-context.cpp's extraction switch).
     ///
     /// # Errors
     ///
@@ -137,9 +158,6 @@ impl<'model> LlamaContext<'model> {
             return Err(EmbeddingsError::NotEnabled);
         }
 
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
         unsafe {
             let embedding = llama_cpp_sys_2::llama_get_embeddings_seq(self.context.as_ptr(), i);
 
@@ -147,7 +165,7 @@ impl<'model> LlamaContext<'model> {
             if embedding.is_null() {
                 Err(EmbeddingsError::NonePoolType)
             } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
+                Ok(slice::from_raw_parts(embedding, self.embeddings_out_len()))
             }
         }
     }
@@ -157,7 +175,9 @@ impl<'model> LlamaContext<'model> {
     /// # Returns
     ///
     /// A slice containing the embeddings for the last decoded batch of the given token.
-    /// The size corresponds to the `n_embd` parameter of the context's model.
+    /// The size is the pooling-derived output width: `n_cls_out` for RANK,
+    /// `n_embd_out` otherwise — NOT `n_embd` (llama.h:1029 /
+    /// llama-context.cpp's extraction switch).
     ///
     /// # Errors
     ///
@@ -173,17 +193,30 @@ impl<'model> LlamaContext<'model> {
             return Err(EmbeddingsError::NotEnabled);
         }
 
-        let n_embd =
-            usize::try_from(self.model.n_embd()).expect("n_embd does not fit into a usize");
-
         unsafe {
             let embedding = llama_cpp_sys_2::llama_get_embeddings_ith(self.context.as_ptr(), i);
             // Technically also possible whenever `i >= batch.n_tokens`, but no good way of checking `n_tokens` here.
             if embedding.is_null() {
                 Err(EmbeddingsError::LogitsNotEnabled)
             } else {
-                Ok(slice::from_raw_parts(embedding, n_embd))
+                Ok(slice::from_raw_parts(embedding, self.embeddings_out_len()))
             }
+        }
+    }
+
+    /// The correct output width for an embeddings read, keyed on the context's
+    /// LIVE pooling type rather than the model's `n_embd`.
+    ///
+    /// RANK reads return `float[n_cls_out]` (default 1) per llama.h:1029; every
+    /// other pooling mode extracts at `n_embd_out` per llama-context.cpp's
+    /// extraction switch (which diverges from `n_embd` whenever
+    /// `{arch}.embedding_length_out` is present).
+    fn embeddings_out_len(&self) -> usize {
+        let pooling = unsafe { llama_cpp_sys_2::llama_pooling_type(self.context.as_ptr()) };
+        if pooling == llama_cpp_sys_2::LLAMA_POOLING_TYPE_RANK {
+            usize::try_from(self.model.n_cls_out()).expect("n_cls_out does not fit into a usize")
+        } else {
+            usize::try_from(self.model.n_embd_out()).expect("n_embd_out does not fit into a usize")
         }
     }
 
@@ -361,6 +394,29 @@ impl<'model> LlamaContext<'model> {
 
         tracing::debug!("Remove lora adapter");
         Ok(())
+    }
+
+    /// Get the backend-sampled token at the given index.
+    ///
+    /// This is part of the experimental backend sampling API. Only usable
+    /// when the context was created with at least one `llama_sampler_seq_config`.
+    ///
+    /// Returns `None` if no token was sampled at the given index
+    /// (i.e. the C API returned `LLAMA_TOKEN_NULL`).
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The token index, matching the order from the batch.
+    #[must_use]
+    pub fn sampled_token_ith(&self, i: i32) -> Option<LlamaToken> {
+        let token =
+            unsafe { llama_cpp_sys_2::llama_get_sampled_token_ith(self.context.as_ptr(), i) };
+        // LLAMA_TOKEN_NULL is #define'd as -1 in llama.h (not exposed by bindgen)
+        if token == -1 {
+            None
+        } else {
+            Some(LlamaToken(token))
+        }
     }
 
     /// Print a breakdown of per-device memory use to the default logger.

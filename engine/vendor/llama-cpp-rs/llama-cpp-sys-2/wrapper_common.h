@@ -7,6 +7,7 @@
 
 struct llama_model;
 struct llama_sampler;
+struct llama_rs_mtp_speculative;
 struct llama_vocab;
 
 #include "wrapper_utils.h"
@@ -59,9 +60,44 @@ int llama_rs_fit_params(
 
 void llama_rs_memory_breakdown_print(const struct llama_context * ctx);
 
-// Renders `n_messages` role/content pairs through the model's own chat
-// template (the Jinja template embedded in the GGUF, read via
-// llama_model_chat_template), the same way llama-server does by default.
+struct llama_rs_mtp_speculative * llama_rs_mtp_speculative_init(
+    struct llama_context * ctx_tgt,
+    struct llama_context * ctx_dft,
+    int32_t n_max,
+    int32_t n_min,
+    float p_min);
+
+void llama_rs_mtp_speculative_free(struct llama_rs_mtp_speculative * spec);
+
+llama_rs_status llama_rs_mtp_speculative_begin(
+    struct llama_rs_mtp_speculative * spec,
+    const llama_token * prompt_tokens,
+    size_t prompt_tokens_count);
+
+llama_rs_status llama_rs_mtp_speculative_process(
+    struct llama_rs_mtp_speculative * spec,
+    const struct llama_batch * batch);
+
+llama_rs_status llama_rs_mtp_speculative_draft(
+    struct llama_rs_mtp_speculative * spec,
+    llama_pos n_past,
+    llama_token id_last,
+    const llama_token * prompt_tokens,
+    size_t prompt_tokens_count,
+    llama_token * out_tokens,
+    size_t out_tokens_capacity,
+    size_t * out_tokens_count);
+
+llama_rs_status llama_rs_mtp_speculative_accept(
+    struct llama_rs_mtp_speculative * spec,
+    uint16_t n_accepted);
+
+void llama_rs_string_free(char * ptr);
+
+// EuLLM addition: renders `n_messages` role/content pairs through the
+// model's own chat template (the Jinja template embedded in the GGUF, read
+// via llama_model_chat_template), the same way llama-server does by
+// default.
 // `*out_was_explicit` reports whether the GGUF actually carried a template —
 // when false, llama.cpp silently fell back to a built-in ChatML template
 // internally, and `*out_prompt` reflects that fallback rather than anything
@@ -87,14 +123,13 @@ llama_rs_status llama_rs_apply_chat_template(
     char ** out_thinking_start_tag,
     char ** out_thinking_end_tag);
 
-void llama_rs_string_free(char * ptr);
-
-// OpenAI-compatible chat template application. `messages_json` is the
-// request's own OpenAI-format messages array (so tool roles and assistant
-// tool_calls survive), `tools_json` the OpenAI tools array or NULL,
-// `tool_choice` "auto"/"required"/"none" or NULL. Besides the rendered
-// prompt, returns the output-format triple (`out_format`, `out_parser`,
-// `out_generation_prompt`) that llama_rs_chat_parse needs.
+// EuLLM addition: OpenAI-compatible chat template application.
+// `messages_json` is the request's own OpenAI-format messages array (so
+// tool roles and assistant tool_calls survive), `tools_json` the OpenAI
+// tools array or NULL, `tool_choice` "auto"/"required"/"none" or NULL.
+// Besides the rendered prompt, returns the output-format triple
+// (`out_format`, `out_parser`, `out_generation_prompt`) that
+// llama_rs_chat_parse needs.
 llama_rs_status llama_rs_apply_chat_template_oai(
     const struct llama_model * model,
     const char * messages_json,
@@ -110,9 +145,10 @@ llama_rs_status llama_rs_apply_chat_template_oai(
     char ** out_thinking_start_tag,
     char ** out_thinking_end_tag);
 
-// Parse raw model output into an OpenAI-compatible message JSON
-// ({"role","content","reasoning_content","tool_calls",...}) using the format
-// triple from llama_rs_apply_chat_template_oai. Model-free and stateless.
+// EuLLM addition: parse raw model output into an OpenAI-compatible message
+// JSON ({"role","content","reasoning_content","tool_calls",...}) using the
+// format triple from llama_rs_apply_chat_template_oai. Model-free and
+// stateless.
 llama_rs_status llama_rs_chat_parse(
     const char * input,
     bool is_partial,
