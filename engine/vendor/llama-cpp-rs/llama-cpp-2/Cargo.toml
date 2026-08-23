@@ -23,6 +23,14 @@
 #     already-upstream `llama_rs_memory_breakdown_print` (declared in
 #     `wrapper_common.h`, not itself an EuLLM addition) in a safe method —
 #     only the Rust-side wrapper is ours.
+#   - `llama-cpp-sys-2/wrapper_common.cpp`, `llama_rs_memory_breakdown_print`:
+#     the verbosity-threshold raise/restore around the call (the table is
+#     LOG_TRC-gated and would otherwise never print) is an EuLLM patch on a
+#     wrapper whose one-line body is upstream's.
+#   - `context/params/get_set.rs`: `with_n_outputs_max`/`n_outputs_max` —
+#     upstream never exposed the raw struct's `n_outputs_max` field, and its
+#     n_batch default costs ~300 MiB of compute buffer per loaded model for
+#     callers that read one logit per sequence per step (see the method doc).
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"

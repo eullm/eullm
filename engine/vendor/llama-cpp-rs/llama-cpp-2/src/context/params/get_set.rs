@@ -129,6 +129,49 @@ impl LlamaContextParams {
         self.context_params.n_seq_max
     }
 
+    /// EuLLM addition: set the maximum number of logit/embedding outputs per
+    /// ubatch (llama.cpp's `n_outputs_max`). `0` (the default) means
+    /// `n_batch`, and that default is expensive: the load-time worst-case
+    /// graph reservation sizes the LM-head output as
+    /// `[n_vocab, min(n_ubatch, n_outputs_max)]` in the device compute
+    /// buffer — for a ~150k-vocab model at n_ubatch 512 that is ~300 MiB of
+    /// VRAM reserved for logit rows a caller that only ever reads one logit
+    /// per sequence per decode step (every normal generation loop) never
+    /// asks for. Setting this to the real ceiling (e.g. the number of
+    /// concurrent sequences) shrinks the compute buffer accordingly.
+    ///
+    /// Do NOT set this below `n_batch` on an embeddings context: pooled
+    /// embeddings output every token of the batch, and llama.cpp rejects a
+    /// batch requesting more outputs than this cap.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use llama_cpp_2::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default()
+    ///     .with_n_outputs_max(4);
+    /// assert_eq!(params.n_outputs_max(), 4);
+    /// ```
+    #[must_use]
+    pub fn with_n_outputs_max(mut self, n_outputs_max: u32) -> Self {
+        self.context_params.n_outputs_max = n_outputs_max;
+        self
+    }
+
+    /// EuLLM addition: get `n_outputs_max` (see [`Self::with_n_outputs_max`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use llama_cpp_2::context::params::LlamaContextParams;
+    /// let params = LlamaContextParams::default();
+    /// assert_eq!(params.n_outputs_max(), 0);
+    /// ```
+    #[must_use]
+    pub fn n_outputs_max(&self) -> u32 {
+        self.context_params.n_outputs_max
+    }
+
     /// Set the number of recurrent-state rollback snapshots per sequence.
     ///
     /// MTP speculative decoding uses this on the target context so llama.cpp can

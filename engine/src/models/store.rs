@@ -230,11 +230,30 @@ impl ModelStore {
     }
 
     /// Get the multimodal projector path for a locally available model, if any.
+    /// Resolve a model name to its directory under the store root, refusing
+    /// any name that would escape it.
+    ///
+    /// The `model` field of an API request reaches these lookups directly:
+    /// only the launch-model shortcut, the opt-in `EULLM_ALLOW_MODEL_PATHS`
+    /// path forms, and the `/models` mount join in `api::resolve_model` are
+    /// gated there, and step 5 handed the raw name straight to the store. A
+    /// name like `../../../../etc` would then resolve to `root.join("../…")`
+    /// and load — or, via `delete`, remove — a directory outside the store,
+    /// and double as an existence oracle for `.gguf`/`manifest.json` anywhere
+    /// the process can read. `is_safe_filename` (the same check the `/models`
+    /// join and the manifest's own `gguf_file` already use) rejects `..`,
+    /// separators, and absolute/drive-relative forms, so the join can only
+    /// ever stay one component under the root. `eullm/` is stripped first
+    /// because that is a legitimate id prefix, not a path segment.
+    fn safe_model_dir(&self, name: &str) -> Option<PathBuf> {
+        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
+        is_safe_filename(short_name).then(|| self.root.join(short_name))
+    }
+
     /// Mirrors `gguf_path` but reads `manifest.mmproj_file` instead, and falls
     /// back to scanning the directory for any `mmproj*.gguf` file.
     pub fn mmproj_path(&self, name: &str) -> Option<PathBuf> {
-        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
-        let model_dir = self.root.join(short_name);
+        let model_dir = self.safe_model_dir(name)?;
 
         let manifest_path = model_dir.join("manifest.json");
         if manifest_path.exists()
@@ -255,7 +274,10 @@ impl ModelStore {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                    && name.starts_with("mmproj")
+                    // Case-insensitive to match `mmproj_beside`, the picker and
+                    // `registry::is_mmproj`: an `MMProj-F16.gguf` those three
+                    // find must not be invisible here.
+                    && name.to_ascii_lowercase().starts_with("mmproj")
                     && path.extension().is_some_and(|e| e == "gguf")
                 {
                     return Some(path);
@@ -267,8 +289,7 @@ impl ModelStore {
 
     /// Get the GGUF file path for a locally available model.
     pub fn gguf_path(&self, name: &str) -> Option<PathBuf> {
-        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
-        let model_dir = self.root.join(short_name);
+        let model_dir = self.safe_model_dir(name)?;
 
         // Check manifest for recorded gguf_file
         let manifest_path = model_dir.join("manifest.json");
@@ -443,8 +464,10 @@ impl ModelStore {
 
     /// Get a single model's manifest by name.
     pub fn get(&self, name: &str) -> Result<Option<ModelManifest>, Box<dyn std::error::Error>> {
-        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
-        let manifest_path = self.root.join(short_name).join("manifest.json");
+        let Some(model_dir) = self.safe_model_dir(name) else {
+            return Ok(None);
+        };
+        let manifest_path = model_dir.join("manifest.json");
 
         if !manifest_path.exists() {
             return Ok(None);
@@ -454,21 +477,27 @@ impl ModelStore {
         let mut manifest: ModelManifest = serde_json::from_str(&data)?;
         // Backfill the addressable id from the directory key for older manifests.
         if manifest.id.is_empty() {
-            manifest.id = short_name.to_string();
+            manifest.id = name.strip_prefix("eullm/").unwrap_or(name).to_string();
         }
         Ok(Some(manifest))
     }
 
     /// Check if a model exists locally.
     pub fn exists(&self, name: &str) -> bool {
-        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
-        self.root.join(short_name).join("manifest.json").exists()
+        self.safe_model_dir(name)
+            .is_some_and(|d| d.join("manifest.json").exists())
     }
 
     /// Return the path to the model directory.
+    ///
+    /// A name that would escape the store root (see `safe_model_dir`) is
+    /// mapped to a fixed non-escaping placeholder under the root rather than
+    /// the traversing join, so no caller can be steered outside the store —
+    /// every real caller passes a store-owned id, and the placeholder simply
+    /// won't exist for a crafted one.
     pub fn model_path(&self, name: &str) -> PathBuf {
-        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
-        self.root.join(short_name)
+        self.safe_model_dir(name)
+            .unwrap_or_else(|| self.root.join("__eullm_invalid_model_name__"))
     }
 
     /// Create this model's directory, or explain why it cannot be created.
@@ -491,8 +520,11 @@ impl ModelStore {
     /// removed, `Ok(None)` if there was nothing to remove. Errors only on
     /// real filesystem failures.
     pub fn delete(&self, name: &str) -> Result<Option<u64>, Box<dyn std::error::Error>> {
-        let short_name = name.strip_prefix("eullm/").unwrap_or(name);
-        let model_dir = self.root.join(short_name);
+        // Never let a crafted name steer `remove_dir_all` outside the store —
+        // this is the most destructive of the store lookups.
+        let Some(model_dir) = self.safe_model_dir(name) else {
+            return Ok(None);
+        };
         if !model_dir.exists() {
             return Ok(None);
         }
@@ -951,6 +983,45 @@ mod store_lookup_tests {
                 .is_none(),
             "the display name must not be used as a path"
         );
+    }
+
+    // A crafted `model` name must never let a lookup escape the store root.
+    // Every store lookup reachable from an API request goes through
+    // `safe_model_dir`; here we plant a real .gguf OUTSIDE the store and
+    // confirm a `../`-laden name cannot reach it, delete it, or confirm its
+    // existence.
+    #[test]
+    fn a_traversing_name_cannot_escape_the_store_root() {
+        let s = Scratch::new();
+        // A sibling dir next to the store root, holding weights the store must
+        // not be able to reach by name.
+        let outside = s.0.parent().unwrap().join(format!(
+            "eullm-outside-{}",
+            s.0.file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir_all(&outside).expect("outside dir");
+        fs::write(outside.join("model.gguf"), b"x").expect("outside gguf");
+        let store = s.store();
+
+        let escape = format!("../{}", outside.file_name().unwrap().to_string_lossy());
+        assert!(
+            store.gguf_path(&escape).is_none(),
+            "gguf_path must not resolve a ../ name outside the root"
+        );
+        assert!(
+            !store.exists(&escape),
+            "exists must not confirm a directory outside the root"
+        );
+        assert!(store.get(&escape).expect("get").is_none());
+        assert!(store.mmproj_path(&escape).is_none());
+        // delete must be a no-op, and the outside weights must survive.
+        assert!(store.delete(&escape).expect("delete").is_none());
+        assert!(
+            outside.join("model.gguf").exists(),
+            "delete escaped the store root and removed an outside file"
+        );
+
+        let _ = fs::remove_dir_all(&outside);
     }
 
     // What the user actually hit: a manifest present, the GGUF absent. The

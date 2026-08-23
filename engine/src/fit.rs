@@ -653,16 +653,20 @@ pub(crate) const MIN_FREE_TOTAL_RATIO: f64 = 0.12;
 const VRAM_SAFETY_FRACTION: f64 = 0.97;
 
 /// Flat reserve for the CUDA context + the prefill/decode compute buffer,
-/// which does not scale per offloaded layer. The original 320 MiB here was
-/// calibrated against an observed ~307 MiB CUDA0 compute buffer — but at the
-/// time, `n_ubatch` (the actual physical prefill micro-batch size, which is
-/// what the compute buffer scales with) was never set explicitly and
-/// defaulted to llama.cpp's own 512 regardless of `n_batch`. Now that
-/// `n_ubatch` is explicitly set to 1024 (see `inference::build_ctx_params_with_cache`),
-/// this reserve is doubled as a conservative linear estimate — NOT yet
-/// confirmed against a real measurement at n_ubatch=1024. Re-measure the
-/// actual CUDA0 compute buffer size (nvidia-smi, or the loader's own
-/// buffer-size log line) before trusting this at a tight fit.
+/// which does not scale per offloaded layer. The original 320 MiB was
+/// calibrated against an observed ~307 MiB CUDA0 compute buffer; it was then
+/// doubled to 640 on the theory that `n_ubatch` had been bumped to 1024. That
+/// theory is now stale twice over: `build_ctx_params_with_cache` sets
+/// `n_ubatch = n_batch.min(512)` (llama.cpp's real default — the 1024 bump was
+/// reverted), and the compute buffer has since been measured directly via the
+/// memory-breakdown table (`LlamaContext::memory_breakdown_print`) at ~507 MiB
+/// on a 27B before the `n_outputs_max` cap and expected far lower after it.
+/// So 640 is almost certainly oversized now — but lowering it is a real-fit
+/// change that must be validated on hardware before it lands (an under-reserve
+/// OOMs at load), which is why the number is left alone here and the
+/// recalibration tracked as H2-H in docs/backlog-fix-e-hardening.md. Re-measure
+/// the actual CUDA0 compute buffer with the breakdown table at the new
+/// n_ubatch and n_outputs_max before trusting this at a tight fit.
 const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 640.0 * 1024.0 * 1024.0;
 
 /// The same kind of flat reserve as `COMPUTE_BUFFER_RESERVE_BYTES`, but for
