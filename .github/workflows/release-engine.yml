@@ -410,9 +410,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - cuda: "12.8.1"
-            artifact: eullm-linux-x64-cuda-12.8
-            cuda_tag: "12.8.1-devel-ubuntu22.04"
+          # CUDA 13 rather than 12.8. Two reasons, both about size: NVIDIA
+          # dropped library support below sm_75 in 13.0, so the static math
+          # libraries no longer carry Maxwell/Pascal/Volta kernels at all, and
+          # everything we still don't need gets pruned below. The cost is the
+          # minimum driver moving from r570 to r580 — an August 2025 driver,
+          # and any card this binary can run on (RTX 3000/4000/5000) is on a
+          # newer one already.
+          - cuda: "13.1.2"
+            artifact: eullm-linux-x64-cuda-13.1
+            cuda_tag: "13.1.2-devel-ubuntu22.04"
 
     runs-on: ubuntu-22.04
     container:
@@ -515,13 +522,12 @@ jobs:
       # throwaway container needs no build.rs change: the link step just
       # picks up whatever lives in the toolkit's lib64.
       #
-      # This also settles a question that looked like a regression: a local
-      # build came out ~210 MB smaller than the CI one from the same commit.
-      # The cause was CUDA 13, which dropped library support below sm_75, so
-      # NVIDIA had already deleted the pre-Turing kernels. Pruning to the
-      # three architectures we actually target removes strictly more than
-      # that, and without raising the minimum driver from r570 to r580 the
-      # way a toolkit bump would.
+      # This is why a local build once came out ~210 MB smaller than the CI
+      # build of the same commit: the local toolkit was CUDA 13, which had
+      # already dropped the pre-Turing kernels. The job now uses CUDA 13 too,
+      # so that part is settled at the source — but 13 still ships sm_75
+      # through sm_121, which is nine architectures we cannot run on. The
+      # prune is what removes those, and it is the larger of the two effects.
       #
       # Deliberately best-effort. A release that publishes a fat CUDA binary
       # is a nuisance; a release that publishes NO CUDA binary is a
@@ -613,9 +619,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - cuda: "12.8.1"
-            artifact: eullm-linux-arm64-cuda-12.8
-            cuda_tag: "12.8.1-devel-ubuntu22.04"
+          # See the x64 CUDA job for why this is 13.x and not 12.8.
+          - cuda: "13.1.2"
+            artifact: eullm-linux-arm64-cuda-13.1
+            cuda_tag: "13.1.2-devel-ubuntu22.04"
 
     runs-on: ubuntu-24.04-arm
     container:
@@ -941,11 +948,11 @@ jobs:
         run: choco install ninja --no-progress --yes
         shell: pwsh
 
-      - name: Install CUDA toolkit 12.8
+      - name: Install CUDA toolkit 13.1
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
-          cuda: "12.8.0"
+          cuda: "13.1.2"
           # `local` (full offline installer ~3 GB) instead of `network`: the
           # network installer is a tiny bootstrapper that re-downloads ~5 GB
           # of packages from NVIDIA's CDN on EVERY run (6-17 min, variable),
@@ -1036,7 +1043,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
-          key: x86_64-pc-windows-msvc-cuda-12.8
+          key: x86_64-pc-windows-msvc-cuda-13.1
 
       # sccache now uses S3 backend (see workflow-level env block)
 
@@ -1095,16 +1102,62 @@ jobs:
           # launch. We ship a ZIP containing the exe + the three DLLs that
           # llama.cpp inference actually loads. The user extracts and runs
           # eullm.exe from the same folder — no CUDA Toolkit install needed.
-          $bundle = "eullm-windows-x64-cuda-12.8"
+          $bundle = "eullm-windows-x64-cuda-13.1"
           New-Item -ItemType Directory -Path $bundle -Force | Out-Null
           Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "$bundle\eullm.exe"
           $cudaBin = "$env:CUDA_PATH\bin"
-          # Copy by glob so we are resilient to the exact minor-version
-          # suffix (cudart64_12.dll, cublas64_12.dll, cublasLt64_12.dll).
+          # Copy by glob so we are resilient to the exact major-version
+          # suffix — cudart64_12.dll became cudart64_13.dll on the move to
+          # CUDA 13, and the globs needed no edit for it.
           Copy-Item "$cudaBin\cudart64_*.dll"   -Destination $bundle
           Copy-Item "$cudaBin\cublas64_*.dll"   -Destination $bundle
           Copy-Item "$cudaBin\cublasLt64_*.dll" -Destination $bundle
           Get-ChildItem $bundle | Format-Table Name, Length
+
+          # Prove the bundle is self-contained instead of assuming it.
+          #
+          # Which NVIDIA DLLs cuBLAS itself pulls in is a property of the
+          # toolkit, not of our code, and it changes between major versions —
+          # cuBLASLt has grown dependencies (nvJitLink) in the 12.x line
+          # already. Getting this wrong is uniquely nasty: Windows resolves
+          # imports at process start, so the user gets a dialog box, no log
+          # line, and an exe that never runs. Nothing in CI would notice.
+          #
+          # dumpbin is on PATH because the MSVC dev environment is active for
+          # Ninja. Read only the "Image has the following dependencies"
+          # section — delay-loaded imports are listed separately and are not
+          # required at start-up. Any cu*/nv* import that is not in the folder
+          # and not a system DLL fails the step: a bundle that cannot launch
+          # is worse than one that is missing, and the fix is one more
+          # Copy-Item once the log names the file.
+          # Only a genuinely missing DLL fails this step. If the check itself
+          # throws — dumpbin absent, output format changed — it warns and gets
+          # out of the way, because losing the Windows CUDA artifact to a bug
+          # in a safety net is a worse outcome than the net not running.
+          $needed = $null
+          try {
+            $found = @()
+            foreach ($f in Get-ChildItem $bundle -File | Where-Object { $_.Extension -in '.exe', '.dll' }) {
+              $out = & dumpbin /dependents $f.FullName 2>&1 | Out-String
+              $head = ($out -split 'Image has the following delay load dependencies')[0]
+              $found += [regex]::Matches($head, '(?im)^\s+((?:cu|nv)\w*\.dll)\s*$') |
+                        ForEach-Object { $_.Groups[1].Value }
+            }
+            $needed = $found | Sort-Object -Unique
+          } catch {
+            Write-Host "::warning::dependency check could not run ($_) — bundle NOT verified"
+          }
+          if ($null -ne $needed) {
+            $have = (Get-ChildItem $bundle -Filter *.dll).Name
+            $missing = $needed | Where-Object { $have -notcontains $_ }
+            if ($missing) {
+              Write-Host "::error::NVIDIA DLLs imported but not bundled: $($missing -join ', ')"
+              Write-Host "Add a Copy-Item for each, and its sub-package to the CUDA install step above."
+              exit 1
+            }
+            Write-Host "Bundle is self-contained. NVIDIA imports: $($needed -join ', ')"
+          }
+
           Compress-Archive -Path "$bundle\*" -DestinationPath "$bundle.zip" -Force
         env:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
@@ -1112,8 +1165,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v6
         with:
-          name: eullm-windows-x64-cuda-12.8
-          path: eullm-windows-x64-cuda-12.8.zip
+          name: eullm-windows-x64-cuda-13.1
+          path: eullm-windows-x64-cuda-13.1.zip
 
   release:
     needs:
@@ -1200,8 +1253,8 @@ jobs:
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64 -o eullm
             chmod +x eullm
 
-            # Linux x64 with NVIDIA GPU (CUDA 12.8 — supports RTX 3000/4000/5000 series)
-            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-12.8 -o eullm
+            # Linux x64 with NVIDIA GPU (CUDA 13.1 — supports RTX 3000/4000/5000 series)
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-13.1 -o eullm
             chmod +x eullm
 
             # macOS Apple Silicon
@@ -1213,9 +1266,9 @@ jobs:
             # Windows x64 (CPU only) — PowerShell
             Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64.exe -OutFile eullm.exe
 
-            # Windows x64 with NVIDIA GPU (CUDA 12.8 — supports RTX 3000/4000/5000)
+            # Windows x64 with NVIDIA GPU (CUDA 13.1 — supports RTX 3000/4000/5000)
             # This is a ZIP: eullm.exe + the CUDA runtime DLLs it needs.
-            Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64-cuda-12.8.zip -OutFile eullm-cuda.zip
+            Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64-cuda-13.1.zip -OutFile eullm-cuda.zip
             Expand-Archive eullm-cuda.zip -DestinationPath eullm-cuda
             # Run eullm.exe from inside the extracted folder (the DLLs must
             # stay next to it).
@@ -1228,12 +1281,12 @@ jobs:
             |--------|-------------|--------------|
             | `eullm-linux-x64` | CPU only | None |
             | `eullm-linux-x64-vulkan` | Any GPU with a Vulkan driver (AMD, Intel, NVIDIA) | `libvulkan.so.1` and a working driver on the machine — mesa RADV, amdvlk, NVIDIA or Intel ANV. Nothing is bundled |
-            | `eullm-linux-x64-cuda-12.8` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ |
+            | `eullm-linux-x64-cuda-13.1` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 580+ |
             | `eullm-linux-arm64` | CPU only | ARM64 Linux |
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
             | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 |
-            | `eullm-windows-x64-cuda-12.8.zip` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 570+ for Windows. ZIP bundles eullm.exe + CUDA DLLs — run from the extracted folder |
+            | `eullm-windows-x64-cuda-13.1.zip` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 580+ for Windows. ZIP bundles eullm.exe + CUDA DLLs — run from the extracted folder |
 
             ### Pick a model interactively
 
