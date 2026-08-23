@@ -823,8 +823,22 @@ fn run_scheduler_loop(
     let has_quantized_cache = config.cache_type_k != super::KvCacheType::F16
         || config.cache_type_v != super::KvCacheType::F16;
 
+    // n_outputs_max: how many logit rows a single decode can ask for. Left at
+    // llama.cpp's default (0 = n_batch = 2048), the load-time worst-case graph
+    // reservation sizes the LM-head output as [n_vocab, min(n_ubatch,
+    // n_outputs_max)] in the DEVICE compute buffer — ~300 MiB of VRAM for a
+    // ~150k-vocab model at n_ubatch 512, reserved for logit rows this
+    // scheduler never requests: it reads exactly one logit per sequence per
+    // decode step (prefill sets `logits=true` only on each sequence's last
+    // token). Found comparing memory-breakdown tables against stock
+    // llama-cli on identical settings — its compute buffer was a third of
+    // ours (164 vs 507 MiB on a 27B) because its in-graph backend samplers
+    // cap the reserve at n_outputs_max_per_seq=1 per sequence, while our
+    // host-side sampling path fell into the n_batch-sized default. The true
+    // ceiling here is one output per concurrent slot.
     let ctx_params = super::build_ctx_params(&config, ctx_size)
-        .with_n_seq_max(sched_config.max_batch_size as u32);
+        .with_n_seq_max(sched_config.max_batch_size as u32)
+        .with_n_outputs_max(sched_config.max_batch_size as u32);
 
     let mut ctx = match model.new_context(&backend, ctx_params) {
         Ok(c) => c,
@@ -847,7 +861,8 @@ fn run_scheduler_loop(
                         super::KvCacheType::F16,
                         super::KvCacheType::F16,
                     )
-                    .with_n_seq_max(sched_config.max_batch_size as u32);
+                    .with_n_seq_max(sched_config.max_batch_size as u32)
+                    .with_n_outputs_max(sched_config.max_batch_size as u32);
 
                     match model.new_context(&backend, ctx_params) {
                         Ok(c) => c,
