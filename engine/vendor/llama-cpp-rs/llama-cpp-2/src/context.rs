@@ -89,6 +89,18 @@ impl<'model> LlamaContext<'model> {
         unsafe { llama_cpp_sys_2::llama_n_ctx(self.context.as_ptr()) }
     }
 
+    /// EuLLM addition: prints llama.cpp's own per-device memory breakdown
+    /// table (`total | free | self = model + (context = kv + compute +
+    /// output) + unaccounted`) for this context to stderr via llama.cpp's
+    /// logger — the same table stock `llama-cli`/`llama-server` print at
+    /// load time. Wraps `common_memory_breakdown_print`, the exact function
+    /// those binaries call, so a comparison against them is apples-to-apples
+    /// instead of a guess from two different processes' free-VRAM numbers.
+    #[cfg(feature = "common")]
+    pub fn memory_breakdown_print(&self) {
+        unsafe { llama_cpp_sys_2::llama_rs_memory_breakdown_print(self.context.as_ptr()) }
+    }
+
     /// Decodes the batch.
     ///
     /// # Errors

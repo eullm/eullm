@@ -19,6 +19,10 @@
 #   - `llama-cpp-sys-2/wrapper_common.h` + `.cpp`: the C wrapper functions
 #     backing the three above — `llama_rs_apply_chat_template`,
 #     `llama_rs_apply_chat_template_oai`, `llama_rs_chat_parse`.
+#   - `context.rs`: `LlamaContext::memory_breakdown_print`, wrapping the
+#     already-upstream `llama_rs_memory_breakdown_print` (declared in
+#     `wrapper_common.h`, not itself an EuLLM addition) in a safe method —
+#     only the Rust-side wrapper is ours.
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"

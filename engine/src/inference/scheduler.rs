@@ -874,6 +874,14 @@ fn run_scheduler_loop(
     // and this backend is now shared (`Arc`) across every model in the
     // process.
 
+    // The same per-device memory breakdown table stock llama-cli/llama-server
+    // print at load time (`total | free | self = model + context + compute`),
+    // straight from llama.cpp's own accounting rather than our own estimate —
+    // logged here so a real allocation can be compared apples-to-apples
+    // against a stock binary's, instead of guessing from two processes' free
+    // VRAM numbers.
+    ctx.memory_breakdown_print();
+
     let mut active: Vec<ActiveSequence> = Vec::with_capacity(sched_config.max_batch_size);
     // Pool of idle sequence slots in range [0, max_batch_size), each carrying
     // the token history currently resident in its KV cache so a later
