@@ -616,7 +616,26 @@ fn best_checkpoint<'a>(
 ) -> Option<&'a PromptCheckpoint> {
     checkpoints
         .iter()
-        .filter(|c| !c.tokens.is_empty() && common_prefix_len(&c.tokens, tokens) == c.tokens.len())
+        .filter(|c| {
+            // A STRICT prefix: `c.tokens.len() < tokens.len()`, not just `==`.
+            // Restoring a checkpoint sets `effective_reuse_len =
+            // c.tokens.len()`, and `prefill_sequence` then decodes only
+            // `tokens[reuse_len..]`. A checkpoint covering the *entire* prompt
+            // leaves that range empty: no decode runs, no fresh logits row is
+            // produced, and the caller's `sampler.sample(&ctx, -1)` reads
+            // whatever logits the context last held — a different sequence's
+            // or a previous turn's distribution — and samples the first reply
+            // token from it, silently. Every other reuse path already caps at
+            // `len-1` (see `pick_slot`, and the text-prefix fast path) for
+            // exactly this reason; requiring a strict prefix here is the
+            // checkpoint equivalent — there is always at least one token left
+            // to decode, so there is always a genuine logits row to sample.
+            // The full-prompt-resubmitted case simply falls through to a
+            // reuse_len=0 re-prefill, which is correct.
+            !c.tokens.is_empty()
+                && c.tokens.len() < tokens.len()
+                && common_prefix_len(&c.tokens, tokens) == c.tokens.len()
+        })
         .max_by_key(|c| c.tokens.len())
 }
 
@@ -1116,10 +1135,17 @@ fn run_scheduler_loop(
                         // recurrent-incapable) in-place trim above, but an
                         // earlier full-state snapshot of the same lineage
                         // might still cover most of the prompt. Restoring is
-                        // best-effort: if the restore call itself fails, or
-                        // the retried prefill still errors, this simply falls
-                        // through to the reuse_len=0 attempt below exactly as
-                        // if no checkpoint had been found.
+                        // best-effort for the *restore call itself*: if
+                        // `state_seq_set_data_ext` returns false the snapshot
+                        // is ignored and `effective_reuse_len` stays 0, so the
+                        // single `prefill_sequence` call below re-prefills the
+                        // whole prompt. (Note there is no further retry after
+                        // that one call: a decode error there fails the
+                        // request — the `Err` arm handles it.) `best_checkpoint`
+                        // only ever returns a STRICT prefix, so a successful
+                        // restore always leaves at least one token for that
+                        // call to decode and therefore a real logits row to
+                        // sample from.
                         if let Some(checkpoint) = best_checkpoint(&checkpoints, &tokens) {
                             let restore_len = checkpoint.tokens.len();
                             // SAFETY: `checkpoint.state` was produced by this
@@ -2455,6 +2481,26 @@ mod tests {
         // equivalent to restoring nothing — must never be selected.
         let checkpoints = vec![checkpoint(Vec::new(), 1)];
         assert!(best_checkpoint(&checkpoints, &toks(&[1, 2, 3])).is_none());
+    }
+
+    #[test]
+    fn best_checkpoint_rejects_a_full_length_match() {
+        // A checkpoint whose tokens EQUAL the request leaves nothing to
+        // decode: restoring it would produce no fresh logits row, and the
+        // first reply token would be sampled from stale/foreign logits. Must
+        // fall through to a full re-prefill instead. A strictly-shorter
+        // checkpoint in the same set is still usable and must win.
+        let checkpoints = vec![
+            checkpoint(toks(&[1, 2, 3, 4]), 5), // exactly the request — rejected
+            checkpoint(toks(&[1, 2, 3]), 3),    // strict prefix — usable
+        ];
+        let tokens = toks(&[1, 2, 3, 4]);
+        let best = best_checkpoint(&checkpoints, &tokens).expect("the strict prefix is usable");
+        assert_eq!(best.tokens, toks(&[1, 2, 3]));
+
+        // With only the full-length checkpoint, nothing is selected.
+        let only_full = vec![checkpoint(toks(&[1, 2, 3, 4]), 5)];
+        assert!(best_checkpoint(&only_full, &tokens).is_none());
     }
 
     #[test]
