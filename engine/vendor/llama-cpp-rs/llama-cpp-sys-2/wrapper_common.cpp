@@ -12,6 +12,7 @@
 #include "llama.cpp/common/common.h"
 #include "llama.cpp/common/fit.h"
 #include "llama.cpp/common/json-schema-to-grammar.h"
+#include "llama.cpp/common/log.h"
 #include "llama.cpp/common/speculative.h"
 #include "llama.cpp/include/llama.h"
 #include "wrapper_utils.h"
@@ -338,8 +339,20 @@ extern "C" int llama_rs_fit_params(
         log_level));
 }
 
+// EuLLM fix: common_memory_breakdown_print's table is emitted via LOG_TRC
+// (common/log.h), gated by a *separate* verbosity threshold
+// (common_log_verbosity_thold, default LOG_LEVEL_INFO) that the upstream
+// wrapper below never touched — the table was silently dropped before it
+// ever reached any llama_log_set callback, regardless of what that
+// callback did. Temporarily raising the threshold to LOG_LEVEL_TRACE lets
+// the table through; restored after so nothing else on the process gets
+// noisier. common_log_set_verbosity_thold is documented as not
+// thread-safe (mutates global state), same caveat as common_fit_params.
 extern "C" void llama_rs_memory_breakdown_print(const struct llama_context * ctx) {
+    const int prev_thold = common_log_get_verbosity_thold();
+    common_log_set_verbosity_thold(LOG_LEVEL_TRACE);
     common_memory_breakdown_print(ctx);
+    common_log_set_verbosity_thold(prev_thold);
 }
 
 struct llama_rs_mtp_speculative {
