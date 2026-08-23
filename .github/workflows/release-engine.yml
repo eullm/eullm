@@ -905,7 +905,18 @@ jobs:
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
         shell: pwsh
-        run: sccache --show-stats
+        # `if: always()` means this also runs after an earlier step failed, and
+        # if that step was the toolchain install then sccache was never put on
+        # PATH — so this one dies too, and its red "sccache is not recognized"
+        # sits at the bottom of the log where the real cause is easy to miss.
+        # It cost a diagnosis on v0.7.3. The Linux jobs already tolerate this
+        # with `|| true`; this is the same thing in PowerShell.
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            sccache --show-stats
+          } else {
+            Write-Host "sccache not on PATH (an earlier step failed) — no stats to show"
+          }
 
       - name: Package binary
         shell: pwsh
@@ -952,7 +963,17 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.35
         id: cuda-toolkit
         with:
-          cuda: "13.1.2"
+          # 13.1.1, not the 13.1.2 the Linux containers use, because this
+          # action carries its own hardcoded table of download URLs and the
+          # pinned tag's table stops at 13.1.1 — v0.7.3 failed here in one
+          # second with "Version not available: 13.1.2". The version list on
+          # the action's master branch is NOT the list the pinned tag has;
+          # check the tag (src/links/windows-links.ts at v0.2.35) before
+          # changing this. Both sides are still CUDA 13.1, which is what the
+          # artifact name and the driver requirement are about, so the patch
+          # difference is deliberate and not a mismatch to "fix". Raising it
+          # further means bumping the action tag first.
+          cuda: "13.1.1"
           # `local` (full offline installer ~3 GB) instead of `network`: the
           # network installer is a tiny bootstrapper that re-downloads ~5 GB
           # of packages from NVIDIA's CDN on EVERY run (6-17 min, variable),
@@ -1092,7 +1113,18 @@ jobs:
       - name: sccache stats (visibility into S3 hit/miss)
         if: always()
         shell: pwsh
-        run: sccache --show-stats
+        # `if: always()` means this also runs after an earlier step failed, and
+        # if that step was the toolchain install then sccache was never put on
+        # PATH — so this one dies too, and its red "sccache is not recognized"
+        # sits at the bottom of the log where the real cause is easy to miss.
+        # It cost a diagnosis on v0.7.3. The Linux jobs already tolerate this
+        # with `|| true`; this is the same thing in PowerShell.
+        run: |
+          if (Get-Command sccache -ErrorAction SilentlyContinue) {
+            sccache --show-stats
+          } else {
+            Write-Host "sccache not on PATH (an earlier step failed) — no stats to show"
+          }
 
       - name: Package binary + bundle CUDA runtime DLLs
         shell: pwsh
