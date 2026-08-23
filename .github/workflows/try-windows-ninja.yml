@@ -71,7 +71,13 @@ jobs:
           # with the full toolkit on v0.6.38) and whether the build below still
           # links. A missing component fails the build outright.
           method: local
-          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
+          # Mirrors the release job, which suspended its sub-packages list on
+          # the move to CUDA 13 (see the long note there: include/crt/ comes
+          # from a component nobody has been able to name). This workflow is
+          # where the trim gets restored — re-add the list here plus one
+          # candidate component, dispatch, and only then put it back in the
+          # release job:
+          # '["nvcc","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up

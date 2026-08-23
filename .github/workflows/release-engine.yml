@@ -1025,7 +1025,52 @@ jobs:
           # immediate — it cannot produce a subtly wrong binary. Validate a
           # change to this list by dispatching try-windows-ninja.yml, which
           # carries the same list, rather than by spending a release.
-          sub-packages: '["nvcc","cudart","cublas","cublas_dev","thrust","cuobjdump","nvdisasm","cuxxfilt","nvprune","visual_studio_integration"]'
+          #
+          # SUSPENDED ON THE MOVE TO CUDA 13 — the list above is the 12.8 one
+          # and is kept for the day it can be restored. Every component name in
+          # it still exists in 13.1 (checked against NVIDIA's 13.1 Windows
+          # installation guide, including that "thrust" was NOT folded into
+          # cccl), and the install itself succeeded. The build then died in
+          # CMake's CUDA compiler-detection step:
+          #
+          #   CUDA/v13.1/include\cuda_runtime.h(82): fatal error C1083:
+          #   Cannot open include file: 'crt/host_config.h'
+          #
+          # So in CUDA 13 the include/crt/ headers come from some component
+          # this list does not name, and which one is not documented anywhere
+          # findable: NVIDIA's own forum thread reporting exactly this on
+          # GitHub runners ("CUDA 13.0 on GitHub action runners:
+          # 'crt/host_config.h': No such file or directory") sat unanswered.
+          # Two release builds were already spent guessing at CUDA 13 details;
+          # a third guess is not worth ~7 minutes of installer time. Installing
+          # everything is deterministic — a full toolkit always has that
+          # header.
+          #
+          # To restore the trim: dispatch try-windows-ninja.yml with the list
+          # re-added plus one candidate component at a time, and put the winner
+          # back here. That workflow exists for exactly this, and using it
+          # instead of a release is the lesson from tonight.
+
+      # Say "the toolkit is incomplete" in those words, at the moment it is
+      # knowable. The CUDA 13 failure this replaces surfaced as CMake being
+      # unable to identify the CUDA compiler — several layers away from the
+      # one missing file, inside a cargo build script, and it cost a release
+      # build to read. These are the headers ggml-cuda's include chain reaches
+      # first, so if any is absent nothing downstream can work.
+      - name: Verify the CUDA toolkit has the headers the build needs
+        shell: pwsh
+        env:
+          CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
+        run: |
+          $inc = Join-Path $env:CUDA_PATH "include"
+          $want = @("crt\host_config.h", "cuda_runtime.h", "cuda_fp16.h", "cublas_v2.h")
+          $missing = $want | Where-Object { -not (Test-Path (Join-Path $inc $_)) }
+          if ($missing) {
+            Write-Host "::error::CUDA toolkit at $env:CUDA_PATH is missing: $($missing -join ', ')"
+            Write-Host "The installed component set does not cover these headers — see the sub-packages note on the install step."
+            exit 1
+          }
+          Write-Host "CUDA headers present under $inc"
 
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
