@@ -91,14 +91,51 @@ impl<'model> LlamaContext<'model> {
 
     /// EuLLM addition: prints llama.cpp's own per-device memory breakdown
     /// table (`total | free | self = model + (context = kv + compute +
-    /// output) + unaccounted`) for this context to stderr via llama.cpp's
-    /// logger — the same table stock `llama-cli`/`llama-server` print at
-    /// load time. Wraps `common_memory_breakdown_print`, the exact function
-    /// those binaries call, so a comparison against them is apples-to-apples
-    /// instead of a guess from two different processes' free-VRAM numbers.
+    /// output) + unaccounted`) for this context to stderr — the same table
+    /// stock `llama-cli`/`llama-server` print at load time. Wraps
+    /// `common_memory_breakdown_print`, the exact function those binaries
+    /// call, so a comparison against them is apples-to-apples instead of a
+    /// guess from two different processes' free-VRAM numbers.
+    ///
+    /// `common_memory_breakdown_print` writes through llama.cpp's own
+    /// logger, which a caller may have silenced process-wide (eullm does,
+    /// via `LlamaBackend::void_logs`, to drop noisy CUDA graph warmup
+    /// lines) — a diagnostic call that a prior, unrelated `void_logs()` call
+    /// silently swallows defeats the point of calling it, so this
+    /// temporarily installs a real stderr-writing callback around the
+    /// print and restores the previous one after.
+    ///
+    /// # Thread safety
+    /// Not thread-safe: `llama_log_set` mutates process-global state (the
+    /// same caveat llama.cpp documents on `common_fit_params`). Only call
+    /// this where nothing else touches the logger concurrently — e.g. once,
+    /// right after a model finishes loading, before any other model's load
+    /// or a request's own logging can race with it.
     #[cfg(feature = "common")]
     pub fn memory_breakdown_print(&self) {
-        unsafe { llama_cpp_sys_2::llama_rs_memory_breakdown_print(self.context.as_ptr()) }
+        unsafe extern "C" fn stderr_log(
+            _level: llama_cpp_sys_2::ggml_log_level,
+            text: *const std::os::raw::c_char,
+            _user_data: *mut std::os::raw::c_void,
+        ) {
+            if !text.is_null() {
+                let bytes = unsafe { std::ffi::CStr::from_ptr(text) }.to_bytes();
+                use std::io::Write as _;
+                let _ = std::io::stderr().write_all(bytes);
+            }
+        }
+        unsafe extern "C" fn void_log(
+            _level: llama_cpp_sys_2::ggml_log_level,
+            _text: *const std::os::raw::c_char,
+            _user_data: *mut std::os::raw::c_void,
+        ) {
+        }
+
+        unsafe {
+            llama_cpp_sys_2::llama_log_set(Some(stderr_log), std::ptr::null_mut());
+            llama_cpp_sys_2::llama_rs_memory_breakdown_print(self.context.as_ptr());
+            llama_cpp_sys_2::llama_log_set(Some(void_log), std::ptr::null_mut());
+        }
     }
 
     /// Decodes the batch.
