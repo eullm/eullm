@@ -1520,22 +1520,25 @@ impl InferenceEngine {
 
         // A model loaded with an mmproj can still receive a plain text-only
         // message — `generate`/`generate_streaming` build their context from
-        // `config.n_batch` capped at 1024 (see `build_ctx_params`), same as
-        // any other model — as well as one with an image, which
-        // `generate_multimodal` sizes to `multimodal_batch_size` instead.
-        // The probe must cover whichever of the two is larger, since either
-        // is a real request this same loaded model will serve: taking only
-        // the (usually smaller) multimodal figure proved a compute-buffer
-        // requirement too small for an ordinary text message, which is
-        // exactly the gap a 12B Q8 vision model on real hardware exposed:
-        // load-time probe passed, first *text* message with no image
-        // attached failed with the same OOM the probe was built to catch.
-        // Taking only the plain text figure, symmetrically, undersells what
-        // a real image needs.
+        // `config.n_batch` capped at 512 (see `build_ctx_params_with_cache`,
+        // matching llama.cpp's own n_ubatch default), same as any other model
+        // — as well as one with an image, which `generate_multimodal` sizes to
+        // `multimodal_batch_size` instead. The probe must cover whichever of
+        // the two is larger, since either is a real request this same loaded
+        // model will serve: taking only the (usually smaller) multimodal
+        // figure proved a compute-buffer requirement too small for an ordinary
+        // text message, which is exactly the gap a 12B Q8 vision model on real
+        // hardware exposed: load-time probe passed, first *text* message with
+        // no image attached failed with the same OOM the probe was built to
+        // catch. Taking only the plain text figure, symmetrically, undersells
+        // what a real image needs. The `.min(512)` must track
+        // `build_ctx_params_with_cache`'s cap exactly — probing a larger
+        // micro-batch than the real request uses only shrinks the context
+        // more than necessary.
         let worst_case_batch = config
             .mmproj_path
             .is_some()
-            .then(|| multimodal_batch_size().max(config.n_batch.min(1024)));
+            .then(|| multimodal_batch_size().max(config.n_batch.min(512)));
 
         // Why a candidate was rejected — kept so the final error message (if
         // even the floor is rejected) can still name the real cause instead
