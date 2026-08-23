@@ -2457,6 +2457,18 @@ l'evidenza sul sorgente raccolta durante la revisione.
 
 ---
 
+## Revisione 0.7.1 (2026-08-23)
+
+Una passata di revisione su quattro fronti (sicurezza, correttezza scheduler,
+riscontro di questo backlog contro il codice, igiene) è documentata a parte in
+[`analisi-hardening-0.7.1.md`](analisi-hardening-0.7.1.md). Ha chiuso un path
+traversal nei lookup del model store (S-01) e un bug di campionamento da logit
+stantii nel restore da checkpoint (S-02), e ha confermato ancora valide le voci
+aperte H1-F, H2-F, H2-H, H3-E, H3-I, H3-J, H3-S, H3-T, H4-C, H4-D, H4-E, H4-F(b),
+H4-G elencate sopra. **H3-R** è superata da H3-Y e può chiudersi con rimando.
+Nessuna regressione dal bump b10405. Le voci nuove (S-05…S-11, G-01/G-02) vivono
+in quel documento, non ripetute qui.
+
 ## Cose che funzionano e non vanno toccate
 
 Registrate perché un refactor le metterebbe a rischio senza accorgersene.
