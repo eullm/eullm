@@ -3593,16 +3593,31 @@ async fn interactive_chat(
             print!("{stats_line}");
         }
 
-        // Add assistant response to history. When this turn suppressed
-        // thinking (think_arg == false), the model actually decoded
-        // `think_suppression_prefix()` right before this response — stored
-        // history must include it too, or every later turn that includes
-        // this one reconstructs text that no longer matches what's really
-        // resident in this turn's KV cache, breaking prefix-based KV reuse
-        // from here on (see `ChatTemplate::build_prompt`'s doc comment).
+        // Add assistant response to history.
+        //
+        // When thinking is on, the reasoning block is dropped before storing:
+        // it existed to produce this answer, not to be re-read on every later
+        // turn. Keeping it is what made a terminal conversation hit
+        // `truncated — out of context` several exchanges before the same
+        // conversation did in the web UI, which has always stripped it
+        // (`ui/app.js`, `stripThink`) — a few hundred reasoning tokens per turn
+        // add up far faster than the answers do.
+        //
+        // This does cost some prefix KV reuse: the reconstructed history no
+        // longer matches the tokens actually resident in the cache, so reuse
+        // now ends at the last user turn instead of covering the whole
+        // conversation. The trade is clearly worth it — re-decoding one
+        // stripped answer is a short prefill, while the reasoning it replaces
+        // would otherwise occupy the context permanently, on every turn.
+        //
+        // When this turn suppressed thinking (think_arg == false) nothing is
+        // stripped, and the model's decoded `think_suppression_prefix()` is
+        // prepended instead: stored history must include it, or every later
+        // turn reconstructs text that no longer matches this turn's KV cache
+        // (see `ChatTemplate::build_prompt`'s doc comment).
         if !response_text.is_empty() {
             let content = if think_arg {
-                response_text
+                crate::chat_template::strip_reasoning_blocks(&response_text)
             } else {
                 format!("{}{response_text}", template.think_suppression_prefix())
             };

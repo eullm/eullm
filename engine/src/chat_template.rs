@@ -285,6 +285,125 @@ impl ChatTemplate {
     }
 }
 
+/// Remove a finished assistant turn's reasoning blocks, leaving the answer.
+///
+/// Reasoning exists to produce the answer, not to remember it: feeding a
+/// model's own thinking back as context on the next turn confuses reasoning
+/// models and — the reason this matters here — burns context several times
+/// faster than the answers do. On a model that spends a few hundred tokens
+/// thinking per turn, a 4096-token window that should hold a long conversation
+/// instead fills after a handful of exchanges and generation stops with
+/// `truncated — out of context`.
+///
+/// The web UI has always done this (`ui/app.js`, `stripThink`); the terminal
+/// chat did not, so the same conversation ran out of context far sooner there.
+/// This is the Rust half of that same decision, kept deliberately literal —
+/// plain substring scanning over the two delimiter pairs the engine already
+/// knows (see `inference::DEFAULT_HARMONY_FILTERS`), no regex dependency, and
+/// no attempt to be clever about nesting the models do not produce.
+///
+/// An unclosed opener (a turn cut off mid-thought by the context limit) drops
+/// everything from that opener on: there is no answer after it to keep.
+///
+/// Returns the input unchanged if stripping would leave nothing — a turn that
+/// was *only* reasoning still has to occupy its place in the history, and an
+/// empty assistant message is worse than a verbose one. `app.js` makes the
+/// same choice (`stripThink(t) || t`).
+#[must_use]
+pub fn strip_reasoning_blocks(text: &str) -> String {
+    // Gemma 4's Harmony channel form first, then Qwen3's `<think>`, matching
+    // the order `app.js` applies them. Note the asymmetric channel delimiters
+    // (`<|channel>` opens, `<channel|>` closes) — not a typo.
+    let stripped = strip_delimited(text, "<|channel>thought", "<channel|>");
+    let stripped = strip_delimited(&stripped, "<think>", "</think>");
+    let stripped = stripped.trim();
+
+    if stripped.is_empty() {
+        text.to_string()
+    } else {
+        stripped.to_string()
+    }
+}
+
+/// Drop every `open`…`close` span, and any whitespace trailing a closed one.
+/// An `open` with no matching `close` truncates the rest of the string.
+fn strip_delimited(text: &str, open: &str, close: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+
+    loop {
+        let Some(start) = rest.find(open) else {
+            out.push_str(rest);
+            return out;
+        };
+        out.push_str(&rest[..start]);
+
+        let after_open = &rest[start + open.len()..];
+        let Some(end) = after_open.find(close) else {
+            // Unclosed: everything from the opener on is reasoning that never
+            // reached an answer.
+            return out;
+        };
+        rest = after_open[end + close.len()..].trim_start();
+    }
+}
+
+#[cfg(test)]
+mod reasoning_strip_tests {
+    use super::strip_reasoning_blocks;
+
+    #[test]
+    fn a_qwen3_think_block_is_dropped_and_the_answer_kept() {
+        let turn = "<think>\nThe user greets me. Answer warmly.\n</think>\n\nCiao! Come stai?";
+        assert_eq!(strip_reasoning_blocks(turn), "Ciao! Come stai?");
+    }
+
+    #[test]
+    fn a_gemma_channel_thought_is_dropped() {
+        let turn = "<|channel>thought\nreasoning here<channel|>The answer.";
+        assert_eq!(strip_reasoning_blocks(turn), "The answer.");
+    }
+
+    /// The case that motivated this: a turn cut off mid-thought by the context
+    /// limit. There is no answer after the opener, so nothing is worth keeping
+    /// from it — but the turn must not come back empty either.
+    #[test]
+    fn an_unclosed_think_block_falls_back_to_the_original() {
+        let turn = "<think>\nStill reasoning when the context ran out";
+        // Stripping leaves nothing, so the original is preserved rather than
+        // storing an empty assistant turn.
+        assert_eq!(strip_reasoning_blocks(turn), turn);
+    }
+
+    #[test]
+    fn text_before_an_unclosed_opener_survives() {
+        let turn = "Partial answer.<think>\nthen it ran out";
+        assert_eq!(strip_reasoning_blocks(turn), "Partial answer.");
+    }
+
+    #[test]
+    fn a_turn_with_no_reasoning_is_untouched() {
+        let turn = "Just a plain answer, no reasoning at all.";
+        assert_eq!(strip_reasoning_blocks(turn), turn);
+    }
+
+    #[test]
+    fn several_blocks_in_one_turn_are_all_dropped() {
+        let turn = "<think>a</think>First. <think>b</think>Second.";
+        assert_eq!(strip_reasoning_blocks(turn), "First. Second.");
+    }
+
+    /// A `<think>` written by the *user* inside their own message is not
+    /// reasoning the model produced, but this runs only on assistant turns, so
+    /// the asymmetry is intentional and worth pinning: whatever is between the
+    /// delimiters goes, wherever it sits.
+    #[test]
+    fn stripping_is_purely_positional_not_semantic() {
+        let turn = "Answer <think>aside</think> continues.";
+        assert_eq!(strip_reasoning_blocks(turn), "Answer continues.");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
