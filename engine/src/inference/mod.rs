@@ -226,14 +226,19 @@ pub(crate) fn build_ctx_params_with_cache(
 ) -> LlamaContextParams {
     // n_ubatch is the *physical* micro-batch the GPU actually processes in one
     // pass during prefill — distinct from n_batch, which is just the logical
-    // ceiling on how many tokens can be queued. Left unset, llama.cpp defaults
-    // it to 512 regardless of n_batch, so prefill never used the larger batch
-    // this server configures. 1024 is a deliberately conservative bump (not
-    // n_batch's full 2048) since a bigger micro-batch needs a bigger compute
-    // buffer, and fit.rs's COMPUTE_BUFFER_RESERVE_BYTES hasn't been
-    // recalibrated against real GPU measurements at this value yet. Must never exceed
-    // n_batch (llama.cpp requirement), hence the min().
-    let n_ubatch = config.n_batch.min(1024);
+    // ceiling on how many tokens can be queued. llama.cpp's own default is
+    // 512, independent of n_batch (which defaults to 2048) — confirmed in
+    // llama.cpp's own common_params (common/common.h). eullm used to derive
+    // n_ubatch as min(n_batch, 1024), doubling llama.cpp's real default
+    // compute-buffer footprint. Found on real hardware (docs/backlog-fix-e-
+    // hardening.md H3-Y follow-up): on a card tight enough that a model
+    // barely fits at all, that doubled n_ubatch was the difference between
+    // eullm loading a context at all and OOMing at every size down to 512,
+    // while stock llama-cli — same file, same layers, same card, n_ubatch at
+    // its real default of 512 — loaded a context 16x larger. Matching
+    // llama.cpp's literal default here, not a value we invented. Must never
+    // exceed n_batch (llama.cpp requirement), hence the min().
+    let n_ubatch = config.n_batch.min(512);
     let mut params = LlamaContextParams::default()
         .with_n_ctx(Some(ctx_size))
         .with_n_batch(config.n_batch)
