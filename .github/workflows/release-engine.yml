@@ -452,12 +452,22 @@ jobs:
           key: cargo-registry-cuda-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-registry-cuda-
 
-      # Cache Rust target/ directory
+      # Cache Rust target/ directory.
+      #
+      # The `p1` generation marker is not decoration. Cargo decides the final
+      # binary is fresh from *its* inputs (crates, build-script output), and
+      # the CUDA static archives we link against are none of those — so a
+      # restored target/ from before the nvprune step below would let cargo
+      # skip the link entirely and publish the old fat binary from cache,
+      # with a green build and no warning anywhere. The marker is in
+      # restore-keys too, because a prefix match would restore the stale
+      # cache just as effectively as an exact one. Bump it (`p2`, …) on any
+      # future change to what gets linked but not to what cargo tracks.
       - uses: actions/cache@v5
         with:
           path: target
-          key: target-cuda-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: target-cuda-${{ matrix.cuda }}-
+          key: target-cuda-p1-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-cuda-p1-${{ matrix.cuda }}-
 
       # sccache now uses S3 backend (see workflow-level env block)
 
@@ -486,6 +496,68 @@ jobs:
           fi
           sccache --version
           sccache --start-server || true
+
+      # The bulk of the published CUDA binary is neither our code nor ggml's
+      # kernels — it is NVIDIA's static cuBLAS. The v0.7.2 assets say so
+      # plainly: `eullm-linux-x64` is 16 MB and `eullm-linux-x64-vulkan`
+      # (which carries a full set of GPU shaders) is 54 MB, while
+      # `eullm-linux-x64-cuda-12.8` is 902 MB. That ~880 MB is
+      # libcublas_static.a + libcublasLt_static.a, and those archives ship
+      # device code for EVERY architecture the toolkit supports — Maxwell
+      # (sm_50) through Blackwell. We compile ggml for exactly three
+      # (CMAKE_CUDA_ARCHITECTURES below) and the binary cannot run on
+      # anything else, so every other architecture's cuBLAS kernels are
+      # weight the user downloads and never executes.
+      #
+      # nvprune is NVIDIA's own tool for this and ships with the toolkit —
+      # its documented example is literally `nvprune -arch sm_120
+      # libcublas_static.a`. Pruning the archives in place inside this
+      # throwaway container needs no build.rs change: the link step just
+      # picks up whatever lives in the toolkit's lib64.
+      #
+      # This also settles a question that looked like a regression: a local
+      # build came out ~210 MB smaller than the CI one from the same commit.
+      # The cause was CUDA 13, which dropped library support below sm_75, so
+      # NVIDIA had already deleted the pre-Turing kernels. Pruning to the
+      # three architectures we actually target removes strictly more than
+      # that, and without raising the minimum driver from r570 to r580 the
+      # way a toolkit bump would.
+      #
+      # Deliberately best-effort. A release that publishes a fat CUDA binary
+      # is a nuisance; a release that publishes NO CUDA binary is a
+      # regression, and the release job's `files:` glob would swallow the
+      # omission silently. So a prune failure warns and leaves the originals
+      # in place, and the byte counts go into the log either way.
+      - name: Prune CUDA static libs to the architectures we ship
+        run: |
+          set -u
+          NVPRUNE=/usr/local/cuda/bin/nvprune
+          LIBDIR=/usr/local/cuda/lib64
+          # -gencode is the form NVIDIA documents for keeping more than one
+          # architecture; repeated -arch is documented as singular.
+          KEEP="-gencode=arch=compute_86,code=sm_86
+                -gencode=arch=compute_89,code=sm_89
+                -gencode=arch=compute_120,code=sm_120"
+          if [ ! -x "$NVPRUNE" ]; then
+            echo "::warning::nvprune not found at $NVPRUNE — shipping unpruned CUDA libs"
+            exit 0
+          fi
+          for lib in libcublas_static.a libcublasLt_static.a; do
+            src="$LIBDIR/$lib"
+            if [ ! -f "$src" ]; then
+              echo "::warning::$src not found — skipped"
+              continue
+            fi
+            before=$(stat -c%s "$src")
+            if "$NVPRUNE" $KEEP "$src" -o "$src.pruned" && [ -s "$src.pruned" ]; then
+              after=$(stat -c%s "$src.pruned")
+              mv "$src.pruned" "$src"
+              echo "$lib: $before -> $after bytes"
+            else
+              rm -f "$src.pruned"
+              echo "::warning::nvprune failed on $lib — shipping it unpruned"
+            fi
+          done
 
       - name: Build engine with CUDA + multimodal (mtmd)
         run: |
@@ -521,6 +593,9 @@ jobs:
           cp target/release/eullm ${{ matrix.artifact }}
           strip --strip-all ${{ matrix.artifact }} || true
           chmod +x ${{ matrix.artifact }}
+          # Printed so the effect of the nvprune step is visible in the log
+          # without downloading the release asset to measure it.
+          ls -l ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
@@ -579,8 +654,9 @@ jobs:
       - uses: actions/cache@v5
         with:
           path: target
-          key: target-cuda-arm64-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: target-cuda-arm64-${{ matrix.cuda }}-
+          # `p1`: see the x64 CUDA job for why the generation marker exists.
+          key: target-cuda-arm64-p1-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-cuda-arm64-p1-${{ matrix.cuda }}-
 
       - name: Install sccache
         run: |
@@ -605,6 +681,37 @@ jobs:
           fi
           sccache --version
           sccache --start-server || true
+
+      # Same reasoning as the x64 CUDA job — see the long comment there. The
+      # arm64 CUDA asset is 863 MB for the same reason the x64 one is 902 MB.
+      - name: Prune CUDA static libs to the architectures we ship
+        run: |
+          set -u
+          NVPRUNE=/usr/local/cuda/bin/nvprune
+          LIBDIR=/usr/local/cuda/lib64
+          KEEP="-gencode=arch=compute_86,code=sm_86
+                -gencode=arch=compute_89,code=sm_89
+                -gencode=arch=compute_120,code=sm_120"
+          if [ ! -x "$NVPRUNE" ]; then
+            echo "::warning::nvprune not found at $NVPRUNE — shipping unpruned CUDA libs"
+            exit 0
+          fi
+          for lib in libcublas_static.a libcublasLt_static.a; do
+            src="$LIBDIR/$lib"
+            if [ ! -f "$src" ]; then
+              echo "::warning::$src not found — skipped"
+              continue
+            fi
+            before=$(stat -c%s "$src")
+            if "$NVPRUNE" $KEEP "$src" -o "$src.pruned" && [ -s "$src.pruned" ]; then
+              after=$(stat -c%s "$src.pruned")
+              mv "$src.pruned" "$src"
+              echo "$lib: $before -> $after bytes"
+            else
+              rm -f "$src.pruned"
+              echo "::warning::nvprune failed on $lib — shipping it unpruned"
+            fi
+          done
 
       - name: Build engine with CUDA + multimodal (mtmd)
         run: |
@@ -635,6 +742,9 @@ jobs:
           cp target/release/eullm ${{ matrix.artifact }}
           strip --strip-all ${{ matrix.artifact }} || true
           chmod +x ${{ matrix.artifact }}
+          # Printed so the effect of the nvprune step is visible in the log
+          # without downloading the release asset to measure it.
+          ls -l ${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
