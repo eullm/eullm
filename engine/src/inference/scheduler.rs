@@ -874,6 +874,19 @@ fn run_scheduler_loop(
     // and this backend is now shared (`Arc`) across every model in the
     // process.
 
+    // The actual n_ubatch/n_batch llama.cpp applied — read back from the
+    // context rather than trusted from what we asked for, since this is
+    // exactly the number a VRAM-discrepancy comparison against a stock
+    // binary needs and the startup banner never printed it (only n_batch,
+    // the logical ceiling, not n_ubatch, the physical micro-batch that
+    // actually drives compute-buffer size).
+    tracing::info!(
+        "Context params applied: n_ctx={}, n_batch={}, n_ubatch={}",
+        ctx.n_ctx(),
+        ctx.n_batch(),
+        ctx.n_ubatch(),
+    );
+
     // The same per-device memory breakdown table stock llama-cli/llama-server
     // print at load time (`total | free | self = model + context + compute`),
     // straight from llama.cpp's own accounting rather than our own estimate —
