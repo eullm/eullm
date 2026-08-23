@@ -38,21 +38,50 @@ const DEFAULT_PIDFILE: &str = "eullm.pid";
 //   eullm 0.5.8 (CPU)
 // Only one branch matches per build because feature flags are mutually
 // exclusive (set by the release matrix).
+// The git commit this binary was built from (see build.rs) — the crate
+// version alone doesn't say which commit on an unreleased branch a build
+// came from, and "did you actually rebuild with the fix" was costing real
+// back-and-forth during hands-on debugging on real hardware.
 #[cfg(feature = "cuda")]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CUDA)");
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (CUDA) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
 #[cfg(feature = "metal")]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Metal)");
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (Metal) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
 #[cfg(feature = "rocm")]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (ROCm)");
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (ROCm) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
 #[cfg(feature = "vulkan")]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (Vulkan)");
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (Vulkan) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
 #[cfg(not(any(
     feature = "cuda",
     feature = "metal",
     feature = "rocm",
     feature = "vulkan"
 )))]
-const VERSION_STRING: &str = concat!(env!("CARGO_PKG_VERSION"), " (CPU)");
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (CPU) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
 
 /// Build the `run` command implied by a choice made in the interactive picker.
 ///
@@ -2307,7 +2336,11 @@ async fn cmd_run(
     let short = model_name.strip_prefix("eullm/").unwrap_or(&model_name);
 
     println!();
-    println!("eullm ready.  [v{}]", env!("CARGO_PKG_VERSION"));
+    println!(
+        "eullm ready.  [v{} {}]",
+        env!("CARGO_PKG_VERSION"),
+        env!("EULLM_GIT_HASH")
+    );
     println!("  API (EULLM):   http://localhost:{port}/api");
     println!("  API (OpenAI):  http://localhost:{port}/v1");
     if let Some(p) = ui_port {
