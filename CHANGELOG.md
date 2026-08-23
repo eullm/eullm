@@ -13,6 +13,43 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.2 — 2026-08-23
+
+### Fixed
+- **A model that fit and ran a moment ago could suddenly fail to allocate its
+  context — down to `--ctx-size 512` — on a card with just enough VRAM for
+  it.** The physical prefill micro-batch (`n_ubatch`) was set to 1024 instead
+  of llama.cpp's own default of 512, doubling the compute buffer that sizing
+  depends on; on a card where a model barely fits, that doubling was the
+  difference between loading a real context and failing at every size. Now
+  matches llama.cpp's default, so eullm allocates the same context a stock
+  `llama-cli` does on the same file, layers, and card.
+- **Roughly 300 MiB of VRAM per loaded model was reserved for output rows the
+  server never uses, on top of the fix above.** The load-time graph sized its
+  logit output for the full batch when a chat only ever reads one logit per
+  sequence per step; that space is now reclaimed, which on a large model can
+  mean one or two more layers fit on the GPU, or a bigger context, before
+  anything spills to slower CPU offload.
+- **Security: a request naming a model with `../` in it could reach files
+  outside the model store.** A crafted `model` field (e.g.
+  `"../../../../tmp/x"`) let the loader resolve, and in the delete path
+  *remove*, a directory outside the store, and could confirm whether a file
+  existed anywhere the process could read. Every model-name lookup now refuses
+  a name that would escape the store directory. Relevant to any deployment
+  that exposes the API beyond the local machine.
+- **With prompt checkpoints enabled (`--ctx-checkpoints`), resubmitting an
+  identical prompt on a hybrid/recurrent model could make the first reply
+  token come from the wrong conversation.** A checkpoint covering the entire
+  prompt left nothing to decode, so the reply was sampled from whatever the
+  context last held — silently. Fixed; the affected case now re-runs the
+  prompt normally.
+
+### Added
+- **`eullm -V` and the startup banner now show the exact git commit the binary
+  was built from** (e.g. `0.7.2 (CUDA) [a1b2c3d4e5f6]`, with `-dirty` when the
+  working tree had uncommitted changes at build time) — so a build from source
+  is identifiable beyond its version number.
+
 ## 0.7.1 — 2026-08-22
 
 ### Changed
