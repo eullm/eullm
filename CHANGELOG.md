@@ -13,6 +13,36 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.3 — 2026-08-23
+
+### Changed
+- **The NVIDIA downloads shrink by a large fraction, and their file names
+  change.** The CUDA binaries were carrying NVIDIA's cuBLAS device code for
+  every GPU architecture the toolkit supports — Maxwell through Blackwell —
+  while the binary itself is built for, and can only run on, RTX
+  3000/4000/5000. That unusable code is now stripped out before linking, and
+  the build moved to the CUDA 13 toolkit, which had already dropped the
+  oldest architectures on its own. Nothing about what the binary does or
+  which GPUs it supports changes; it is the same engine in a much smaller
+  file. Two consequences worth knowing before you upgrade: the downloads are
+  now named `eullm-linux-x64-cuda-13.1`, `eullm-linux-arm64-cuda-13.1` and
+  `eullm-windows-x64-cuda-13.1.zip` (they were `-cuda-12.8`), so a script
+  that fetches the old name by URL needs updating; and they require **NVIDIA
+  driver 580 or newer**, up from 570. The CPU, Vulkan and macOS builds are
+  untouched.
+
+### Fixed
+- **A long chat with a reasoning model ran out of context far sooner than it
+  should have in the terminal.** Every reply was stored in the conversation
+  complete with the model's thinking, so each new turn re-sent all of the
+  reasoning from every previous turn — several times more text than the
+  answers themselves, for no benefit, until the context filled and replies
+  came back truncated. The terminal chat now keeps the answers and drops the
+  thinking, which is what the web UI already did. Long conversations with
+  models like DeepSeek and the Qwen3 thinking variants now last several times
+  longer before hitting the limit, and the model is no longer fed its own
+  earlier deliberations as if they were part of the conversation.
+
 ## 0.7.2 — 2026-08-23
 
 ### Fixed
