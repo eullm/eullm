@@ -653,21 +653,28 @@ pub(crate) const MIN_FREE_TOTAL_RATIO: f64 = 0.12;
 const VRAM_SAFETY_FRACTION: f64 = 0.97;
 
 /// Flat reserve for the CUDA context + the prefill/decode compute buffer,
-/// which does not scale per offloaded layer. The original 320 MiB was
-/// calibrated against an observed ~307 MiB CUDA0 compute buffer; it was then
-/// doubled to 640 on the theory that `n_ubatch` had been bumped to 1024. That
-/// theory is now stale twice over: `build_ctx_params_with_cache` sets
-/// `n_ubatch = n_batch.min(512)` (llama.cpp's real default — the 1024 bump was
-/// reverted), and the compute buffer has since been measured directly via the
-/// memory-breakdown table (`LlamaContext::memory_breakdown_print`) at ~507 MiB
-/// on a 27B before the `n_outputs_max` cap and expected far lower after it.
-/// So 640 is almost certainly oversized now — but lowering it is a real-fit
-/// change that must be validated on hardware before it lands (an under-reserve
-/// OOMs at load), which is why the number is left alone here and the
-/// recalibration tracked as H2-H in docs/backlog-fix-e-hardening.md. Re-measure
-/// the actual CUDA0 compute buffer with the breakdown table at the new
-/// n_ubatch and n_outputs_max before trusting this at a tight fit.
-const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 640.0 * 1024.0 * 1024.0;
+/// which does not scale per offloaded layer. H2-H (docs/backlog-fix-e-hardening.md)
+/// tracked this as "almost certainly oversized" since the `n_outputs_max` cap
+/// landed, but left at 640 pending an on-hardware re-measurement — this is
+/// that re-measurement. `LlamaContext::memory_breakdown_print` on a 27B
+/// (RTX 5070 Ti, 16384 ctx, `n_ubatch` at its real default of 512, the
+/// `n_outputs_max` cap in effect) reported the actual CUDA0 compute buffer at
+/// **164 MiB**. 320 keeps roughly 2× that measurement as margin for
+/// architectures not yet re-measured (wider intermediate tensors, more attention
+/// heads) rather than pinning the reserve to one data point from one model.
+///
+/// Getting this wrong in the low direction OOMs at load, which is why it isn't
+/// pinned to the bare 164 — but this constant only feeds `--fit`'s *automatic*
+/// sizing, the guardrail for someone who launched with no `--gpu-layers` at
+/// all. Anyone who wants to steer past what it picks still can, with
+/// `--gpu-layers` (a ceiling on top of fit) or `--no-fit` (fit out of the
+/// loop entirely) — so a split that turns out mildly optimistic on some other
+/// architecture costs that person a manual `--gpu-layers` step down, not a
+/// silent failure with no recourse.
+///
+/// Re-measure via the breakdown table before lowering further; 320 is this
+/// session's floor, not a ceiling nothing will ever beat.
+const COMPUTE_BUFFER_RESERVE_BYTES: f64 = 320.0 * 1024.0 * 1024.0;
 
 /// The same kind of flat reserve as `COMPUTE_BUFFER_RESERVE_BYTES`, but for
 /// an embedding model's own compute buffer rather than a generation model's
