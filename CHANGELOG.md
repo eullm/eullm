@@ -32,6 +32,14 @@ something changed, less so for understanding what it means.
   untouched.
 
 ### Fixed
+- **The terminal chat cut every reply off at 2048 tokens, even with a much
+  bigger context window open and mostly empty.** `--ctx-size 4096` with a
+  short prompt left roughly 4000 tokens of real room, but a leftover cap
+  clamped every reply to 2048 regardless, and reported it as
+  `truncated — out of context` — a context exhaustion that had not actually
+  happened. Longer answers, and models that think before answering, are no
+  longer cut short for a reason unrelated to the context you asked for.
+  `/maxtokens <n>` still sets an explicit cap when you want one.
 - **A long chat with a reasoning model ran out of context far sooner than it
   should have in the terminal.** Every reply was stored in the conversation
   complete with the model's thinking, so each new turn re-sent all of the

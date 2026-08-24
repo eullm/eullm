@@ -3508,9 +3508,19 @@ async fn interactive_chat(
             build_cli_prompt(&backend, &template, &pairs, think_arg)
         };
 
-        // Rough token estimate: ~4 chars per token. Leave room for the response.
+        // Rough token estimate: ~4 chars per token. This is the real bound —
+        // whatever room is left in the context after the prompt — with no
+        // extra cap layered on top. A hardcoded `.min(2048)` used to sit here,
+        // silently contradicting the "unlimited by default" comment on
+        // `max_reply_tokens` above: with `--ctx-size 4096` and a 76-token
+        // prompt, ~4000 tokens of real room were available, but every reply
+        // still got cut at 2048 and reported as `truncated — out of context`
+        // — a context exhaustion that never actually happened. `max_tokens`
+        // is combined with `max_reply_tokens` below, so `/maxtokens <n>`
+        // still works as an explicit cap; only the silent unconditional one
+        // is gone.
         let estimated_prompt_tokens = prompt.len() as u32 / 4;
-        let max_tokens = ctx_size.saturating_sub(estimated_prompt_tokens).min(2048);
+        let max_tokens = ctx_size.saturating_sub(estimated_prompt_tokens);
 
         if max_tokens < 32 {
             eprintln!("Warning: conversation too long for context window. Use /clear to reset.\n");
