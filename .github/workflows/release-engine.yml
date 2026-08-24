@@ -1182,13 +1182,29 @@ jobs:
           $bundle = "eullm-windows-x64-cuda-13.1"
           New-Item -ItemType Directory -Path $bundle -Force | Out-Null
           Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "$bundle\eullm.exe"
-          $cudaBin = "$env:CUDA_PATH\bin"
-          # Copy by glob so we are resilient to the exact major-version
-          # suffix — cudart64_12.dll became cudart64_13.dll on the move to
-          # CUDA 13, and the globs needed no edit for it.
-          Copy-Item "$cudaBin\cudart64_*.dll"   -Destination $bundle
-          Copy-Item "$cudaBin\cublas64_*.dll"   -Destination $bundle
-          Copy-Item "$cudaBin\cublasLt64_*.dll" -Destination $bundle
+
+          # Search the whole toolkit tree for the three DLLs, rather than
+          # assuming they sit directly under \bin. That assumption held for
+          # CUDA 12.8 and broke on the move to 13.1: `$env:CUDA_PATH\bin`
+          # matched nothing, all three Copy-Item calls silently copied
+          # zero files (a glob with no match is not an error in
+          # PowerShell), and the bundle shipped as exe-only — caught only
+          # by the dumpbin check below, which is exactly what it exists
+          # for. NVIDIA does not document the post-install layout, and it
+          # has already moved once; searching finds the files wherever
+          # this toolkit version put them, instead of encoding a path that
+          # the next version can silently invalidate the same way.
+          $names = "cudart64_*.dll", "cublas64_*.dll", "cublasLt64_*.dll"
+          foreach ($pattern in $names) {
+            $hit = Get-ChildItem -Path $env:CUDA_PATH -Recurse -Filter $pattern -File -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if ($hit) {
+              Copy-Item $hit.FullName -Destination $bundle
+              Write-Host "Bundled $($hit.Name) from $($hit.DirectoryName)"
+            } else {
+              Write-Host "::warning::no file matching $pattern found anywhere under $env:CUDA_PATH"
+            }
+          }
           Get-ChildItem $bundle | Format-Table Name, Length
 
           # Prove the bundle is self-contained instead of assuming it.
