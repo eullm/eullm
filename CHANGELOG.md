@@ -13,6 +13,27 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.4 — 2026-08-28
+
+### Fixed
+- **Loading a model with `--n-cpu-moe N` for `N` greater than 1 crashed
+  instead of loading**, panicking with `last buft_override was not empty`.
+  Every MoE-to-CPU layer override after the first was written into the same
+  slot instead of the next free one, so the crash was guaranteed as soon as
+  more than one layer needed offloading — in practice, any large MoE model
+  that `--fit` or a manual `--n-cpu-moe` chose to partially offload, such as
+  Qwen3-Next-80B-A3B on a single consumer GPU. `--cpu-moe` (offload every MoE
+  layer in one call) and single-layer `--n-cpu-moe 1` were unaffected; this
+  is what broke everything above that.
+- **`--fit`'s automatic GPU-layer sizing reserved more headroom for the
+  compute buffer than modern loads actually use**, so it sometimes left a
+  layer or two on CPU that would have fit on GPU. The reserve was set years
+  ago and had already been flagged as outdated; a real measurement on
+  today's loader (27B model, 16384 context) now backs the new, smaller
+  figure. This only affects the automatic split `--fit` picks when no
+  `--gpu-layers` is given — `--gpu-layers` still overrides it, and
+  `--no-fit` skips it entirely.
+
 ## 0.7.3 — 2026-08-23
 
 ### Changed
