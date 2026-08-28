@@ -225,7 +225,7 @@ impl LlamaModelParams {
     ) {
         let kv_override = self
             .kv_overrides
-            .get_mut(0)
+            .last_mut()
             .expect("kv_overrides did not have a next allocated");
 
         assert_eq!(kv_override.key[0], 0, "last kv_override was not empty");
@@ -269,7 +269,7 @@ impl LlamaModelParams {
     pub fn add_cpu_buft_override(mut self: Pin<&mut Self>, key: &CStr) {
         let buft_override = self
             .buft_overrides
-            .get_mut(0)
+            .last_mut()
             .expect("buft_overrides did not have a next allocated");
 
         assert!(
@@ -693,6 +693,33 @@ mod tests {
         assert_eq!(
             params.tensor_buft_override_patterns(),
             vec!["\\.ffn_(up|down|gate)_(ch|)exps".to_owned()],
+        );
+    }
+
+    #[test]
+    fn tensor_buft_override_patterns_reads_back_multiple_added_overrides() {
+        // Regression test: --n-cpu-moe N>1 calls add_cpu_buft_override once per
+        // layer on the same params. A prior re-vendor swapped `.last_mut()` for
+        // `.get_mut(0)` here, which panicked on the second call ("last
+        // buft_override was not empty") because it kept re-reading the already
+        // filled first slot instead of the newest empty one.
+        let mut params = pin!(LlamaModelParams::default());
+        params
+            .as_mut()
+            .add_cpu_buft_override(c"blk\\.0\\.ffn_(up|down|gate)_(ch|)exps");
+        params
+            .as_mut()
+            .add_cpu_buft_override(c"blk\\.1\\.ffn_(up|down|gate)_(ch|)exps");
+        params
+            .as_mut()
+            .add_cpu_buft_override(c"blk\\.2\\.ffn_(up|down|gate)_(ch|)exps");
+        assert_eq!(
+            params.tensor_buft_override_patterns(),
+            vec![
+                "blk\\.0\\.ffn_(up|down|gate)_(ch|)exps".to_owned(),
+                "blk\\.1\\.ffn_(up|down|gate)_(ch|)exps".to_owned(),
+                "blk\\.2\\.ffn_(up|down|gate)_(ch|)exps".to_owned(),
+            ],
         );
     }
 
