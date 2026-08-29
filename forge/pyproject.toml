@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "eullm-forge"
 version = "0.1.0"
 description = "EULLM Forge — compress, customize, and brand open-source LLMs"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.10"
 authors = [
     { name = "EULLM Team", email = "dev@eullm.eu" },

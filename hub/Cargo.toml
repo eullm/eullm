@@ -3,7 +3,7 @@ name = "eullm-hub"
 version = "0.1.0"
 edition = "2024"
 description = "EULLM Hub — EU-hosted model registry for sovereign LLMs"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/eullm/eullm"
 
 [dependencies]

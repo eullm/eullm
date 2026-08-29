@@ -3,7 +3,7 @@
 </p>
 
 <p align="center"><strong>EULLM Platform</strong></p>
-<p align="center"><strong>The inference Engine is ready today.</strong> Drop-in Ollama replacement, Apache 2.0, EU-sovereign, AI Act-ready audit trail, zero telemetry.<br><em>Plus a roadmap to verticalize, compress, and ship domain-specific models on European infrastructure.</em></p>
+<p align="center"><strong>The inference Engine is ready today.</strong> Drop-in Ollama replacement, AGPL-3.0, EU-sovereign, AI Act-ready audit trail, zero telemetry.<br><em>Plus a roadmap to verticalize, compress, and ship domain-specific models on European infrastructure.</em></p>
 
 <p align="center">
   <a href="#try-it-now">Try it now</a> ·
@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-Apache%202.0-blue" alt="License" />
+  <img src="https://img.shields.io/badge/license-AGPL%203.0-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
   <img src="https://img.shields.io/badge/Engine-v0.6.29-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
@@ -1026,7 +1026,7 @@ The EU AI Act (Regulation 2024/1689) is easy to discuss on paper and hard to
 study on *running* software. EULLM is built to be an open, reproducible
 **testbed** for exactly that: every inference is written to a local,
 inspectable audit trail, nothing leaves the machine, and the whole stack is
-Apache-2.0 with no hidden services — so a lab can instrument, measure and
+AGPL-3.0 with no hidden services — so a lab can instrument, measure and
 prototype transparency, traceability and human-oversight mechanisms on a real
 engine instead of a mock.
 
@@ -1326,7 +1326,17 @@ If you use EuLLM in academic research, EU grant proposals, or technical publicat
 
 ## License
 
-EULLM is licensed under [Apache 2.0](LICENSE) — the same license used by the models we build on. Use it, fork it, sell it, modify it. No restrictions.
+EULLM is licensed under [AGPL-3.0-or-later](LICENSE). Use it, fork it, modify
+it, run it commercially — the one condition is copyleft: if you modify EULLM
+and let others use it over a network (including as a hosted service), you
+must offer them the Corresponding Source of your modified version. Versions
+published before the 2026-08 relicense remain available to everyone under
+their original Apache 2.0 terms; this only governs new work going forward.
+Contributions require signing the project's CLA before merge.
+
+The models we build on (Qwen 3, Mistral, Falcon 3, etc.) keep their own,
+separate licenses — see the [model catalog](#planned-verticalized-models-q4-2026-roadmap)
+and each model's card.
 
 ## Support the project
 

@@ -13,6 +13,21 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Changed
+- **EULLM's own code is now licensed AGPL-3.0-or-later, not Apache 2.0.**
+  This applies to new work going forward only: every version already
+  published (0.7.4 and earlier) keeps its original Apache 2.0 terms for
+  anyone who already has a copy — a license grant already given can't be
+  revoked. The practical difference for AGPL-3.0: if you modify EULLM and
+  let others use it over a network, including as a hosted service, you must
+  offer them the Corresponding Source of your modified version. Running an
+  unmodified build, or modifying it for purely internal/local use, carries
+  no new obligation. The models EULLM runs (Qwen 3, Mistral, Falcon 3, etc.)
+  are unaffected — they keep their own separate licenses. Contributions now
+  require signing the project's CLA before merge.
+
 ## 0.7.4 — 2026-08-28
 
 ### Fixed
