@@ -104,9 +104,15 @@ See [docs/architecture.md](docs/architecture.md) for detailed diagrams.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under [Apache 2.0](LICENSE).
+EULLM is licensed under [AGPL-3.0-or-later](LICENSE). By contributing, you
+agree that your contributions will be licensed under the same terms, and you
+must sign the project's CLA before a pull request can be merged (ask in the
+PR if this hasn't happened yet).
 
-**Important:** Do not introduce dependencies with GPL, AGPL, or other copyleft licenses. All dependencies must be Apache 2.0 compatible.
+**Important:** Do not introduce *dependencies* with GPL, AGPL, or other
+copyleft licenses — our own crates being AGPL-3.0-or-later doesn't change
+this. Every dependency must stay permissive (MIT, Apache-2.0, BSD, or
+similar); `cargo deny check licenses` enforces this for the Rust workspace.
 
 ## Questions?
 

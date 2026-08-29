@@ -1,7 +1,7 @@
 {
   "title": "EuLLM — Open-source sovereign LLM platform",
   "description": "<p>EuLLM is an open-source platform for creating, distributing, and running sovereign EU-compliant Large Language Models, designed for verticalization across domains, languages, and brands while ensuring AI Act compliance.</p><p>The platform consists of three components: <strong>Engine</strong> — a Rust-based inference runtime built on top of llama.cpp, exposing OpenAI-compatible and Ollama-compatible APIs on the same port, with TurboQuant KV cache compression for up to 4× context length on consumer GPUs and a continuous batching scheduler for parallel decode of multiple concurrent requests; <strong>Forge</strong> — a verticalization pipeline written in Python that compresses 14B-30B foundation models down to specialized 7B domain experts via structural pruning, knowledge distillation, quantization, and identity LoRA fine-tuning; <strong>Hub</strong> — an EU-hosted model registry providing AI Act compliance cards, provenance documentation, and verifiable model lineage tracking, distributed via European cloud infrastructure to ensure data sovereignty.</p><p>Use cases include sovereign EU LLM deployment for regulated industries (legal, healthcare, finance), domain-specific verticalized models, and EU AI Act compliant inference infrastructure.</p>",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-or-later",
   "upload_type": "software",
   "creators": [
     {

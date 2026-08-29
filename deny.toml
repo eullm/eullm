@@ -1,7 +1,9 @@
 # cargo-deny — dependency, licence and advisory policy for the Rust workspace.
 #
-# `CLAUDE.md` states that no GPL, AGPL or other copyleft dependency may enter
-# the tree, and that everything must be Apache-2.0 compatible. Until this file
+# `CLAUDE.md` states that no GPL, AGPL or other copyleft *dependency* may enter
+# the tree — our own workspace crates are the one deliberate exception, licensed
+# AGPL-3.0-or-later since the 2026-08 relicense (see `[[licenses.exceptions]]`
+# below), everything they pull in must still be permissive. Until this file
 # existed that rule was enforced by whoever remembered to check, which worked
 # only as long as somebody remembered. The allow-list below inverts it: a
 # licence that is not named here fails the build, so a new dependency has to be
@@ -26,9 +28,12 @@ ignore = []
 
 [licenses]
 version = 2
-# Permissive only. Every entry is Apache-2.0 compatible and none is copyleft,
-# not even weakly: MPL-2.0 and LGPL are deliberately absent, so a crate that
-# offers only those fails instead of slipping in.
+# Permissive only for third-party dependencies. Every entry below is a
+# permissive licence and none is copyleft, not even weakly: MPL-2.0 and LGPL
+# are deliberately absent, so a crate that offers only those fails instead of
+# slipping in. Our own workspace crates are AGPL-3.0-or-later (see the
+# exceptions block below) and are not part of this allow-list's reasoning —
+# it governs what we depend on, not what we ourselves are licensed as.
 allow = [
     "Apache-2.0",
     "MIT",
@@ -58,6 +63,17 @@ confidence-threshold = 0.8
 # choice among three and we take a permissive one, which the allow-list above
 # already expresses. Recorded here so nobody reads "LGPL" in a dependency
 # listing and thinks the rule was broken.
+
+# Our own crates: AGPL-3.0-or-later since the 2026-08 relicense. Scoped to
+# these two names only, so the global allow-list above keeps rejecting a
+# third-party dependency that tries to bring copyleft in.
+[[licenses.exceptions]]
+allow = ["AGPL-3.0-or-later"]
+name = "eullm-engine"
+
+[[licenses.exceptions]]
+allow = ["AGPL-3.0-or-later"]
+name = "eullm-hub"
 
 [bans]
 # Duplicate versions are noise in a tree this size and say nothing about

@@ -17,7 +17,16 @@
 
 ## License
 
-Apache 2.0. All code must be Apache 2.0 compatible. Never introduce dependencies with GPL, AGPL, or other copyleft licenses.
+AGPL-3.0-or-later (relicensed 2026-08, was Apache 2.0). All code must stay
+permissively-*dependent*: never introduce a GPL, AGPL, or other copyleft
+dependency — our own crates being AGPL-3.0-or-later is the one deliberate
+exception, not a precedent for relaxing this on the dependency side. New
+contributions require signing the project's CLA before merge (handled
+manually for now — ask in the PR if it hasn't happened).
+
+Note that this only binds new work going forward: every version already
+published under Apache 2.0 keeps its Apache 2.0 terms for anyone who already
+has a copy — relicensing cannot revoke a licence already granted.
 
 ## Architecture Decisions
 
@@ -46,7 +55,9 @@ Outstanding tasks:
 - Never hardcode API keys or credentials
 - Never introduce Llama models in the default catalog
 - Never break Ollama API compatibility in Engine
-- Never use non-Apache-2.0-compatible dependencies
+- Never introduce a GPL, AGPL, or other copyleft *dependency* — everything we
+  depend on must stay permissive (MIT, Apache-2.0, BSD, or similar); our own
+  crates being AGPL-3.0-or-later is the one deliberate exception
 - Never run distillation on Colab Pro+ (insufficient for multi-GPU, long-running jobs)
 
 ## Where the rest of the guidance lives

@@ -188,7 +188,10 @@ $EULLM_HUB_STORAGE/           # Default: ~/.eullm/hub/models/
 
 ## Licensing
 
-All code is Apache 2.0. Only models with fully permissive licenses are supported:
+All code is AGPL-3.0-or-later (relicensed 2026-08, was Apache 2.0). Only
+models with fully permissive licenses are supported — that policy is about
+which base models Forge is allowed to build on, and is independent of what
+license EULLM's own source carries:
 
 | Model Family | License | Role |
 |---|---|---|

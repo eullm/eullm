@@ -3,7 +3,7 @@ name = "eullm-engine"
 version = "0.7.4"
 edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
-license = "Apache-2.0"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/eullm/eullm"
 
 [[bin]]

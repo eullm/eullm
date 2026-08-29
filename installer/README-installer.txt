@@ -55,5 +55,5 @@ LINKS
 -----
 Website:  https://eullm.eu
 Source:   https://github.com/eullm/eullm
-License:  Apache 2.0 (see LICENSE next to this file)
+License:  AGPL-3.0-or-later (see LICENSE next to this file)
 DOI:      10.5281/zenodo.20412979

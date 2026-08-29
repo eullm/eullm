@@ -116,9 +116,11 @@ jobs:
   # become vulnerable without anyone touching this repository, so this job has
   # to run when nothing changed as much as when something did.
   #
-  # `CLAUDE.md` forbids copyleft dependencies and requires Apache-2.0
-  # compatibility. That rule was enforced by manual diligence until this job
-  # existed — it held, but only for as long as somebody remembered to look.
+  # `CLAUDE.md` forbids copyleft *dependencies* and requires them to stay
+  # permissive; our own crates are the deliberate exception (AGPL-3.0-or-later
+  # since the 2026-08 relicense, see `deny.toml`'s `[[licenses.exceptions]]`).
+  # That rule was enforced by manual diligence until this job existed — it
+  # held, but only for as long as somebody remembered to look.
   # The policy lives in `deny.toml`; adding a crate whose licence is not on the
   # allow-list fails here rather than being discovered at a licence review.
   deps:
