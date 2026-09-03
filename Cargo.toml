@@ -3,26 +3,28 @@ resolver = "2"
 members = [
     "engine",
     "hub",
-    # Vendored llama-cpp-rs (utilityai/llama-cpp-rs main @ 8625c7c4) — built
-    # through the EU-hosted mirror https://github.com/eullm/llama-cpp-rs. The
-    # earlier ysimonson:support-gemma4-12b workaround for PR #1034 is gone: that
-    # fix landed upstream in main via PR #1037, so we now track plain upstream
-    # main (0.1.151) through our EU mirror instead of a fork branch. These are
-    # members because a path dependency living under the workspace root is always
-    # promoted to a member regardless of `exclude` or a nested `[workspace]`
-    # (verified empirically). To keep EuLLM's `-D warnings` clippy gate off this
+    # Vendored llama-cpp-rs (utilityai/llama-cpp-rs main @ 09fc815d, 2026-08-18,
+    # version 0.1.154) — built through the EU-hosted mirror
+    # https://github.com/eullm/llama-cpp-rs. These are members because a path
+    # dependency living under the workspace root is always promoted to a
+    # member regardless of `exclude` or a nested `[workspace]` (verified
+    # empirically). To keep EuLLM's `-D warnings` clippy gate off this
     # third-party code, the CI/release clippy step uses `--no-deps` (lints only
     # our own crates, never dependencies). The vendored manifests are
     # self-contained (dependency versions inlined from upstream's
     # `[workspace.dependencies]`), so no root inheritance table is needed.
     #
     # llama.cpp C++ source is a git submodule pinned to
-    # 9e3b928fd8c9d14dbf15a8768b9fdd7e5c721d66, fetched through the EU-hosted
-    # mirror https://github.com/eullm/llama.cpp (see .gitmodules).
+    # e79e4bf660e19f2ad851e06c6913f7a8c5852621 (tag b10405), fetched through
+    # the EU-hosted mirror https://github.com/eullm/llama.cpp (see
+    # .gitmodules).
     #
     # To refresh: re-vendor llama-cpp-2/llama-cpp-sys-2 from the eullm
     # llama-cpp-rs mirror and bump the submodule pin to the matching llama.cpp
-    # commit.
+    # commit. Update both this comment and the header comment in
+    # engine/vendor/llama-cpp-rs/llama-cpp-2/Cargo.toml — they drifted out of
+    # sync once already (this comment still said 9e3b928f/8625c7c4 weeks after
+    # the 2026-08-22 bump to e79e4bf6/b10405).
     "engine/vendor/llama-cpp-rs/llama-cpp-2",
     "engine/vendor/llama-cpp-rs/llama-cpp-sys-2",
 ]
