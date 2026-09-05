@@ -17,8 +17,6 @@
 #include "llama.cpp/include/llama.h"
 #include "wrapper_utils.h"
 
-#include <nlohmann/json.hpp>
-
 extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
     const char * schema_json,
     bool force_gbnf,
@@ -29,7 +27,7 @@ extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
 
     *out_grammar = nullptr;
     try {
-        const auto schema = nlohmann::ordered_json::parse(schema_json);
+        const auto schema = common_json::parse(schema_json);
         const auto grammar = json_schema_to_grammar(schema, force_gbnf);
         *out_grammar = llama_rs_dup_string(grammar);
         return *out_grammar ? LLAMA_RS_STATUS_OK : LLAMA_RS_STATUS_ALLOCATION_FAILED;
@@ -90,9 +88,9 @@ extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
         // reasoning_content, and templates that strip prior-turn reasoning
         // from the history do so.
         inputs.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-        inputs.messages = common_chat_msgs_parse_oaicompat(nlohmann::ordered_json::parse(messages_json));
+        inputs.messages = common_chat_msgs_parse_oaicompat(common_json::parse(messages_json));
         if (tools_json && tools_json[0] != '\0') {
-            inputs.tools = common_chat_tools_parse_oaicompat(nlohmann::ordered_json::parse(tools_json));
+            inputs.tools = common_chat_tools_parse_oaicompat(common_json::parse(tools_json));
         }
         if (tool_choice && tool_choice[0] != '\0') {
             inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice);
@@ -328,6 +326,9 @@ extern "C" int llama_rs_fit_params(
     size_t * margins,
     uint32_t n_ctx_min,
     enum ggml_log_level log_level) {
+    // extra: a second model fit alongside the main one (e.g. an MTP draft
+    // context). We don't drive that path through this wrapper yet, so
+    // nullptr — same as every other caller that isn't fitting a pair.
     return static_cast<int>(common_fit_params(
         path_model,
         mparams,
@@ -336,6 +337,7 @@ extern "C" int llama_rs_fit_params(
         tensor_buft_overrides,
         margins,
         n_ctx_min,
+        nullptr,
         log_level));
 }
 

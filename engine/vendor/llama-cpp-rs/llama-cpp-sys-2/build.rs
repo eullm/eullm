@@ -1218,6 +1218,35 @@ fn main() {
             }
         }
 
+        // mtmd-helper.cpp calls hash_sha256_hex() (bitmap IDs as a SHA-256
+        // hex string) since the qwen4exp-era bump. hash.cpp and the sha256
+        // implementation it wraps live under llama.cpp/vendor/hash/, outside
+        // the tools/mtmd/ glob above, and aren't part of the CMake-built
+        // libcommon/libllama either (upstream builds them as their own
+        // `vendor-hash` CMake target — see vendor/hash/CMakeLists.txt) — so
+        // nothing else pulls them in and they have to be added explicitly
+        // here. sha1/xxhash from that same vendor dir have no caller in what
+        // we build, so they're deliberately left out.
+        mtmd_build.file(llama_src.join("vendor/hash/hash.cpp"));
+
+        // sha256.c must stay a *C* translation unit: sha256.h declares
+        // sha256_hash() with no `extern "C"` guard of its own, and hash.cpp
+        // only gets away with calling it because hash.cpp wraps its own
+        // #include in `extern "C" { ... }`. Compiling sha256.c through
+        // mtmd_build (which forces every file through the C++ compiler via
+        // .cpp(true)) would C++-mangle that definition and break the link
+        // against hash.cpp's C-linkage declaration — matches upstream, whose
+        // CMakeLists.txt compiles sha256.c as plain C too (only sha1.c is
+        // forced to CXX, for a boringssl symbol clash — see the comment in
+        // vendor/hash/CMakeLists.txt). A separate, non-C++ cc::Build keeps
+        // it a real C compile.
+        let mut sha256_build = cc::Build::new();
+        sha256_build
+            .include(llama_src.join("vendor/hash"))
+            .file(llama_src.join("vendor/hash/sha256/sha256.c"))
+            .warnings(false);
+        sha256_build.compile("vendor_sha256");
+
         mtmd_build.compile("mtmd");
     }
 

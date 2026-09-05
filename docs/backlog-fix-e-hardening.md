@@ -2463,6 +2463,99 @@ diligenza manuale.
   poi eventualmente limare i margini di qualche px. Attenzione a non
   toccare le righe vuote dentro il testo semplice, dove il pre-wrap è
   proprio ciò che preserva i paragrafi.
+
+- [ ] **H4-I · Bump di `llama.cpp` a `b10818`: architettura `qwen4exp`
+  (Qwen3.8-Flash-Next), 4 rotture d'API portate a mano — in attesa di
+  validazione su hardware reale** *(P2)*
+  Il pin era fermo a `e79e4bf6`/`b10405` (13 agosto, H3-Y) da oltre 400
+  build/3 settimane. Occasione diretta: un utente ha chiesto se
+  `unsloth/Qwen3.8-Flash-Next-GGUF` avrebbe funzionato — l'architettura
+  `qwen4exp` (anteprima di Qwen4: hybrid attention Gated DeltaNet + Qwen
+  Sparse Attention, n-gram/PLE embeddings, low-rank hyper-connections,
+  vision encoder) è entrata a monte il 27 agosto (`6c84c7d5d`, #27742),
+  con stabilizzazioni fino al 3 settembre — completamente fuori dal
+  nostro pin.
+
+  **Correzione importante rispetto a quanto inizialmente creduto**:
+  Qwen3.8-Flash-Next **non ha ancora MTP a monte**. Il commit iniziale
+  imposta esplicitamente `supports_mtp_export = False` / `no_mtp = True`
+  nel converter ("the MTP block is a separate draft head; vLLM drops it
+  too"), e non esiste alcun commit successivo che lo abiliti fino a
+  `b10818`. Il claim di marketing di Unsloth (1.3-1.7x da MTP) non trova
+  riscontro nel path GGUF/llama.cpp. Questo bump porta il supporto
+  all'architettura di base (caricamento, inferenza, mtmd per il vision
+  encoder) ma non l'accelerazione MTP per questo modello specifico — il
+  nostro wrapper generico `MtpSpeculative` (`speculative.rs`,
+  `llama_rs_mtp_speculative_*`) resta valido per i modelli su cui già
+  funzionava (NextN DeepSeek-V3, MTP ibrido Qwen3.5/Qwen3-Next), non
+  copre qwen4exp.
+
+  A differenza di H3-Y e come H3-R: `utilityai/llama-cpp-rs` è fermo
+  **esattamente sullo stesso nostro pin** (`main` non si è mosso da
+  `e79e4bf6`, e ha rimosso il proprio workflow di bump notturno) — nessun
+  ri-vendor pulito disponibile, patch a mano necessarie. Le 4 rotture
+  trovate (le prime 3 diagnosticate a monte via diff mirato prima di
+  applicarle, senza `cargo build` disponibile in quel momento; la quarta
+  emersa solo a compile-time):
+  1. `wrapper_common.cpp`: `nlohmann::ordered_json` è stato sostituito da
+     un wrapper proprio, `common_json` (`common/json.h`), su tutta
+     `common/chat.h`/`json-schema-to-grammar.h`. 3 call site aggiornati
+     (`json_schema_to_grammar`, `common_chat_msgs_parse_oaicompat`,
+     `common_chat_tools_parse_oaicompat`) da `nlohmann::ordered_json::
+     parse(...)` a `common_json::parse(...)` — stessa API di parsing/
+     dump, stesso `catch (const std::exception &)` a valle
+     (`common_json_error` eredita `std::runtime_error`). Rimosso
+     l'include ormai inutile di `<nlohmann/json.hpp>`.
+  2. `mtmd.rs`, `MtmdBitmap::from_file`/`from_buffer`:
+     `mtmd_helper_bitmap_init_from_file`/`_from_buf` hanno guadagnato un
+     4° parametro obbligatorio, `struct mtmd_helper_init_opt opt`
+     (supporto video). Passato `mtmd_helper_init_opt_default()` — nessun
+     comportamento nuovo per noi, `MTMD_VIDEO` resta disattivato nel
+     nostro `build.rs`.
+  3. `wrapper_common.cpp`, `llama_rs_fit_params`: `common_fit_params` ha
+     guadagnato un parametro `const common_fit_extra_model * extra`
+     (fitting di un secondo modello — es. un draft MTP — insieme al
+     principale) prima del `log_level` finale. Passato `nullptr`: non
+     guidiamo ancora quel percorso da questo wrapper.
+  4. `build.rs`: `mtmd-helper.cpp` ora chiama `hash_sha256_hex()` (ID
+     SHA-256 dei bitmap) da una nuova libreria vendorizzata a monte,
+     `llama.cpp/vendor/hash/` — fuori dal glob `tools/mtmd/**/*.cpp` e
+     non parte del CMake che costruisce libcommon/libllama nel nostro
+     `build.rs` (a monte è un target CMake a sé, `vendor-hash`). Aggiunto
+     `hash.cpp` a `mtmd_build`. `sha256.c` (l'implementazione sotto)
+     **non** poteva andare nello stesso `cc::Build`: `mtmd_build` forza
+     tutto attraverso il compilatore C++ (`.cpp(true)`), e `sha256.h` non
+     ha guardie `extern "C"` — compilarlo come C++ mangla `sha256_hash` e
+     rompe il link contro la dichiarazione `extern "C"` che `hash.cpp`
+     usa. Fix: `sha256.c` in un `cc::Build` separato, non C++, che
+     rispecchia il fatto che a monte solo `sha1.c` (non `sha256.c`) è
+     forzato a `LANGUAGE CXX` nel `CMakeLists.txt` di `vendor/hash`
+     (clash di simboli con boringssl, non rilevante qui). `sha1`/`xxhash`
+     dello stesso vendor non hanno chiamanti nel nostro albero e sono
+     stati lasciati fuori.
+
+  Pin portato all'ultimo tag disponibile sul mirror `eullm/llama.cpp`
+  al momento del bump (`4d917609`/`b10818`, 4-5 settembre), non a un
+  passo intermedio: eravamo già a 3 settimane/400+ build di distanza, il
+  costo di un salto grande era già pagato indipendentemente da dove ci si
+  fermava, e non c'era motivo di doverlo ripetere subito dopo per
+  recuperare le ultime settimane. Si riprende da qui con bump piccoli e
+  settimanali, come da regola.
+
+  Validato finora, in locale, senza GPU disponibile in questo ambiente:
+  `cargo build` pulito con le feature di default (`multimodal`
+  incluso), `cargo test` verde (295 test), `cargo clippy --no-deps --
+  -D warnings` pulito (stessi flag di CI), `cargo check --features
+  multimodal` pulito. Il percorso CUDA non è stato validato qui (nessun
+  CUDA toolkit in questo ambiente) — resta da verificare via i job
+  `build-cuda` di CI.
+
+  **Da validare su hardware reale**: ricaricare ogni famiglia di modelli
+  disponibile localmente, incluso il template di ragionamento DeepSeek e
+  un modello multimodale, prima che questo bump arrivi su `main` — per
+  regola di `engine/CLAUDE.md`, una build pulita non basta. Se possibile,
+  caricare anche un vero GGUF Qwen3.8-Flash-Next per confermare che
+  l'architettura funzioni davvero end-to-end e non solo a compile-time.
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti
