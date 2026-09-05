@@ -482,11 +482,13 @@ impl MtmdBitmap {
         // decoding context) instead of a bare pointer. `video_ctx` is only set
         // when MTMD_VIDEO is enabled at compile time; this crate does not build
         // with it on, so it is always null here and only the bitmap matters.
+        let opt = unsafe { llama_cpp_sys_2::mtmd_helper_init_opt_default() };
         let wrapper = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_file(
                 ctx.context.as_ptr(),
                 path_cstr.as_ptr(),
                 placeholder,
+                opt,
             )
         };
 
@@ -526,12 +528,14 @@ impl MtmdBitmap {
     ) -> Result<Self, MtmdBitmapError> {
         // See the comment in `from_file`: this returns a wrapper struct now, and
         // `video_ctx` is always null since MTMD_VIDEO is not enabled in this build.
+        let opt = unsafe { llama_cpp_sys_2::mtmd_helper_init_opt_default() };
         let wrapper = unsafe {
             llama_cpp_sys_2::mtmd_helper_bitmap_init_from_buf(
                 ctx.context.as_ptr(),
                 data.as_ptr(),
                 data.len(),
                 placeholder,
+                opt,
             )
         };
 
