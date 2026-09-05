@@ -408,6 +408,16 @@ jobs:
   build-cuda:
     if: ${{ github.event_name == 'push' }}
     strategy:
+      # One architecture set failing must not cancel the other — they are
+      # separate downloads. `release` below already tolerates any of these
+      # jobs failing or being skipped (`!cancelled()`, so a real build
+      # failure was never going to block the release by itself) — but
+      # GitHub's default fail-fast was cancelling the OTHER, still-healthy
+      # matrix entry too, so a single flaky/broken arch took out an asset
+      # that would otherwise have built fine. Found live: the datacenter
+      # (80;90) entry failed and consumer (86;89;120) got cancelled mid-link
+      # as a result, so the release published with neither Linux CUDA asset.
+      fail-fast: false
       matrix:
         include:
           # CUDA 13 rather than 12.8. Two reasons, both about size: NVIDIA
@@ -635,7 +645,26 @@ jobs:
           # error this comment used to describe — the `-path` filter below
           # is specifically so it can't match that file again.
           export BINDGEN_EXTRA_CLANG_ARGS="-I$(dirname "$(find /opt/rh/gcc-toolset-13 -path '*/lib/gcc/*/include/stdbool.h' | head -1)")"
-          cargo build --release --features "cuda,multimodal" -p eullm-engine
+          # Recent stable Rust defaults x86_64-unknown-linux-gnu to its
+          # self-contained rust-lld, which links PIE by default and is
+          # strict about it: nvcc's device-link object (ggml-cuda.cu.o,
+          # carrying the fatbin for every arch in CMAKE_CUDA_ARCHITECTURES)
+          # isn't built -fPIC, so linking it into a PIE binary fails with
+          # "relocation R_X86_64_32 cannot be used against local symbol".
+          # Only this job hits it — build-cuda-arm64 (lld isn't the aarch64
+          # default), build-windows-cuda (MSVC link.exe), and the plain CPU/
+          # Vulkan x64 builds (no nvcc object to link) are all unaffected.
+          #
+          # `-C link-arg=-no-pie` is the fix, but it must be scoped to only
+          # the final `eullm` binary's link step, not passed globally via
+          # RUSTFLAGS: telling a proc-macro crate (built as a .so, i.e. a
+          # shared object) not to be PIE doesn't mean anything, and doing it
+          # anyway broke those crates with "undefined symbol: main" — hit
+          # for real on this same class of build (see docs/cineca/leonardo.md).
+          # `cargo rustc -p <pkg> --bin <name> -- <flags>` applies extra
+          # rustc flags only to that final crate's own compile+link, which
+          # is what scopes it correctly.
+          cargo rustc --release --features "cuda,multimodal" -p eullm-engine --bin eullm -- -C link-arg=-no-pie
         env:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
