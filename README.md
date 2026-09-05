@@ -69,7 +69,7 @@ curl http://localhost:11434/v1/chat/completions \
 
 | Platform | File | Status | Notes |
 |----------|------|:------:|-------|
-| 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
+| 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | Now built on a Rocky Linux 8 base (glibc 2.28) instead of Ubuntu 22.04, so it also runs on RHEL/CentOS/Rocky/Alma/Oracle Linux 8+ — found live on CINECA Leonardo (RHEL 8.7), where it hit the same glibc-symbol gap the CUDA build below already had fixed |
 | 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-13.1` | ✅ Tested | RTX 3000/4000/5000. Now built on a Rocky Linux 8 base (glibc 2.28) instead of Ubuntu 22.04, so it also runs on RHEL/CentOS/Rocky/Alma/Oracle Linux 8+, not just current Ubuntu/Fedora/Windows — the RTX-card behavior above is what's actually tested, the older-distro compatibility follows from how glibc versioning works but hasn't had its own hardware report yet |
 | 🐧 Linux x64 (NVIDIA data-center) | `eullm-linux-x64-cuda-13.1-datacenter` | 🆕 Untested | A100 (sm_80), H100 (sm_90) — a different, older compute capability than the consumer build above, which doesn't run on these cards. Built and published by CI; not yet run on real hardware by anyone — if you try it, please report back |
 | 🐧 Linux ARM64 | `eullm-linux-arm64` | ✅ Tested (community) | Validated on Raspberry Pi 400; RPi 4/5, Orange Pi 5+, Jetson, etc. |

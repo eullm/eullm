@@ -165,22 +165,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            artifact: eullm-linux-x64
-            # x86-64-v3 (Intel Haswell 2013+ / AMD Zen 2017+): baseline AVX2/FMA
-            # so llama-cpp-sys-2's build.rs (reads CARGO_CFG_TARGET_FEATURE)
-            # actually turns on GGML_AVX2 in llama.cpp's CPU backend. Without
-            # this, Rust's default x86_64 target features are SSE-only, so the
-            # published CPU-only binary silently runs llama.cpp's much slower,
-            # far-less-used no-AVX2 fallback kernels regardless of the actual
-            # CPU — confirmed via `rustc --print cfg`, and reproduced on real
-            # hardware in issue #140 (1.16 tok/s on a 12-core Haswell-class i9
-            # that fully supports AVX2). CPUs older than this floor get a hard
-            # SIGILL crash instead of a slow-but-working binary — see
-            # docs/x86-64-baseline.md for the compatibility trade-off writeup.
-            rustflags: "-C target-cpu=x86-64-v3"
-            features: multimodal
+          # x86_64 Linux CPU moved to its own job, `build-linux-cpu`, on
+          # Rocky Linux 8 — see that job's comment for why (same
+          # glibc-portability reasoning as build-cuda, found live on the
+          # plain CPU binary too, not just CUDA).
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04
             artifact: eullm-linux-arm64
@@ -316,6 +304,128 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}
+
+  # x86_64 Linux CPU-only build, on Rocky Linux 8 for the same reason as
+  # build-cuda below: found live on CINECA Leonardo (RHEL 8.7) that
+  # eullm-linux-x64 itself — not just the CUDA binaries — needs glibc
+  # symbols up to 2.34/2.35 that RHEL-family 8.x distros don't ship (they
+  # freeze glibc at 2.28 for the life of the release). Building on Rocky 8
+  # instead means the same binary also covers RHEL/CentOS/Rocky/Alma/Oracle
+  # Linux 8+, not just current Ubuntu/Fedora/Arch/Windows — see that job's
+  # comment for the full glibc-backward-compatibility reasoning.
+  #
+  # Split out of the `build` job above instead of adding a container to one
+  # of its matrix entries: that job's "Install Rust toolchain" step is
+  # shared across all four entries via the dtolnay/rust-toolchain action,
+  # and two of those entries (macOS) must never run inside a container at
+  # all. Branching that one shared step per-entry is exactly the kind of
+  # thing that's easy to get subtly wrong for the entries that must stay
+  # untouched; a separate job mirroring build-cuda's proven container
+  # recipe is simpler than that gets right the first time.
+  build-linux-cpu:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-22.04
+    container:
+      image: rockylinux:8
+    steps:
+      # The rockylinux:8 image ships without git. actions/checkout then
+      # falls back to a REST API tarball download, which cannot fetch
+      # submodules — same reason as build-cuda's identical step.
+      - name: Install git (container has none; required for submodule checkout)
+        run: dnf install -y git
+
+      - uses: actions/checkout@v5
+        with:
+          # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
+          submodules: recursive
+
+      # Rocky 8's own default gcc (8.5) is too old for llama.cpp's C++17 use
+      # — same fix as build-cuda: gcc-toolset-13 for a current compiler
+      # while the produced object code still links against this image's own
+      # glibc 2.28. clang-devel is bindgen's libclang for the Rust FFI
+      # bindings (needed regardless of the cuda feature).
+      - name: Install a modern GCC, build dependencies and bindgen's libclang
+        run: |
+          dnf install -y gcc-toolset-13 cmake make pkgconf-pkg-config openssl-devel clang-devel curl
+          echo "/opt/rh/gcc-toolset-13/root/usr/bin" >> $GITHUB_PATH
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-linux-cpu-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-linux-cpu-
+
+      - uses: actions/cache@v5
+        with:
+          path: target
+          key: target-linux-cpu-p1-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-linux-cpu-p1-
+
+      - name: Install sccache
+        run: |
+          SCCACHE_VER=0.8.0
+          TMPSC=$(mktemp -d)
+          curl -sSfL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" \
+            -o "${TMPSC}/sccache.tar.gz"
+          tar -xzf "${TMPSC}/sccache.tar.gz" -C "${TMPSC}"
+          find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
+          chmod +x /usr/local/bin/sccache
+          rm -rf "${TMPSC}"
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
+          sccache --version
+          sccache --start-server || true
+
+      - name: Build engine
+        run: |
+          . "$HOME/.cargo/env"
+          # Same bindgen/gcc-toolset-13 stdbool.h fix as build-cuda — see
+          # that job's comment for exactly why the -path filter matters.
+          export BINDGEN_EXTRA_CLANG_ARGS="-I$(dirname "$(find /opt/rh/gcc-toolset-13 -path '*/lib/gcc/*/include/stdbool.h' | head -1)")"
+          cargo build --release --features multimodal -p eullm-engine
+        env:
+          CC: /opt/rh/gcc-toolset-13/root/usr/bin/gcc
+          CXX: /opt/rh/gcc-toolset-13/root/usr/bin/g++
+          # x86-64-v3 baseline (Intel Haswell 2013+ / AMD Zen 2017+) — see
+          # docs/x86-64-baseline.md; without it the published binary
+          # silently runs llama.cpp's much slower no-AVX2 fallback kernels
+          # (issue #140). Static libstdc++/libgcc for the same reason as
+          # build-cuda: without it the final link dynamically pulls in
+          # gcc-toolset-13's own non-standard /opt/rh/... libstdc++.so,
+          # defeating the whole point of building on this base image. No
+          # -no-pie needed here unlike build-cuda: that fix was specifically
+          # for nvcc's non-PIC device-link object, which a plain CPU build
+          # never produces.
+          RUSTFLAGS: "-C target-cpu=x86-64-v3 -C link-arg=-static-libgcc -C link-arg=-static-libstdc++"
+
+      - name: sccache stats (visibility into S3 hit/miss)
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Package binary
+        run: |
+          cp target/release/eullm eullm-linux-x64
+          strip --strip-all eullm-linux-x64 || true
+          chmod +x eullm-linux-x64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: eullm-linux-x64
+          path: eullm-linux-x64
 
   # ── Vulkan: the GPU build for everything that is not NVIDIA ────────────────
   #
@@ -1369,6 +1479,7 @@ jobs:
       - require_green_ci
       - require_version_match
       - build
+      - build-linux-cpu
       - build-vulkan
       - build-cuda
       - build-cuda-arm64
@@ -1542,6 +1653,7 @@ jobs:
     name: Drop this tag's Actions caches
     needs:
       - build
+      - build-linux-cpu
       - build-cuda
       - build-cuda-arm64
       - build-arm-cix-p1
