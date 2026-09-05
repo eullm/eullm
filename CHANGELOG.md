@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.7.5-rc1 — 2026-09-05
 
 ### Added
 - **New Linux CUDA download for data-center NVIDIA GPUs**:
