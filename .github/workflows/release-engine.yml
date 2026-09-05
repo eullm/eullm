@@ -417,9 +417,37 @@ jobs:
           # minimum driver moving from r570 to r580 — an August 2025 driver,
           # and any card this binary can run on (RTX 3000/4000/5000) is on a
           # newer one already.
+          #
+          # Base image is rockylinux8, not ubuntu22.04: found live getting
+          # eullm running on CINECA Leonardo (RHEL 8.7, see
+          # docs/cineca/leonardo.md) that an Ubuntu-22.04-built binary needs
+          # glibc symbols up to 2.34 that RHEL-family distros don't have —
+          # RHEL freezes glibc for the life of the release (8.x stays on
+          # 2.28). Building on Rocky 8 instead means we link against glibc
+          # 2.28, and glibc is strictly backward-compatible (a binary built
+          # against an OLDER glibc runs fine on a NEWER one, never the
+          # reverse) — so the same binary now also covers RHEL/CentOS/Rocky/
+          # Alma/Oracle Linux 8+, not just current Ubuntu/Fedora/Arch/Windows.
+          # This is the same principle Python's manylinux images use.
           - cuda: "13.1.2"
             artifact: eullm-linux-x64-cuda-13.1
-            cuda_tag: "13.1.2-devel-ubuntu22.04"
+            cuda_tag: "13.1.2-devel-rockylinux8"
+            cuda_archs: "86;89;120"
+          # Data-center NVIDIA: A100 (sm_80) and H100 (sm_90). Both are above
+          # CUDA 13's sm_75 floor. Separate artifact rather than folding into
+          # the consumer one above, same reasoning as CPU/Vulkan/CUDA already
+          # being separate downloads: A100/H100 owners get a binary sized for
+          # what they have, consumer-card owners don't pay for archs they
+          # can't run. RTX A-series *workstation* cards are Ampere sm_86 and
+          # already covered by the consumer build above — sm_80/90 is
+          # specifically the compute-only A100/H100 line. On the same
+          # rockylinux8 base as the consumer entry above, for the same
+          # glibc-portability reason — A100/H100 boxes are, if anything, more
+          # likely to be RHEL-family than consumer GPU desktops are.
+          - cuda: "13.1.2"
+            artifact: eullm-linux-x64-cuda-13.1-datacenter
+            cuda_tag: "13.1.2-devel-rockylinux8"
+            cuda_archs: "80;90"
 
     runs-on: ubuntu-22.04
     container:
@@ -431,19 +459,26 @@ jobs:
       # the GitHub REST API"). Installing git BEFORE checkout lets it do a real
       # clone and pull the llama.cpp submodule.
       - name: Install git (container has none; required for submodule checkout)
-        run: |
-          DEBIAN_FRONTEND=noninteractive apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y git
+        run: dnf install -y git
 
       - uses: actions/checkout@v5
         with:
           # llama.cpp submodule under engine/vendor/llama-cpp-rs/llama-cpp-sys-2/
           submodules: recursive
 
-      - name: Install build dependencies
+      # rockylinux8's own default gcc (8.5) is too old for llama.cpp's C++17
+      # use — hit this for real on CINECA Leonardo (same RHEL 8 family, same
+      # gcc 8.5): std::filesystem symbols came out ABI-mismatched against
+      # libstdc++, not cleanly missing (see docs/cineca/leonardo.md). Same
+      # fix here: gcc-toolset-13 (a real RPM package on Rocky 8's AppStream
+      # repo, no subscription needed — Rocky isn't tied to Red Hat's
+      # entitlement system) gives a current compiler while the produced
+      # object code still links against this image's own glibc 2.28 — the
+      # portability the whole point of this base image is.
+      - name: Install a modern GCC, build dependencies and bindgen's libclang
         run: |
-          DEBIAN_FRONTEND=noninteractive apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y curl cmake build-essential pkg-config libssl-dev git libclang-dev
+          dnf install -y gcc-toolset-13 cmake make pkgconf-pkg-config openssl-devel clang-devel curl
+          echo "/opt/rh/gcc-toolset-13/root/usr/bin" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
         run: |
@@ -470,11 +505,18 @@ jobs:
       # restore-keys too, because a prefix match would restore the stale
       # cache just as effectively as an exact one. Bump it (`p2`, …) on any
       # future change to what gets linked but not to what cargo tracks.
+      #
+      # Keyed on `matrix.artifact`, not `matrix.cuda`: two matrix entries can
+      # share the same CUDA version but build for different
+      # CMAKE_CUDA_ARCHITECTURES (consumer vs. data-center) — cargo's
+      # fingerprint doesn't see that env var either, so sharing this key
+      # across them risks the exact same stale-cache problem the marker
+      # above exists to prevent, just on a different axis.
       - uses: actions/cache@v5
         with:
           path: target
-          key: target-cuda-p1-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: target-cuda-p1-${{ matrix.cuda }}-
+          key: target-cuda-p1-${{ matrix.artifact }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-cuda-p1-${{ matrix.artifact }}-
 
       # sccache now uses S3 backend (see workflow-level env block)
 
@@ -540,10 +582,15 @@ jobs:
           NVPRUNE=/usr/local/cuda/bin/nvprune
           LIBDIR=/usr/local/cuda/lib64
           # -gencode is the form NVIDIA documents for keeping more than one
-          # architecture; repeated -arch is documented as singular.
-          KEEP="-gencode=arch=compute_86,code=sm_86
-                -gencode=arch=compute_89,code=sm_89
-                -gencode=arch=compute_120,code=sm_120"
+          # architecture; repeated -arch is documented as singular. Built
+          # from matrix.cuda_archs (the same list the build step compiles
+          # for) instead of a second hardcoded copy, so the two can't drift
+          # apart on a future architecture change.
+          KEEP=""
+          IFS=';' read -ra ARCHS <<< "${{ matrix.cuda_archs }}"
+          for a in "${ARCHS[@]}"; do
+            KEEP="$KEEP -gencode=arch=compute_$a,code=sm_$a"
+          done
           if [ ! -x "$NVPRUNE" ]; then
             echo "::warning::nvprune not found at $NVPRUNE — shipping unpruned CUDA libs"
             exit 0
@@ -569,19 +616,34 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           export PATH="/usr/local/cuda/bin:$PATH"
+          # bindgen's libclang (Rocky 8's own clang-devel) still resolves C
+          # headers against the base image's default gcc (8.5) unless told
+          # otherwise — same "fatal error: 'stdbool.h' file not found" hit
+          # for real on Leonardo after switching the actual compiler to a
+          # newer gcc (docs/cineca/leonardo.md). Point it at gcc-toolset-13's
+          # own headers instead of hardcoding a version-specific path.
+          export BINDGEN_EXTRA_CLANG_ARGS="-I$(dirname "$(find /opt/rh/gcc-toolset-13 -name stdbool.h | head -1)")"
           cargo build --release --features "cuda,multimodal" -p eullm-engine
         env:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          # Fat binary covering the three consumer NVIDIA generations:
-          #   sm_86  = Ampere      (RTX 3000 series)
-          #   sm_89  = Ada Lovelace (RTX 4000 series)
-          #   sm_120 = Blackwell    (RTX 5000 series)
+          CC: /opt/rh/gcc-toolset-13/root/usr/bin/gcc
+          CXX: /opt/rh/gcc-toolset-13/root/usr/bin/g++
+          # Without this, the final link dynamically pulls in
+          # gcc-toolset-13's OWN newer libstdc++.so from its non-standard
+          # /opt/rh/... path — defeating the entire point of this base
+          # image, since that path only exists on a machine with this exact
+          # toolset installed. Statically linking the C++ runtime (the same
+          # technique Python's manylinux wheels use) means the binary's only
+          # remaining runtime dependency is the base glibc itself.
+          RUSTFLAGS: "-C link-arg=-static-libgcc -C link-arg=-static-libstdc++"
+          # matrix.cuda_archs: "86;89;120" (consumer: RTX 3000/4000/5000) or
+          # "80;90" (data-center: A100/H100) — see the matrix comment above.
           # cuBLAS static is the bulk of the binary and is shared across
-          # archs, so adding two more arches grows the file by ~kernel
-          # cubins only (~50-80 MB each), not 3x.
-          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+          # archs, so adding more arches grows the file by ~kernel cubins
+          # only (~50-80 MB each), not proportionally.
+          CMAKE_CUDA_ARCHITECTURES: ${{ matrix.cuda_archs }}
           # NCCL is disabled at the CMake level in the vendored build.rs
           # (GGML_CUDA_NCCL=OFF). It is a multi-GPU collective library that made
           # the binary hard-depend on libnccl.so.2 at runtime — breaking

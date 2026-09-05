@@ -13,7 +13,30 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.7.5-rc1 — 2026-09-05
+
+### Added
+- **New Linux CUDA download for data-center NVIDIA GPUs**:
+  `eullm-linux-x64-cuda-13.1-datacenter`, built for A100 (sm_80) and H100
+  (sm_90). The existing `eullm-linux-x64-cuda-13.1` remains the consumer
+  build (RTX 3000/4000/5000, sm_86/89/120) and does not run on A100/H100 —
+  those are a different, older compute capability that the consumer build
+  never targeted. RTX A-series workstation cards are Ampere sm_86 and are
+  already covered by the existing consumer download.
+
+### Fixed
+- **The Linux CUDA binaries (`eullm-linux-x64-cuda-13.1` and the new
+  `-datacenter` variant) didn't run on RHEL, CentOS, Rocky Linux, AlmaLinux,
+  or Oracle Linux — any RHEL 8-family distro.** They were built against
+  Ubuntu 22.04's glibc, and RHEL-family distros freeze glibc for the life of
+  the release (8.x stays on 2.28) — the binary failed at startup with
+  `GLIBC_2.29' not found` and similar. Found getting EULLM running on CINECA
+  Leonardo (RHEL 8.7). Both Linux CUDA builds now compile on a Rocky Linux 8
+  base image instead, so they link against glibc 2.28 — which, being
+  backward-compatible, still runs fine on current Ubuntu/Fedora/Arch/
+  Windows, so nothing changes for existing users. The CPU, Vulkan, ARM64 and
+  macOS builds were not affected by this — only the two `x64` CUDA
+  binaries were built on the newer base.
 
 ### Changed
 - **EULLM's own code is now licensed AGPL-3.0-or-later, not Apache 2.0.**
