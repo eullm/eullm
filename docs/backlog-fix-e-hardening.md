@@ -2413,6 +2413,33 @@ diligenza manuale.
   Metodo che ha funzionato per la sezione `run`: generare la tabella dei
   flag da `--help` del binario invece di riscriverla a memoria.
 
+- [ ] **H4-H · Build CUDA da sorgente: il link statico di `cudart_static`
+  non trova la lib su toolkit pacchettizzati via Spack** *(P3 — trovato il
+  4 settembre facendo una build di test su Leonardo/CINECA, RTX A100,
+  CUDA 12.2 via modulefile Spack)*
+  `engine/vendor/llama-cpp-rs/llama-cpp-sys-2/build.rs:1265-1267` popola i
+  path di ricerca del linker chiamando la crate esterna `find_cuda_helper`
+  (v0.2.0, dipendenza in `llama-cpp-sys-2/Cargo.toml:81`), poi
+  `build.rs:1287` chiede `cargo:rustc-link-lib=static=cudart_static`
+  fidandosi che quei path bastino. Sul toolkit CUDA 12.2 di Leonardo
+  (Spack), `libcudart_static.a` sta sotto
+  `$CUDA_HOME/targets/x86_64-linux/lib/`, non sotto `$CUDA_HOME/lib64`
+  (quello che il modulefile mette in `LIBRARY_PATH`) — `find_cuda_helper`
+  non lo trova, il link fallisce con `could not find native static
+  library \`cudart_static\`, perhaps an -L flag is missing?`. Workaround
+  applicato manualmente: `export
+  LIBRARY_PATH=$LIBRARY_PATH:$CUDA_HOME/targets/x86_64-linux/lib` prima
+  della build. I pipeline CI (installer NVIDIA ufficiali, dove `lib64` è
+  di norma un symlink dentro `targets/.../lib`) non hanno mai incontrato
+  questo layout, per questo non era emerso prima. Non urgente (release
+  CI non tocca questo percorso), ma vale la pena: verificare se una
+  versione più recente di `find_cuda_helper` copre già il layout
+  `targets/<arch>/lib`, e se no aggiungere un fallback esplicito in
+  `build.rs` (prima di riga 1287) che lo controlli comunque — dato che
+  sarebbe funzionalità EuLLM-specifica sopra la vendorizzazione, andrebbe
+  anche annotata nell'elenco in testa a `llama-cpp-sys-2/Cargo.toml` per
+  non perderla al prossimo re-vendor (vedi la lezione di H3-Y).
+
 - [ ] **H4-E · Banner: la stima KV di `estimate_kv_memory` non conosce gli
   ibridi** *(P3 — cosmetico, emerso dall'audit di fine giornata del 9
   agosto sui percorsi dense)*
