@@ -622,7 +622,19 @@ jobs:
           # for real on Leonardo after switching the actual compiler to a
           # newer gcc (docs/cineca/leonardo.md). Point it at gcc-toolset-13's
           # own headers instead of hardcoding a version-specific path.
-          export BINDGEN_EXTRA_CLANG_ARGS="-I$(dirname "$(find /opt/rh/gcc-toolset-13 -name stdbool.h | head -1)")"
+          #
+          # gcc-toolset-13 ships TWO files named stdbool.h: the correct one
+          # is the compiler's own minimal freestanding header, under
+          # lib/gcc/<triple>/<ver>/include/. There is also
+          # include/c++/13/tr1/stdbool.h — a C++ TR1 compatibility shim that
+          # assumes the rest of libstdc++'s C++ header tree is already on
+          # the include path and pulls in bits/requires_hosted.h, which
+          # isn't there in isolation. An unqualified `find -name stdbool.h`
+          # found that one first (whichever sorts first on disk) and broke
+          # the build with "bits/requires_hosted.h not found" instead of the
+          # error this comment used to describe — the `-path` filter below
+          # is specifically so it can't match that file again.
+          export BINDGEN_EXTRA_CLANG_ARGS="-I$(dirname "$(find /opt/rh/gcc-toolset-13 -path '*/lib/gcc/*/include/stdbool.h' | head -1)")"
           cargo build --release --features "cuda,multimodal" -p eullm-engine
         env:
           CUDA_PATH: /usr/local/cuda
