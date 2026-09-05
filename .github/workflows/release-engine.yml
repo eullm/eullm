@@ -343,10 +343,14 @@ jobs:
       # — same fix as build-cuda: gcc-toolset-13 for a current compiler
       # while the produced object code still links against this image's own
       # glibc 2.28. clang-devel is bindgen's libclang for the Rust FFI
-      # bindings (needed regardless of the cuda feature).
+      # bindings (needed regardless of the cuda feature). findutils is NOT
+      # in the bare `rockylinux:8` image the way it is in build-cuda's
+      # `nvidia/cuda:*-devel-rockylinux8` (a fuller devel image) — without
+      # it, the sccache install step's `find` call fails with "command not
+      # found" (exit 127), found live on this job's first real CI run.
       - name: Install a modern GCC, build dependencies and bindgen's libclang
         run: |
-          dnf install -y gcc-toolset-13 cmake make pkgconf-pkg-config openssl-devel clang-devel curl
+          dnf install -y gcc-toolset-13 cmake make pkgconf-pkg-config openssl-devel clang-devel findutils curl
           echo "/opt/rh/gcc-toolset-13/root/usr/bin" >> $GITHUB_PATH
 
       - name: Install Rust toolchain
