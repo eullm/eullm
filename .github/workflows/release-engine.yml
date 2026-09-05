@@ -420,6 +420,19 @@ jobs:
           - cuda: "13.1.2"
             artifact: eullm-linux-x64-cuda-13.1
             cuda_tag: "13.1.2-devel-ubuntu22.04"
+            cuda_archs: "86;89;120"
+          # Data-center NVIDIA: A100 (sm_80) and H100 (sm_90). Both are above
+          # CUDA 13's sm_75 floor. Separate artifact rather than folding into
+          # the consumer one above, same reasoning as CPU/Vulkan/CUDA already
+          # being separate downloads: A100/H100 owners get a binary sized for
+          # what they have, consumer-card owners don't pay for archs they
+          # can't run. RTX A-series *workstation* cards are Ampere sm_86 and
+          # already covered by the consumer build above — sm_80/90 is
+          # specifically the compute-only A100/H100 line.
+          - cuda: "13.1.2"
+            artifact: eullm-linux-x64-cuda-13.1-datacenter
+            cuda_tag: "13.1.2-devel-ubuntu22.04"
+            cuda_archs: "80;90"
 
     runs-on: ubuntu-22.04
     container:
@@ -470,11 +483,18 @@ jobs:
       # restore-keys too, because a prefix match would restore the stale
       # cache just as effectively as an exact one. Bump it (`p2`, …) on any
       # future change to what gets linked but not to what cargo tracks.
+      #
+      # Keyed on `matrix.artifact`, not `matrix.cuda`: two matrix entries can
+      # share the same CUDA version but build for different
+      # CMAKE_CUDA_ARCHITECTURES (consumer vs. data-center) — cargo's
+      # fingerprint doesn't see that env var either, so sharing this key
+      # across them risks the exact same stale-cache problem the marker
+      # above exists to prevent, just on a different axis.
       - uses: actions/cache@v5
         with:
           path: target
-          key: target-cuda-p1-${{ matrix.cuda }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: target-cuda-p1-${{ matrix.cuda }}-
+          key: target-cuda-p1-${{ matrix.artifact }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-cuda-p1-${{ matrix.artifact }}-
 
       # sccache now uses S3 backend (see workflow-level env block)
 
@@ -540,10 +560,15 @@ jobs:
           NVPRUNE=/usr/local/cuda/bin/nvprune
           LIBDIR=/usr/local/cuda/lib64
           # -gencode is the form NVIDIA documents for keeping more than one
-          # architecture; repeated -arch is documented as singular.
-          KEEP="-gencode=arch=compute_86,code=sm_86
-                -gencode=arch=compute_89,code=sm_89
-                -gencode=arch=compute_120,code=sm_120"
+          # architecture; repeated -arch is documented as singular. Built
+          # from matrix.cuda_archs (the same list the build step compiles
+          # for) instead of a second hardcoded copy, so the two can't drift
+          # apart on a future architecture change.
+          KEEP=""
+          IFS=';' read -ra ARCHS <<< "${{ matrix.cuda_archs }}"
+          for a in "${ARCHS[@]}"; do
+            KEEP="$KEEP -gencode=arch=compute_$a,code=sm_$a"
+          done
           if [ ! -x "$NVPRUNE" ]; then
             echo "::warning::nvprune not found at $NVPRUNE — shipping unpruned CUDA libs"
             exit 0
@@ -574,14 +599,12 @@ jobs:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
           CMAKE_CUDA_COMPILER: /usr/local/cuda/bin/nvcc
-          # Fat binary covering the three consumer NVIDIA generations:
-          #   sm_86  = Ampere      (RTX 3000 series)
-          #   sm_89  = Ada Lovelace (RTX 4000 series)
-          #   sm_120 = Blackwell    (RTX 5000 series)
+          # matrix.cuda_archs: "86;89;120" (consumer: RTX 3000/4000/5000) or
+          # "80;90" (data-center: A100/H100) — see the matrix comment above.
           # cuBLAS static is the bulk of the binary and is shared across
-          # archs, so adding two more arches grows the file by ~kernel
-          # cubins only (~50-80 MB each), not 3x.
-          CMAKE_CUDA_ARCHITECTURES: "86;89;120"
+          # archs, so adding more arches grows the file by ~kernel cubins
+          # only (~50-80 MB each), not proportionally.
+          CMAKE_CUDA_ARCHITECTURES: ${{ matrix.cuda_archs }}
           # NCCL is disabled at the CMake level in the vendored build.rs
           # (GGML_CUDA_NCCL=OFF). It is a multi-GPU collective library that made
           # the binary hard-depend on libnccl.so.2 at runtime — breaking

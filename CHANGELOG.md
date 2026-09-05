@@ -15,6 +15,15 @@ something changed, less so for understanding what it means.
 
 ## Unreleased
 
+### Added
+- **New Linux CUDA download for data-center NVIDIA GPUs**:
+  `eullm-linux-x64-cuda-13.1-datacenter`, built for A100 (sm_80) and H100
+  (sm_90). The existing `eullm-linux-x64-cuda-13.1` remains the consumer
+  build (RTX 3000/4000/5000, sm_86/89/120) and does not run on A100/H100 —
+  those are a different, older compute capability that the consumer build
+  never targeted. RTX A-series workstation cards are Ampere sm_86 and are
+  already covered by the existing consumer download.
+
 ### Changed
 - **EULLM's own code is now licensed AGPL-3.0-or-later, not Apache 2.0.**
   This applies to new work going forward only: every version already

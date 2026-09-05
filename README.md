@@ -71,6 +71,7 @@ curl http://localhost:11434/v1/chat/completions \
 |----------|------|:------:|-------|
 | 🐧 Linux x64 (CPU) | `eullm-linux-x64` | ✅ Tested | – |
 | 🐧 Linux x64 (NVIDIA) | `eullm-linux-x64-cuda-13.1` | ✅ Tested | RTX 3000/4000/5000 |
+| 🐧 Linux x64 (NVIDIA data-center) | `eullm-linux-x64-cuda-13.1-datacenter` | 🆕 Untested | A100 (sm_80), H100 (sm_90) — a different, older compute capability than the consumer build above, which doesn't run on these cards. Built and published by CI; not yet run on real hardware by anyone — if you try it, please report back |
 | 🐧 Linux ARM64 | `eullm-linux-arm64` | ✅ Tested (community) | Validated on Raspberry Pi 400; RPi 4/5, Orange Pi 5+, Jetson, etc. |
 | 🐧 Linux ARM64 (NVIDIA) | `eullm-linux-arm64-cuda-13.1` | ✅ Tested | ARM host + discrete NVIDIA GPU (sm_86/89/120); validated on a Radxa Orion O6 (CIX P1) with an RTX 3060 12GB in its PCIe slot, qwen3-14b Q4 at 33 tok/s — the same board does 3.0 tok/s on the same model CPU-only |
 | 🍎 macOS Apple Silicon (Metal) | `eullm-macos-arm64` | ✅ Tested (community) | Validated on M2 Pro (Metal); M1/M2/M3/M4 |
