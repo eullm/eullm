@@ -35,6 +35,17 @@ something changed, less so for understanding what it means.
   was the wrong trade for its audience.
 
 ### Fixed
+- **`eullm pull` could not download from HuggingFace repos that put each
+  quantization in its own subdirectory.** Large models are increasingly
+  published that way — `unsloth/Qwen3.8-Flash-Next-GGUF` stores its files as
+  `UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf` — and the
+  repo listing dropped every file whose name contained a `/`, so the whole
+  repo looked empty of weights. What the user saw was the misleading
+  `this HuggingFace repo contains only a projector (mmproj), no model
+  weights`. Subdirectories are now accepted, each path segment still
+  validated exactly as a bare filename was, and the file is saved under its
+  own name rather than the full repo path.
+
 - **The Linux CUDA binaries (`eullm-linux-x64-cuda-13.1` and the new
   `-datacenter` variant) didn't run on RHEL, CentOS, Rocky Linux, AlmaLinux,
   or Oracle Linux — any RHEL 8-family distro.** They were built against

@@ -67,6 +67,27 @@ pub fn is_safe_filename(name: &str) -> bool {
         && Path::new(name).components().count() == 1
 }
 
+/// Whether `path` is safe as a *remote* HuggingFace reference: one or more
+/// components, each one safe by `is_safe_filename`.
+///
+/// Repos that publish many quantizations give each its own subdirectory —
+/// `UD-Q4_K_XL/Model-UD-Q4_K_XL-00001-of-00004.gguf` — so `siblings[].rfilename`
+/// is a path, not a bare name. Judging those with `is_safe_filename` dropped
+/// every weight file in such a repo and left only the projector sitting at the
+/// repo root, which surfaced as the nonsensical "this HuggingFace repo contains
+/// only a projector (mmproj), no model weights". Found live pulling
+/// `unsloth/Qwen3.8-Flash-Next-GGUF`, whose weights are *all* in subdirectories.
+///
+/// The traversal guarantee is unchanged, because every component still goes
+/// through the same rules: `..`, absolute prefixes, backslashes, drive letters
+/// and NUL are all rejected per component, and an absolute path fails outright
+/// (its leading `/` splits to an empty first component). Callers still reduce
+/// this to a basename before touching the filesystem — this validates the value
+/// on the way *out* to the network, which is a use of its own.
+pub fn is_safe_relative_path(path: &str) -> bool {
+    !path.is_empty() && path.len() <= 4096 && path.split('/').all(is_safe_filename)
+}
+
 /// Manages the local model directory (`~/.eullm/models/`).
 pub struct ModelStore {
     root: PathBuf,
@@ -773,6 +794,76 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed[0].id, "my-model");
         fs::remove_dir_all(&root).ok();
+    }
+}
+
+#[cfg(test)]
+mod safe_relative_path_tests {
+    use super::{is_safe_filename, is_safe_relative_path};
+
+    /// The case that motivated this: `unsloth/Qwen3.8-Flash-Next-GGUF` keeps
+    /// every quantization in its own subdirectory, so judging the HF API's
+    /// `rfilename` values as single filenames dropped all the weights and left
+    /// only the repo-root projector — reported to the user as "this repo
+    /// contains only a projector, no model weights".
+    #[test]
+    fn accepts_the_per_quant_subdirectory_layout() {
+        for path in [
+            "UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+            "Q8_0/Qwen3.8-Flash-Next-Q8_0-00006-of-00006.gguf",
+            "BF16/Qwen3.8-Flash-Next-BF16-00001-of-00008.gguf",
+            "MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf",
+        ] {
+            assert!(is_safe_relative_path(path), "should accept {path:?}");
+            assert!(
+                !is_safe_filename(path),
+                "{path:?} is exactly the shape the old check rejected"
+            );
+        }
+    }
+
+    /// Widening to paths must not widen what escapes: every component is still
+    /// judged by the same rules.
+    #[test]
+    fn still_rejects_anything_that_escapes() {
+        for path in [
+            "../../../../etc/cron.d/payload.gguf",
+            "UD-Q4_K_XL/../../../etc/shadow.gguf",
+            "/etc/shadow.gguf",
+            "UD-Q4_K_XL//model.gguf", // empty component
+            "UD-Q4_K_XL/",
+            "sub\\dir/model.gguf",
+            "C:\\Windows\\model.gguf",
+            "UD-Q4_K_XL/.hidden.gguf",
+            "UD-Q4_K_XL/model\0.gguf",
+            "",
+        ] {
+            assert!(!is_safe_relative_path(path), "should reject {path:?}");
+        }
+    }
+
+    /// A bare filename is still a valid relative path — the single-component
+    /// case must keep working, since most repos are laid out flat.
+    #[test]
+    fn a_bare_filename_is_still_accepted() {
+        for name in ["qwen3-8b-Q4_K_M.gguf", "mmproj-F16.gguf"] {
+            assert!(is_safe_relative_path(name));
+        }
+    }
+
+    /// The property callers rely on: taking the last component of any accepted
+    /// path yields a name that is itself safe to join onto the model directory.
+    #[test]
+    fn the_basename_of_an_accepted_path_is_always_a_safe_filename() {
+        for path in [
+            "UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+            "a/b/c/model.gguf",
+            "model.gguf",
+        ] {
+            assert!(is_safe_relative_path(path));
+            let leaf = path.rsplit('/').next().unwrap();
+            assert!(is_safe_filename(leaf), "basename of {path:?} must be safe");
+        }
     }
 }
 
