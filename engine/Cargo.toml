@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.7.5-rc5"
+version = "0.7.5-rc6"
 edition = "2024"
 description = "eullm — sovereign LLM runtime for Europe"
 license = "AGPL-3.0-or-later"

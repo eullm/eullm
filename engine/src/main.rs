@@ -3918,9 +3918,9 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 /// One-shot multimodal probe: load the file at `image_path`, read a prompt
-/// from stdin (or use a default), wrap it in the Gemma chat template with
-/// the mtmd media marker, run a single multimodal generation, stream tokens
-/// to stdout, exit.
+/// from stdin (or use a default), wrap it in the model's own chat template
+/// with the mtmd media marker, run a single multimodal generation, stream
+/// tokens to stdout, exit.
 ///
 /// This is the MVP entry point for the mtmd integration — deliberately tiny.
 /// API/UI multimodal surface is intentionally out of scope here.
@@ -3957,22 +3957,32 @@ async fn run_multimodal_oneshot(engine: Arc<InferenceEngine>, image_path: PathBu
         user_prompt
     };
 
-    // 3. Wrap in the Gemma chat template with the media marker placed inside
-    //    the user turn. Future work: detect the template from the model name
-    //    instead of hardcoding Gemma — but our only multimodal catalog entry
-    //    today is Gemma 4 12B, so this is correct for the MVP.
+    // 3. Template the turn with the media marker inside the user content,
+    //    using the model's own GGUF-embedded Jinja template — the same choice
+    //    the API path makes in `multimodal_chat_prompt`. Hardcoding Gemma here
+    //    was correct only while Gemma 4 was the sole multimodal model we
+    //    shipped; a Qwen VL fed `<start_of_turn>` answers badly and says
+    //    nothing about why.
     let marker = mtmd_default_marker();
-    let templated = format!(
-        "<start_of_turn>user\n{marker}\n{user_prompt}<end_of_turn>\n<start_of_turn>model\n"
-    );
+    let marked = format!("{marker}\n{user_prompt}");
+    let pairs: [(&str, &str); 1] = [("user", marked.as_str())];
+    let (templated, stop_sequences) = match engine.apply_jinja_chat_template(&pairs, true) {
+        // The model's own template ends generation on its EOG token, so there
+        // is no stop sequence to add on top.
+        Some(dynamic) => (dynamic.prompt, Vec::new()),
+        None => (
+            format!("<start_of_turn>user\n{marked}<end_of_turn>\n<start_of_turn>model\n"),
+            vec!["<end_of_turn>".to_string()],
+        ),
+    };
 
     // 4. Build the request and stream the answer to stdout.
     let request = inference::GenerateRequest {
         prompt: templated,
         max_tokens: 512,
         temperature: 0.7,
-        raw: true, // template is hand-built, no extra BOS / formatting
-        stop_sequences: vec!["<end_of_turn>".to_string()],
+        raw: true, // already templated, no extra BOS / formatting
+        stop_sequences,
         ..Default::default()
     };
 

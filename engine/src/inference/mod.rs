@@ -1708,9 +1708,9 @@ impl InferenceEngine {
             .map_err(|e| format!("Failed to load mmproj: {e}"))?;
 
         // Log capability flags up front so the user (and our own logs) can
-        // see at a glance what this projector enables. M-RoPE is the load-
-        // time guard the plan called out: scalar position bookkeeping in
-        // our scheduler/generate loop is incorrect for M-RoPE models.
+        // see at a glance what this projector enables. `m_rope` was a
+        // load-time refusal until 0.7.5-rc6 and is now only a fact worth
+        // recording — see `generate_multimodal` for why the guard was wrong.
         let support_vision = ctx.support_vision();
         let support_audio = ctx.support_audio();
         let use_mrope = ctx.decode_use_mrope();
@@ -1719,14 +1719,6 @@ impl InferenceEngine {
             "mmproj loaded — vision={support_vision} audio={support_audio} \
              m_rope={use_mrope} non_causal={use_non_causal}"
         );
-        if use_mrope {
-            tracing::warn!(
-                "mmproj reports decode_use_mrope=true — this model uses \
-                 multi-dimensional positions. The current MVP only supports \
-                 scalar-position models (e.g. Gemma 4). Multimodal calls \
-                 will refuse media input on this model."
-            );
-        }
 
         Ok(Some(ctx))
     }
@@ -2183,8 +2175,8 @@ impl InferenceEngine {
     /// audio file (wav/mp3/flac) — `MtmdBitmap::from_buffer` auto-detects.
     ///
     /// Returns immediately via `StreamEvent::Error` if multimodal is not
-    /// configured for this engine, the M-RoPE guard refuses the model, or
-    /// the requested modality is not supported by the loaded projector.
+    /// configured for this engine, or the requested modality is not supported
+    /// by the loaded projector.
     #[cfg(feature = "multimodal")]
     pub fn generate_multimodal(
         &self,
@@ -2209,15 +2201,20 @@ impl InferenceEngine {
             ));
             return;
         };
-        if mtmd_ctx.decode_use_mrope() {
-            let _ = tx.blocking_send(StreamEvent::Error(
-                "This model requires M-RoPE positions, which the current MVP \
-                 does not yet plumb through the decode loop. Image/audio input \
-                 is refused; text-only requests still work via generate_streaming."
-                    .into(),
-            ));
-            return;
-        }
+        // No M-RoPE guard here any more, and the reason is in upstream's own
+        // code. The guard assumed a model with multi-dimensional positions
+        // needed four positions per token in the decode batch, and that our
+        // scalar `batch.add(token, n_cur, ..)` below would therefore be wrong.
+        // It isn't: `llama_batch_allocr` broadcasts a text batch's single
+        // position across all RoPE sections — `src_off = batch.token ? 0 : ..`
+        // in `llama-batch.cpp`, with the comment spelling it out — and
+        // llama.cpp's reference `mtmd-cli` generates with exactly the same
+        // scalar `common_batch_add(batch, token_id, n_past++, {0}, true)`.
+        // The image's real 2D positions are set inside `eval_chunks`, which
+        // returns an `n_past` already advanced past the whole grid, so the
+        // decode loop resumes at a position the M-RoPE consistency check
+        // accepts. Refusing these models cost us every Qwen VL for nothing.
+        //
         // Reject the request if the user supplied a modality the projector
         // does not support, to fail loudly rather than silently mis-decode.
         let has_audio = media.iter().any(|b| {

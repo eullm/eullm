@@ -35,6 +35,29 @@ something changed, less so for understanding what it means.
   was the wrong trade for its audience.
 
 ### Fixed
+- **Images sent to a non-Gemma multimodal model were refused outright, or
+  answered badly.** Two separate causes, both now fixed, found running
+  Qwen3.8-Flash-Next on 4× A100.
+
+  The first was an outright refusal: `This model requires M-RoPE positions,
+  which the current MVP does not yet plumb through the decode loop`. The
+  guard assumed a model with multi-dimensional positions needed four
+  positions per token in the decode batch. It does not — llama.cpp
+  broadcasts a text batch's single position across all RoPE sections, and
+  its own reference `mtmd-cli` generates with the same scalar position we
+  do. Every Qwen VL was refused for nothing. The guard is gone; `m_rope` is
+  now only logged at load.
+
+  The second was quieter and worse. The multimodal path built its prompt
+  with Gemma's `<start_of_turn>` turn markers, hardcoded, for every model.
+  It now renders the model's own GGUF-embedded chat template — what the
+  text path has done since 0.7.0 — with the media marker placed inside the
+  user message, so a Qwen VL gets ChatML and a Gemma still gets Gemma. A
+  wrong template does not error, it just degrades the answer, which is why
+  this survived: Gemma 4 was the only multimodal model in the catalog. The
+  `think` parameter now reaches the multimodal path too. Both the API and
+  `eullm run --image` are fixed.
+
 - **`eullm pull` could not download from HuggingFace repos that put each
   quantization in its own subdirectory.** Large models are increasingly
   published that way — `unsloth/Qwen3.8-Flash-Next-GGUF` stores its files as
