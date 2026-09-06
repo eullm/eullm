@@ -216,6 +216,83 @@ first and excluded from the timed window in every case.
   (small-context, quantized-KV) configuration, or `split-mode row` if it
   becomes available. Worth revisiting.
 
+## Storage: `$WORK` vs the fast scratch tier (6 Sep 2026)
+
+Model loading felt slow — around a minute for a 29.3 GiB GGUF — so we
+measured instead of guessing. Two plausible explanations turned out to be
+wrong, and the one that mattered was never about tuning.
+
+Raw sequential read of the same 31.46 GB file, login node, cold:
+
+| Path | Time | Throughput |
+|---|---|---|
+| `$WORK` (`/leonardo_work/AIFAC_P02_1147`) | 48.99 s | ~640 MB/s |
+| `/leonardo_scratch/fast/AIFAC_P02_1147` | **6.54 s** | **~4.8 GB/s** |
+
+**7.5× faster on the fast tier**, and it holds for the real workload: model
+load on a compute node is visibly quicker from scratch.
+
+What did *not* help, both tested and both dead ends worth not repeating:
+
+- **Lustre striping.** `$WORK` applies a progressive layout (PFL) by
+  default: `stripe_count 1` for the first 10 GiB, 2 up to 100 GiB, 4 beyond
+  — so a third of this file came off a single OST. Restriping the whole file
+  to `lfs setstripe -c 8` gained **7%** (48.99 s → 46.74 s), not the several
+  times expected. Striping helps parallel or large-block I/O; a model load
+  is one sequential stream and barely engages the extra targets.
+- **Larger read blocks.** `dd bs=16M` was 570 MB/s, marginally *slower* than
+  `cat`'s default. Request size is not the limit either.
+
+The page-cache confound was ruled out explicitly rather than assumed:
+reading the 31 GB `$WORK` copy evicts the scratch copy from cache, and a
+re-read of scratch immediately afterwards still returned 6.5 s.
+
+**Why this is worth the trouble:** the model load happens on the compute
+node, so those ~45 saved seconds are billed A100 time on every single
+allocation. Ten loads is roughly eight minutes of GPU allocation not spent.
+
+Recommended layout, given scratch is purged of inactive files while `$WORK`
+is permanent — keep the canonical copy on `$WORK` and a working copy on
+scratch, pointing eullm at the fast one only where speed matters:
+
+```bash
+export EULLM_MODELS_DIR=/leonardo_scratch/fast/AIFAC_P02_1147/models
+```
+
+Leave `~/.eullm` symlinked to `$WORK/.eullm` as the safe default: if scratch
+is cleaned, nothing breaks and re-copying takes about a minute.
+
+Still unmeasured: the same comparison run *from a compute node* rather than
+the shared login node. A 7.5× gap is unlikely to invert, but the login
+node's storage connectivity is not the one that matters at run time.
+
+## What the published 0.7.5-rc4 binaries actually do here (6 Sep 2026)
+
+| Artifact | Result |
+|---|---|
+| `eullm-linux-x64` (CPU) | ✅ runs on the login node — the Rocky Linux 8 rebuild fixed the glibc failure. This is the one that matters for downloads, since compute nodes have no outbound network |
+| `eullm-linux-x64-cuda-12.4-datacenter` | ✅ initialises CUDA on an A100-SXM-64GB (`compute capability 8.0`), `--fit` offloads all layers automatically |
+| same, built on CUDA 13.1 (rc1–rc3) | ❌ silent CPU fallback — see reason 3 above |
+
+Single-stream decode of `qwen3.8-27b-ud-q8_k_xl`, 1 GPU, all layers on GPU:
+**32.4 tok/s** — inside the ~31-34 tok/s band measured before the llama.cpp
+bump from `b10405` to `b10818`, so that bump carries no performance
+regression on an existing architecture. That closes the real-hardware
+validation the bump still owed.
+
+Two things worth fixing that this surfaced, neither blocking:
+
+- The banner prints `GPU backend: CUDA` and `GPU layers: all` even when
+  `ggml_cuda_init` has failed and everything is running on CPU. The single
+  warning line scrolls past and the only reliable tell is a memory breakdown
+  with a `Host` row and no device row. A banner that reports the *requested*
+  configuration rather than the achieved one costs real GPU allocation
+  before anyone notices.
+- The model download path never logs its destination directory, and eullm
+  defaults to `~/.eullm/models` — which on this system is a 50 GB quota. A
+  30 GB model landed there unnoticed. One log line naming the target would
+  have made it obvious.
+
 ## Open items
 
 - Backlog **H4-H** (`docs/backlog-fix-e-hardening.md`) tracks a real fix for
