@@ -17,12 +17,22 @@ something changed, less so for understanding what it means.
 
 ### Added
 - **New Linux CUDA download for data-center NVIDIA GPUs**:
-  `eullm-linux-x64-cuda-13.1-datacenter`, built for A100 (sm_80) and H100
+  `eullm-linux-x64-cuda-12.4-datacenter`, built for A100 (sm_80) and H100
   (sm_90). The existing `eullm-linux-x64-cuda-13.1` remains the consumer
   build (RTX 3000/4000/5000, sm_86/89/120) and does not run on A100/H100 —
   those are a different, older compute capability that the consumer build
   never targeted. RTX A-series workstation cards are Ampere sm_86 and are
   already covered by the existing consumer download.
+
+  **This build uses CUDA 12.4, not 13.1 like the consumer one**, so its
+  minimum NVIDIA driver is r550 rather than r580. The first attempt shipped
+  it on CUDA 13.1 and it would not start on CINECA Leonardo at all — CUDA 13
+  requires an August-2025 driver, and Leonardo's is older, so the binary
+  died with `CUDA driver version is insufficient for CUDA runtime version`
+  and silently fell back to running a 27B model on CPU. A100s live
+  overwhelmingly in HPC centres and enterprise fleets, which freeze driver
+  versions for years: aiming this particular artifact at the newest drivers
+  was the wrong trade for its audience.
 
 ### Fixed
 - **The Linux CUDA binaries (`eullm-linux-x64-cuda-13.1` and the new
@@ -34,9 +44,16 @@ something changed, less so for understanding what it means.
   Leonardo (RHEL 8.7). Both Linux CUDA builds now compile on a Rocky Linux 8
   base image instead, so they link against glibc 2.28 — which, being
   backward-compatible, still runs fine on current Ubuntu/Fedora/Arch/
-  Windows, so nothing changes for existing users. The CPU, Vulkan, ARM64 and
-  macOS builds were not affected by this — only the two `x64` CUDA
-  binaries were built on the newer base.
+  Windows, so nothing changes for existing users.
+
+- **The CPU build `eullm-linux-x64` had the same problem**, and the same
+  fix. It was missed on the first pass, which only moved the two CUDA
+  builds: running it on Leonardo's login node still failed with
+  `GLIBC_2.29' not found`. It now builds on Rocky Linux 8 too. This is the
+  binary that matters most on an HPC system, since compute nodes usually
+  have no outbound network and model downloads have to run from the login
+  node. The Vulkan and ARM64 Linux builds are still produced on Ubuntu and
+  carry the same exposure; macOS and Windows are unaffected.
 
 ### Changed
 - **EULLM's own code is now licensed AGPL-3.0-or-later, not Apache 2.0.**
