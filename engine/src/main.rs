@@ -1096,7 +1096,18 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
     println!();
 
     let model_dir = store.model_path(&id);
-    let gguf_dest = model_dir.join(&filename);
+    // `filename` is the repo-relative path and can carry a subdirectory when
+    // the repo groups quantizations (`UD-Q4_K_XL/Model-…-00001-of-00004.gguf`).
+    // The remote path is what the download needs; locally the model already
+    // has its own directory, so that prefix is redundant and the file is
+    // stored under its bare name — the same flattening the projector branch
+    // below has always done.
+    let leaf = filename
+        .rsplit('/')
+        .next()
+        .unwrap_or(&filename)
+        .to_string();
+    let gguf_dest = model_dir.join(&leaf);
 
     let result = {
         use crate::registry::download_from_huggingface;
@@ -1151,9 +1162,11 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
     match result {
         Ok(()) => {
             let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
+            // `leaf`, not `filename`: the manifest names a file inside this
+            // model's directory, and that is where the flattened basename is.
             match store.write_external_manifest(
                 &id,
-                &filename,
+                &leaf,
                 &hf.original,
                 size,
                 mmproj_stored.as_deref(),
