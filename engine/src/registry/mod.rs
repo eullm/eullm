@@ -580,12 +580,17 @@ pub async fn list_hf_ggufs(
             if !name.to_lowercase().ends_with(".gguf") {
                 continue;
             }
-            // The suffix used to be the only check, and this value becomes a
-            // path component in `cmd_pull_hf` (`model_dir.join(&filename)`).
-            // A repo is free to declare whatever `rfilename` it likes, so
-            // anything that isn't a single safe filename is dropped here, at
-            // the boundary, rather than being validated at each use site.
-            if !crate::models::store::is_safe_filename(name) {
+            // The suffix used to be the only check. A repo is free to declare
+            // whatever `rfilename` it likes, so anything unsafe is dropped
+            // here, at the boundary, rather than being validated at each use
+            // site.
+            //
+            // A *relative path* is allowed, not just a bare filename: repos
+            // with many quantizations put each in its own subdirectory, and
+            // requiring a single component rejected every weight file in such
+            // a repo. Callers store the basename, so nothing joins this onto a
+            // local directory as-is.
+            if !crate::models::store::is_safe_relative_path(name) {
                 tracing::warn!(
                     "Ignoring unsafe filename from the HuggingFace API for {repo}: {}",
                     crate::audit::sanitize_for_log(name),
