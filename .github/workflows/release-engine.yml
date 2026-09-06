@@ -557,20 +557,44 @@ jobs:
             artifact: eullm-linux-x64-cuda-13.1
             cuda_tag: "13.1.2-devel-rockylinux8"
             cuda_archs: "86;89;120"
-          # Data-center NVIDIA: A100 (sm_80) and H100 (sm_90). Both are above
-          # CUDA 13's sm_75 floor. Separate artifact rather than folding into
-          # the consumer one above, same reasoning as CPU/Vulkan/CUDA already
-          # being separate downloads: A100/H100 owners get a binary sized for
-          # what they have, consumer-card owners don't pay for archs they
-          # can't run. RTX A-series *workstation* cards are Ampere sm_86 and
-          # already covered by the consumer build above — sm_80/90 is
-          # specifically the compute-only A100/H100 line. On the same
-          # rockylinux8 base as the consumer entry above, for the same
-          # glibc-portability reason — A100/H100 boxes are, if anything, more
-          # likely to be RHEL-family than consumer GPU desktops are.
-          - cuda: "13.1.2"
-            artifact: eullm-linux-x64-cuda-13.1-datacenter
-            cuda_tag: "13.1.2-devel-rockylinux8"
+          # Data-center NVIDIA: A100 (sm_80) and H100 (sm_90). Separate
+          # artifact rather than folding into the consumer one above, same
+          # reasoning as CPU/Vulkan/CUDA already being separate downloads:
+          # A100/H100 owners get a binary sized for what they have,
+          # consumer-card owners don't pay for archs they can't run. RTX
+          # A-series *workstation* cards are Ampere sm_86 and already covered
+          # by the consumer build above — sm_80/90 is specifically the
+          # compute-only A100/H100 line. On the same rockylinux8 base as the
+          # consumer entry above, for the same glibc-portability reason —
+          # A100/H100 boxes are, if anything, more likely to be RHEL-family
+          # than consumer GPU desktops are.
+          #
+          # CUDA 12.4, NOT 13.1 like the consumer entry — and this is the
+          # whole point of the split. Found live on CINECA Leonardo
+          # (docs/cineca/leonardo.md): the 13.1 build died at startup with
+          # "CUDA driver version is insufficient for CUDA runtime version",
+          # silently fell back to CPU, and ran a 27B at CPU speed. CUDA 13
+          # needs driver r580 (August 2025); Leonardo tops out at the
+          # cuda/12.6 module, so its driver predates that.
+          #
+          # The lesson generalises past one site: A100s live overwhelmingly
+          # in HPC centres and enterprise fleets, which are precisely the
+          # environments that freeze driver versions for years. Inheriting
+          # the consumer build's CUDA 13 — chosen there for binary size,
+          # since 13.0 dropped sub-sm_75 kernels — pointed this artifact at
+          # the newest drivers while aiming it at the most conservative
+          # audience we have.
+          #
+          # 12.4 rather than 12.6 (which Leonardo would also accept) because
+          # the failure is asymmetric: too old costs some Hopper kernel
+          # tuning, too new means the binary does not start at all. 12.4
+          # puts the driver floor at r550 (May 2024) instead of r560, buying
+          # margin for sites more conservative than this one. sm_80/sm_90
+          # have both been supported since CUDA 12.0, so nothing is lost on
+          # the architecture side.
+          - cuda: "12.4.1"
+            artifact: eullm-linux-x64-cuda-12.4-datacenter
+            cuda_tag: "12.4.1-devel-rockylinux8"
             cuda_archs: "80;90"
 
     runs-on: ubuntu-22.04

@@ -12,7 +12,16 @@ theoretical.
 
 ## Why the prebuilt release binaries don't work here
 
-Two independent, unrelated reasons — both are hard blockers, not tuning:
+> **Status as of 0.7.5-rc3 (6 Sep 2026): reasons 1 and 2 are fixed in CI.**
+> `eullm-linux-x64` now builds on a Rocky Linux 8 base and was verified
+> running on a Leonardo login node — building from source is no longer
+> required for the CPU binary, which is the one that matters here anyway
+> (compute nodes have no outbound network, so model downloads run from the
+> login node). A data-center CUDA artifact targeting sm_80/sm_90 now exists
+> too. Reason 3 below was found *while* validating that work and is the
+> one still open at the time of writing.
+
+Three independent, unrelated reasons — all hard blockers, not tuning:
 
 1. **glibc.** RHEL 8.7 ships glibc 2.28 and never moves past it for the life
    of the release (RHEL freezes the major glibc version for ABI stability).
@@ -24,8 +33,11 @@ Two independent, unrelated reasons — both are hard blockers, not tuning:
    ./eullm-linux-x64: /lib64/libc.so.6: version `GLIBC_2.30' not found
    ...
    ```
-   This is permanent — no flag or env var works around it. **Any binary run
-   on Leonardo has to be compiled on Leonardo.**
+   No flag or env var works around it from the running side — but it is
+   fixable at build time, and now is: since 0.7.5-rc3 the CPU and both CUDA
+   x64 builds compile on a Rocky Linux 8 base (glibc 2.28), and glibc is
+   backward-compatible, so those binaries run here unchanged. The Vulkan and
+   ARM64 Linux artifacts are still built on Ubuntu and still fail this way.
 2. **CUDA architecture.** `release-engine.yml` compiles the CUDA build for
    `CMAKE_CUDA_ARCHITECTURES: "86;89;120"` (RTX 3000/4000/5000 consumer
    Ampere/Ada/Blackwell) to keep the binary small (see the nvprune work in
@@ -33,11 +45,34 @@ Two independent, unrelated reasons — both are hard blockers, not tuning:
    *different* compute capability than sm_86, and *older* than the lowest
    architecture in that list, so it doesn't even benefit from PTX
    forward-compatibility. The official CUDA binary would not run on an A100
-   even if glibc were not a problem.
+   even if glibc were not a problem. Addressed since 0.7.5-rc1 by a separate
+   `-datacenter` artifact built for `80;90`.
+3. **CUDA driver version.** Found on 6 Sep 2026, testing the datacenter
+   artifact on a Booster node. The binary starts, prints a normal banner
+   claiming `GPU backend: CUDA` and `GPU layers: all`, and then runs
+   entirely on CPU. The only sign is one line early in the output:
+   ```
+   ggml_cuda_init: failed to initialize CUDA: CUDA driver version is insufficient for CUDA runtime version
+   ```
+   with the memory breakdown showing a `Host` row and no device row. A 27B
+   Q8 model then decodes at CPU speed, which looks like a hang rather than a
+   fallback. The cause: that artifact was built with CUDA 13.1, which needs
+   driver r580 (August 2025). Leonardo's newest toolkit module is
+   `cuda/12.6`, so its driver predates that. Fixed by rebuilding the
+   data-center artifact on CUDA 12.4 (driver floor r550) — see the matrix
+   comment in `release-engine.yml` for why 12.4 rather than 12.6.
 
-Building from source sidesteps both: compiling directly on the target node
-picks up its own glibc, and CMake's `native` CUDA-architecture detection (or
-an explicit `CMAKE_CUDA_ARCHITECTURES=80`) targets the A100 correctly.
+   Two lessons worth keeping: check `module avail cuda` on any new site
+   before assuming a CUDA build will run there — the newest toolkit offered
+   bounds the driver — and treat a silent CPU fallback as a reporting bug,
+   because a banner that says `CUDA` while running on CPU costs real GPU
+   allocation before anyone notices.
+
+Building from source sidesteps all three: compiling directly on the target
+node picks up its own glibc, its own driver-compatible CUDA, and CMake's
+`native` architecture detection (or an explicit
+`CMAKE_CUDA_ARCHITECTURES=80`). It is no longer the *only* way in, but it
+remains the fallback when a published artifact does not match the site.
 
 ## Build recipe that works
 
