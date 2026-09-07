@@ -1082,7 +1082,7 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
     }
 
     println!("Resolving HuggingFace repo: {}", hf.repo);
-    let filename = match registry::resolve_hf_gguf(hf).await {
+    let filenames = match registry::resolve_hf_gguf(hf).await {
         Ok(f) => f,
         Err(e) => {
             eprintln!("Could not resolve a GGUF to download: {e}");
@@ -1090,37 +1090,59 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
         }
     };
 
-    println!("Pulling from HuggingFace: {} ({})", hf.repo, filename);
+    if filenames.len() > 1 {
+        println!(
+            "Pulling from HuggingFace: {} ({} shards)",
+            hf.repo,
+            filenames.len()
+        );
+        for f in &filenames {
+            println!("    {f}");
+        }
+    } else {
+        println!("Pulling from HuggingFace: {} ({})", hf.repo, filenames[0]);
+    }
     println!("  Storing as: {id}");
     println!("  (off-catalog model — no license/VRAM metadata available)");
     println!();
 
     let model_dir = store.model_path(&id);
-    // `filename` is the repo-relative path and can carry a subdirectory when
+    // Each name is the repo-relative path and can carry a subdirectory when
     // the repo groups quantizations (`UD-Q4_K_XL/Model-…-00001-of-00004.gguf`).
     // The remote path is what the download needs; locally the model already
     // has its own directory, so that prefix is redundant and the file is
     // stored under its bare name — the same flattening the projector branch
-    // below has always done.
-    let leaf = filename
-        .rsplit('/')
-        .next()
-        .unwrap_or(&filename)
-        .to_string();
-    let gguf_dest = model_dir.join(&leaf);
+    // below has always done. Shards must keep their `-NNNNN-of-TOTAL` suffix,
+    // which they do: only the directory prefix is dropped.
+    let leaves: Vec<String> = filenames
+        .iter()
+        .map(|f| f.rsplit('/').next().unwrap_or(f).to_string())
+        .collect();
+    // The manifest names the first shard. llama.cpp reads the split count from
+    // its header and opens the siblings itself, which is why they all have to
+    // land in the same directory.
+    let leaf = leaves[0].clone();
 
-    let result = {
-        use crate::registry::download_from_huggingface;
-        download_from_huggingface(
+    let mut result = Ok(());
+    for (i, (remote, local)) in filenames.iter().zip(leaves.iter()).enumerate() {
+        if filenames.len() > 1 {
+            println!("  [{}/{}] {local}", i + 1, filenames.len());
+        }
+        result = registry::download_from_huggingface(
             &hf.repo,
-            &filename,
-            &gguf_dest,
+            remote,
+            &model_dir.join(local),
             None,
             Some(download_progress()),
         )
-        .await
-    };
-    eprintln!();
+        .await;
+        eprintln!();
+        // Stop at the first failure: a partial split cannot be loaded, and the
+        // error handling below deletes the whole model directory anyway.
+        if result.is_err() {
+            break;
+        }
+    }
 
     // A vision repo ships the projector beside the weights, and without it the
     // model loads but cannot see. llama.cpp's own `-hf` fetches both, and a
@@ -1161,9 +1183,17 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
 
     match result {
         Ok(()) => {
-            let size = std::fs::metadata(&gguf_dest).map(|m| m.len()).unwrap_or(0);
-            // `leaf`, not `filename`: the manifest names a file inside this
-            // model's directory, and that is where the flattened basename is.
+            // Every shard, not just the first: the recorded size is what the
+            // model costs on disk, and `eullm list` showing 30 GB for a 111 GB
+            // split would be worse than showing nothing.
+            let size: u64 = leaves
+                .iter()
+                .filter_map(|l| std::fs::metadata(model_dir.join(l)).ok())
+                .map(|m| m.len())
+                .sum();
+            // `leaf`, not the repo-relative name: the manifest names a file
+            // inside this model's directory, and that is where the flattened
+            // basename is.
             match store.write_external_manifest(
                 &id,
                 &leaf,
