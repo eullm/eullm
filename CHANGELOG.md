@@ -16,6 +16,26 @@ something changed, less so for understanding what it means.
 ## 0.7.5-rc9 — 2026-09-07
 
 ### Fixed
+- **Sending a large image killed the engine.** Not an error message — the
+  process aborted, taking the loaded model and every other request with it,
+  so the next thing anyone did failed with `network error` and everything
+  after that with `Failed to fetch`. A 1584×1584 photo through Gemma 4's
+  projector encodes to 1089 tokens; the context had been built for a batch of
+  512, and llama.cpp enforces that with a `GGML_ASSERT`, which calls
+  `abort()` rather than returning an error.
+
+  Two numbers were involved and neither was derived from the image: the
+  context was sized from a fixed 512, measured once against Gemma 4's
+  ~256-300 tokens for a typical slice, while the splitting of media chunks
+  was handed the *text* prefill batch of 2048. So a single batch of up to
+  2048 tokens could be passed to a context that accepted 512. The batch is
+  now sized to the largest media chunk the request actually tokenized to,
+  and the same figure is used for both, so they cannot disagree. An image
+  past 8192 tokens is refused with a message naming
+  `EULLM_IMAGE_MAX_TOKENS`, instead of asking for a compute buffer that will
+  not fit.
+
+### Fixed
 - **The model browser said "no GPU detected" on every build except CUDA, and
   judged downloads against system RAM alone.** VRAM was read with
   `cudaMemGetInfo`, compiled in only for the CUDA binaries, so the Vulkan,

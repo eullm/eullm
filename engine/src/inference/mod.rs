@@ -169,6 +169,30 @@ pub fn cpu_features_summary() -> String {
 /// `generate_multimodal`'s real context and `probe_and_shrink_context`'s
 /// probe, which must agree — a probe built from a smaller batch than the
 /// request that follows it proves nothing.
+/// The largest single media chunk this build will allocate a batch for.
+///
+/// A vision encoder needs its whole image in one micro-batch, so this bounds
+/// the compute buffer a single request can ask for. 8192 is far above any
+/// image a current projector produces (a 1584x1584 photo through Gemma 4 is
+/// 1089) and well below a figure that would fail to allocate on a small card.
+const MAX_MEDIA_TOKENS_PER_CHUNK: u32 = 8192;
+
+/// The batch a request needs, given the largest media chunk it carries.
+///
+/// `Err` when that chunk is past [`MAX_MEDIA_TOKENS_PER_CHUNK`] — the caller
+/// turns it into a message rather than allocating a compute buffer that will
+/// not fit anywhere.
+///
+/// Pure and separate from the request path on purpose: getting this wrong
+/// aborts the process, which is not a failure mode a test can catch after the
+/// fact.
+fn required_media_batch(max_media_tokens: u32, floor: u32) -> Result<u32, u32> {
+    if max_media_tokens > MAX_MEDIA_TOKENS_PER_CHUNK {
+        return Err(max_media_tokens);
+    }
+    Ok(floor.max(max_media_tokens))
+}
+
 fn multimodal_batch_size() -> u32 {
     let img_budget = std::env::var("EULLM_IMAGE_MAX_TOKENS")
         .ok()
@@ -2184,7 +2208,7 @@ impl InferenceEngine {
         media: &[Vec<u8>],
         tx: mpsc::Sender<StreamEvent>,
     ) {
-        use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputText};
+        use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputChunkType, MtmdInputText};
 
         let _lock = self.ctx_mutex.lock();
         let start = std::time::Instant::now();
@@ -2238,15 +2262,116 @@ impl InferenceEngine {
             return;
         }
 
-        // ── 2. Build context (same code path as generate_streaming) ─────
+        // ── 2. Decode media bytes into mtmd bitmaps ─────────────────────
+        let mut bitmaps: Vec<MtmdBitmap> = Vec::with_capacity(media.len());
+        for (i, bytes) in media.iter().enumerate() {
+            // llama-cpp-2 0.1.151 added a `placeholder` flag to from_buffer:
+            // false = decode and load the actual media (what we need for inference).
+            match MtmdBitmap::from_buffer(mtmd_ctx, bytes, false) {
+                Ok(b) => bitmaps.push(b),
+                Err(e) => {
+                    // `NullResult` on its own tells the caller nothing, and the
+                    // most common cause is simply an unsupported container: a
+                    // .webp fails exactly like a corrupt file does. Name the
+                    // formats so the answer is in the error rather than in the
+                    // source.
+                    let _ = tx.blocking_send(StreamEvent::Error(format!(
+                        "Media #{i} failed to decode ({e:?}). Supported images \
+                         are jpg, png, bmp and gif, and audio is wav, mp3 or \
+                         flac. Other containers, webp among them, are not \
+                         decoded by the multimodal backend."
+                    )));
+                    return;
+                }
+            }
+        }
+        let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+
+        // ── 3. Tokenize text + media → MtmdInputChunks ──────────────────
+        // The prompt is hand-templated by the caller (turn markers + one
+        // <__media__> marker per bitmap) but does NOT include <bos>.
+        // `add_special = true` makes mtmd prepend the model's BOS, matching
+        // llama.cpp's reference `mtmd-cli` (`add_special = add_bos` on the
+        // first turn). Omitting BOS was the bug: Gemma needs it, and without
+        // it the model degrades into "wall of text / line art" confabulation
+        // on all but the easiest images (the missing-BOS prompt is malformed;
+        // strong landscapes survived it, weaker subjects did not).
+        // `parse_special = true` so the turn tokens (Gemma <start_of_turn>)
+        // are recognised rather than tokenised literally.
+        let input_text = MtmdInputText {
+            text: request.prompt.clone(),
+            add_special: true,
+            parse_special: true,
+        };
+        let chunks = match mtmd_ctx.tokenize(input_text, &bitmap_refs) {
+            Ok(c) => c,
+            Err(e) => {
+                let _ =
+                    tx.blocking_send(StreamEvent::Error(format!("mtmd tokenize failed: {e:?}")));
+                return;
+            }
+        };
+
+        let tokens_prompt = chunks.total_tokens() as u32;
+
+        // ── 4. Size the batch to the image that actually arrived ────────
+        //
+        // A vision encoder uses NON-causal attention, so llama.cpp requires
+        // the whole image in one micro-batch (`n_ubatch >= n_tokens`) and the
+        // whole call within one batch (`n_tokens_all <= n_batch`). Both are
+        // GGML_ASSERTs, which call `abort()` — they do not return an error, so
+        // getting this wrong takes the process down and every request with it.
+        //
+        // It was wrong. The context was built from a fixed 512, documented as
+        // "comfortably above a typical single-slice image" from a measurement
+        // of Gemma 4 at ~256-300 tokens per slice, while `eval_chunks` was
+        // handed `config.n_batch` (2048) — so mtmd packed an image into ONE
+        // batch of up to 2048 tokens and passed it to a context that accepted
+        // 512. A 1584x1584 photo encodes to 1089 tokens and killed the server:
+        // `llama-context.cpp:1722: GGML_ASSERT(n_tokens_all <= cparams.n_batch)
+        // failed`. Reported from the field on a Gemma 4 e4b.
+        //
+        // Neither number could have been right, because neither was derived
+        // from the image. The chunks are tokenized above and know exactly how
+        // many tokens each media chunk became, so the batch is sized to the
+        // largest of them and that same figure is what `eval_chunks` splits
+        // by. The two cannot disagree any more.
+        let max_media_tokens = (0..chunks.len())
+            .filter_map(|i| chunks.get(i))
+            .filter(|c| !matches!(c.chunk_type(), MtmdInputChunkType::Text))
+            .map(|c| c.n_tokens() as u32)
+            .max()
+            .unwrap_or(0);
+        // A ceiling so a pathological image cannot ask for a compute buffer
+        // that will not fit anywhere. `EULLM_IMAGE_MAX_TOKENS` bounds the
+        // encoder itself and is the setting to reach for.
+        let mm_batch = match required_media_batch(max_media_tokens, multimodal_batch_size()) {
+            Ok(b) => b,
+            Err(n) => {
+                let _ = tx.blocking_send(StreamEvent::Error(format!(
+                    "this image encodes to {n} tokens, past the \
+                     {MAX_MEDIA_TOKENS_PER_CHUNK} this build will allocate a \
+                     batch for. Send a smaller image, or lower the encoder's \
+                     resolution with EULLM_IMAGE_MAX_TOKENS."
+                )));
+                return;
+            }
+        };
+        if max_media_tokens > multimodal_batch_size() {
+            tracing::info!(
+                "Media chunk is {max_media_tokens} tokens: raising the batch \
+                 from {} to match, since a vision encoder needs the whole \
+                 image in one micro-batch",
+                multimodal_batch_size(),
+            );
+        }
+
+        // ── 5. Build context (same code path as generate_streaming) ─────
         let ctx_size =
             NonZeroU32::new(self.config.context_size).unwrap_or(NonZeroU32::new(4096).unwrap());
         let has_quantized_cache = self.config.cache_type_k != KvCacheType::F16
             || self.config.cache_type_v != KvCacheType::F16;
 
-        // See `multimodal_batch_size` — must match what `probe_and_shrink_context`
-        // used to prove this context size fits, or the probe proves nothing.
-        let mm_batch = multimodal_batch_size();
         let mk_params = |ctk, ctv| {
             build_ctx_params_with_cache(&self.config, ctx_size, ctk, ctv)
                 .with_n_batch(mm_batch)
@@ -2283,57 +2408,9 @@ impl InferenceEngine {
             }
         };
 
-        // ── 3. Decode media bytes into mtmd bitmaps ─────────────────────
-        let mut bitmaps: Vec<MtmdBitmap> = Vec::with_capacity(media.len());
-        for (i, bytes) in media.iter().enumerate() {
-            // llama-cpp-2 0.1.151 added a `placeholder` flag to from_buffer:
-            // false = decode and load the actual media (what we need for inference).
-            match MtmdBitmap::from_buffer(mtmd_ctx, bytes, false) {
-                Ok(b) => bitmaps.push(b),
-                Err(e) => {
-                    // `NullResult` on its own tells the caller nothing, and the
-                    // most common cause is simply an unsupported container: a
-                    // .webp fails exactly like a corrupt file does. Name the
-                    // formats so the answer is in the error rather than in the
-                    // source.
-                    let _ = tx.blocking_send(StreamEvent::Error(format!(
-                        "Media #{i} failed to decode ({e:?}). Supported images \
-                         are jpg, png, bmp and gif, and audio is wav, mp3 or \
-                         flac. Other containers, webp among them, are not \
-                         decoded by the multimodal backend."
-                    )));
-                    return;
-                }
-            }
-        }
-        let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
-
-        // ── 4. Tokenize text + media → MtmdInputChunks ──────────────────
-        // The prompt is hand-templated by the caller (turn markers + one
-        // <__media__> marker per bitmap) but does NOT include <bos>.
-        // `add_special = true` makes mtmd prepend the model's BOS, matching
-        // llama.cpp's reference `mtmd-cli` (`add_special = add_bos` on the
-        // first turn). Omitting BOS was the bug: Gemma needs it, and without
-        // it the model degrades into "wall of text / line art" confabulation
-        // on all but the easiest images (the missing-BOS prompt is malformed;
-        // strong landscapes survived it, weaker subjects did not).
-        // `parse_special = true` so the turn tokens (Gemma <start_of_turn>)
-        // are recognised rather than tokenised literally.
-        let input_text = MtmdInputText {
-            text: request.prompt.clone(),
-            add_special: true,
-            parse_special: true,
-        };
-        let chunks = match mtmd_ctx.tokenize(input_text, &bitmap_refs) {
-            Ok(c) => c,
-            Err(e) => {
-                let _ =
-                    tx.blocking_send(StreamEvent::Error(format!("mtmd tokenize failed: {e:?}")));
-                return;
-            }
-        };
-
-        let tokens_prompt = chunks.total_tokens() as u32;
+        // Checked here rather than beside the tokenizer: `n_ctx` is a
+        // property of the context, and the context is now built after
+        // tokenizing so its batch can be sized to the real image.
         let server_ctx = ctx.n_ctx();
         let effective_ctx = request
             .num_ctx
@@ -2346,14 +2423,17 @@ impl InferenceEngine {
             return;
         }
 
-        // ── 5. mtmd-aware prefill: text chunks via llama_decode, media
+        // ── 6. mtmd-aware prefill: text chunks via llama_decode, media
         //      chunks via mtmd_encode + llama_decode, all handled internally.
         let new_n_past = match chunks.eval_chunks(
             mtmd_ctx,
             &ctx,
             0,
             0,
-            self.config.n_batch as i32,
+            // `mm_batch`, NOT `config.n_batch`: this is the size mtmd splits
+            // media chunks by, and handing it anything larger than the context
+            // accepts is what aborted the process. See step 4.
+            mm_batch as i32,
             true, // we want logits on the last token to start sampling
         ) {
             Ok(p) => p,
@@ -2378,10 +2458,10 @@ impl InferenceEngine {
             effective_ctx,
         );
 
-        // ── 6. Sampler (identical to generate_streaming) ────────────────
+        // ── 7. Sampler (identical to generate_streaming) ────────────────
         let mut sampler = sampling::build_sampler(&self.model, request, 1234);
 
-        // ── 7. Decode loop (identical pattern to generate_streaming) ────
+        // ── 8. Decode loop (identical pattern to generate_streaming) ────
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut full_output = String::new();
         // See the non-streaming path: held-back tail, dropped on EOG, flushed
@@ -2929,5 +3009,55 @@ mod stop_reason_tests {
         assert_eq!(parsed.content, "Just an answer, no thinking block.");
         assert_eq!(parsed.reasoning_content, None);
         assert!(parsed.tool_calls.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod media_batch_tests {
+    use super::*;
+
+    // The case that took the server down: a 1584x1584 photo through Gemma 4's
+    // projector is 1089 tokens, and the batch was a fixed 512. A vision
+    // encoder needs its whole image in one micro-batch, so the batch has to
+    // follow the image, never the other way round.
+    #[test]
+    fn the_batch_grows_to_hold_the_image() {
+        assert_eq!(required_media_batch(1089, 512), Ok(1089));
+    }
+
+    // A small image does not shrink the batch below the floor: the floor also
+    // has to cover the text prefill this same context will serve.
+    #[test]
+    fn a_small_image_leaves_the_floor_alone() {
+        assert_eq!(required_media_batch(300, 512), Ok(512));
+        assert_eq!(required_media_batch(0, 512), Ok(512));
+    }
+
+    // Refusing with a message beats allocating a compute buffer that cannot
+    // fit, and beats an abort() either way.
+    #[test]
+    fn an_absurd_image_is_refused_not_allocated_for() {
+        assert_eq!(
+            required_media_batch(MAX_MEDIA_TOKENS_PER_CHUNK + 1, 512),
+            Err(MAX_MEDIA_TOKENS_PER_CHUNK + 1)
+        );
+        // Exactly at the ceiling is still served.
+        assert_eq!(
+            required_media_batch(MAX_MEDIA_TOKENS_PER_CHUNK, 512),
+            Ok(MAX_MEDIA_TOKENS_PER_CHUNK)
+        );
+    }
+
+    // Raising EULLM_IMAGE_MAX_TOKENS raises the floor, and the result must
+    // still be at least as large as the image.
+    #[test]
+    fn a_raised_floor_still_never_undercuts_the_image() {
+        for floor in [512, 1024, 2048, 4096] {
+            for image in [0, 300, 1089, 4000] {
+                let got = required_media_batch(image, floor).unwrap();
+                assert!(got >= image, "batch {got} must hold an image of {image}");
+                assert!(got >= floor, "batch {got} must not fall below {floor}");
+            }
+        }
     }
 }
