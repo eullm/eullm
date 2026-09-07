@@ -1,6 +1,7 @@
 //! Local model management — storage, manifests, and catalog.
 
 pub mod catalog;
+pub mod pull;
 pub mod store;
 
 pub use catalog::{CatalogEntry, EU_CATALOG};

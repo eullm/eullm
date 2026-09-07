@@ -1546,15 +1546,142 @@ async fn show_model(Json(body): Json<Value>) -> Json<Value> {
     }
 }
 
-async fn pull_model(Json(body): Json<Value>) -> Json<Value> {
+/// `POST /api/pull` — fetch a model, streaming progress as NDJSON.
+///
+/// Ollama's shape, because Ollama clients are the ones that call this:
+/// `{"status": "..."}` lines while it works, `{"status","digest","total",
+/// "completed"}` while bytes move, `{"status":"success"}` at the end, and
+/// `{"error": "..."}` if it fails. Streaming is the default there, so it is
+/// the default here; `{"stream": false}` collapses to one final object.
+///
+/// Until 0.7.5 this endpoint was a stub that answered "not yet implemented"
+/// and did nothing, so there is no old behaviour to keep compatible with.
+///
+/// The work itself is `models::pull`, shared with `eullm pull`. Two copies of
+/// a download path would drift the first time a repo layout changes, the way
+/// two copies of a prompt builder already did.
+async fn pull_model(State(state): State<S>, Json(body): Json<Value>) -> axum::response::Response {
+    use crate::models::pull::{PullEvent, pull_from_huggingface};
+
     let name = body
         .get("name")
+        .or_else(|| body.get("model"))
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
-    Json(json!({
-        "status": format!("pulling {name} from EU registry (not yet implemented)")
-    }))
+    let Some(hf) = crate::registry::parse_hf_ref(&name) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "`{name}` is not a HuggingFace reference. Use \
+                     hf.co/<owner>/<repo>[:<quant>] — the catalog browser \
+                     supplies this string for each quantization."
+                )
+            })),
+        )
+            .into_response();
+    };
+    let id = crate::models::pull::hf_ref_to_model_id(&hf);
+
+    if state.store.gguf_path(&id).is_some() {
+        let done = json!({ "status": "success", "model": id, "already_present": true });
+        return if stream {
+            ndjson_lines(futures_util::stream::once(async move { done }))
+        } else {
+            (StatusCode::OK, Json(done)).into_response()
+        };
+    }
+
+    // The whole state, not the store: `ModelStore` is owned by `AppState`
+    // and the Arc is what can cross into the task.
+    let state = Arc::clone(&state);
+    let (tx, rx) = mpsc::channel::<PullEvent>(256);
+    let worker = tokio::spawn(async move {
+        let tx_for_error = tx.clone();
+        if let Err(e) = pull_from_huggingface(&state.store, &hf, &id, tx).await {
+            let _ = tx_for_error.try_send(PullEvent::Failed(e));
+        }
+    });
+
+    if stream {
+        return ndjson_lines(pull_events_as_json(rx));
+    }
+
+    // Non-streaming: drain to the last meaningful line and answer with it.
+    let mut rx = rx;
+    let mut last = json!({ "status": "success" });
+    while let Some(ev) = rx.recv().await {
+        if let Some(v) = pull_event_to_json(&ev) {
+            if v.get("error").is_some() {
+                let _ = worker.await;
+                return (StatusCode::BAD_GATEWAY, Json(v)).into_response();
+            }
+            if v.get("status").and_then(|s| s.as_str()) == Some("success") {
+                last = v;
+            }
+        }
+    }
+    let _ = worker.await;
+    (StatusCode::OK, Json(last)).into_response()
+}
+
+/// Render a [`PullEvent`] in Ollama's `/api/pull` vocabulary. `None` for
+/// events that carry nothing a client would show.
+fn pull_event_to_json(ev: &crate::models::pull::PullEvent) -> Option<Value> {
+    use crate::models::pull::PullEvent;
+    Some(match ev {
+        PullEvent::Status(s) => json!({ "status": s }),
+        PullEvent::Progress {
+            file,
+            completed,
+            total,
+        } => json!({
+            "status": format!("pulling {file}"),
+            // Ollama keys progress by layer digest. We have no digest before
+            // the download finishes, so the filename stands in — clients use
+            // it only to keep one bar per concurrent item.
+            "digest": file,
+            "total": total,
+            "completed": completed,
+        }),
+        PullEvent::Done { id } => json!({ "status": "success", "model": id }),
+        PullEvent::Failed(e) => json!({ "error": e }),
+    })
+}
+
+fn pull_events_as_json(
+    mut rx: mpsc::Receiver<crate::models::pull::PullEvent>,
+) -> impl Stream<Item = Value> {
+    async_stream::stream! {
+        while let Some(ev) = rx.recv().await {
+            if let Some(v) = pull_event_to_json(&ev) {
+                yield v;
+            }
+        }
+    }
+}
+
+/// Wrap a stream of JSON values as `application/x-ndjson` — one object per
+/// line, no `data:` prefix, which is what Ollama's endpoints emit and what
+/// its clients parse.
+fn ndjson_lines(values: impl Stream<Item = Value> + Send + 'static) -> axum::response::Response {
+    use futures_util::StreamExt;
+    let lines = values.map(|v| {
+        let mut line = v.to_string();
+        line.push('\n');
+        Ok::<_, std::convert::Infallible>(line)
+    });
+    axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .body(Body::from_stream(lines))
+        .unwrap()
 }
 
 // ── OpenAI-compatible handlers ───────────────────────────────────────────────

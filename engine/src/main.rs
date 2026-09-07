@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 use models::{ModelStore, catalog};
+use crate::models::pull::hf_ref_to_model_id;
 
 use crate::inference::{BatchScheduler, InferenceConfig, InferenceEngine, SchedulerConfig};
 use crate::lineedit::{Line, LineReader};
@@ -1007,71 +1008,15 @@ fn local_quants_of_repo(store: &ModelStore, hf: &registry::HfRef) -> Vec<String>
     ids
 }
 
-/// Derive a filesystem-safe model id from a HuggingFace ref. Uses the repo
-/// name (last path segment), lowercased and sanitized like `url_to_model_id`,
-/// with the quant appended when one was requested so different quants of the
-/// same repo coexist:  `hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M` → `qwen3-8b-gguf-q4_k_m`.
-fn hf_ref_to_model_id(hf: &registry::HfRef) -> String {
-    let repo_name = hf.repo.rsplit('/').next().unwrap_or(&hf.repo);
-    let base = match hf.quant.as_deref() {
-        Some(q) => format!("{repo_name}-{q}"),
-        None => repo_name.to_string(),
-    };
-    let id: String = base
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let id = id.trim_matches('-').to_string();
-    if id.is_empty() {
-        "model".to_string()
-    } else {
-        id
-    }
-}
 
-/// Pull a GGUF from a HuggingFace repo shorthand, outside the catalog.
+/// `eullm pull hf.co/owner/repo[:quant]`.
 ///
-/// Resolves the repo's `.gguf` siblings via the HF API, picks one (by the
-/// requested `:quant` or a sensible default), downloads it into the store
-/// under an id derived from the repo + quant, and writes an external manifest.
-/// On ambiguity (multiple matches or sharded multi-file gguf) it prints the
-/// available filenames and exits, asking the user to re-run with `:<quant>`.
-/// A progress callback that redraws one line every 10 MB and at completion.
-///
-/// Built here rather than inline because a download without one is a silent
-/// stall: the projector fetch shipped with `None` and left 44 seconds of
-/// nothing between "found in the repo" and "Done", which reads like a hang.
-fn download_progress() -> registry::ProgressCallback {
-    use crate::registry::format_progress;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    let last_printed = Arc::new(AtomicU64::new(0));
-    Box::new(move |downloaded, total| {
-        let last = last_printed.load(Ordering::Relaxed);
-        if downloaded.saturating_sub(last) > 10_000_000 || (total > 0 && downloaded >= total) {
-            last_printed.store(downloaded, Ordering::Relaxed);
-            eprint!("\r  {}", format_progress(downloaded, total));
-            // Close the line at completion. Whatever is logged next — and the
-            // "no integrity digest recorded" warning always is, for an
-            // off-catalog file — otherwise lands on the same line as the
-            // progress counter and reads as one garbled sentence.
-            if total > 0 && downloaded >= total {
-                eprintln!();
-            }
-            let _ = std::io::Write::flush(&mut std::io::stderr());
-        }
-    })
-}
-
+/// The sequence itself lives in `models::pull`, shared with `POST /api/pull`,
+/// so a repo layout the download path learns to handle is learned by both at
+/// once. All this adds is printing.
 async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
+    use crate::models::pull::{PullEvent, pull_from_huggingface};
+
     let id = hf_ref_to_model_id(hf);
 
     if let Some(gguf) = store.gguf_path(&id) {
@@ -1081,136 +1026,49 @@ async fn cmd_pull_hf(store: &ModelStore, hf: &registry::HfRef) {
         return;
     }
 
-    println!("Resolving HuggingFace repo: {}", hf.repo);
-    let filenames = match registry::resolve_hf_gguf(hf).await {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Could not resolve a GGUF to download: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    if filenames.len() > 1 {
-        println!(
-            "Pulling from HuggingFace: {} ({} shards)",
-            hf.repo,
-            filenames.len()
-        );
-        for f in &filenames {
-            println!("    {f}");
-        }
-    } else {
-        println!("Pulling from HuggingFace: {} ({})", hf.repo, filenames[0]);
-    }
     println!("  Storing as: {id}");
     println!("  (off-catalog model — no license/VRAM metadata available)");
     println!();
 
-    let model_dir = store.model_path(&id);
-    // Each name is the repo-relative path and can carry a subdirectory when
-    // the repo groups quantizations (`UD-Q4_K_XL/Model-…-00001-of-00004.gguf`).
-    // The remote path is what the download needs; locally the model already
-    // has its own directory, so that prefix is redundant and the file is
-    // stored under its bare name — the same flattening the projector branch
-    // below has always done. Shards must keep their `-NNNNN-of-TOTAL` suffix,
-    // which they do: only the directory prefix is dropped.
-    let leaves: Vec<String> = filenames
-        .iter()
-        .map(|f| f.rsplit('/').next().unwrap_or(f).to_string())
-        .collect();
-    // The manifest names the first shard. llama.cpp reads the split count from
-    // its header and opens the siblings itself, which is why they all have to
-    // land in the same directory.
-    let leaf = leaves[0].clone();
-
-    let mut result = Ok(());
-    for (i, (remote, local)) in filenames.iter().zip(leaves.iter()).enumerate() {
-        if filenames.len() > 1 {
-            println!("  [{}/{}] {local}", i + 1, filenames.len());
-        }
-        result = registry::download_from_huggingface(
-            &hf.repo,
-            remote,
-            &model_dir.join(local),
-            None,
-            Some(download_progress()),
-        )
-        .await;
-        eprintln!();
-        // Stop at the first failure: a partial split cannot be loaded, and the
-        // error handling below deletes the whole model directory anyway.
-        if result.is_err() {
-            break;
-        }
-    }
-
-    // A vision repo ships the projector beside the weights, and without it the
-    // model loads but cannot see. llama.cpp's own `-hf` fetches both, and a
-    // user who has to notice the second file and pass `--mmproj` by hand is
-    // being asked to know something the repo layout already says (issue #286).
-    let mmproj_name: Option<String> = if result.is_ok() {
-        match registry::list_hf_ggufs(&hf.repo).await {
-            Ok(files) => files.into_iter().find(|f| registry::is_mmproj(f)),
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
-    let mut mmproj_stored: Option<String> = None;
-    if let Some(ref name) = mmproj_name {
-        let leaf = name.rsplit('/').next().unwrap_or(name).to_string();
-        println!("  Multimodal projector found in the repo: {leaf}");
-        let dest = model_dir.join(&leaf);
-        let done = registry::download_from_huggingface(
-            &hf.repo,
-            name,
-            &dest,
-            None,
-            Some(download_progress()),
-        )
-        .await;
-        eprintln!();
-        match done {
-            Ok(()) => mmproj_stored = Some(leaf),
-            // The weights are already on disk and usable for text. Losing the
-            // projector costs image and audio input, not the model, so it is a
-            // warning and not a failed pull.
-            Err(e) => eprintln!(
-                "  Warning: projector download failed ({e}). Text still works; re-run the pull or pass --mmproj."
-            ),
-        }
-    }
-
-    match result {
-        Ok(()) => {
-            // Every shard, not just the first: the recorded size is what the
-            // model costs on disk, and `eullm list` showing 30 GB for a 111 GB
-            // split would be worse than showing nothing.
-            let size: u64 = leaves
-                .iter()
-                .filter_map(|l| std::fs::metadata(model_dir.join(l)).ok())
-                .map(|m| m.len())
-                .sum();
-            // `leaf`, not the repo-relative name: the manifest names a file
-            // inside this model's directory, and that is where the flattened
-            // basename is.
-            match store.write_external_manifest(
-                &id,
-                &leaf,
-                &hf.original,
-                size,
-                mmproj_stored.as_deref(),
-            ) {
-                Ok(_) => {
-                    println!("  Done. Model ready.");
-                    println!("\nRun with: eullm run {id}");
+    // Bounded, and the sender drops ticks rather than blocking: a download
+    // must not be paced by how fast a terminal repaints.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<PullEvent>(256);
+    let printer = tokio::spawn(async move {
+        let mut last_line_was_progress = false;
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                PullEvent::Status(s) => {
+                    if last_line_was_progress {
+                        eprintln!();
+                        last_line_was_progress = false;
+                    }
+                    println!("  {s}");
                 }
-                Err(e) => eprintln!("Warning: download succeeded but manifest write failed: {e}"),
+                PullEvent::Progress {
+                    completed, total, ..
+                } => {
+                    eprint!("\r  {}", registry::format_progress(completed, total));
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
+                    last_line_was_progress = true;
+                }
+                PullEvent::Done { .. } | PullEvent::Failed(_) => {}
             }
         }
+        if last_line_was_progress {
+            eprintln!();
+        }
+    });
+
+    let outcome = pull_from_huggingface(store, hf, &id, tx).await;
+    let _ = printer.await;
+
+    match outcome {
+        Ok(id) => {
+            println!("  Done. Model ready.");
+            println!("\nRun with: eullm run {id}");
+        }
         Err(e) => {
-            eprintln!("Download failed: {e}");
-            let _ = store.delete(&id);
+            eprintln!("Pull failed: {e}");
             std::process::exit(1);
         }
     }
