@@ -449,17 +449,92 @@ pub fn is_mmproj(name: &str) -> bool {
         .starts_with("mmproj")
 }
 
-fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String, String> {
+/// One split GGUF: every shard of `stem-NNNNN-of-TOTAL.gguf`, in order.
+#[derive(Debug)]
+struct ShardSet {
+    /// Everything before `-NNNNN-of-TOTAL.gguf`, which identifies the split.
+    stem: String,
+    /// How many shards the filenames themselves claim exist.
+    total: u32,
+    /// The shards present in the repo listing, ordered by index.
+    files: Vec<String>,
+}
+
+impl ShardSet {
+    fn is_complete(&self) -> bool {
+        self.files.len() as u32 == self.total
+    }
+}
+
+/// Decompose `…/Model-Q4_K_XL-00002-of-00004.gguf` into its stem, index and
+/// total. `None` for anything that is not a split shard.
+fn parse_shard(name: &str) -> Option<(&str, u32, u32)> {
+    let base = name.get(..name.len().checked_sub(5)?)?;
+    if !name[name.len() - 5..].eq_ignore_ascii_case(".gguf") {
+        return None;
+    }
+    let (rest, total) = base.rsplit_once("-of-")?;
+    let (stem, index) = rest.rsplit_once('-')?;
+    let total: u32 = total.parse().ok()?;
+    let index: u32 = index.parse().ok()?;
+    // A zero index or a shard numbered past the total is not a split we
+    // understand; treat the name as an ordinary file rather than guess.
+    if index == 0 || total == 0 || index > total {
+        return None;
+    }
+    Some((stem, index, total))
+}
+
+/// Split a candidate list into standalone files and the split GGUFs they
+/// belong to. Shard order follows the index in the filename, not the order
+/// the API happened to list them in.
+fn group_shards(files: &[&String]) -> (Vec<String>, Vec<ShardSet>) {
+    let mut singles = Vec::new();
+    // Insertion-ordered so the result does not depend on hash iteration order,
+    // which would make an ambiguity error vary between runs.
+    let mut sets: Vec<(ShardSet, Vec<(u32, String)>)> = Vec::new();
+    for f in files {
+        let Some((stem, index, total)) = parse_shard(f) else {
+            singles.push((*f).clone());
+            continue;
+        };
+        match sets.iter_mut().find(|(s, _)| s.stem == stem) {
+            Some((_, indexed)) => indexed.push((index, (*f).clone())),
+            None => sets.push((
+                ShardSet {
+                    stem: stem.to_string(),
+                    total,
+                    files: Vec::new(),
+                },
+                vec![(index, (*f).clone())],
+            )),
+        }
+    }
+    let sets = sets
+        .into_iter()
+        .map(|(mut set, mut indexed)| {
+            indexed.sort_by_key(|(i, _)| *i);
+            indexed.dedup_by_key(|(i, _)| *i);
+            set.files = indexed.into_iter().map(|(_, f)| f).collect();
+            set
+        })
+        .collect();
+    (singles, sets)
+}
+
+/// Every file that has to be downloaded for one model, in the order to
+/// fetch them.
+///
+/// A split GGUF is `N` files and llama.cpp opens the rest from the first, but
+/// only once they are all on disk — so returning one name was never enough.
+/// Until 0.7.5-rc7 this returned a single `String`, which is why pulling a
+/// large quantization from a repo that ships it split failed: with four
+/// shards matching the requested quant, none of the single-file branches
+/// applied and the pull ended on `multiple .gguf files match quant`.
+fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<Vec<String>, String> {
     if ggufs.is_empty() {
         return Err("no .gguf files found in this HuggingFace repo".to_string());
     }
-
-    // Sharded multi-file ggufs (e.g. `model-00001-of-00003.gguf`) cannot be
-    // loaded from a single file — refuse to guess and let the user pick.
-    let is_shard = |name: &str| {
-        let lower = name.to_lowercase();
-        lower.contains("-of-") && lower.contains(".gguf")
-    };
 
     // A projector is a `.gguf` in the same repo but never the model, and it
     // has to come out of the candidate set before anything else looks at it.
@@ -496,19 +571,35 @@ fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String
         ));
     }
 
-    // If a quant was requested and it disambiguates to a single file, use it
-    // even if other (non-matching) shards exist.
+    let (singles, sets) = group_shards(&candidates);
+
+    // Refusing to download a split we know to be incomplete beats downloading
+    // three quarters of a model and failing at load with an error about the
+    // file rather than about the repo.
+    let take = |set: ShardSet| -> Result<Vec<String>, String> {
+        if set.is_complete() {
+            return Ok(set.files);
+        }
+        Err(format!(
+            "'{}' is split into {} shards but the repo lists only {}. \
+             The upload looks incomplete; nothing was downloaded.",
+            set.stem,
+            set.total,
+            set.files.len(),
+        ))
+    };
+
     if requested_quant.is_some() {
-        let non_shard: Vec<&&String> = candidates
-            .iter()
-            .filter(|f| !is_shard(f.as_str()))
-            .collect();
-        if non_shard.len() == 1 {
-            return Ok(non_shard[0].to_string());
+        // A quant that disambiguates to a single standalone file wins even
+        // when other (non-matching) shards are present in the repo.
+        if singles.len() == 1 {
+            return Ok(vec![singles.into_iter().next().unwrap()]);
+        }
+        if singles.is_empty() && sets.len() == 1 {
+            return take(sets.into_iter().next().unwrap());
         }
         if candidates.len() == 1 {
-            // Single match, even if it looks like a shard — let llama.cpp try.
-            return Ok(candidates[0].to_string());
+            return Ok(vec![candidates[0].to_string()]);
         }
         return Err(format!(
             "multiple .gguf files match quant '{}'. Re-run with a more specific :<quant>. Available files:\n{}",
@@ -517,25 +608,29 @@ fn select_gguf(ggufs: &[String], requested_quant: Option<&str>) -> Result<String
         ));
     }
 
-    // No quant requested: refuse if the repo only contains shards (we'd have
-    // to guess across them), otherwise prefer the standard quants.
-    let single_file: Vec<&String> = ggufs.iter().filter(|f| !is_shard(f.as_str())).collect();
-    if single_file.is_empty() {
-        return Err(format!(
-            "this repo only contains sharded .gguf files; pass an explicit :<quant>. Available files:\n{}",
-            list_for_error(ggufs),
-        ));
-    }
-
+    // No quant requested: prefer a standalone file, and fall back to a split
+    // when it is the only thing the repo offers. Guessing across *several*
+    // splits is still refused — that is a real choice for the user to make.
     let prefer = |needle: &str| {
-        single_file
+        singles
             .iter()
             .find(|f| f.to_lowercase().contains(needle))
-            .map(|f| f.to_string())
+            .cloned()
     };
-    Ok(prefer("q4_k_m")
-        .or_else(|| prefer("q4_0"))
-        .unwrap_or_else(|| single_file[0].to_string()))
+    if !singles.is_empty() {
+        return Ok(vec![
+            prefer("q4_k_m")
+                .or_else(|| prefer("q4_0"))
+                .unwrap_or_else(|| singles[0].clone()),
+        ]);
+    }
+    if sets.len() == 1 {
+        return take(sets.into_iter().next().unwrap());
+    }
+    Err(format!(
+        "this repo contains several sharded .gguf models; pass an explicit :<quant>. Available files:\n{}",
+        list_for_error(ggufs),
+    ))
 }
 
 /// Render a bullet list of filenames for an error message.
@@ -605,11 +700,15 @@ pub async fn list_hf_ggufs(
 
 /// Resolve a HuggingFace ref to a single GGUF filename to download.
 ///
-/// Combines [`list_hf_ggufs`] and [`select_gguf`]. The returned string is the
+/// Combines [`list_hf_ggufs`] and [`select_gguf`]. Each returned string is an
 /// `rfilename` to fetch from `{repo}/resolve/main/{filename}`.
+///
+/// More than one file comes back when the model is a split GGUF: all of its
+/// shards, in order, all of which have to be on disk before llama.cpp can
+/// open the first.
 pub async fn resolve_hf_gguf(
     hf: &HfRef,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {
     let ggufs = list_hf_ggufs(&hf.repo).await?;
     select_gguf(&ggufs, hf.quant.as_deref()).map_err(|e| e.into())
 }
@@ -754,7 +853,7 @@ mod tests {
             "model-Q4_K_M.gguf".to_string(),
             "model-Q4_0.gguf".to_string(),
         ];
-        assert_eq!(select_gguf(&files, None).unwrap(), "model-Q4_K_M.gguf");
+        assert_eq!(select_gguf(&files, None).unwrap(), ["model-Q4_K_M.gguf"]);
     }
 
     #[test]
@@ -763,20 +862,91 @@ mod tests {
             "model-Q8_0.gguf".to_string(),
             "model-Q4_K_M.gguf".to_string(),
         ];
+        assert_eq!(select_gguf(&files, Some("q8_0")).unwrap(), ["model-Q8_0.gguf"]);
+    }
+
+    // A repo whose only model is one split GGUF used to be refused with
+    // "pass an explicit :<quant>" -- and passing one refused again, because
+    // several files matched it. Both halves failed, so the repo could not be
+    // pulled at all. The whole split now comes back, in shard order.
+    #[test]
+    fn select_returns_a_whole_split_without_quant() {
+        let files = vec![
+            "model-00002-of-00003.gguf".to_string(),
+            "model-00003-of-00003.gguf".to_string(),
+            "model-00001-of-00003.gguf".to_string(),
+        ];
         assert_eq!(
-            select_gguf(&files, Some("q8_0")).unwrap(),
-            "model-Q8_0.gguf"
+            select_gguf(&files, None).unwrap(),
+            [
+                "model-00001-of-00003.gguf",
+                "model-00002-of-00003.gguf",
+                "model-00003-of-00003.gguf",
+            ]
         );
     }
 
+    // The real layout that started this: unsloth/Qwen3.8-Flash-Next-GGUF, one
+    // subdirectory per quantization and every large quant split. rc5 made the
+    // files visible; the pull still ended on "multiple .gguf files match
+    // quant" because four shards matched and none of the single-file branches
+    // applied.
     #[test]
-    fn select_refuses_shards_without_quant() {
+    fn select_returns_every_shard_of_the_requested_quant() {
+        let files: Vec<String> = (1..=4)
+            .map(|i| format!("UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-0000{i}-of-00004.gguf"))
+            .chain(std::iter::once("mmproj-F16.gguf".to_string()))
+            .chain((1..=2).map(|i| {
+                format!("UD-Q2_K_XL/Qwen3.8-Flash-Next-UD-Q2_K_XL-0000{i}-of-00002.gguf")
+            }))
+            .collect();
+        let picked = select_gguf(&files, Some("UD-Q4_K_XL")).unwrap();
+        assert_eq!(picked.len(), 4);
+        assert!(picked[0].ends_with("00001-of-00004.gguf"));
+        assert!(picked[3].ends_with("00004-of-00004.gguf"));
+        // The other quantization's shards, and the projector, stay out of it.
+        assert!(picked.iter().all(|f| f.contains("UD-Q4_K_XL")));
+    }
+
+    // Downloading three quarters of a model and failing at load with an error
+    // about the file is worse than refusing up front.
+    #[test]
+    fn select_refuses_an_incomplete_split() {
         let files = vec![
             "model-00001-of-00003.gguf".to_string(),
-            "model-00002-of-00003.gguf".to_string(),
             "model-00003-of-00003.gguf".to_string(),
         ];
+        let err = select_gguf(&files, None).expect_err("shard 2 is missing");
+        assert!(err.contains("3 shards"), "{err}");
+        assert!(err.contains("only 2"), "{err}");
+    }
+
+    // Two splits and no way to tell which is wanted is still the user's
+    // choice to make, not ours to guess.
+    #[test]
+    fn select_refuses_to_guess_between_two_splits() {
+        let files = vec![
+            "model-Q4_K_M-00001-of-00002.gguf".to_string(),
+            "model-Q4_K_M-00002-of-00002.gguf".to_string(),
+            "model-Q8_0-00001-of-00002.gguf".to_string(),
+            "model-Q8_0-00002-of-00002.gguf".to_string(),
+        ];
         assert!(select_gguf(&files, None).is_err());
+        // Naming one of them resolves it.
+        assert_eq!(select_gguf(&files, Some("q8_0")).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_name_that_only_looks_sharded_is_an_ordinary_file() {
+        // No `-of-` at all, and a `-of-` that is not a shard counter.
+        assert_eq!(parse_shard("model-Q4_K_M.gguf"), None);
+        assert_eq!(parse_shard("best-of-breed.gguf"), None);
+        assert_eq!(parse_shard("model-00000-of-00003.gguf"), None);
+        assert_eq!(parse_shard("model-00004-of-00003.gguf"), None);
+        assert_eq!(
+            parse_shard("dir/model-00002-of-00003.gguf"),
+            Some(("dir/model", 2, 3))
+        );
     }
 
     // A vision repo carries the projector next to the weights. It is a .gguf
@@ -794,7 +964,7 @@ mod tests {
         // could land on the projector.
         assert_eq!(
             select_gguf(&files, None).expect("one model, one projector"),
-            "gemma-4-12b-it-Q4_K_M.gguf"
+            ["gemma-4-12b-it-Q4_K_M.gguf"]
         );
         // `:F16` used to match `mmproj-F16.gguf` and download it as the
         // weights, which then failed to load with an error about the file

@@ -35,6 +35,25 @@ something changed, less so for understanding what it means.
   was the wrong trade for its audience.
 
 ### Fixed
+- **`eullm pull` now downloads split GGUFs, so large quantizations can be
+  pulled at all.** A model published as `…-00001-of-00004.gguf` is four
+  files, and llama.cpp opens the rest from the first only once they are all
+  on disk — but the pull resolved to a single filename and downloaded one.
+  With four shards matching the requested quantization, none of the
+  single-file branches applied and the pull ended on `multiple .gguf files
+  match quant 'UD-Q4_K_XL'`. Every shard is now fetched, in order, and the
+  recorded size is the sum rather than the first shard's.
+
+  This completes the previous entry, which did not go as far as it read: it
+  made the files in a per-quantization subdirectory *visible*, which changed
+  the failure from `contains only a projector` to the ambiguity error above,
+  but left `unsloth/Qwen3.8-Flash-Next-GGUF` — and every repo like it —
+  still impossible to pull. A repo whose only model is one split is also no
+  longer refused with `pass an explicit :<quant>`, which was advice that led
+  straight into the same wall. An incomplete split is refused up front,
+  naming the missing shards, rather than downloading most of a model and
+  failing at load.
+
 - **Images sent to a non-Gemma multimodal model were refused outright, or
   answered badly.** Two separate causes, both now fixed, found running
   Qwen3.8-Flash-Next on 4× A100.
