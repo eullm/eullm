@@ -1592,6 +1592,13 @@ jobs:
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-13.1 -o eullm
             chmod +x eullm
 
+            # Linux x64 with an NVIDIA DATA-CENTER GPU (A100, H100) — a different
+            # build, on CUDA 12.4, because these cards are a different compute
+            # capability and their drivers are usually older. The consumer build
+            # above does not run on them.
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-12.4-datacenter -o eullm
+            chmod +x eullm
+
             # macOS Apple Silicon
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-macos-arm64 -o eullm
             chmod +x eullm
@@ -1614,10 +1621,13 @@ jobs:
 
             | Binary | GPU Support | Requirements |
             |--------|-------------|--------------|
-            | `eullm-linux-x64` | CPU only | None |
+            | `eullm-linux-x64` | CPU only | glibc 2.28+ — built on Rocky Linux 8, so it runs on RHEL/CentOS/Rocky/Alma/Oracle 8+ as well as current Ubuntu/Fedora/Arch |
             | `eullm-linux-x64-vulkan` | Any GPU with a Vulkan driver (AMD, Intel, NVIDIA) | `libvulkan.so.1` and a working driver on the machine — mesa RADV, amdvlk, NVIDIA or Intel ANV. Nothing is bundled |
-            | `eullm-linux-x64-cuda-13.1` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 580+ |
-            | `eullm-linux-arm64` | CPU only | ARM64 Linux |
+            | `eullm-linux-x64-cuda-13.1` | NVIDIA **consumer** GPU (RTX 3000/4000/5000, sm_86/89/120) | NVIDIA driver 580+. Does **not** run on A100/H100 — those need the data-center build below |
+            | `eullm-linux-x64-cuda-12.4-datacenter` | NVIDIA **data-center** GPU (A100 sm_80, H100 sm_90) | NVIDIA driver 550+. Built on CUDA 12.4, not 13.1, on purpose: these cards live in HPC centres and enterprise fleets that freeze drivers for years, and CUDA 13 needs an August-2025 driver. Does **not** run on RTX cards |
+            | `eullm-linux-arm64` | CPU only | ARM64 Linux — generic baseline, runs on Raspberry Pi, Graviton, Jetson, any ARM64 SoC |
+            | `eullm-linux-arm64-cuda-13.1` | NVIDIA GPU on an ARM64 host (sm_86/89/120) | ARM64 Linux + NVIDIA driver 580+. For a discrete NVIDIA card in an ARM board's PCIe slot |
+            | `eullm-linux-arm64-cix-p1` | CPU only | **Armv9.2-A with SVE2, BF16, I8MM and DotProd only** — a tuned CPU profile for the CIX P1 (Radxa Orion O6). These instructions are compiled in, so it crashes with SIGILL on any ARM64 host without them, Raspberry Pi included. If you are not on a CIX P1, take `eullm-linux-arm64` |
             | `eullm-macos-x64` | CPU only | macOS Intel |
             | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
             | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 |
@@ -1650,6 +1660,21 @@ jobs:
             ```bash
             sha256sum -c checksums.txt
             ```
+
+            ### What changed
+
+            See [CHANGELOG.md](https://github.com/eullm/eullm/blob/main/CHANGELOG.md)
+            for what was added, fixed and made faster in this version.
+
+            ### License
+
+            EULLM is [AGPL-3.0-or-later](https://github.com/eullm/eullm/blob/main/LICENSE).
+            Running an unmodified binary, or modifying it for internal or local
+            use, carries no additional obligation. If you modify EULLM and let
+            others use it over a network, including as a hosted service, you
+            must offer them the source of your modified version. Versions up to
+            and including 0.7.4 were released under Apache 2.0 and keep those
+            terms. The models EULLM runs have their own separate licenses.
 
   # ── Housekeeping: drop the caches this tag created ──────────────────────
   #
