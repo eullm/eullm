@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.7.5-rc1 — 2026-09-05
+## 0.7.5-rc8 — 2026-09-07
 
 ### Added
 - **A model browser in the web UI.** The download icon in the top bar opens a
