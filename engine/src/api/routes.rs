@@ -11,10 +11,11 @@
 //! **Dynamic model swap:** if a request specifies a `model` that differs from
 //! the currently loaded one, the server automatically swaps to the new model.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
@@ -130,6 +131,110 @@ pub fn api_routes() -> Router<S> {
         .route("/version", get(version))
         .route("/unload", post(unload_model))
         .route("/embed", post(embed))
+        .route("/hf/search", get(hf_search))
+        .route("/hf/repo", get(hf_repo))
+}
+
+/// `GET /api/hf/search?q=<text>&limit=<n>` — search the HuggingFace Hub for
+/// repos containing GGUF files.
+///
+/// The engine makes the call, not the browser. That keeps the viewer's
+/// address away from the Hub, leaves `EULLM_WEB_ALLOWED_DOMAINS` as the one
+/// place the perimeter is decided, and means the catalog still works from a
+/// machine whose browser has no route out but whose engine does — an HPC
+/// login node, most of all, which is where downloads have to be started when
+/// compute nodes are offline.
+async fn hf_search(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let q = params.get("q").map(String::as_str).unwrap_or("").trim();
+    if q.is_empty() {
+        return (StatusCode::OK, Json(json!({ "models": [] })));
+    }
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(25);
+    match crate::registry::search_hf_models(q, limit).await {
+        Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("HuggingFace search failed: {e}") })),
+        ),
+    }
+}
+
+/// `GET /api/hf/repo?id=<owner>/<repo>` — the quantizations one repo offers,
+/// each with its total download size and whether it is expected to run here.
+///
+/// The verdict is an estimate from the file size, not a fit: the exact answer
+/// needs the GGUF header, which needs the file. It is here to answer "is this
+/// download worth starting", which is a question that has to be answered
+/// before the download, or not at all.
+async fn hf_repo(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let Some(id) = params.get("id").map(|s| s.trim()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing `id` (owner/repo)" })),
+        );
+    };
+    // Validated before it reaches a URL: this string is interpolated into the
+    // Hub path, and the caller is a browser.
+    if !crate::registry::is_plausible_repo_id(id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "`id` must be owner/repo" })),
+        );
+    }
+    let contents = match crate::registry::list_hf_repo_contents(id).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("could not read {id}: {e}") })),
+            );
+        }
+    };
+
+    let vram = crate::fit::vram_bytes();
+    let ram = crate::fit::system_ram_bytes();
+    let quants: Vec<Value> = contents
+        .quants
+        .iter()
+        .map(|q| {
+            // The projector rides along with whatever quantization is picked,
+            // so it counts towards the download and towards what is resident.
+            let total = q.total_bytes + contents.mmproj_bytes;
+            let verdict = crate::fit::classify_download(total, vram, ram);
+            json!({
+                "label": q.label,
+                "files": q.files,
+                "bytes": q.total_bytes,
+                "shards": q.files.len(),
+                "verdict": match verdict {
+                    crate::fit::RunVerdict::Fits => "fits",
+                    crate::fit::RunVerdict::Tight => "tight",
+                    crate::fit::RunVerdict::TooLarge => "too_large",
+                    crate::fit::RunVerdict::Unknown => "unknown",
+                },
+                // What `eullm pull` takes, so the UI never builds this itself.
+                "pull": format!("hf.co/{id}:{}", q.quant),
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "id": id,
+            "quants": quants,
+            "mmproj": contents.mmproj,
+            "mmproj_bytes": contents.mmproj_bytes,
+            // Echoed so the UI can say what the traffic light was judged
+            // against, rather than presenting a colour with no basis.
+            "vram_free_bytes": vram.map(|(f, _)| f),
+            "vram_total_bytes": vram.map(|(_, t)| t),
+            "ram_total_bytes": ram,
+        })),
+    )
 }
 
 /// OpenAI-compatible routes (`/v1/*`).
