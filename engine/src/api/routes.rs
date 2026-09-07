@@ -329,12 +329,47 @@ fn extract_multimodal_payload(messages: &[Value]) -> Option<(String, Vec<Vec<u8>
     Some((text, media))
 }
 
-/// Wrap a user prompt in the Gemma chat template with an mtmd media marker
-/// placed inside the user turn (matches `run_multimodal_oneshot` in main.rs).
+/// Build the prompt for a multimodal turn, preferring the model's own
+/// GGUF-embedded Jinja template — the same choice [`build_chat_prompt`] makes
+/// for text.
+///
+/// The mtmd media marker goes inside the user message's **content**, before
+/// the template renders, so the model receives the turn markers it was
+/// actually trained on: `<|im_start|>user` for a Qwen VL, `<start_of_turn>user`
+/// for Gemma. This is also how llama-server does it.
+///
+/// It was Gemma's markers in every case until now, and the reason is worth
+/// recording because it is the divergence `engine/CLAUDE.md` warns about. The
+/// multimodal branch landed two days before `build_chat_prompt` learned to
+/// render the embedded template, and it returns early — above that call — so
+/// it never picked the change up. Gemma 4 was the only multimodal model in the
+/// catalog, so nothing looked wrong until a Qwen VL arrived and was handed
+/// `<start_of_turn>` tokens it has never seen. A wrong template does not
+/// error; it degrades the answer quietly, which is the worst way to be wrong.
+///
+/// Returns the prompt together with the stop sequences that belong to it:
+/// none when the embedded template rendered (its EOG token ends generation,
+/// the contract `build_chat_prompt` already uses), Gemma's when we fell back.
+///
+/// Only the latest user turn is rendered. That predates this change — the
+/// payload extractor returns one turn's text and its images — so multi-turn
+/// image conversations still lose their history here.
 #[cfg(feature = "multimodal")]
-fn gemma_multimodal_prompt(user_text: &str) -> String {
+fn multimodal_chat_prompt(
+    engine: &InferenceEngine,
+    user_text: &str,
+    think: bool,
+) -> (String, Vec<String>) {
     let marker = llama_cpp_2::mtmd::mtmd_default_marker();
-    format!("<start_of_turn>user\n{marker}\n{user_text}<end_of_turn>\n<start_of_turn>model\n")
+    let marked = format!("{marker}\n{user_text}");
+    let pairs: [(&str, &str); 1] = [("user", marked.as_str())];
+    if let Some(dynamic) = engine.apply_jinja_chat_template(&pairs, think) {
+        return (dynamic.prompt, Vec::new());
+    }
+    (
+        format!("<start_of_turn>user\n{marked}<end_of_turn>\n<start_of_turn>model\n"),
+        crate::chat_template::ChatTemplate::Gemma.stop_sequences(),
+    )
 }
 
 /// Background mtmd-aware generation, mirroring `sequential_to_channel`.
@@ -1176,8 +1211,12 @@ async fn chat(
             }
         };
         let sp = parse_generate_params(&body);
+        // Parsed here rather than reused from the text path below: the
+        // multimodal branch returns before that code runs.
+        let mm_think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
+        let (mm_prompt, mm_stops) = multimodal_chat_prompt(&engine, &user_text, mm_think);
         let mm_request = GenerateRequest {
-            prompt: gemma_multimodal_prompt(&user_text),
+            prompt: mm_prompt,
             max_tokens: sp.max_tokens,
             temperature: sp.temperature,
             top_k: sp.top_k,
@@ -1187,15 +1226,15 @@ async fn chat(
             repeat_last_n: sp.repeat_last_n,
             seed: sp.seed,
             num_ctx: sp.num_ctx,
-            // Hand-built Gemma template with the mtmd marker — do NOT let
-            // generate() add its own BOS/template on top.
+            // The prompt is already templated, with the mtmd marker in place —
+            // do NOT let generate() add its own BOS/template on top.
             raw: true,
-            // The same list the text path uses. It was spelled out here, so a
-            // stop sequence added for Gemma applied everywhere except the one
-            // path that only runs with a Gemma model.
-            stop_sequences: crate::chat_template::ChatTemplate::Gemma.stop_sequences(),
-            // Gemma has no think toggle, so nothing extra to strip here.
-            filter_sequences: crate::inference::default_filters(true),
+            // Empty when the model's own template rendered: its EOG token ends
+            // generation. See `multimodal_chat_prompt`.
+            stop_sequences: mm_stops,
+            // think-aware, like the text path: a model that can be asked not to
+            // think can also emit a think tag that has to be stripped.
+            filter_sequences: crate::inference::default_filters(mm_think),
             grammar: None,
         };
         if is_streaming(&body) {
