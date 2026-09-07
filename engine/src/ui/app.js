@@ -1339,6 +1339,15 @@
     }
 
     catalogEls.detail.innerHTML = "";
+    // The head does not scroll: the repo name and, above all, what the traffic
+    // lights were judged against have to be visible without hunting for them.
+    // They were inside the scrolling list, and a repo with twenty
+    // quantizations opened showing the largest ones and none of the context —
+    // which reads as the colours having no basis at all.
+    const head = document.createElement("div");
+    head.className = "catalog-detail-head";
+    const list = document.createElement("div");
+    list.className = "quant-list";
     const back = document.createElement("button");
     back.type = "button";
     back.className = "catalog-back";
@@ -1349,7 +1358,7 @@
     });
     const title = document.createElement("h3");
     title.textContent = id;
-    catalogEls.detail.append(back, title);
+    head.append(back, title);
 
     // Say what the traffic light was judged against, rather than showing a
     // colour with no stated basis.
@@ -1363,18 +1372,22 @@
     }
     if (data.ram_total_bytes) parts.push(`${humanBytes(data.ram_total_bytes)} RAM`);
     basis.textContent = `Judged against: ${parts.join(", ")}. An estimate from the download size — the exact layer split is computed after the model is on disk.`;
-    catalogEls.detail.appendChild(basis);
+    head.appendChild(basis);
 
     if (data.mmproj) {
       const mm = document.createElement("p");
       mm.className = "catalog-note";
       mm.textContent = `Ships a multimodal projector (${humanBytes(data.mmproj_bytes)}); it is downloaded with whichever quantization you pick.`;
-      catalogEls.detail.appendChild(mm);
+      head.appendChild(mm);
     }
 
     for (const q of data.quants) {
-      catalogEls.detail.appendChild(quantRow(q));
+      list.appendChild(quantRow(q));
     }
+    catalogEls.detail.append(head, list);
+    // Smallest first is the useful end of the list, so start there rather than
+    // wherever the previous view happened to leave the scroll position.
+    list.scrollTop = 0;
   }
 
   function quantRow(q) {

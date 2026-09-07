@@ -750,3 +750,10 @@ dialog#catalog-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
 .quant-row progress { width: 100%; grid-column: 1 / -1; height: 4px; }
 .quant-row .pull-state { font-size: 0.78rem; color: var(--text-dim); grid-column: 1 / -1; }
 .catalog-error { color: var(--danger); font-size: 0.85rem; }
+
+/* The detail panel scrolls its quantization list only: the repo name and the
+   line saying what the traffic lights were judged against stay put. */
+.catalog-detail { overflow: hidden; display: flex; flex-direction: column; gap: 0.5rem; }
+.catalog-detail-head { display: flex; flex-direction: column; gap: 0.35rem; }
+.catalog-detail-head h3 { margin: 0; font-size: 0.95rem; }
+.quant-list { overflow-y: auto; max-height: 42vh; }

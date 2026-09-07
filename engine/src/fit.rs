@@ -587,33 +587,59 @@ pub fn read_gguf_moe_layout(path: &Path, file_size: u64, n_layers: u32) -> Optio
 
 /// Free VRAM in bytes, as reported by the active GPU backend.
 ///
-/// `(free, total)` VRAM in bytes. The total matters because the loader's
-/// context probe requires a fraction of the card's TOTAL memory to remain
-/// free after allocation (`inference::MIN_FREE_VRAM_RATIO`), a floor the
-/// sizer has to respect or it produces splits the loader then refuses.
-#[cfg(feature = "cuda")]
+/// `(free, total)` in bytes, or `None` when there is no GPU or nothing can be
+/// read from it. The total matters because the loader's context probe requires
+/// a fraction of the card's TOTAL memory to remain free after allocation
+/// (`inference::MIN_FREE_VRAM_RATIO`), a floor the sizer has to respect or it
+/// produces splits the loader then refuses.
+///
+/// Asked through ggml's device registry rather than `cudaMemGetInfo`, so it
+/// answers on **every** GPU backend we ship — Vulkan, Metal and ROCm as well
+/// as CUDA — instead of only the CUDA builds. The old probe was
+/// `#[cfg(feature = "cuda")]` and returned `None` everywhere else, which was
+/// invisible while VRAM only fed `--fit` (falling back to the user's own
+/// `--gpu-layers` is a reasonable non-answer) and became wrong the moment the
+/// model catalog started colouring downloads by it: a Vulkan build on a 16 GB
+/// card was told "no GPU detected" and judged every model against system RAM
+/// alone. Reported from the field.
+///
+/// Multiple GPUs are summed, because that is what a layer split can use.
+///
+/// Returns `None` before `llama_backend_init` has run: the device registry is
+/// empty until then, and reporting zero VRAM would read as "a GPU with no
+/// memory" rather than "not asked yet".
 pub fn vram_bytes() -> Option<(u64, u64)> {
-    // cudart is linked by the CUDA build of llama.cpp. We bind only the one
-    // symbol we need rather than pulling in a CUDA crate.
-    unsafe extern "C" {
-        fn cudaMemGetInfo(free: *mut usize, total: *mut usize) -> i32;
+    use llama_cpp_sys_2::{
+        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
+        ggml_backend_dev_memory, ggml_backend_dev_type,
+    };
+
+    let mut free_total: u64 = 0;
+    let mut total_total: u64 = 0;
+    // SAFETY: the registry is a process-global initialised by the ggml
+    // backends when they load. `ggml_backend_dev_get` is valid for any index
+    // below the count, and `ggml_backend_dev_memory` writes two usize
+    // out-params through pointers we own. Nothing here mutates backend state.
+    unsafe {
+        for i in 0..ggml_backend_dev_count() {
+            let dev = ggml_backend_dev_get(i);
+            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
+                continue;
+            }
+            let mut free: usize = 0;
+            let mut total: usize = 0;
+            ggml_backend_dev_memory(dev, &mut free as *mut usize, &mut total as *mut usize);
+            free_total += free as u64;
+            total_total += total as u64;
+        }
     }
-    let mut free: usize = 0;
-    let mut total: usize = 0;
-    // SAFETY: cudaMemGetInfo writes two usize out-params and returns a status
-    // code. We pass valid, initialized pointers and read the values only on
-    // success. No CUDA context state is mutated.
-    let rc = unsafe { cudaMemGetInfo(&mut free as *mut usize, &mut total as *mut usize) };
-    if rc != 0 || free == 0 {
+
+    // A device that reports nothing is a device we cannot size against, and
+    // saying so beats sizing a model to zero bytes of VRAM.
+    if total_total == 0 || free_total == 0 {
         return None;
     }
-    Some((free as u64, total as u64))
-}
-
-/// Non-CUDA builds cannot probe VRAM: always "unknown".
-#[cfg(not(feature = "cuda"))]
-pub fn vram_bytes() -> Option<(u64, u64)> {
-    None
+    Some((free_total, total_total))
 }
 
 /// The outcome of a fit computation.

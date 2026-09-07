@@ -13,6 +13,26 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.5-rc9 — 2026-09-07
+
+### Fixed
+- **The model browser said "no GPU detected" on every build except CUDA, and
+  judged downloads against system RAM alone.** VRAM was read with
+  `cudaMemGetInfo`, compiled in only for the CUDA binaries, so the Vulkan,
+  Metal, ROCm and CPU builds all reported no GPU — a Vulkan machine with a
+  16 GB card was told it had none, and a 21 GB model was coloured against its
+  64 GB of RAM instead. It is now asked through ggml's device registry, which
+  every backend populates, and several GPUs are summed because that is what a
+  layer split can use. This also gives `--fit` a real VRAM figure on those
+  builds for the first time, where it previously fell back to whatever
+  `--gpu-layers` the user passed.
+
+- **Opening a repo in the model browser showed the bottom of its
+  quantization list**, so a repo with twenty of them opened on the largest
+  and hid the line saying what the traffic lights were judged against. The
+  repo name and that line now stay put while only the list scrolls, and the
+  list starts at the smallest.
+
 ## 0.7.5-rc8 — 2026-09-07
 
 ### Added
