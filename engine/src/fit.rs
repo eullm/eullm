@@ -1937,3 +1937,219 @@ mod moe_fit_tests {
         }
     }
 }
+
+// ── Pre-download sizing: "will this model run here?" ────────────────────────
+
+/// Total physical RAM in bytes, or `None` where it cannot be read.
+///
+/// Only needed to answer a question the VRAM probe cannot: whether a model
+/// too big for the GPU would at least run with layers on the CPU, or not run
+/// at all. `sysconf` covers Linux and macOS; Windows has no libc equivalent
+/// and reports unknown, which downgrades a red verdict to amber rather than
+/// producing a wrong one.
+#[cfg(unix)]
+pub fn system_ram_bytes() -> Option<u64> {
+    // SAFETY: `sysconf` takes an int and returns a long. No pointers, no
+    // allocation, no global state touched.
+    let pages = unsafe { libc::sysconf(libc::_SC_PHYS_PAGES) };
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if pages <= 0 || page_size <= 0 {
+        return None;
+    }
+    Some(pages as u64 * page_size as u64)
+}
+
+/// Non-Unix: no portable way to read total RAM without pulling in a
+/// platform crate. See [`system_ram_bytes`].
+#[cfg(not(unix))]
+pub fn system_ram_bytes() -> Option<u64> {
+    None
+}
+
+/// How a model of a known download size is expected to run on this machine.
+///
+/// This is an **estimate made before downloading**, from the file size alone.
+/// It is not [`compute_fit`], which reads the GGUF header and returns an
+/// exact layer split — that needs the file. The two answer different
+/// questions: this one decides whether the download is worth starting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunVerdict {
+    /// Expected to run entirely on the GPU, or comfortably in RAM on a
+    /// machine without one.
+    Fits,
+    /// Expected to run, but not comfortably: layers spilling to the CPU, or
+    /// filling most of the available RAM. Usable, considerably slower.
+    Tight,
+    /// Not expected to run: larger than VRAM and RAM together.
+    TooLarge,
+    /// Neither VRAM nor RAM could be read, so no honest answer is available.
+    Unknown,
+}
+
+/// What a model needs resident beyond its weights: KV cache, compute
+/// buffers, the context. A fraction of the weights plus a floor, because the
+/// fixed costs dominate for a small model and scale for a large one.
+///
+/// Deliberately rough. The exact number depends on context size, cache
+/// types and architecture, none of which are known before the file is
+/// downloaded — and being roughly right in the right direction is the whole
+/// job of a traffic light.
+const OVERHEAD_FRACTION: f64 = 0.15;
+const OVERHEAD_FLOOR: u64 = 512 * 1024 * 1024;
+
+/// Fraction of total RAM treated as available to a model. The rest is the
+/// operating system, the page cache and everything else already running:
+/// a model sized to 100% of RAM swaps rather than runs.
+const RAM_USABLE_FRACTION: f64 = 0.70;
+
+/// Classify a download of `file_bytes` against the memory this machine has.
+///
+/// `vram` is `(free, total)` as [`vram_bytes`] reports it, `ram` is total
+/// system RAM. Both optional: a CPU-only build has no VRAM to report, and
+/// Windows has no RAM figure here.
+pub fn classify_download(
+    file_bytes: u64,
+    vram: Option<(u64, u64)>,
+    ram: Option<u64>,
+) -> RunVerdict {
+    let needed =
+        file_bytes + ((file_bytes as f64 * OVERHEAD_FRACTION) as u64).max(OVERHEAD_FLOOR);
+
+    // Same headroom the real sizer applies, so a green light here does not
+    // turn into a partial split there: the loader's floor is a fraction of
+    // TOTAL VRAM, not of what happens to be free.
+    let usable_vram = vram
+        .map(|(free, total)| {
+            (free as f64 * VRAM_SAFETY_FRACTION - total as f64 * MIN_FREE_TOTAL_RATIO).max(0.0)
+                as u64
+        })
+        .unwrap_or(0);
+    let usable_ram = ram
+        .map(|r| (r as f64 * RAM_USABLE_FRACTION) as u64)
+        .unwrap_or(0);
+
+    if vram.is_none() && ram.is_none() {
+        return RunVerdict::Unknown;
+    }
+    if needed <= usable_vram {
+        return RunVerdict::Fits;
+    }
+    // No GPU: a model that fits in the usable slice of RAM runs fine, one
+    // that only fits in nearly all of it runs badly.
+    if vram.is_none() {
+        return if needed <= usable_ram {
+            RunVerdict::Fits
+        } else if let Some(r) = ram {
+            if needed <= r {
+                RunVerdict::Tight
+            } else {
+                RunVerdict::TooLarge
+            }
+        } else {
+            RunVerdict::Unknown
+        };
+    }
+    // A GPU that cannot hold it all: the rest goes to the CPU, which works
+    // and is slow. Without a RAM figure, say so rather than guess.
+    if ram.is_none() {
+        return RunVerdict::Tight;
+    }
+    if needed <= usable_vram + usable_ram {
+        RunVerdict::Tight
+    } else {
+        RunVerdict::TooLarge
+    }
+}
+
+#[cfg(test)]
+mod download_verdict_tests {
+    use super::*;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+
+    #[test]
+    fn a_small_model_on_a_big_card_fits() {
+        // 4 GiB of weights on a 24 GiB card with 23 free.
+        assert_eq!(
+            classify_download(4 * GIB, Some((23 * GIB, 24 * GIB)), Some(64 * GIB)),
+            RunVerdict::Fits
+        );
+    }
+
+    #[test]
+    fn a_model_past_the_card_but_inside_ram_is_tight_not_impossible() {
+        // 40 GiB of weights, 24 GiB card, 128 GiB of RAM: this runs, slowly.
+        assert_eq!(
+            classify_download(40 * GIB, Some((23 * GIB, 24 * GIB)), Some(128 * GIB)),
+            RunVerdict::Tight
+        );
+    }
+
+    #[test]
+    fn a_model_past_both_is_too_large() {
+        assert_eq!(
+            classify_download(400 * GIB, Some((23 * GIB, 24 * GIB)), Some(64 * GIB)),
+            RunVerdict::TooLarge
+        );
+    }
+
+    // The loader reserves a fraction of TOTAL VRAM, so a card reporting
+    // almost all of its memory free still cannot take a model sized to it.
+    // Sizing against `free` alone is what produced splits the loader then
+    // refused; the same headroom has to apply here or a green light turns
+    // into a partial offload after a 20 GB download.
+    #[test]
+    fn the_loader_floor_is_respected_not_just_free_memory() {
+        // 21 GiB of weights on a 24 GiB card with 23.5 free. Free memory
+        // alone says yes; the 12% floor on total says no.
+        assert_ne!(
+            classify_download(21 * GIB, Some((23 * GIB, 24 * GIB)), Some(64 * GIB)),
+            RunVerdict::Fits
+        );
+    }
+
+    #[test]
+    fn a_cpu_only_machine_is_judged_on_ram_alone() {
+        assert_eq!(
+            classify_download(4 * GIB, None, Some(32 * GIB)),
+            RunVerdict::Fits
+        );
+        // Fits in RAM, but only by filling nearly all of it.
+        assert_eq!(
+            classify_download(25 * GIB, None, Some(32 * GIB)),
+            RunVerdict::Tight
+        );
+        assert_eq!(
+            classify_download(64 * GIB, None, Some(32 * GIB)),
+            RunVerdict::TooLarge
+        );
+    }
+
+    // Better to say "unknown" than to paint a red light from no data.
+    #[test]
+    fn nothing_measurable_is_unknown_not_a_guess() {
+        assert_eq!(classify_download(8 * GIB, None, None), RunVerdict::Unknown);
+    }
+
+    // Windows reports no RAM figure. A model past the card is still known
+    // to spill to the CPU, so amber is honest; red would not be.
+    #[test]
+    fn a_missing_ram_figure_never_produces_a_red_light() {
+        assert_eq!(
+            classify_download(400 * GIB, Some((23 * GIB, 24 * GIB)), None),
+            RunVerdict::Tight
+        );
+    }
+
+    // The overhead floor matters for small models: a 200 MB model does not
+    // need 30 MB of context, it needs a few hundred.
+    #[test]
+    fn small_models_still_carry_the_fixed_overhead() {
+        let tiny = 200 * 1024 * 1024;
+        // 512 MiB floor + 200 MiB of weights does not fit in 600 MiB.
+        assert_ne!(
+            classify_download(tiny, Some((600 * 1024 * 1024, 700 * 1024 * 1024)), None),
+            RunVerdict::Fits
+        );
+    }
+}

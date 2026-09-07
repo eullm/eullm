@@ -999,3 +999,504 @@ mod tests {
         assert!(select_gguf(&files, Some("Q2_K")).is_err());
     }
 }
+
+// ── Catalog browsing: search the Hub, and price up a repo's quantizations ───
+
+/// One row of a Hub search result.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HfModelSummary {
+    /// `owner/repo`, which is also what `eullm pull hf.co/<id>` takes.
+    pub id: String,
+    pub downloads: u64,
+    pub likes: u64,
+    /// ISO-8601 last-modified timestamp, as the Hub reports it.
+    pub updated: Option<String>,
+    /// Gated repos need an accepted licence agreement and a token, neither of
+    /// which the engine has, so a pull will fail. Surfaced rather than hidden:
+    /// "you must accept the terms" is a better answer than an empty list.
+    pub gated: bool,
+}
+
+/// Search the HuggingFace Hub for repos containing GGUF files.
+///
+/// Server-side on purpose. The browser never talks to the Hub, so a user's
+/// address is not handed to it by opening the catalog, and
+/// `EULLM_WEB_ALLOWED_DOMAINS` stays the single place the perimeter is
+/// decided. It also means the catalog works from an HPC login node, which is
+/// where model downloads have to happen when compute nodes have no route out.
+/// The `expand[]` parameters are not decoration: without them the Hub omits
+/// `lastModified` and `gated` from a search response entirely, so a row could
+/// not say how old a model is or that it needs an accepted licence.
+pub async fn search_hf_models(
+    query: &str,
+    limit: usize,
+) -> Result<Vec<HfModelSummary>, Box<dyn std::error::Error + Send + Sync>> {
+    let limit = limit.clamp(1, 100);
+    let url = format!(
+        "https://huggingface.co/api/models?search={}&filter=gguf&sort=downloads&direction=-1&limit={limit}\
+         &expand%5B%5D=lastModified&expand%5B%5D=downloads&expand%5B%5D=likes&expand%5B%5D=gated",
+        urlencode(query),
+    );
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("eullm/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let response = client.get(&url).send().await?;
+    if !response.status().is_success() {
+        return Err(format!("HuggingFace search returned HTTP {}", response.status()).into());
+    }
+    let body: serde_json::Value = response.json().await?;
+    let rows = body.as_array().map(Vec::as_slice).unwrap_or(&[]);
+    Ok(rows
+        .iter()
+        .filter_map(|m| {
+            let id = m.get("id").or_else(|| m.get("modelId"))?.as_str()?;
+            // The Hub is free to return whatever it likes here, and this id
+            // becomes part of a URL and a local directory name.
+            if !is_plausible_repo_id(id) {
+                tracing::warn!(
+                    "Ignoring implausible repo id from the HuggingFace search: {}",
+                    crate::audit::sanitize_for_log(id),
+                );
+                return None;
+            }
+            Some(HfModelSummary {
+                id: id.to_string(),
+                downloads: m.get("downloads").and_then(|v| v.as_u64()).unwrap_or(0),
+                likes: m.get("likes").and_then(|v| v.as_u64()).unwrap_or(0),
+                updated: m
+                    .get("lastModified")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+                // `gated` is `false`, `"auto"` or `"manual"`.
+                gated: !matches!(m.get("gated"), None | Some(serde_json::Value::Bool(false))),
+            })
+        })
+        .collect())
+}
+
+/// `owner/repo`, each part a path segment we would be willing to put in a URL.
+pub fn is_plausible_repo_id(id: &str) -> bool {
+    let mut parts = id.split('/');
+    let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let ok = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 96
+            && s != "."
+            && s != ".."
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    };
+    ok(owner) && ok(repo)
+}
+
+/// Minimal percent-encoding for a query string value.
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
+/// One downloadable quantization of a repo: its files and what they weigh.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QuantOption {
+    /// What to show: the subdirectory when the repo groups by quantization,
+    /// otherwise the part of the filename that varies between them.
+    pub label: String,
+    /// What to pass as `:<quant>`. Usually the same as `label`, but falls
+    /// back to the full stem when the label alone would match more than one
+    /// entry — a directory holding several quantizations makes that happen.
+    pub quant: String,
+    /// Repo-relative paths, in shard order. One entry unless it is a split.
+    pub files: Vec<String>,
+    /// Sum of every file's size, which is what the download costs and what
+    /// the model occupies on disk.
+    pub total_bytes: u64,
+}
+
+/// Everything the catalog needs to show about one repo.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RepoContents {
+    pub quants: Vec<QuantOption>,
+    /// The multimodal projector, if the repo ships one. Downloaded alongside
+    /// whichever quantization is chosen — it is the same file for all of them.
+    pub mmproj: Option<String>,
+    pub mmproj_bytes: u64,
+}
+
+/// List a repo's quantizations with their sizes.
+///
+/// Uses the tree endpoint rather than `siblings`, because only the tree
+/// carries `size` — and a catalog that cannot say how big a download is
+/// cannot say whether it will run either.
+pub async fn list_hf_repo_contents(
+    repo: &str,
+) -> Result<RepoContents, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!("https://huggingface.co/api/models/{repo}/tree/main?recursive=1");
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("eullm/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?;
+    let response = client.get(&url).send().await?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "HuggingFace API returned HTTP {} for {repo}",
+            response.status()
+        )
+        .into());
+    }
+    let body: serde_json::Value = response.json().await?;
+    let entries = body.as_array().map(Vec::as_slice).unwrap_or(&[]);
+
+    let mut sizes: Vec<(String, u64)> = Vec::new();
+    for e in entries {
+        let Some(path) = e.get("path").and_then(|p| p.as_str()) else {
+            continue;
+        };
+        if !path.to_lowercase().ends_with(".gguf") {
+            continue;
+        }
+        // Same boundary check the pull path applies — anything that could
+        // escape a directory is dropped here rather than at each use site.
+        if !crate::models::store::is_safe_relative_path(path) {
+            tracing::warn!(
+                "Ignoring unsafe path from the HuggingFace tree for {repo}: {}",
+                crate::audit::sanitize_for_log(path),
+            );
+            continue;
+        }
+        let size = e.get("size").and_then(|s| s.as_u64()).unwrap_or(0);
+        sizes.push((path.to_string(), size));
+    }
+
+    let (mmproj, mmproj_bytes) = sizes
+        .iter()
+        .find(|(p, _)| is_mmproj(p))
+        .map(|(p, s)| (Some(p.clone()), *s))
+        .unwrap_or((None, 0));
+
+    let weights: Vec<String> = sizes
+        .iter()
+        .filter(|(p, _)| !is_mmproj(p))
+        .map(|(p, _)| p.clone())
+        .collect();
+    let byte_of = |p: &str| sizes.iter().find(|(q, _)| q == p).map(|(_, s)| *s).unwrap_or(0);
+
+    Ok(RepoContents {
+        quants: group_quantizations(&weights, byte_of),
+        mmproj,
+        mmproj_bytes,
+    })
+}
+
+/// Group a repo's weight files into one entry per quantization.
+///
+/// Two layouts, and both appear in the wild:
+///
+/// - one subdirectory per quantization (`UD-Q4_K_XL/Model-…-00001-of-00004.gguf`),
+///   where the directory name *is* the label; and
+/// - everything flat (`Qwen3-8B-Q4_K_M.gguf`, `Qwen3-8B-Q8_0.gguf`), where
+///   the label is what differs between the names.
+///
+/// The flat case is handled by stripping the longest prefix common to the
+/// names, backed off to the last `-`, which is the model name and leaves the
+/// quantization. It needs no list of known quantization tokens, so it does
+/// not go stale when a new one is invented.
+///
+/// A directory does not always hold exactly one quantization, and assuming it
+/// did was wrong on a real repo: `unsloth/Qwen3.8-Flash-Next-GGUF` keeps six
+/// separate MTP draft models under `MTP/`, which collapsed into a single
+/// 22.9 GiB entry that was not any downloadable thing. So the directory name
+/// is used only when the directory holds one entry; otherwise the same
+/// prefix-stripping runs *within* that directory.
+fn group_quantizations(files: &[String], size_of: impl Fn(&str) -> u64) -> Vec<QuantOption> {
+    // Key by shard stem: every shard of one split shares it, and it already
+    // carries the directory, so it separates two quantizations that happen to
+    // have the same filename in different directories.
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for f in files {
+        let stem = match parse_shard(f) {
+            Some((stem, _, _)) => stem.to_string(),
+            None => f.strip_suffix(".gguf").unwrap_or(f).to_string(),
+        };
+        match groups.iter_mut().find(|(s, _)| *s == stem) {
+            Some((_, fs)) => fs.push(f.clone()),
+            None => groups.push((stem, vec![f.clone()])),
+        }
+    }
+
+    let dir_of = |stem: &str| match stem.rsplit_once('/') {
+        Some((dir, _)) => dir.to_string(),
+        None => String::new(),
+    };
+    let leaf_of = |stem: &str| stem.rsplit('/').next().unwrap_or(stem).to_string();
+
+    let mut out: Vec<QuantOption> = Vec::new();
+    for (stem, mut group_files) in groups.iter().cloned() {
+        let dir = dir_of(&stem);
+        let siblings: Vec<String> = groups
+            .iter()
+            .filter(|(s, _)| dir_of(s) == dir)
+            .map(|(s, _)| leaf_of(s))
+            .collect();
+
+        let label = if siblings.len() == 1 && !dir.is_empty() {
+            // One quantization in its own directory: the directory names it.
+            dir.rsplit('/').next().unwrap_or(&dir).to_string()
+        } else if siblings.len() == 1 {
+            // A single file at the repo root: there is nothing to contrast
+            // it with, so its whole name is the most informative label.
+            leaf_of(&stem)
+        } else {
+            let common = longest_common_prefix(&siblings);
+            let common = match common.rfind('-') {
+                Some(i) => common[..=i].to_string(),
+                None => String::new(),
+            };
+            let leaf = leaf_of(&stem);
+            let trimmed = leaf.strip_prefix(&common).unwrap_or(&leaf).trim_matches('-');
+            if trimmed.is_empty() {
+                leaf.clone()
+            } else {
+                trimmed.to_string()
+            }
+        };
+
+        group_files.sort_by_key(|f| parse_shard(f).map(|(_, i, _)| i).unwrap_or(0));
+        let total_bytes = group_files.iter().map(|f| size_of(f)).sum();
+        out.push(QuantOption {
+            label,
+            // Filled in below, once every label is known.
+            quant: String::new(),
+            files: group_files,
+            total_bytes,
+        });
+    }
+
+    // A label can still repeat across directories -- `MTP/` holds a draft
+    // `Q8_0` and the repo root holds the real one -- and two identical rows
+    // are worse than a long one. Qualify the duplicates by their directory,
+    // and give them a pull token that is unambiguous too: `:<quant>` selects
+    // by substring, so a repeated label would resolve to "multiple .gguf
+    // files match". The stem is unique by construction, the groups being
+    // keyed by it.
+    let duplicated: Vec<String> = out
+        .iter()
+        .filter(|q| out.iter().filter(|o| o.label == q.label).count() > 1)
+        .map(|q| q.label.clone())
+        .collect();
+    for entry in &mut out {
+        let label = entry.label.clone();
+        let unique = !duplicated.contains(&label);
+        if !unique
+            && let Some((dir, _)) = entry.files[0].rsplit_once('/')
+            // `Q8_0/Q8_0` says nothing `Q8_0` did not: when the directory is
+            // already the label, the other entry is the one that needs
+            // qualifying, and it gets it on its own pass.
+            && dir != label
+        {
+            entry.label = format!("{dir}/{label}");
+        }
+        entry.quant = if unique {
+            label
+        } else {
+            match parse_shard(&entry.files[0]) {
+                Some((stem, _, _)) => stem.to_string(),
+                None => entry.files[0]
+                    .strip_suffix(".gguf")
+                    .unwrap_or(&entry.files[0])
+                    .to_string(),
+            }
+        };
+    }
+
+    out.sort_by_key(|q| q.total_bytes);
+    out
+}
+fn longest_common_prefix(items: &[String]) -> String {
+    let Some(first) = items.first() else {
+        return String::new();
+    };
+    let mut len = first.len();
+    for other in &items[1..] {
+        len = len.min(
+            first
+                .bytes()
+                .zip(other.bytes())
+                .take_while(|(a, b)| a == b)
+                .count(),
+        );
+    }
+    // Never split a UTF-8 character: back off to the nearest boundary.
+    while len > 0 && !first.is_char_boundary(len) {
+        len -= 1;
+    }
+    first[..len].to_string()
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    fn sizes(files: &[(&str, u64)]) -> (Vec<String>, impl Fn(&str) -> u64 + use<>) {
+        let owned: Vec<(String, u64)> = files
+            .iter()
+            .map(|(f, s)| ((*f).to_string(), *s))
+            .collect();
+        let names = owned.iter().map(|(f, _)| f.clone()).collect();
+        let lookup = move |p: &str| {
+            owned
+                .iter()
+                .find(|(f, _)| f == p)
+                .map(|(_, s)| *s)
+                .unwrap_or(0)
+        };
+        (names, lookup)
+    }
+
+    // The layout that started all of this: a directory per quantization,
+    // every large one split into shards.
+    #[test]
+    fn a_directory_per_quantization_is_labelled_by_the_directory() {
+        let (files, size_of) = sizes(&[
+            ("UD-Q4_K_XL/M-UD-Q4_K_XL-00001-of-00002.gguf", 50),
+            ("UD-Q4_K_XL/M-UD-Q4_K_XL-00002-of-00002.gguf", 61),
+            ("UD-Q2_K_XL/M-UD-Q2_K_XL-00001-of-00001.gguf", 30),
+        ]);
+        let q = group_quantizations(&files, size_of);
+        assert_eq!(q.len(), 2);
+        // Sorted smallest first.
+        assert_eq!(q[0].label, "UD-Q2_K_XL");
+        assert_eq!(q[1].label, "UD-Q4_K_XL");
+        assert_eq!(q[1].files.len(), 2);
+        assert_eq!(q[1].total_bytes, 111);
+    }
+
+    // The other common layout, and the one where the label has to be worked
+    // out rather than read off a directory.
+    #[test]
+    fn a_flat_repo_is_labelled_by_what_differs_between_the_names() {
+        let (files, size_of) = sizes(&[
+            ("Qwen3-8B-Q4_K_M.gguf", 5),
+            ("Qwen3-8B-Q8_0.gguf", 9),
+            ("Qwen3-8B-Q2_K.gguf", 3),
+        ]);
+        let q = group_quantizations(&files, size_of);
+        let labels: Vec<&str> = q.iter().map(|q| q.label.as_str()).collect();
+        assert_eq!(labels, ["Q2_K", "Q4_K_M", "Q8_0"]);
+    }
+
+    // Every quantization starting with the same letters is the case that
+    // broke the naive common prefix: `Q4_K_M` and `Q4_K_S` share `Q4_K_`, and
+    // stripping that leaves `M` and `S`, which name nothing.
+    #[test]
+    fn a_shared_leading_token_does_not_get_eaten_from_the_label() {
+        let (files, size_of) = sizes(&[
+            ("Qwen3-8B-Q4_K_M.gguf", 5),
+            ("Qwen3-8B-Q4_K_S.gguf", 4),
+        ]);
+        let q = group_quantizations(&files, size_of);
+        let labels: Vec<&str> = q.iter().map(|q| q.label.as_str()).collect();
+        assert_eq!(labels, ["Q4_K_S", "Q4_K_M"]);
+    }
+
+    // With one file there is no "what differs", and stripping the common
+    // prefix would leave nothing at all.
+    #[test]
+    fn a_single_flat_file_keeps_its_whole_name_as_the_label() {
+        let (files, size_of) = sizes(&[("gemma-4-12b-it-Q4_K_M.gguf", 7)]);
+        let q = group_quantizations(&files, size_of);
+        assert_eq!(q.len(), 1);
+        assert_eq!(q[0].label, "gemma-4-12b-it-Q4_K_M");
+        assert_eq!(q[0].total_bytes, 7);
+    }
+
+    #[test]
+    fn shards_are_ordered_by_index_not_by_listing_order() {
+        let (files, size_of) = sizes(&[
+            ("M-Q4-00003-of-00003.gguf", 1),
+            ("M-Q4-00001-of-00003.gguf", 1),
+            ("M-Q4-00002-of-00003.gguf", 1),
+        ]);
+        let q = group_quantizations(&files, size_of);
+        assert!(q[0].files[0].contains("00001"));
+        assert!(q[0].files[2].contains("00003"));
+    }
+
+    // A directory is not always one quantization. unsloth/Qwen3.8-Flash-Next
+    // keeps six separate MTP draft models under `MTP/`, and labelling by the
+    // directory collapsed them into one 22.9 GiB entry that was not any
+    // downloadable thing.
+    #[test]
+    fn a_directory_holding_several_models_is_not_one_entry() {
+        let (files, size_of) = sizes(&[
+            ("MTP/mtp-Model-Q4_K_M.gguf", 3),
+            ("MTP/mtp-Model-Q8_0.gguf", 4),
+            ("MTP/mtp-Model-shared-Q4_K_M.gguf", 2),
+            ("UD-Q2_K_XL/Model-UD-Q2_K_XL-00001-of-00002.gguf", 10),
+            ("UD-Q2_K_XL/Model-UD-Q2_K_XL-00002-of-00002.gguf", 11),
+        ]);
+        let q = group_quantizations(&files, size_of);
+        assert_eq!(q.len(), 4, "three MTP files plus one split, got {q:?}");
+        // The directory with one entry still gets the directory as its label.
+        let split = q.iter().find(|q| q.label == "UD-Q2_K_XL").expect("the split");
+        assert_eq!(split.files.len(), 2);
+        assert_eq!(split.total_bytes, 21);
+        // The crowded directory falls back to what differs inside it.
+        let labels: Vec<&str> = q.iter().map(|q| q.label.as_str()).collect();
+        assert!(labels.contains(&"Q8_0"), "got {labels:?}");
+        assert!(labels.contains(&"shared-Q4_K_M"), "got {labels:?}");
+    }
+
+    // `:<quant>` matches by substring, so a label that is not unique across
+    // the repo would resolve to "multiple .gguf files match". The pull token
+    // falls back to the stem, which is unique by construction.
+    #[test]
+    fn a_duplicated_label_gets_an_unambiguous_pull_token() {
+        let (files, size_of) = sizes(&[
+            ("a/Model-Q4_K_M.gguf", 1),
+            ("a/Model-Q8_0.gguf", 1),
+            ("b/Model-Q4_K_M.gguf", 1),
+            ("b/Model-Q8_0.gguf", 1),
+        ]);
+        let q = group_quantizations(&files, size_of);
+        assert_eq!(q.len(), 4);
+        for entry in &q {
+            if entry.label == "Q4_K_M" {
+                assert!(
+                    entry.quant.contains('/'),
+                    "an ambiguous label must fall back to the stem, got {:?}",
+                    entry.quant
+                );
+                // And the token must actually pick out this one file.
+                let picked = select_gguf(&files, Some(&entry.quant)).unwrap();
+                assert_eq!(picked, entry.files);
+            }
+        }
+    }
+
+    #[test]
+    fn a_repo_id_has_exactly_two_plausible_segments() {
+        assert!(is_plausible_repo_id("unsloth/Qwen3.8-Flash-Next-GGUF"));
+        assert!(!is_plausible_repo_id("unsloth"));
+        assert!(!is_plausible_repo_id("a/b/c"));
+        assert!(!is_plausible_repo_id("../etc"));
+        assert!(!is_plausible_repo_id("owner/"));
+        assert!(!is_plausible_repo_id("own er/repo"));
+    }
+
+    #[test]
+    fn a_search_query_is_encoded_not_pasted_into_the_url() {
+        assert_eq!(urlencode("qwen 3 8b"), "qwen+3+8b");
+        assert_eq!(urlencode("a&b=c"), "a%26b%3Dc");
+        assert_eq!(urlencode("../x"), "..%2Fx");
+    }
+}

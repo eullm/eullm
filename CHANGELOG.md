@@ -16,6 +16,38 @@ something changed, less so for understanding what it means.
 ## 0.7.5-rc1 — 2026-09-05
 
 ### Added
+- **A model browser in the web UI.** The download icon in the top bar opens a
+  search over HuggingFace's GGUF repos, and picking one lists every
+  quantization it offers with its total download size, its shard count, and a
+  traffic light saying whether it is expected to run on this machine — green
+  fits on the GPU or comfortably in RAM, amber runs with layers on the CPU,
+  red is larger than VRAM and RAM together. Downloading streams a progress
+  bar and the model appears in the picker without a reload.
+
+  The engine makes the HuggingFace calls, not the browser. Your address is
+  never handed to the Hub by opening the catalog, `EULLM_WEB_ALLOWED_DOMAINS`
+  stays the one place the perimeter is decided, and — the reason it was built
+  this way — the catalog keeps working on a machine whose browser has no
+  route out but whose engine does. That is an HPC login node, which is
+  exactly where downloads have to be started when the compute nodes are
+  offline.
+
+  The traffic light is an estimate from the download size, and says so in the
+  panel. The exact layer split needs the GGUF header, which needs the file;
+  this exists to answer whether the download is worth starting, and that has
+  to be answered before the download or not at all. It applies the same
+  headroom the real sizer does, so a green light does not turn into a partial
+  offload after 100 GB.
+
+- **`POST /api/pull` works, and streams NDJSON the way Ollama does.** It was
+  a stub that answered `not yet implemented` and did nothing. It now pulls
+  `hf.co/<owner>/<repo>[:<quant>]`, emitting one JSON object per line —
+  `{"status"}` while it works, `{"status","digest","total","completed"}`
+  while bytes move, `{"status":"success"}` at the end — so an existing Ollama
+  client shows a progress bar with no changes. `{"stream": false}` returns a
+  single object instead. The CLI and the API now run the same download code
+  rather than two copies of it.
+
 - **New Linux CUDA download for data-center NVIDIA GPUs**:
   `eullm-linux-x64-cuda-12.4-datacenter`, built for A100 (sm_80) and H100
   (sm_90). The existing `eullm-linux-x64-cuda-13.1` remains the consumer

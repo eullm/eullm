@@ -1244,6 +1244,251 @@
     }
   });
 
+  // ── Model catalog ─────────────────────────────────────────────────────
+  //
+  // Everything here talks to the engine, never to huggingface.co: the browser
+  // making the Hub call directly would hand the viewer's address to the Hub,
+  // put a second host outside EULLM_WEB_ALLOWED_DOMAINS, and stop working on
+  // the machine that needs this most — an HPC login node, where the engine
+  // has a route out and the browser does not.
+
+  const catalogEls = {
+    modal: $("catalog-modal"),
+    open: $("catalog-btn"),
+    close: $("catalog-close"),
+    search: $("catalog-search"),
+    results: $("catalog-results"),
+    detail: $("catalog-detail"),
+  };
+
+  const humanBytes = (n) => {
+    if (!n) return "—";
+    const gib = n / 1024 ** 3;
+    return gib >= 1 ? `${gib.toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
+  };
+  const humanCount = (n) =>
+    n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${Math.round(n / 1e3)}k` : String(n);
+
+  // What each verdict means, in words. A colour alone is not readable to
+  // everyone, and "too large" deserves saying rather than implying.
+  const VERDICT_TEXT = {
+    fits: ["Fits", "Expected to run fully on this machine's GPU, or comfortably in RAM."],
+    tight: ["Tight", "Expected to run with layers on the CPU, or filling most of RAM. Slower."],
+    too_large: ["Too large", "Larger than this machine's VRAM and RAM together."],
+    unknown: ["Unknown", "Neither VRAM nor RAM could be read here, so there is no honest answer."],
+  };
+
+  function catalogError(where, msg) {
+    where.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "catalog-error";
+    p.textContent = msg;
+    where.appendChild(p);
+  }
+
+  async function searchCatalog(q) {
+    catalogEls.detail.hidden = true;
+    catalogEls.results.hidden = false;
+    if (!q.trim()) {
+      catalogEls.results.innerHTML = "";
+      return;
+    }
+    catalogEls.results.textContent = "Searching…";
+    try {
+      const r = await fetch(`/api/hf/search?q=${encodeURIComponent(q)}&limit=30`, withAuth());
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      catalogEls.results.innerHTML = "";
+      if (!data.models.length) {
+        catalogEls.results.textContent = "Nothing found.";
+        return;
+      }
+      for (const m of data.models) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "catalog-row";
+        const name = document.createElement("span");
+        name.className = "repo";
+        name.textContent = m.id;
+        const meta = document.createElement("span");
+        meta.className = "meta";
+        meta.textContent =
+          `${humanCount(m.downloads)} downloads · ${humanCount(m.likes)} likes` +
+          (m.gated ? " · gated" : "");
+        row.append(name, meta);
+        row.addEventListener("click", () => showRepo(m.id));
+        catalogEls.results.appendChild(row);
+      }
+    } catch (err) {
+      catalogError(catalogEls.results, `Search failed: ${err.message}`);
+    }
+  }
+
+  async function showRepo(id) {
+    catalogEls.results.hidden = true;
+    catalogEls.detail.hidden = false;
+    catalogEls.detail.textContent = `Reading ${id}…`;
+    let data;
+    try {
+      const r = await fetch(`/api/hf/repo?id=${encodeURIComponent(id)}`, withAuth());
+      data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    } catch (err) {
+      catalogError(catalogEls.detail, `Could not read ${id}: ${err.message}`);
+      return;
+    }
+
+    catalogEls.detail.innerHTML = "";
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "catalog-back";
+    back.textContent = "← back to results";
+    back.addEventListener("click", () => {
+      catalogEls.detail.hidden = true;
+      catalogEls.results.hidden = false;
+    });
+    const title = document.createElement("h3");
+    title.textContent = id;
+    catalogEls.detail.append(back, title);
+
+    // Say what the traffic light was judged against, rather than showing a
+    // colour with no stated basis.
+    const basis = document.createElement("p");
+    basis.className = "catalog-note";
+    const parts = [];
+    if (data.vram_total_bytes) {
+      parts.push(`${humanBytes(data.vram_free_bytes)} of ${humanBytes(data.vram_total_bytes)} VRAM free`);
+    } else {
+      parts.push("no GPU detected");
+    }
+    if (data.ram_total_bytes) parts.push(`${humanBytes(data.ram_total_bytes)} RAM`);
+    basis.textContent = `Judged against: ${parts.join(", ")}. An estimate from the download size — the exact layer split is computed after the model is on disk.`;
+    catalogEls.detail.appendChild(basis);
+
+    if (data.mmproj) {
+      const mm = document.createElement("p");
+      mm.className = "catalog-note";
+      mm.textContent = `Ships a multimodal projector (${humanBytes(data.mmproj_bytes)}); it is downloaded with whichever quantization you pick.`;
+      catalogEls.detail.appendChild(mm);
+    }
+
+    for (const q of data.quants) {
+      catalogEls.detail.appendChild(quantRow(q));
+    }
+  }
+
+  function quantRow(q) {
+    const row = document.createElement("div");
+    row.className = "quant-row";
+
+    const [text, why] = VERDICT_TEXT[q.verdict] || VERDICT_TEXT.unknown;
+    const badge = document.createElement("span");
+    badge.className = `verdict ${q.verdict}`;
+    badge.textContent = text;
+    badge.title = why;
+
+    const label = document.createElement("span");
+    label.className = "label";
+    label.textContent = q.label + (q.shards > 1 ? ` · ${q.shards} shards` : "");
+
+    const size = document.createElement("span");
+    size.className = "size";
+    size.textContent = humanBytes(q.bytes);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn-secondary";
+    btn.textContent = "Download";
+
+    const state = document.createElement("span");
+    state.className = "pull-state";
+    state.hidden = true;
+    const bar = document.createElement("progress");
+    bar.max = 1;
+    bar.value = 0;
+    bar.hidden = true;
+
+    btn.addEventListener("click", () => pullModel(q, btn, state, bar));
+    row.append(badge, label, size, btn, bar, state);
+    return row;
+  }
+
+  // Reads the NDJSON the engine streams from /api/pull — one JSON object per
+  // line, the same shape Ollama emits, so the parsing is a split on newlines
+  // and nothing more. A line can arrive in pieces, hence the buffer.
+  async function pullModel(q, btn, state, bar) {
+    btn.disabled = true;
+    state.hidden = false;
+    state.textContent = "starting…";
+    try {
+      const r = await fetch(
+        "/api/pull",
+        withAuth({
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: q.pull }),
+        }),
+      );
+      if (!r.ok || !r.body) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${r.status}`);
+      }
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let done = false;
+      for (;;) {
+        const { value, done: finished } = await reader.read();
+        if (finished) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const ev = JSON.parse(line);
+          if (ev.error) throw new Error(ev.error);
+          if (ev.total) {
+            bar.hidden = false;
+            bar.value = ev.completed / ev.total;
+            state.textContent = `${humanBytes(ev.completed)} of ${humanBytes(ev.total)}`;
+          } else if (ev.status === "success") {
+            done = true;
+          } else if (ev.status) {
+            state.textContent = ev.status;
+          }
+        }
+      }
+      bar.hidden = true;
+      if (done) {
+        state.textContent = "Downloaded — now in the model list.";
+        btn.textContent = "Done";
+        // The picker is built from /api/tags, so it has to be rebuilt for the
+        // new model to be selectable without a page reload.
+        await loadModels();
+      } else {
+        state.textContent = "The download ended without confirming. Try again.";
+        btn.disabled = false;
+      }
+    } catch (err) {
+      bar.hidden = true;
+      state.textContent = `Failed: ${err.message}`;
+      btn.disabled = false;
+    }
+  }
+
+  let searchTimer = null;
+  catalogEls.search?.addEventListener("input", (e) => {
+    clearTimeout(searchTimer);
+    const q = e.target.value;
+    // Debounced: every keystroke is a request the engine forwards to the Hub.
+    searchTimer = setTimeout(() => searchCatalog(q), 300);
+  });
+  catalogEls.open?.addEventListener("click", () => {
+    catalogEls.modal.showModal();
+    catalogEls.search.focus();
+  });
+  catalogEls.close?.addEventListener("click", () => catalogEls.modal.close());
+
   // ── Boot ──────────────────────────────────────────────────────────────
   async function init(skipWelcomeReinject) {
     const v = await loadVersion();

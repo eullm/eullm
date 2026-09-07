@@ -2023,6 +2023,42 @@ mod http_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    // The catalog endpoints answer before any model is loaded, and both
+    // refuse malformed input without reaching the network -- so these run in
+    // CI, where there is none.
+    #[tokio::test]
+    async fn the_catalog_search_answers_an_empty_query_without_calling_out() {
+        let tmp = std::env::temp_dir().join(format!("eullm-hfsearch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        let (status, body) = get_json(&format!("{base}/api/hf/search?q=")).await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            body["models"].as_array().map(Vec::len),
+            Some(0),
+            "an empty query is an empty result, not a search for everything"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // This id is interpolated into a huggingface.co URL, so it is validated
+    // before the request is built rather than after it comes back.
+    #[tokio::test]
+    async fn the_catalog_refuses_a_repo_id_that_is_not_owner_slash_repo() {
+        let tmp = std::env::temp_dir().join(format!("eullm-hfrepo-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let store = store_with_one_model(&tmp, "a-pulled-model");
+        let base = spawn(store).await;
+
+        for bad in ["", "owner", "a/b/c", "..%2Fetc"] {
+            let (status, _) = get_json(&format!("{base}/api/hf/repo?id={bad}")).await;
+            assert_eq!(status, 400, "`{bad}` must be refused, not requested");
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     #[tokio::test]
     async fn the_version_endpoint_answers_without_a_model() {
         // `serve` starts with an empty slot, and a client probing whether the

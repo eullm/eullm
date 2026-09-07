@@ -11,10 +11,11 @@
 //! **Dynamic model swap:** if a request specifies a `model` that differs from
 //! the currently loaded one, the server automatically swaps to the new model.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Body;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::response::sse::{Event, Sse};
@@ -130,6 +131,110 @@ pub fn api_routes() -> Router<S> {
         .route("/version", get(version))
         .route("/unload", post(unload_model))
         .route("/embed", post(embed))
+        .route("/hf/search", get(hf_search))
+        .route("/hf/repo", get(hf_repo))
+}
+
+/// `GET /api/hf/search?q=<text>&limit=<n>` — search the HuggingFace Hub for
+/// repos containing GGUF files.
+///
+/// The engine makes the call, not the browser. That keeps the viewer's
+/// address away from the Hub, leaves `EULLM_WEB_ALLOWED_DOMAINS` as the one
+/// place the perimeter is decided, and means the catalog still works from a
+/// machine whose browser has no route out but whose engine does — an HPC
+/// login node, most of all, which is where downloads have to be started when
+/// compute nodes are offline.
+async fn hf_search(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let q = params.get("q").map(String::as_str).unwrap_or("").trim();
+    if q.is_empty() {
+        return (StatusCode::OK, Json(json!({ "models": [] })));
+    }
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(25);
+    match crate::registry::search_hf_models(q, limit).await {
+        Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("HuggingFace search failed: {e}") })),
+        ),
+    }
+}
+
+/// `GET /api/hf/repo?id=<owner>/<repo>` — the quantizations one repo offers,
+/// each with its total download size and whether it is expected to run here.
+///
+/// The verdict is an estimate from the file size, not a fit: the exact answer
+/// needs the GGUF header, which needs the file. It is here to answer "is this
+/// download worth starting", which is a question that has to be answered
+/// before the download, or not at all.
+async fn hf_repo(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
+    let Some(id) = params.get("id").map(|s| s.trim()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "missing `id` (owner/repo)" })),
+        );
+    };
+    // Validated before it reaches a URL: this string is interpolated into the
+    // Hub path, and the caller is a browser.
+    if !crate::registry::is_plausible_repo_id(id) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "`id` must be owner/repo" })),
+        );
+    }
+    let contents = match crate::registry::list_hf_repo_contents(id).await {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("could not read {id}: {e}") })),
+            );
+        }
+    };
+
+    let vram = crate::fit::vram_bytes();
+    let ram = crate::fit::system_ram_bytes();
+    let quants: Vec<Value> = contents
+        .quants
+        .iter()
+        .map(|q| {
+            // The projector rides along with whatever quantization is picked,
+            // so it counts towards the download and towards what is resident.
+            let total = q.total_bytes + contents.mmproj_bytes;
+            let verdict = crate::fit::classify_download(total, vram, ram);
+            json!({
+                "label": q.label,
+                "files": q.files,
+                "bytes": q.total_bytes,
+                "shards": q.files.len(),
+                "verdict": match verdict {
+                    crate::fit::RunVerdict::Fits => "fits",
+                    crate::fit::RunVerdict::Tight => "tight",
+                    crate::fit::RunVerdict::TooLarge => "too_large",
+                    crate::fit::RunVerdict::Unknown => "unknown",
+                },
+                // What `eullm pull` takes, so the UI never builds this itself.
+                "pull": format!("hf.co/{id}:{}", q.quant),
+            })
+        })
+        .collect();
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "id": id,
+            "quants": quants,
+            "mmproj": contents.mmproj,
+            "mmproj_bytes": contents.mmproj_bytes,
+            // Echoed so the UI can say what the traffic light was judged
+            // against, rather than presenting a colour with no basis.
+            "vram_free_bytes": vram.map(|(f, _)| f),
+            "vram_total_bytes": vram.map(|(_, t)| t),
+            "ram_total_bytes": ram,
+        })),
+    )
 }
 
 /// OpenAI-compatible routes (`/v1/*`).
@@ -1441,15 +1546,142 @@ async fn show_model(Json(body): Json<Value>) -> Json<Value> {
     }
 }
 
-async fn pull_model(Json(body): Json<Value>) -> Json<Value> {
+/// `POST /api/pull` — fetch a model, streaming progress as NDJSON.
+///
+/// Ollama's shape, because Ollama clients are the ones that call this:
+/// `{"status": "..."}` lines while it works, `{"status","digest","total",
+/// "completed"}` while bytes move, `{"status":"success"}` at the end, and
+/// `{"error": "..."}` if it fails. Streaming is the default there, so it is
+/// the default here; `{"stream": false}` collapses to one final object.
+///
+/// Until 0.7.5 this endpoint was a stub that answered "not yet implemented"
+/// and did nothing, so there is no old behaviour to keep compatible with.
+///
+/// The work itself is `models::pull`, shared with `eullm pull`. Two copies of
+/// a download path would drift the first time a repo layout changes, the way
+/// two copies of a prompt builder already did.
+async fn pull_model(State(state): State<S>, Json(body): Json<Value>) -> axum::response::Response {
+    use crate::models::pull::{PullEvent, pull_from_huggingface};
+
     let name = body
         .get("name")
+        .or_else(|| body.get("model"))
         .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let stream = body
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
-    Json(json!({
-        "status": format!("pulling {name} from EU registry (not yet implemented)")
-    }))
+    let Some(hf) = crate::registry::parse_hf_ref(&name) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!(
+                    "`{name}` is not a HuggingFace reference. Use \
+                     hf.co/<owner>/<repo>[:<quant>] — the catalog browser \
+                     supplies this string for each quantization."
+                )
+            })),
+        )
+            .into_response();
+    };
+    let id = crate::models::pull::hf_ref_to_model_id(&hf);
+
+    if state.store.gguf_path(&id).is_some() {
+        let done = json!({ "status": "success", "model": id, "already_present": true });
+        return if stream {
+            ndjson_lines(futures_util::stream::once(async move { done }))
+        } else {
+            (StatusCode::OK, Json(done)).into_response()
+        };
+    }
+
+    // The whole state, not the store: `ModelStore` is owned by `AppState`
+    // and the Arc is what can cross into the task.
+    let state = Arc::clone(&state);
+    let (tx, rx) = mpsc::channel::<PullEvent>(256);
+    let worker = tokio::spawn(async move {
+        let tx_for_error = tx.clone();
+        if let Err(e) = pull_from_huggingface(&state.store, &hf, &id, tx).await {
+            let _ = tx_for_error.try_send(PullEvent::Failed(e));
+        }
+    });
+
+    if stream {
+        return ndjson_lines(pull_events_as_json(rx));
+    }
+
+    // Non-streaming: drain to the last meaningful line and answer with it.
+    let mut rx = rx;
+    let mut last = json!({ "status": "success" });
+    while let Some(ev) = rx.recv().await {
+        if let Some(v) = pull_event_to_json(&ev) {
+            if v.get("error").is_some() {
+                let _ = worker.await;
+                return (StatusCode::BAD_GATEWAY, Json(v)).into_response();
+            }
+            if v.get("status").and_then(|s| s.as_str()) == Some("success") {
+                last = v;
+            }
+        }
+    }
+    let _ = worker.await;
+    (StatusCode::OK, Json(last)).into_response()
+}
+
+/// Render a [`PullEvent`] in Ollama's `/api/pull` vocabulary. `None` for
+/// events that carry nothing a client would show.
+fn pull_event_to_json(ev: &crate::models::pull::PullEvent) -> Option<Value> {
+    use crate::models::pull::PullEvent;
+    Some(match ev {
+        PullEvent::Status(s) => json!({ "status": s }),
+        PullEvent::Progress {
+            file,
+            completed,
+            total,
+        } => json!({
+            "status": format!("pulling {file}"),
+            // Ollama keys progress by layer digest. We have no digest before
+            // the download finishes, so the filename stands in — clients use
+            // it only to keep one bar per concurrent item.
+            "digest": file,
+            "total": total,
+            "completed": completed,
+        }),
+        PullEvent::Done { id } => json!({ "status": "success", "model": id }),
+        PullEvent::Failed(e) => json!({ "error": e }),
+    })
+}
+
+fn pull_events_as_json(
+    mut rx: mpsc::Receiver<crate::models::pull::PullEvent>,
+) -> impl Stream<Item = Value> {
+    async_stream::stream! {
+        while let Some(ev) = rx.recv().await {
+            if let Some(v) = pull_event_to_json(&ev) {
+                yield v;
+            }
+        }
+    }
+}
+
+/// Wrap a stream of JSON values as `application/x-ndjson` — one object per
+/// line, no `data:` prefix, which is what Ollama's endpoints emit and what
+/// its clients parse.
+fn ndjson_lines(values: impl Stream<Item = Value> + Send + 'static) -> axum::response::Response {
+    use futures_util::StreamExt;
+    let lines = values.map(|v| {
+        let mut line = v.to_string();
+        line.push('\n');
+        Ok::<_, std::convert::Infallible>(line)
+    });
+    axum::response::Response::builder()
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .body(Body::from_stream(lines))
+        .unwrap()
 }
 
 // ── OpenAI-compatible handlers ───────────────────────────────────────────────
