@@ -112,9 +112,16 @@ EHPC-AIF-2026PG01-1147 on Leonardo Booster (CINECA)** — 1,250 node
 hours, 02/09/2026 → 02/11/2026, nodes of 4x A100 64 GB. No single
 Leonardo GPU fits the single-GPU budgets below, so the Leonardo path
 uses dedicated configs (`forge/training/configs/leonardo/`): Phase 1
-shards everything with DeepSpeed ZeRO-3 across the 4 GPUs (~36 GB/GPU),
-Phase 2 shards the frozen teacher via an accelerate device map while
-the student trains on one GPU. Operational details, node-hour budget
+loads the frozen base at 8-bit and REPLICATES it on each of the 4 GPUs
+under plain DDP (~37 GB/GPU), Phase 2 shards the frozen teacher via an
+accelerate device map while the student trains on one GPU.
+
+Phase 1 used DeepSpeed ZeRO-3 until 2026-09-08 and three jobs OOM'd on
+it. Sharding distributes what a *trainable* model needs; this base is
+frozen, with 107 M trainable of 30.6 B, so the all-gather of a whole MoE
+layer onto every GPU bought nothing and cost everything. From v1.1 the
+teacher stops being quantized too — see
+[`adr-001-offline-distillation.md`](adr-001-offline-distillation.md). Operational details, node-hour budget
 (~250 for the full pipeline), and the 24 h-walltime chaining protocol:
 [`leonardo-runbook.md`](leonardo-runbook.md).
 
@@ -288,6 +295,20 @@ When the pipeline finishes we publish:
 | Out-of-memory at scale | Medium | Phase budgets above are conservative; if it OOMs we drop seq_len from 2048 to 1024 and/or activate FlashAttention 3. |
 | Italian quality regression vs base Qwen3 | Medium | Held-out perplexity on `val.jsonl` + side-by-side prompts (10 fixed legal questions) at every checkpoint. |
 | Memorized PII leaks (despite anonymizer) | Medium — the anonymiser reported a clean run on 5.7 M redactions and had still left 59 codici fiscali in the training text (round 6, 2026-09-08: `RE_CF` was `\b`-anchored, so every code glued to adjacent alphanumerics was skipped). A clean report is evidence about the patterns, not about the corpus. | Re-run `forge/scripts/sweep_structured_pii.py` over `train.jsonl`/`val.jsonl` before every training launch — it exits non-zero when dirty, so it can gate the job. Membership-inference probe before publishing weights; if a leak surfaces, drop the offending chunk and retrain the affected slice. |
+
+## 10b. Architecture from v1.1 — see ADR-001
+
+The run producing v1.0 uses an 8-bit teacher under plain DDP, because online
+distillation needs teacher and student resident together and a bf16 teacher
+does not fit beside one. [`adr-001-offline-distillation.md`](adr-001-offline-distillation.md)
+freezes v1.0 as the baseline and moves Phase 2 to cached top-K logits: the
+teacher runs the corpus once in bf16, writes its distributions to disk, and
+is unloaded before the student trains. That removes the co-residency
+constraint rather than working around it, and with it the reason to quantize
+the teacher at all.
+
+v1.0 is not superseded by that plan — it is what the plan has to beat, on
+quality, throughput, node-hours, VRAM, stability, or student size.
 
 ## 11. Open questions
 
