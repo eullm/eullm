@@ -90,8 +90,24 @@ waste. So:
 * **Online pays while the teacher is still moving**, which is where the
   project is now.
 
-This is a choice per phase, not a permanent one, and the pilot should report
-node-hours for both under the assumption that the teacher is re-run once.
+This is a choice per phase, not a permanent one, and the pilot must report a
+**break-even in number of experiments**, not a single wall-clock comparison.
+Written out, with *P* the teacher pass, *S* a student run reading the cache,
+and *S⁺* a student run computing the teacher inline:
+
+```
+offline(N) = P + N·S
+online(N)  = N·S⁺        where  S⁺ ≈ S + P_inline
+```
+
+Naively that makes offline win at N ≥ 2, which is exactly why the comparison
+has to be run rather than reasoned: the naive form hides three costs. The
+teacher pass may be *slower* per token than inline forwards, because
+`prompt_logprobs` is not the path vLLM is optimised for. Reading a 270 GB
+cache adds to every *S*. And N is not the number of experiments you plan —
+**it is the number you get between teacher changes**, because a Phase-1 re-run
+voids the cache entirely. Report the break-even N*, and state the assumed
+teacher-change interval next to it.
 
 ## Part 3 — teacher inference for design A
 
@@ -129,43 +145,70 @@ does not scale the way dense tensor-parallel traffic does.
 
 ## Part 4 — cache format for design A
 
-Per position: sample/document id, sequence position, target token, top-K
-token ids (uint32), top-K **raw** logits (fp16/bf16), normalisation metadata,
-tokenizer fingerprint, and the teacher checkpoint/commit/config.
+**Per sequence**, not per token: sample/document id, the target token
+sequence, the top-K token ids (uint32), the top-K **raw logits in bf16**, the
+`logZ_T` normalisers as fp32 for T = 1, 2, 4, the sequence length and shard
+offsets, the tokenizer fingerprint, and the teacher checkpoint, adapter, Git
+commit and config.
 
-Normalised probabilities alone are not enough. Softmax at temperature T over
-the *full* vocabulary cannot be recovered from the T=1 normaliser, so store
-the log-sum-exp for **T = 1, 2, 4** — three fp32 per position, about 8 GB
-over the corpus, against re-running the teacher to change a hyperparameter.
+Three things are deliberately **not** stored, all for the same reason — a
+field that can be derived and is stored anyway is a field that can contradict
+its own source:
+
+* **Position per token.** It is the index within the sequence record.
+* **Normalised probabilities.** They fix a temperature at write time; raw
+  logits plus `logZ_T` do not.
+* **Residual mass.** It is `1 − Σ_topK exp(logit_i − logZ)`, computable
+  exactly from what is already there.
+
+**bf16 for the logits, not fp16**, and the reason is not dynamic range. The
+teacher computes in bf16, so its logits already carry exactly that precision;
+storing them in bf16 is lossless with respect to the source, at identical
+size. fp16's two extra mantissa bits would hold no information.
+
+`logZ_T` at three temperatures is what makes a truncated top-K a usable
+distribution: the softmax at temperature T over the *full* vocabulary cannot
+be recovered from the T=1 normaliser. Three fp32 per position is ~12 bytes,
+about 8 GB over the corpus, against re-running the teacher to change a
+hyperparameter.
 
 Sharded, never one monolithic file.
 
 ### Storage, with the arithmetic done
 
-At 700 M positions, ids as uint32 and logits as fp16:
+At 700 M positions, ids as uint32, logits as bf16, plus 12 bytes of `logZ_T`:
 
 | K | bytes/position | corpus |
 |---:|---:|---:|
-| 16 | 96 | ~67 GB |
-| 32 | 192 | ~134 GB |
-| 64 | 384 | **~268 GB** |
-| 128 | 768 | **~537 GB** |
+| 16 | 108 | ~76 GB |
+| 32 | 204 | ~143 GB |
+| 64 | 396 | **~277 GB** |
+| 128 | 780 | **~546 GB** |
 
-The `$WORK` quota is 1 TB and also holds the HF cache (~69 GB), the corpus
-and every checkpoint. **K=128 is therefore a pilot measurement on a subset,
-not a full-corpus option** unless compression changes the picture.
+The `$WORK` quota is 1 TB and also holds the HF cache (~69 GB), the corpus and
+every checkpoint. **K=128 is therefore a pilot measurement on a subset, not a
+full-corpus option** unless compression changes the picture.
 
-And compression is the lever this plan is missing. Top-K logits are highly
-compressible: store the top-1 absolutely and the remaining K−1 as deltas in
-int8, and logit storage falls by 2–4×. That puts K=64 under 150 GB and brings
-K=128 back into range. Measure it in the pilot rather than assuming fp16.
+And compression is the lever this plan is missing. Top-K logits compress well:
+store the top-1 absolutely and the remaining K−1 as int8 deltas, and logit
+storage falls by 2–4×. That puts K=64 near 150 GB and brings K=128 back into
+range. Measure it in the pilot rather than assuming bf16 throughout.
 
 ## Part 5 — K is measured, not chosen
 
-Pilot on one subset at **K = 16, 32, 64, 128**, reporting for each: retained
-probability mass, error against the full distribution, bytes per position,
-throughput, and a short student-training quality check. Then pick one K for
-the whole corpus.
+Pilot on one subset at **K = 16, 32, 64, 128**, and choose on all of:
+
+* probability mass captured by the truncation
+* truncation error / KL against the full vocabulary
+* validation perplexity
+* the fixed Legal-IT evaluation set
+* **general-capability regression** — a domain-distilled model forgets, and a
+  K small enough to look good on legal text can be quietly destroying
+  everything else
+* storage
+* end-to-end node-hours
+
+Then pick one K for the whole corpus.
 
 A truncation that discards meaningful mass makes the student fit a
 distribution the teacher never had — the same class of error the quantization
@@ -173,15 +216,43 @@ gate exists to catch.
 
 ## Part 6 — cache correctness tests are mandatory
 
-This is the section most likely to save the project, because the failure it
-guards against is silent. An off-by-one between `logits[t]` and
-`target[t+1]` does not raise the loss in any obvious way; it poisons 270 GB
-of cache and is discovered after the node-hours are spent.
+Two different questions live here and must not be answered by one test,
+because they have different causes and different fixes:
 
-Automated tests for: the `logits[t] → target[t+1]` alignment; padding;
-packing boundaries; BOS/EOS handling; sample boundaries; cached top-K equal
-to live top-K within tolerance; the probability mass discarded; and tokenizer
-compatibility.
+1. **Is the cache a faithful record of what the teacher said?** A bug in
+   writing, sharding, alignment or reading.
+2. **How much does truncating to K lose?** A property of the method, present
+   even in a perfect cache.
+
+### 6.1 — the equality test (faithfulness)
+
+On a fixed batch, compare the **live teacher's top-K and `logZ_T`** against
+the **cached** values, and require equality within numerical tolerance. This
+is the test that catches a cache which is internally consistent and wrong.
+
+> **Set the tolerance from a control, not from taste.** A GPU forward is not
+> bit-exact across batch compositions — different batch shapes change
+> reduction order in the matmuls and all-reduces. Run the teacher **twice
+> live** on the same batch first, measure the spread, and derive the cache
+> tolerance from it. Skip this and the test either fails at random or is so
+> loose it distinguishes nothing. Whatever tolerance is chosen, record the
+> live-vs-live baseline next to it, or the number is unfalsifiable.
+
+### 6.2 — the truncation measurement (method)
+
+Separately, and only once 6.1 passes: measure the error K introduces against
+the full vocabulary. Reported as retained probability mass and KL, per Part 5.
+Failing to separate the two means a genuine cache bug can be waved through as
+"expected truncation error".
+
+### 6.3 — the rest, all automated
+
+The `logits[t] → target[t+1]` alignment; padding; packing boundaries; BOS/EOS
+handling; sample boundaries; and tokenizer compatibility.
+
+The alignment test earns its place first among these because the failure is
+silent: an off-by-one does not raise the loss in any obvious way, it poisons
+270 GB of cache, and it is discovered after the node-hours are spent.
 
 **The tokenizer check must not stop at vocabulary size.** Two tokenizers can
 agree on 151,936 and differ in merges or special-token ids. Compare a
