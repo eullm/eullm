@@ -34,7 +34,14 @@ teacher_model: Qwen/Qwen3-30B-A3B-Base
 # ($EULLM_RUN_DIR) — i.e. the output_dir of the Phase-1 Leonardo config.
 teacher_adapter: ./checkpoints/qwen3_30b_a3b_legal_it_continued_pt
 student_model: Qwen/Qwen3-4B-Base
-teacher_load_in_8bit: false
+# MUST MATCH quantization_bit in the Phase-1 config. The Phase-1 LoRA
+# adapter below was trained on top of quantized weights; loading the
+# teacher at a different precision applies it to weights it never saw, and
+# in Phase 2 the teacher's logits ARE the distillation target, so the error
+# does not degrade training — it is copied into the student by
+# construction. tests/test_quantization_consistency.py fails on a
+# mismatch and the Phase-2 pre-flight refuses to start on one.
+teacher_load_in_8bit: true
 teacher_load_in_4bit: false
 
 ### teacher placement (Leonardo: shard across the node's 4 GPUs)

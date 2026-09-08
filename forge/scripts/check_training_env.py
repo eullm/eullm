@@ -128,6 +128,56 @@ def check_dataset(data_dir: Path) -> bool:
 DEFAULT_TOKENIZER_MODEL = "Qwen/Qwen3-1.7B-Base"
 
 
+def check_frozen_base_config(config_path: Path) -> bool:
+    """Audit a LoRA training config for sharding of the frozen base.
+
+    ZeRO-3 and FSDP exist to distribute what a *trainable* model needs:
+    optimizer state, gradients, parameters under update. With LoRA the
+    trainable set is a fraction of a percent, so sharding the frozen base
+    buys almost nothing and costs an all-gather of a whole layer onto every
+    GPU on each forward — which on a 128-expert MoE is what OOM'd three
+    jobs on 2026-09-08. Unsharded, the base is replicated, and replicated it
+    only fits if it is quantized. The two facts are checked together because
+    they are the same decision.
+    """
+    try:
+        import yaml
+    except ImportError:
+        warn("PyYAML not installed — cannot audit the training config")
+        return True
+    try:
+        cfg = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        fail(f"could not read {config_path}: {exc}")
+        return False
+
+    ok(f"config {config_path.name}")
+    good = True
+
+    sharding = [k for k in ("deepspeed", "fsdp", "fsdp_config") if cfg.get(k)]
+    if sharding:
+        fail(
+            f"{', '.join(sharding)} set: the frozen base would be sharded. "
+            "Quantize and replicate it instead (see the config header)."
+        )
+        good = False
+    else:
+        ok("no deepspeed/fsdp — the frozen base is not sharded")
+
+    if cfg.get("finetuning_type") == "lora":
+        bits = cfg.get("quantization_bit")
+        if bits in (4, 8):
+            ok(f"base quantized to {bits}-bit and replicated per rank")
+        elif not sharding:
+            fail(
+                "finetuning_type is lora with no quantization_bit and no "
+                "sharding: the full-precision base would be replicated on "
+                "every GPU."
+            )
+            good = False
+    return good
+
+
 def check_tokenizer(model_id: str, *, offline: bool = False) -> bool:
     """Smoke-load the tokenizer for the configured model. Confirms that
     transformers + huggingface_hub auth are working without committing
@@ -172,6 +222,17 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--skip-tokenizer",
         action="store_true",
         help="Skip the HF tokenizer fetch (useful offline / CI)",
+    )
+    parser.add_argument(
+        "--assert-frozen-base",
+        type=Path,
+        default=None,
+        help=(
+            "Training YAML to audit before spending node-hours. Fails if it "
+            "declares deepspeed/fsdp (parameter sharding of a base that is "
+            "frozen buys nothing and cost three OOMs) or if a replicated base "
+            "is left unquantized (61 GB against a 64 GB card)."
+        ),
     )
     parser.add_argument(
         "--tokenizer-model",
@@ -248,6 +309,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     print("== Dataset ==")
     if not check_dataset(args.data_dir):
         failed = True
+
+    if args.assert_frozen_base is not None:
+        print()
+        print("== Training config (frozen base must not be sharded) ==")
+        if not check_frozen_base_config(args.assert_frozen_base):
+            failed = True
 
     print()
     print("== Tokenizer (HF cache + auth check) ==")

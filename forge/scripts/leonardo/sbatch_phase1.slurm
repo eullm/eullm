@@ -25,6 +25,8 @@ EULLM_REPO="${EULLM_REPO:-$WORK/eullm}"
 source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 cd "$EULLM_RUN_DIR"
 
+CFG="$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml"
+
 # Report on ourselves BEFORE the pre-flight, not after. The pre-flight
 # imports transformers, which on a cold node cache reads thousands of small
 # files off Lustre and takes minutes in complete silence — so starting the
@@ -36,7 +38,8 @@ heartbeat_start
 
 python "$EULLM_REPO/forge/scripts/check_training_env.py" \
     --offline --multi-gpu --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
-    --tokenizer-model Qwen/Qwen3-30B-A3B-Base
+    --tokenizer-model Qwen/Qwen3-30B-A3B-Base \
+    --assert-frozen-base "$CFG"
 
 # LLaMA-Factory launches through torchrun with one rank per GPU. No
 # DeepSpeed config is passed, so this is plain DDP and every rank holds the
@@ -59,7 +62,6 @@ export PYTHONPATH="$EULLM_REPO/forge/scripts/leonardo/memprobe${PYTHONPATH:+:$PY
 # Run identity, in the log rather than in someone's memory. Comparing two
 # runs a week apart is impossible without knowing which commit and which
 # quantization produced each.
-CFG="$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml"
 echo "=================== RUN ==================="
 echo "  job          : ${SLURM_JOB_ID:-?} on ${SLURMD_NODENAME:-?}"
 echo "  commit       : $(git -C "$EULLM_REPO" rev-parse --short HEAD 2>/dev/null || echo '?')"
@@ -71,6 +73,4 @@ done
 echo "  deepspeed    : $(grep -qE '^deepspeed:' "$CFG" && echo yes || echo 'no (plain DDP)')"
 echo "==========================================="
 
-bash "$EULLM_REPO/forge/scripts/train.sh" \
-    "$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml" \
-    "$EULLM_DATA_DIR"
+bash "$EULLM_REPO/forge/scripts/train.sh" "$CFG" "$EULLM_DATA_DIR"
