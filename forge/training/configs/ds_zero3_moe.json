@@ -1,5 +1,5 @@
 {
-  "_README": "ZeRO-3 tuned for a Mixture-of-Experts base. ds_zero3.json is tuned for dense models and OOMs on Qwen3-30B-A3B at the first forward: ZeRO-3 keeps parameters partitioned at rest but must gather a whole layer onto every GPU to compute it, and one Qwen3-30B-A3B layer carries 128 experts x 3 matrices ~= 625 M parameters (1.25 GB in bf16) against roughly 25 M for a dense layer of the same hidden size. The 1e9 live-parameter and reuse-distance limits are therefore ~50x too generous here: with prefetch they let several MoE layers be resident at once and 63.4 GiB of an A100 64 GB fills in seconds. Observed on job 56760964, 2026-09-08. Values below cap the gathered working set at ~1e8 parameters (200 MB in bf16) plus prefetch, which is a few layers' worth of headroom rather than tens.",
+  "_README": "ZeRO-3 tuned for a Mixture-of-Experts base. ds_zero3.json is tuned for dense models and OOMs on Qwen3-30B-A3B at the first forward: ZeRO-3 keeps parameters partitioned at rest but must gather a whole layer onto every GPU to compute it, and one Qwen3-30B-A3B layer carries 128 experts x 3 matrices ~= 625 M parameters (1.25 GB in bf16) against roughly 25 M for a dense layer of the same hidden size. The 1e9 live-parameter and reuse-distance limits are therefore ~50x too generous here: with prefetch they let several MoE layers be resident at once and 63.4 GiB of an A100 64 GB fills in seconds. Observed on job 56760964, 2026-09-08. Values below cap the gathered working set at ~1e8 parameters (200 MB in bf16) plus prefetch, which is a few layers' worth of headroom rather than tens. overlap_comm is false, not the usual true: overlapping the reduce with computation makes DeepSpeed hold extra communication buffers sized from reduce_bucket_size, and the backward pass on this model then missed by 94 MiB of 63.42 GiB (job 56768626). Overlap costs throughput to buy headroom; re-enable it once a run is measured and there is room. NOTE FOR EDITORS: comment keys belong HERE, at the top level, and nowhere else. DeepSpeed validates zero_optimization with pydantic in extra=forbid mode, so an explanatory key inside that object is a fatal ValidationError, not an ignored comment — one killed job 56775410 eight minutes in.",
   "train_batch_size": "auto",
   "train_micro_batch_size_per_gpu": "auto",
   "gradient_accumulation_steps": "auto",
@@ -18,7 +18,6 @@
   },
   "zero_optimization": {
     "stage": 3,
-    "_overlap_comm_note": "false, not the usual true: overlapping the reduce with computation makes DeepSpeed hold extra communication buffers sized from reduce_bucket_size, and the backward pass on this model missed by 94 MiB of 63.42 GiB. Overlap costs throughput to buy headroom; re-enable it once a run is measured and there is room.",
     "overlap_comm": false,
     "contiguous_gradients": true,
     "sub_group_size": 100000000,

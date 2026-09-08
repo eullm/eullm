@@ -67,13 +67,34 @@ _heartbeat_loop() {
     done
 }
 
+# Runs however the job ends, and says so. A job that dies leaves a log whose
+# last line is whatever it happened to be printing, so telling "finished" from
+# "still running" meant polling squeue from another shell — and a failure
+# could sit unnoticed for twenty minutes. The banner makes the end of the job
+# the loudest thing in its own log.
+_heartbeat_end() {
+    local status=$?
+    [ -n "${_HEARTBEAT_PID:-}" ] && kill "$_HEARTBEAT_PID" 2>/dev/null
+    local elapsed=$((SECONDS - ${_HEARTBEAT_T0:-0}))
+    printf '\n[hb] ============================================================\n'
+    if [ "$status" -eq 0 ]; then
+        printf '[hb] JOB FINISHED OK after %ds (%dm)\n' "$elapsed" "$((elapsed / 60))"
+    else
+        printf '[hb] JOB FAILED — exit %d after %ds (%dm)\n' \
+            "$status" "$elapsed" "$((elapsed / 60))"
+        printf '[hb] search upward for: Traceback, OutOfMemoryError, RuntimeError\n'
+    fi
+    printf '[hb] ============================================================\n'
+    return "$status"
+}
+
 heartbeat_start() {
+    _HEARTBEAT_T0=$SECONDS
     _heartbeat_loop &
     _HEARTBEAT_PID=$!
-    # Kill the loop however the job ends — normal exit, error under `set -e`,
-    # or SIGTERM from SLURM at the walltime cap. Without the signal traps a
+    # Runs however the job ends — normal exit, error under `set -e`, or
+    # SIGTERM from SLURM at the walltime cap. Without the signal traps a
     # preempted job would leave the loop running until the step is reaped.
-    trap '[ -n "${_HEARTBEAT_PID:-}" ] && kill "$_HEARTBEAT_PID" 2>/dev/null' \
-        EXIT INT TERM
+    trap _heartbeat_end EXIT INT TERM
     echo "[hb] heartbeat every ${HEARTBEAT_INTERVAL}s (pid $_HEARTBEAT_PID)"
 }

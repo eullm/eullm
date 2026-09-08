@@ -34,15 +34,18 @@ ADAPTER="./checkpoints/qwen3_30b_a3b_legal_it_continued_pt"
     exit 1
 }
 
-python "$EULLM_REPO/forge/scripts/check_training_env.py" \
-    --offline --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
-    --tokenizer-model Qwen/Qwen3-4B-Base
-
-# Report on ourselves: LLaMA-Factory and DeepSpeed are silent through
-# checkpoint load and ZeRO-3 init, which is where the long waits are.
+# Report on ourselves BEFORE the pre-flight, not after. The pre-flight
+# imports transformers, which on a cold node cache reads thousands of small
+# files off Lustre and takes minutes in complete silence — so starting the
+# heartbeat after it left the job mute through the very first phase someone
+# would want to watch. Ten minutes of apparent nothing on job 56775410.
 # shellcheck disable=SC1091
 source "$EULLM_REPO/forge/scripts/leonardo/heartbeat.sh"
 heartbeat_start
+
+python "$EULLM_REPO/forge/scripts/check_training_env.py" \
+    --offline --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
+    --tokenizer-model Qwen/Qwen3-4B-Base
 
 bash "$EULLM_REPO/forge/scripts/distill.sh" \
     "$EULLM_REPO/forge/training/configs/leonardo/distill_qwen3_30b_a3b_to_4b_leonardo.yaml" \
