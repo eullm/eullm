@@ -72,6 +72,13 @@ def main() -> int:
     # Verify the offline code path jobs will take, for what did download.
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    # Announce the import: on a cold Lustre cache `import transformers`
+    # reads thousands of small files and can take minutes with nothing on
+    # screen. Silence right after a multi-GB download reads as a hang, and
+    # the natural reaction — Ctrl-C — is the one thing that will not work
+    # here (see the os._exit note at the bottom of this file).
+    print("[..] importing transformers to verify the offline load path "
+          "(slow on a cold cache, no output until it finishes)", flush=True)
     from transformers import AutoConfig, AutoTokenizer
 
     for model_id in ok:
@@ -95,4 +102,17 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    code = main()
+    # os._exit, not sys.exit: the Xet download backend (hf_xet, the Rust
+    # engine behind the "Reconstruction complete" lines) leaves non-daemon
+    # worker threads behind, and the interpreter blocks joining them after
+    # main() has returned. The process then sits there with all the work
+    # done, printing nothing, ignoring Ctrl-C — SIGINT is only serviced
+    # between bytecodes and there are none left to run — and the only way
+    # out is SIGKILL from another shell. Observed on Leonardo after a 61 GB
+    # teacher fetch. Everything this script produces is already on disk by
+    # the time main() returns, so skipping interpreter shutdown costs
+    # nothing; flush by hand since os._exit does not.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)

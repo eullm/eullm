@@ -24,7 +24,7 @@ source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 cd "$EULLM_RUN_DIR"
 
 # The LoRA student is exported merged (full HF weights) by distill.py.
-HF_DIR="$EULLM_RUN_DIR/checkpoints/qwen3_7b_legal_it_distilled/merged"
+HF_DIR="$EULLM_RUN_DIR/checkpoints/qwen3_4b_legal_it_distilled/merged"
 [ -f "$HF_DIR/config.json" ] || {
     echo "[err] merged student not found at $HF_DIR" >&2
     echo "[err] Phase 2 must run to completion first (the merge happens" >&2
