@@ -301,11 +301,13 @@ When the pipeline finishes we publish:
 The run producing v1.0 uses an 8-bit teacher under plain DDP, because online
 distillation needs teacher and student resident together and a bf16 teacher
 does not fit beside one. [`adr-001-offline-distillation.md`](adr-001-offline-distillation.md)
-freezes v1.0 as the baseline and moves Phase 2 to cached top-K logits: the
-teacher runs the corpus once in bf16, writes its distributions to disk, and
-is unloaded before the student trains. That removes the co-residency
-constraint rather than working around it, and with it the reason to quantize
-the teacher at all.
+freezes v1.0 as the baseline and removes the co-residency constraint rather
+than working around it — which also removes the reason to quantize the
+teacher at all. Two designs are built and measured rather than one being
+chosen up front: an offline top-K logit cache, and an online split of the
+node with the teacher on two GPUs and the student on the other two. Which
+wins depends on more than throughput, since a logit cache is invalidated by
+any change to the teacher.
 
 v1.0 is not superseded by that plan — it is what the plan has to beat, on
 quality, throughput, node-hours, VRAM, stability, or student size.
