@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 2 — distillation Qwen3-32B-legal-it → Qwen3-7B on one Leonardo
+# Phase 2 — distillation Qwen3-30B-A3B-legal-it → Qwen3-4B on one Leonardo
 # Booster node. Single process: the frozen BF16 teacher is sharded
 # across the 4 GPUs (accelerate device_map), the student trains on
 # cuda:0. See the Leonardo distill YAML header for the memory budget.
@@ -27,7 +27,7 @@ source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 cd "$EULLM_RUN_DIR"
 
 # Phase 1 must have produced the teacher adapter this YAML points at.
-ADAPTER="./checkpoints/qwen3_32b_legal_it_continued_pt"
+ADAPTER="./checkpoints/qwen3_30b_a3b_legal_it_continued_pt"
 [ -f "$ADAPTER/adapter_config.json" ] || {
     echo "[err] Phase-1 adapter not found at $EULLM_RUN_DIR/$ADAPTER" >&2
     echo "[err] run sbatch_phase1.slurm to completion first" >&2

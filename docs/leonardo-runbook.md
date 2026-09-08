@@ -21,7 +21,7 @@
 | Item | Node hours |
 |------|-----------:|
 | Smoke + wiring validation | ~1 |
-| Phase 1 — continued PT 32B (ZeRO-3, ≤ 2 x 24 h chain) | ~25-50 |
+| Phase 1 — continued PT 30B-A3B (ZeRO-3, ≤ 2 x 24 h chain) | ~25-50 |
 | Phase 2 — distillation (7 x 24 h chain) | ~120-170 |
 | Phase 3 — GGUF (serial partition) | 0 |
 | Retries / headroom | ~50 |
@@ -73,7 +73,7 @@ bash "$EULLM_REPO/forge/scripts/leonardo/submit_chain.sh" \
 ```
 
 Output: LoRA adapter at
-`$EULLM_RUN_DIR/checkpoints/qwen3_32b_legal_it_continued_pt/`.
+`$EULLM_RUN_DIR/checkpoints/qwen3_30b_a3b_legal_it_continued_pt/`.
 If the epoch finishes inside job 1, job 2 wakes up, finds the final
 checkpoint, re-runs the last partial step and exits quickly — a few
 wasted node-minutes, not hours.
@@ -88,7 +88,7 @@ bash "$EULLM_REPO/forge/scripts/leonardo/submit_chain.sh" \
 The sbatch script refuses to start if the Phase-1 adapter is missing.
 Output: LoRA checkpoints plus — from the final save — a **merged**
 full-weights student at
-`.../checkpoints/qwen3_7b_legal_it_distilled/merged/`, which is what
+`.../checkpoints/qwen3_4b_legal_it_distilled/merged/`, which is what
 Phase 3 consumes. Watch the `kl=` term in the logs: it should fall
 steadily for the first few thousand steps.
 

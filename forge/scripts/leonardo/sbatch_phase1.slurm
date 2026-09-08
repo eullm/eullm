@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 1 — continued pre-training of the Qwen3-32B teacher on one
+# Phase 1 — continued pre-training of the Qwen3-30B-A3B teacher on one
 # Leonardo Booster node (4x A100 64 GB), DeepSpeed ZeRO-3 via
 # LLaMA-Factory. See the Leonardo YAML header for the memory budget.
 #
@@ -8,7 +8,7 @@
 #   bash "$EULLM_REPO/forge/scripts/leonardo/submit_chain.sh" \
 #       "$EULLM_REPO/forge/scripts/leonardo/sbatch_phase1.slurm" 2
 #
-#SBATCH --job-name=eullm-p1-cpt32b
+#SBATCH --job-name=eullm-p1-cpt30ba3b
 #SBATCH --partition=boost_usr_prod
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
