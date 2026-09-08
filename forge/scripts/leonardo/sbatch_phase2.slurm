@@ -34,6 +34,8 @@ ADAPTER="./checkpoints/qwen3_30b_a3b_legal_it_continued_pt"
     exit 1
 }
 
+CFG="$EULLM_REPO/forge/training/configs/leonardo/distill_qwen3_30b_a3b_to_4b_leonardo.yaml"
+
 # Report on ourselves BEFORE the pre-flight, not after. The pre-flight
 # imports transformers, which on a cold node cache reads thousands of small
 # files off Lustre and takes minutes in complete silence — so starting the
@@ -45,8 +47,33 @@ heartbeat_start
 
 python "$EULLM_REPO/forge/scripts/check_training_env.py" \
     --offline --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
-    --tokenizer-model Qwen/Qwen3-4B-Base
+    --tokenizer-model Qwen/Qwen3-4B-Base \
+    --assert-frozen-base "$CFG"
 
-bash "$EULLM_REPO/forge/scripts/distill.sh" \
-    "$EULLM_REPO/forge/training/configs/leonardo/distill_qwen3_30b_a3b_to_4b_leonardo.yaml" \
-    "$EULLM_DATA_DIR"
+# Gate: the teacher is quantized, and in distillation its distribution IS
+# the target, so a quantization error is trained into the student rather
+# than merely degrading the run. Measure it before spending the budget.
+#
+# Cached deliberately. The check loads both teachers at once and takes
+# tens of minutes; running it again in every job of an afterany chain would
+# re-pay that for a result that cannot have changed. The report records
+# which bit width was validated, so switching 8-bit to 4-bit invalidates it.
+TEACHER_BITS="$(grep -qE '^teacher_load_in_8bit:[[:space:]]*true' "$CFG" && echo 8 \
+    || { grep -qE '^teacher_load_in_4bit:[[:space:]]*true' "$CFG" && echo 4 || echo 0; })"
+REPORT="$EULLM_RUN_DIR/quant_validation_${TEACHER_BITS}bit.json"
+
+if [ "$TEACHER_BITS" = "0" ]; then
+    echo "[..] teacher is not quantized — no logit validation needed"
+elif [ -f "$REPORT" ]; then
+    echo "[ok] teacher already validated at ${TEACHER_BITS}-bit ($REPORT)"
+else
+    echo "[..] validating the ${TEACHER_BITS}-bit teacher against bf16"
+    python "$EULLM_REPO/forge/scripts/validate_quantized_teacher.py" \
+        --model "$(grep -E '^teacher_model:' "$CFG" | cut -d: -f2- | xargs)" \
+        --bits "$TEACHER_BITS" \
+        --adapter "$(grep -E '^teacher_adapter:' "$CFG" | cut -d: -f2- | xargs)" \
+        --data "$EULLM_DATA_DIR/val.jsonl" \
+        --report "$REPORT"
+fi
+
+bash "$EULLM_REPO/forge/scripts/distill.sh" "$CFG" "$EULLM_DATA_DIR"
