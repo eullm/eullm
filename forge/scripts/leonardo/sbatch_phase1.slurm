@@ -38,10 +38,38 @@ python "$EULLM_REPO/forge/scripts/check_training_env.py" \
     --offline --multi-gpu --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
     --tokenizer-model Qwen/Qwen3-30B-A3B-Base
 
-# LLaMA-Factory launches through torchrun with one rank per GPU.
+# LLaMA-Factory launches through torchrun with one rank per GPU. No
+# DeepSpeed config is passed, so this is plain DDP and every rank holds the
+# whole quantized base — see the training YAML header for why.
 export FORCE_TORCHRUN=1
 export NPROC_PER_NODE=4
 export OMP_NUM_THREADS=8
+
+# Let the caching allocator grow segments instead of pre-carving fixed ones.
+# Three OOMs on this model asked for a few hundred MiB while the allocator
+# held gigabytes it could not hand back because of fragmentation.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# Python auto-imports `sitecustomize` from PYTHONPATH, which is the only
+# hook into LLaMA-Factory's worker processes we get without forking it. The
+# probe prints peak allocated/reserved per GPU at exit and the allocator
+# summary on a CUDA OOM — the breakdown the exception itself never carries.
+export PYTHONPATH="$EULLM_REPO/forge/scripts/leonardo/memprobe${PYTHONPATH:+:$PYTHONPATH}"
+
+# Run identity, in the log rather than in someone's memory. Comparing two
+# runs a week apart is impossible without knowing which commit and which
+# quantization produced each.
+CFG="$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml"
+echo "=================== RUN ==================="
+echo "  job          : ${SLURM_JOB_ID:-?} on ${SLURMD_NODENAME:-?}"
+echo "  commit       : $(git -C "$EULLM_REPO" rev-parse --short HEAD 2>/dev/null || echo '?')"
+echo "  config       : $(basename "$CFG")"
+for k in quantization_bit cutoff_len per_device_train_batch_size \
+         gradient_accumulation_steps lora_rank lora_target num_train_epochs; do
+    printf '  %-13s: %s\n' "$k" "$(grep -E "^${k}:" "$CFG" | head -1 | cut -d: -f2- | xargs)"
+done
+echo "  deepspeed    : $(grep -qE '^deepspeed:' "$CFG" && echo yes || echo 'no (plain DDP)')"
+echo "==========================================="
 
 bash "$EULLM_REPO/forge/scripts/train.sh" \
     "$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml" \
