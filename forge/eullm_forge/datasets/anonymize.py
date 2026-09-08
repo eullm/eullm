@@ -71,8 +71,24 @@ from typing import Any, Callable, Optional
 
 # Italian codice fiscale: 6 letters + 2 digits + 1 letter + 2 digits + 1 letter
 # + 3 digits + 1 letter. Exactly 16 chars.
+#
+# NO word boundaries, deliberately. `\b` looks obviously right here and is why
+# 54 codici fiscali survived into the legal-it training corpus: it demands a
+# non-word character on each side, so every CF glued to an adjacent
+# alphanumeric run passed through in clear text — "CFRSSMRA85M01H501Z" (the
+# "C.F." label OCR'd without its dots), "fiscaleRSSMRA85M01H501Z" (a lost
+# space), and any CF trailed by a stray digit or letter. Those are exactly the
+# shapes bad OCR produces, so the anchor failed hardest on the input it most
+# needed to catch.
+#
+# Gating the un-anchored matches on the codice fiscale check character was
+# tried and removed: it is the fail-DANGEROUS direction. A wrong check-digit
+# implementation silently stops redacting real fiscal codes, while the thing
+# it protects against — redacting a protocol code that happens to have this
+# very specific shape — costs the model one meaningless string. On a PII path
+# recall wins, so the shape alone is enough.
 RE_CF = re.compile(
-    r"\b[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]\b"
+    r"[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]"
 )
 
 # Italian partita IVA: 11 digits. To avoid matching every 11-digit number we

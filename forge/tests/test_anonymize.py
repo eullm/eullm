@@ -20,6 +20,38 @@ def test_redacts_codice_fiscale():
     assert stats.codice_fiscale == 1
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "il ricorrente (CSTGLI71P23F839D) deduce",
+        "C.F. CSTGLI71P23F839D agli atti",
+        # The four shapes a \b-anchored pattern silently let through — the
+        # reason 54 fiscal codes reached the legal-it training corpus.
+        "C.F.CSTGLI71P23F839D agli atti",
+        "CFCSTGLI71P23F839D agli atti",
+        "codice fiscaleCSTGLI71P23F839D agli atti",
+        "CSTGLI71P23F839D1 agli atti",
+        "CSTGLI71P23F839DX agli atti",
+    ],
+)
+def test_redacts_codice_fiscale_however_it_is_glued(text):
+    out, stats = anonymize_text(text)
+    assert "CSTGLI71P23F839D" not in out
+    assert stats.codice_fiscale == 1
+
+
+def test_codice_fiscale_pattern_does_not_eat_legal_references():
+    # Shape-only matching is deliberate (recall beats precision on a PII
+    # path), but it must still leave ordinary legal text alone.
+    text = (
+        "ECLI:IT:CASS:2026:13137PEN, sentenza n. 13137/2026 del 21/11/2023, "
+        "art. 360 c.p.c. n. 5"
+    )
+    out, stats = anonymize_text(text, config=AnonymiserConfig(use_ner=False))
+    assert stats.codice_fiscale == 0
+    assert "ECLI:IT:CASS:2026:13137PEN" in out
+
+
 def test_redacts_partita_iva_only_with_context():
     # With context → redacted
     text1 = "la società con P.IVA 12345678901 ha presentato"
