@@ -65,6 +65,7 @@ def test_report_only_leaves_the_file_untouched(tmp_path):
     counts, changed = mod.sweep_file(
         src,
         config=mod.build_config(list(mod.DEFAULT_LAYERS)),
+        prefilter=mod.build_prefilter(list(mod.DEFAULT_LAYERS)),
         field="text",
         apply=False,
         show=False,
@@ -90,6 +91,7 @@ def test_apply_redacts_and_keeps_a_backup(tmp_path):
     counts, changed = mod.sweep_file(
         src,
         config=mod.build_config(list(mod.DEFAULT_LAYERS)),
+        prefilter=mod.build_prefilter(list(mod.DEFAULT_LAYERS)),
         field="text",
         apply=True,
         show=False,
@@ -116,11 +118,14 @@ def test_sweep_is_idempotent(tmp_path):
     src = tmp_path / "train.jsonl"
     _write_jsonl(src, [{"text": "codice SPDFRC66M42F839P agli atti"}])
     cfg = mod.build_config(list(mod.DEFAULT_LAYERS))
+    pre = mod.build_prefilter(list(mod.DEFAULT_LAYERS))
 
-    mod.sweep_file(src, config=cfg, field="text", apply=True, show=False)
+    mod.sweep_file(src, config=cfg, prefilter=pre, field="text", apply=True, show=False)
     first = src.read_text(encoding="utf-8")
 
-    counts, changed = mod.sweep_file(src, config=cfg, field="text", apply=True, show=False)
+    counts, changed = mod.sweep_file(
+        src, config=cfg, prefilter=pre, field="text", apply=True, show=False
+    )
 
     assert sum(counts.values()) == 0
     assert changed == 0
@@ -134,6 +139,7 @@ def test_records_without_the_text_field_survive(tmp_path):
     counts, changed = mod.sweep_file(
         src,
         config=mod.build_config(list(mod.DEFAULT_LAYERS)),
+        prefilter=mod.build_prefilter(list(mod.DEFAULT_LAYERS)),
         field="text",
         apply=True,
         show=False,
@@ -155,6 +161,7 @@ def test_malformed_json_is_preserved(tmp_path):
     mod.sweep_file(
         src,
         config=mod.build_config(list(mod.DEFAULT_LAYERS)),
+        prefilter=mod.build_prefilter(list(mod.DEFAULT_LAYERS)),
         field="text",
         apply=True,
         show=False,
@@ -163,6 +170,82 @@ def test_malformed_json_is_preserved(tmp_path):
     lines = src.read_text(encoding="utf-8").splitlines()
     assert "MSTMTN76T03M208N" not in lines[0]
     assert lines[1] == "not json at all"
+
+
+# One sample per layer that the layer is known to redact. The prefilter must
+# catch every one of them, JSON-encoded, or the sweep would skip a line it
+# should have cleaned — the single way the fast path can be wrong.
+_LAYER_SAMPLES = {
+    "cf": "il ricorrente RRNMSM70S21G273H deduce",
+    "piva": "la società con P.IVA 12345678901 ha presentato",
+    "iban": "accredito su IBAN IT60X0542811101000000123456 intestato",
+    "email": "notifica a mario.rossi@example.com in data",
+    "phone": "reperibile al +39 333 1234567 per",
+    "birth": "nato a Palermo il 21/11/1970 e residente",
+    "address": "con studio in Via Roma 12, presso",
+}
+
+
+@pytest.mark.parametrize("layer", sorted(_LAYER_SAMPLES))
+def test_prefilter_catches_everything_its_layer_redacts(layer):
+    sample = _LAYER_SAMPLES[layer]
+    _, stats = mod.anonymize_text(sample, config=mod.build_config([layer]))
+    assert stats.total() > 0, f"sample for {layer!r} is not actually redacted"
+
+    line = json.dumps({"text": sample}, ensure_ascii=False)
+    prefilter = mod.build_prefilter([layer])
+    assert any(p.search(line) for p in prefilter)
+
+
+def test_every_selectable_layer_has_prefilter_patterns():
+    assert set(mod.LAYER_PATTERNS) == set(mod.LAYERS)
+    assert all(mod.LAYER_PATTERNS[layer] for layer in mod.LAYERS)
+
+
+def test_clean_lines_are_copied_byte_for_byte(tmp_path):
+    src = tmp_path / "train.jsonl"
+    # Odd spacing, key order and a non-ASCII char: a JSON round-trip would
+    # normalise all three, the fast path must not touch any of them.
+    src.write_text(
+        '{ "id":1,  "text" : "la Corte accoglie il ricorso perché fondato" }\n',
+        encoding="utf-8",
+    )
+    before = src.read_bytes()
+
+    mod.sweep_file(
+        src,
+        config=mod.build_config(list(mod.DEFAULT_LAYERS)),
+        prefilter=mod.build_prefilter(list(mod.DEFAULT_LAYERS)),
+        field="text",
+        apply=True,
+        show=False,
+    )
+
+    assert src.read_bytes() == before
+
+
+def test_prefilter_hit_outside_the_text_field_changes_nothing(tmp_path):
+    src = tmp_path / "train.jsonl"
+    src.write_text(
+        '{"text": "la Corte rigetta", "contact": "ufficio@example.com"}\n',
+        encoding="utf-8",
+    )
+    before = src.read_bytes()
+
+    counts, changed = mod.sweep_file(
+        src,
+        config=mod.build_config(list(mod.DEFAULT_LAYERS)),
+        prefilter=mod.build_prefilter(list(mod.DEFAULT_LAYERS)),
+        field="text",
+        apply=True,
+        show=False,
+    )
+
+    # The sweep only ever rewrites `field`; a match elsewhere costs a parse
+    # and nothing else, and the line is passed through untouched.
+    assert sum(counts.values()) == 0
+    assert changed == 0
+    assert src.read_bytes() == before
 
 
 def test_cli_reports_and_exits_nonzero_when_dirty(tmp_path, capsys):

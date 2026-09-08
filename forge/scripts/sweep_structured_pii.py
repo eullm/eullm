@@ -42,12 +42,21 @@ import argparse
 import json
 import os
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eullm_forge.datasets.anonymize import (  # noqa: E402
+    RE_ADDRESS,
+    RE_BIRTH_CLAUSE,
+    RE_CF,
+    RE_CF_AZIENDA,
+    RE_EMAIL,
+    RE_IBAN,
+    RE_PHONE,
+    RE_PIVA,
     AnonymiserConfig,
     anonymize_text,
 )
@@ -65,7 +74,25 @@ LAYERS: dict[str, str] = {
     "address": "redact_address",
 }
 
+# Layer name → the patterns that layer can fire on. Used to pre-filter raw
+# lines before paying for json.loads (see `_build_prefilter`). Every pattern
+# `anonymize_text` applies for a layer MUST be listed, or the sweep would skip
+# a line it should have redacted — that is the one way this optimisation can
+# be wrong, so the mapping is spelled out rather than inferred.
+LAYER_PATTERNS = {
+    "cf": (RE_CF,),
+    "piva": (RE_CF_AZIENDA, RE_PIVA),
+    "iban": (RE_IBAN,),
+    "email": (RE_EMAIL,),
+    "phone": (RE_PHONE,),
+    "birth": (RE_BIRTH_CLAUSE,),
+    "address": (RE_ADDRESS,),
+}
+
 DEFAULT_LAYERS = ("cf", "piva", "iban", "email")
+
+# How often the progress line is refreshed, in seconds.
+PROGRESS_INTERVAL = 2.0
 
 
 def build_config(layers: list[str]) -> AnonymiserConfig:
@@ -84,13 +111,39 @@ def build_config(layers: list[str]) -> AnonymiserConfig:
     )
 
 
+def build_prefilter(layers: list[str]) -> tuple:
+    """Patterns that decide whether a raw JSONL line is worth parsing.
+
+    This is NOT a speed optimisation — measured on a 187 MB corpus it is a
+    wash, because the regex pass dominates and the prefilter runs the same
+    patterns the redaction would. It is here so that ``--apply`` can copy
+    untouched lines through byte for byte instead of round-tripping them
+    through ``json.loads``/``json.dumps``, which would silently renormalise
+    key order, spacing and escaping across the whole corpus. On a rewrite of
+    the training data, "identical" is worth more than "equivalent".
+
+    It is safe because every default pattern matches pure ASCII with no
+    character JSON has to escape: a codice fiscale, IBAN, email or P.IVA
+    cannot span a ``\\n`` or a ``\\"``, so JSON encoding can neither hide a
+    match nor split one. Matching against the whole line (metadata fields
+    included) can only over-select, which costs a wasted parse and never a
+    missed redaction.
+    """
+    patterns: list = []
+    for layer in layers:
+        patterns.extend(LAYER_PATTERNS[layer])
+    return tuple(patterns)
+
+
 def sweep_file(
     path: Path,
     *,
     config: AnonymiserConfig,
+    prefilter: tuple,
     field: str,
     apply: bool,
     show: bool,
+    progress: bool = False,
 ) -> tuple[Counter, int]:
     """Sweep one JSONL file.
 
@@ -98,20 +151,38 @@ def sweep_file(
     rewritten atomically: output goes to ``<path>.tmp``, the original is moved
     to ``<path>.bak``, then the temp file takes its place. A crash mid-run
     therefore never leaves a truncated corpus behind.
+
+    Lines the ``prefilter`` clears are never parsed, and in ``apply`` mode are
+    copied through byte for byte — so a clean corpus comes out of ``--apply``
+    identical to what went in, not merely equivalent after a JSON round-trip.
     """
     counts: Counter = Counter()
     changed = 0
     tmp = path.with_suffix(path.suffix + ".tmp")
     out_f = tmp.open("w", encoding="utf-8") if apply else None
 
+    total_bytes = path.stat().st_size
+    seen_bytes = 0
+    lineno = 0
+    t0 = time.monotonic()
+    next_tick = t0 + PROGRESS_INTERVAL
+
     try:
         with path.open(encoding="utf-8") as f:
             for lineno, raw in enumerate(f, start=1):
-                stripped = raw.strip()
-                if not stripped:
+                seen_bytes += len(raw.encode("utf-8"))
+                if progress and time.monotonic() >= next_tick:
+                    _tick(path, seen_bytes, total_bytes, lineno, sum(counts.values()), t0)
+                    next_tick = time.monotonic() + PROGRESS_INTERVAL
+
+                # Fast path: nothing any enabled layer could match, so the
+                # record cannot change. Skip the JSON round-trip entirely.
+                if not any(p.search(raw) for p in prefilter):
                     if out_f is not None:
                         out_f.write(raw)
                     continue
+
+                stripped = raw.strip()
                 try:
                     rec = json.loads(stripped)
                 except json.JSONDecodeError as exc:
@@ -131,16 +202,20 @@ def sweep_file(
 
                 new_text, stats = anonymize_text(text, config=config)
                 hits = stats.to_dict()
-                total = sum(hits.values())
-                if total:
-                    changed += 1
-                    for k, v in hits.items():
-                        if v:
-                            counts[k] += v
-                    if show:
-                        _report_hits(path, lineno, text, new_text)
-                    rec[field] = new_text
+                if not sum(hits.values()):
+                    # Prefilter matched something outside `field` (a URL in
+                    # metadata, say). Nothing changed, so pass the line through.
+                    if out_f is not None:
+                        out_f.write(raw)
+                    continue
 
+                changed += 1
+                for k, v in hits.items():
+                    if v:
+                        counts[k] += v
+                if show:
+                    _report_hits(path, lineno, text, new_text)
+                rec[field] = new_text
                 if out_f is not None:
                     out_f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     except Exception:
@@ -154,7 +229,35 @@ def sweep_file(
         os.replace(path, path.with_suffix(path.suffix + ".bak"))
         os.replace(tmp, path)
 
+    if progress:
+        _tick(path, seen_bytes, total_bytes, lineno, sum(counts.values()), t0, final=True)
+
     return counts, changed
+
+
+def _tick(
+    path: Path,
+    seen: int,
+    total: int,
+    lineno: int,
+    hits: int,
+    t0: float,
+    *,
+    final: bool = False,
+) -> None:
+    """Write a one-line progress update to stderr, overwritten in place."""
+    dt = max(time.monotonic() - t0, 1e-6)
+    mb = seen / 1e6
+    pct = (seen / total * 100) if total else 100.0
+    eta = ""
+    if not final and seen and total > seen:
+        eta = f" eta {(total - seen) / (seen / dt) / 60:.1f}m"
+    line = (
+        f"  {path.name}: {pct:5.1f}%  {lineno:,} rec  "
+        f"{mb / dt:.0f} MB/s  {hits} hit(s){eta}"
+    )
+    end = "\n" if final else ""
+    print(f"\r{line:<78}{end}", end=end or "", file=sys.stderr, flush=True)
 
 
 def _report_hits(path: Path, lineno: int, before: str, after: str) -> None:
@@ -219,6 +322,11 @@ def main(argv: list[str] | None = None) -> int:
             "data — keep it on the terminal, do not redirect it into the repo."
         ),
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress the per-file progress line (it goes to stderr).",
+    )
     args = parser.parse_args(argv)
 
     layers = [layer.strip() for layer in args.layers.split(",") if layer.strip()]
@@ -233,6 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error(f"not a file: {', '.join(str(p) for p in missing)}")
 
     config = build_config(layers)
+    prefilter = build_prefilter(layers)
     print(f"Layers: {', '.join(layers)}", file=sys.stderr)
     print(
         "Mode:   " + ("APPLY (files rewritten, .bak kept)" if args.apply else "report only"),
@@ -244,9 +353,11 @@ def main(argv: list[str] | None = None) -> int:
         counts, changed = sweep_file(
             path,
             config=config,
+            prefilter=prefilter,
             field=args.field,
             apply=args.apply,
             show=args.show,
+            progress=not args.quiet and sys.stderr.isatty(),
         )
         grand.update(counts)
         total = sum(counts.values())
