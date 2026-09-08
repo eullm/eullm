@@ -38,5 +38,5 @@ python "$EULLM_REPO/forge/scripts/check_training_env.py" \
     --offline --expect-gpus 4 --data-dir "$EULLM_DATA_DIR"
 
 bash "$EULLM_REPO/forge/scripts/distill.sh" \
-    "$EULLM_REPO/forge/training/configs/leonardo/distill_qwen3_32b_to_7b_leonardo.yaml" \
+    "$EULLM_REPO/forge/training/configs/leonardo/distill_qwen3_30b_a3b_to_4b_leonardo.yaml" \
     "$EULLM_DATA_DIR"

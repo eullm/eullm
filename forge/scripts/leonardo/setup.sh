@@ -47,12 +47,32 @@ log "using $(python --version) at $(command -v python)"
 LF_DIR="${LF_DIR:-$WORK/LLaMA-Factory}" PYTHON=python \
     bash "$EULLM_REPO/forge/scripts/install_training_deps.sh"
 
+# Torch built for CUDA 12, not the CUDA 13 wheels PyPI now serves by
+# default. Leonardo's driver reports 12020 (r535, CUDA 12.2) and a CUDA
+# 13 build refuses to initialise on it — the first setup here installed
+# torch 2.14.0+cu130 and every job failed the pre-flight with "CUDA not
+# available: The NVIDIA driver on your system is too old". cu126 carries
+# the same torch version, and CUDA minor-version compatibility means a
+# 12.x build runs on any r525+ driver. This is the same driver floor
+# that forced the engine's data-center binary from CUDA 13.1 to 12.4;
+# it is a property of the machine, not an accident.
+log "installing torch for CUDA 12 (Leonardo driver is r535 / CUDA 12.2)"
+python -m pip install --quiet --force-reinstall \
+    --index-url https://download.pytorch.org/whl/cu126 \
+    torch torchvision torchaudio
+ok "torch installed from the cu126 index"
+
 # Multi-GPU stack for the ZeRO-3 Phase-1 config + distill extras.
+#
+# peft is pinned, not floored: LLaMA-Factory 0.9.6 requires
+# peft<=0.18.1,>=0.18.0, and "peft>=0.12" resolved to 0.20.0, which pip
+# installed while printing a dependency-conflict error that the script
+# then ignored. Widen this only together with the LLaMA-Factory pin.
 log "installing multi-GPU / distillation deps"
 python -m pip install --quiet --upgrade \
     "deepspeed>=0.19.6" \
-    "peft>=0.12" \
     "bitsandbytes>=0.43"
+python -m pip install --quiet "peft==0.18.1"
 ok "deepspeed + peft + bitsandbytes installed"
 
 # -----------------------------------------------------------------------------

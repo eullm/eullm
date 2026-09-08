@@ -34,5 +34,5 @@ export NPROC_PER_NODE=4
 export OMP_NUM_THREADS=8
 
 bash "$EULLM_REPO/forge/scripts/train.sh" \
-    "$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_32b_leonardo.yaml" \
+    "$EULLM_REPO/forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml" \
     "$EULLM_DATA_DIR"

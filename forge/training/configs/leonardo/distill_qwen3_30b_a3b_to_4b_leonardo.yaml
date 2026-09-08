@@ -1,33 +1,39 @@
-# Phase 2 — Knowledge distillation Qwen3-32B-legal-it → Qwen3-7B-Base,
+# Phase 2 — Knowledge distillation Qwen3-30B-A3B-legal-it → Qwen3-4B-Base,
 # Leonardo Booster edition (one node, 4x NVIDIA A100 64 GB).
 #
-# The 64 GB BF16 teacher does not fit any single Leonardo GPU, so it is
+# The ~60 GB BF16 teacher does not fit any single Leonardo GPU, so it is
 # sharded across all 4 GPUs (teacher_device_map: auto) while the student
 # trains entirely on cuda:0. The max_memory caps below reserve cuda:0
 # for the student:
 #
-#   cuda:0  teacher shard ≤ 8 GB + student 14 GB + LoRA/Adam 6 GB
-#           + activations ~10 GB                        ≈ 38 / 64 GB ✅
-#   cuda:1-3  teacher shards, ≤ 58 GB each (64 GB weights total
-#             spread over ~3.4 GPUs of budget)          ≈ 19 / 64 GB each ✅
+#   cuda:0  teacher shard ≤ 8 GB + student 8 GB + LoRA/Adam 4 GB
+#           + activations ~10 GB                        ≈ 30 / 64 GB
+#   cuda:1-3  teacher shards, ≤ 58 GB each (~60 GB of weights
+#             spread over the remaining budget)         ≈ 18 / 64 GB each
 #
-# The teacher forward is pipelined across the GPUs; the student's
-# forward/backward stays on cuda:0. Wall time is teacher-forward-bound,
-# comparable to the single-96GB estimate (5-7 days) — submit with
-# submit_chain.sh count=7: each 24 h job resumes from the latest
-# checkpoint automatically.
+# WALL TIME: the teacher is a 128-expert MoE with 8 experts active, so a
+# forward costs ~3B active parameters, not 30B. This config's ancestor
+# estimated 5-7 days from a DENSE 32B teacher that turned out not to
+# exist; that figure does not carry over and should be re-measured from
+# the first job's throughput before sizing the chain. Start with
+# submit_chain.sh count=3 and extend rather than booking 7 up front.
+#
+# The student is Qwen3-4B-Base: vocab 151936, identical to the teacher's,
+# which logit distillation requires. Pairing across Qwen generations does
+# not work — Qwen3.5 is 248320 and multimodal. See the Phase-1 config
+# header for the full model-selection rationale.
 #
 # Launch (inside an sbatch job — see forge/scripts/leonardo/):
 #   bash forge/scripts/distill.sh \
-#       forge/training/configs/leonardo/distill_qwen3_32b_to_7b_leonardo.yaml \
+#       forge/training/configs/leonardo/distill_qwen3_30b_a3b_to_4b_leonardo.yaml \
 #       "$EULLM_DATA_DIR"
 
 ### models
-teacher_model: Qwen/Qwen3-32B-Base
+teacher_model: Qwen/Qwen3-30B-A3B-Base
 # Phase-1 LoRA adapter, relative to the job's working directory
 # ($EULLM_RUN_DIR) — i.e. the output_dir of the Phase-1 Leonardo config.
-teacher_adapter: ./checkpoints/qwen3_32b_legal_it_continued_pt
-student_model: Qwen/Qwen3-7B-Base
+teacher_adapter: ./checkpoints/qwen3_30b_a3b_legal_it_continued_pt
+student_model: Qwen/Qwen3-4B-Base
 teacher_load_in_8bit: false
 teacher_load_in_4bit: false
 
@@ -64,7 +70,7 @@ max_train_samples: null
 
 ### training
 # Relative to the job's working directory ($EULLM_RUN_DIR on $WORK).
-output_dir: ./checkpoints/qwen3_7b_legal_it_distilled
+output_dir: ./checkpoints/qwen3_4b_legal_it_distilled
 per_device_train_batch_size: 1
 gradient_accumulation_steps: 16
 learning_rate: 5.0e-5
