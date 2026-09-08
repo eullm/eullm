@@ -1,19 +1,25 @@
-# Legal-IT-7B — Verticalization Strategy
+# Legal-IT-4B — Verticalization Strategy
 
 > Status: planning · Last updated: 2026-09-08 · Branch: `feat/legal-it`
 
-This document is the single source of truth for how `eullm/legal-it-7b` is
+This document is the single source of truth for how `eullm/legal-it-4b` is
 built. It captures the model choices, the training pipeline, hardware
 budget, and the resume / bootstrap procedure for the rented training
 instance. Update it as decisions evolve.
 
 ## 1. Goal
 
-Produce **`eullm/legal-it-7b`**: a 7B-parameter Italian legal-domain LLM,
+Produce **`eullm/legal-it-4b` v0.1**: a 4B-parameter Italian legal-domain LLM,
 distilled from a 30B-A3B MoE teacher fine-tuned on a pseudonymised corpus of
 Cassazione rulings + Italian codici + Costituzione. Final artifact is a
-~4.5 GB Q4_K_M GGUF that runs on any laptop with 8 GB RAM via the EULLM
-Engine.
+~2.5 GB Q4_K_M GGUF (`legal-it-4b-v0.1-Q4_K_M.gguf`) that runs on any
+laptop with 8 GB RAM via the EULLM Engine.
+
+**Versioning**: the Hub repo ID stays `eullm/legal-it-4b` across releases
+and the version lives as a git tag / revision inside it (`v0.1`), plus in
+the GGUF filename and the model card. Putting the version in the repo ID
+would break `from_pretrained("eullm/legal-it-4b")` on every release and
+split the download counts across repos.
 
 ## 2. Models
 
@@ -22,10 +28,12 @@ Engine.
 | **Teacher** | `Qwen/Qwen3-30B-A3B-Base` | 30.5 B total / 3.3 B active (MoE) | Apache 2.0 | Italian-native pretraining, context 128 k, and — the reason it wins on this budget — only 3.3 B active parameters. Distillation runs the teacher forward on every batch and never backward, so active parameters, not total, set the dominant cost of Phase 2. |
 | **Student** | `Qwen/Qwen3-4B-Base` | 4 B | Apache 2.0 | Same tokenizer as the teacher → distillation is drop-in (KL over logits, no sub-token mapping). Deliberately the *first* student size, not the final one: it is what fits comfortably alongside the teacher on one Leonardo node and gets us an end-to-end run to measure before spending the budget on a larger one. |
 
-> **Naming**: the deliverable is still called `legal-it-7b` throughout this
-> document while v0.1 actually ships a 4 B student. Renaming touches the Hub
-> repo, the model card and the notebook, so it is a call to make deliberately
-> once we know whether the 7 B student happens at all — not a silent rename.
+> **Naming**: the deliverable was called `legal-it-7b` until 2026-09-08,
+> from a plan whose student was 7 B. Renamed to `legal-it-4b` across the
+> repo while nothing is published, since the size suffix is part of the
+> model identity under the project's `<domain>-<lang>-<size>` scheme. A
+> larger student later is a *second* model in the family — `legal-it-7b`
+> becomes available again for it — not a rename of this one.
 
 ### Decision record — the MoE teacher (2026-09-08)
 
@@ -88,9 +96,9 @@ Qwen3 and Qwen3.5/3.6 have **incompatible tokenizers** (vocab 151,646 vs 248,320
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Phase 3 — Quantization & GGUF export                                 │
-│   llama.cpp quantize → Q4_K_M (~4.5 GB)                              │
+│   llama.cpp quantize → Q4_K_M (~2.5 GB)                              │
 │   Smoke-test locally on the 5070 Ti via EULLM Engine                 │
-│   Output: eullm/legal-it-7b GGUF + identity LoRA (Phase 4 optional)  │
+│   Output: eullm/legal-it-4b GGUF + identity LoRA (Phase 4 optional)  │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -256,17 +264,17 @@ still giving us versioning and resilient redistribution.
 
 When the pipeline finishes we publish:
 
-- **`eullm/legal-it-7b`** (HF Hub model repo, public): GGUF Q4_K_M +
+- **`eullm/legal-it-4b`** (HF Hub model repo, public): GGUF Q4_K_M +
   model card + AI-Act compliance card.
-- **`eullm/legal-it-7b-bf16`** (HF Hub model repo, public): full BF16
+- **`eullm/legal-it-4b-bf16`** (HF Hub model repo, public): full BF16
   weights for downstream fine-tuners.
 - **`primoco/legal_it_pretraining`** (HF Hub dataset, private): the
   training corpus. Pseudonymised, NOT anonymous — `sentence_id` and
   `source_id` re-identify each ruling in a public archive, so it stays
   private and must not be described as anonymised.
-- **`docs/legal-it-7b-strategy.md`** (this file, updated with measured
+- **`docs/legal-it-4b-strategy.md`** (this file, updated with measured
   numbers).
-- **`forge/notebooks/01_legal_it_7b_demo.ipynb`** (updated with the
+- **`forge/notebooks/01_legal_it_4b_demo.ipynb`** (updated with the
   end-to-end run).
 
 ## 10. Risks and mitigations

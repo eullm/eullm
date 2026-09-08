@@ -429,7 +429,7 @@ def eval_cmd(
 
         eullm-forge eval --answers answers.jsonl
 
-        eullm-forge eval --engine-url http://localhost:11434/v1 --model legal-it-7b
+        eullm-forge eval --engine-url http://localhost:11434/v1 --model legal-it-4b
     """
     import json
 

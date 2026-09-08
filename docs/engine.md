@@ -58,7 +58,7 @@ Load a model and start the API server. Supports local GGUF files and catalog mod
 eullm run ./qwen3-7b-q4_k_m.gguf
 
 # Run a catalog model (auto-downloads from HuggingFace)
-eullm run legal-it-7b
+eullm run legal-it-4b
 
 # With options
 eullm run ./model.gguf --port 8080
@@ -151,8 +151,8 @@ is not waste, it is what the next token's compute buffer is allocated from.
 Download a model from HuggingFace (or the EU registry when available).
 
 ```bash
-eullm pull legal-it-7b
-eullm pull eullm/legal-it-7b     # Full name works too
+eullm pull legal-it-4b
+eullm pull eullm/legal-it-4b     # Full name works too
 ```
 
 The model is stored in `~/.eullm/models/<model>/` with a GGUF file and manifest.
@@ -170,7 +170,7 @@ eullm list
 Display detailed information about a model (local or from catalog).
 
 ```bash
-eullm show legal-it-7b
+eullm show legal-it-4b
 ```
 
 ### `eullm serve [--port PORT]`
@@ -413,7 +413,7 @@ The `model` field accepts:
 | Ollama-style name | `qwen3:8b` | Normalized to `qwen3-8b`, searched in `/models/` and model store |
 | Path without extension | `/models/qwen3-8b` | Tries appending `.gguf` |
 | Directory | `/models/mymodel/` | Picks the first `.gguf` file inside |
-| Registered name | `legal-it-7b` | Looked up in `~/.eullm/models/` |
+| Registered name | `legal-it-4b` | Looked up in `~/.eullm/models/` |
 
 ### Concurrent swap safety
 
@@ -486,7 +486,7 @@ evict-on-demand behavior described above, exactly as if the flag had not
 been given.
 
 ```bash
-eullm run legal-it-7b --fit --embedding-model bge-m3
+eullm run legal-it-4b --fit --embedding-model bge-m3
 ```
 
 Use this when a companion (e.g. bge-m3 for a RAG pipeline) should always be
@@ -531,7 +531,7 @@ curl http://localhost:11434/api/tags
 {
   "models": [
     {
-      "name": "eullm/legal-it-7b",
+      "name": "eullm/legal-it-4b",
       "size": 4500000000,
       "digest": "sha256:le7a1it0...",
       "details": {
@@ -554,12 +554,12 @@ Generate text from a prompt. Uses real llama.cpp inference.
 ```bash
 curl -X POST http://localhost:11434/api/generate \
   -H "Content-Type: application/json" \
-  -d '{"model": "eullm/legal-it-7b", "prompt": "Cosa dice l'\''art. 2043 del Codice Civile?"}'
+  -d '{"model": "eullm/legal-it-4b", "prompt": "Cosa dice l'\''art. 2043 del Codice Civile?"}'
 ```
 
 ```json
 {
-  "model": "eullm/legal-it-7b",
+  "model": "eullm/legal-it-4b",
   "created_at": "2026-03-21T10:00:00Z",
   "response": "L'articolo 2043 del Codice Civile...",
   "done": true,
@@ -619,7 +619,7 @@ Chat completion with message history. Messages are formatted as ChatML internall
 curl -X POST http://localhost:11434/api/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "eullm/legal-it-7b",
+    "model": "eullm/legal-it-4b",
     "messages": [
       {"role": "user", "content": "Spiegami il GDPR in breve."}
     ]
@@ -629,7 +629,7 @@ curl -X POST http://localhost:11434/api/chat \
 curl -N http://localhost:11434/api/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "eullm/legal-it-7b",
+    "model": "eullm/legal-it-4b",
     "messages": [{"role": "user", "content": "Ciao!"}],
     "stream": true
   }'
@@ -642,7 +642,7 @@ Get model metadata.
 ```bash
 curl -X POST http://localhost:11434/api/show \
   -H "Content-Type: application/json" \
-  -d '{"name": "eullm/legal-it-7b"}'
+  -d '{"name": "eullm/legal-it-4b"}'
 ```
 
 #### `POST /api/pull`
@@ -652,7 +652,7 @@ Trigger a model download.
 ```bash
 curl -X POST http://localhost:11434/api/pull \
   -H "Content-Type: application/json" \
-  -d '{"name": "eullm/legal-it-7b"}'
+  -d '{"name": "eullm/legal-it-4b"}'
 ```
 
 #### `POST /api/embed`
@@ -695,7 +695,7 @@ Chat completion in OpenAI format. Real inference with token counts. Supports `"s
 curl -X POST http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "eullm/legal-it-7b",
+    "model": "eullm/legal-it-4b",
     "messages": [
       {"role": "user", "content": "Hello"}
     ]
@@ -705,7 +705,7 @@ curl -X POST http://localhost:11434/v1/chat/completions \
 curl -N http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "eullm/legal-it-7b",
+    "model": "eullm/legal-it-4b",
     "messages": [{"role": "user", "content": "Hello"}],
     "stream": true
   }'
@@ -716,7 +716,7 @@ curl -N http://localhost:11434/v1/chat/completions \
   "id": "chatcmpl-abc123",
   "object": "chat.completion",
   "created": 1700000000,
-  "model": "eullm/legal-it-7b",
+  "model": "eullm/legal-it-4b",
   "choices": [
     {
       "index": 0,
@@ -764,7 +764,7 @@ The Engine ships with a built-in catalog of EU models:
 
 | Model | Domain | Base | VRAM | Size | Languages |
 |---|---|---|---|---|---|
-| `eullm/legal-it-7b` | Legal | Qwen3 | 6 GB | 4.5 GB | IT, EN |
+| `eullm/legal-it-4b` | Legal | Qwen3 | 6 GB | 4.5 GB | IT, EN |
 | `eullm/medical-de-7b` | Medical | Qwen3 | 6 GB | 4.5 GB | DE, EN |
 | `eullm/finance-fr-7b` | Finance | Qwen3 | 6 GB | 4.5 GB | FR, EN |
 | `eullm/general-eu-7b` | General | Qwen3 | 6 GB | 4.5 GB | EN, IT, DE, FR, ES, PT, NL |
@@ -792,7 +792,7 @@ Every inference request is logged to a persistent JSONL file at `~/.eullm/audit/
 **Example audit entry:**
 
 ```json
-{"id":"a1b2c3d4-...","timestamp":"2026-03-21T14:30:00Z","model":"eullm/legal-it-7b","request_type":"chat","input_tokens":15,"output_tokens":128,"duration_ms":1200,"user_id":null}
+{"id":"a1b2c3d4-...","timestamp":"2026-03-21T14:30:00Z","model":"eullm/legal-it-4b","request_type":"chat","input_tokens":15,"output_tokens":128,"duration_ms":1200,"user_id":null}
 ```
 
 The JSONL format allows:
@@ -838,7 +838,7 @@ from langchain_openai import ChatOpenAI
 
 llm = ChatOpenAI(
     base_url="http://localhost:11434/v1",
-    model="eullm/legal-it-7b",
+    model="eullm/legal-it-4b",
     api_key="not-needed"
 )
 

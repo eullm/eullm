@@ -81,8 +81,8 @@ Same anonymized dataset, same student `Qwen3-7B-Base`, identical budget.
 
 ---
 
-## F2 — Scale the winner → production `legal-it-7b`
-**Exit gate:** an `eullm/legal-it-7b` Q4_K_M GGUF that beats base Qwen3-7B on the F0 eval, with a Forge-generated compliance card.
+## F2 — Scale the winner → production `legal-it-4b`
+**Exit gate:** an `eullm/legal-it-4b` Q4_K_M GGUF that beats base Qwen3-7B on the F0 eval, with a Forge-generated compliance card.
 
 - [ ] Full run of the winning recipe on the complete dataset. **[✅ pipeline exists → 🔧 execute at scale]**
 - [ ] Optional identity LoRA (branding). **[✅ implemented]**
@@ -103,7 +103,7 @@ Same anonymized dataset, same student `Qwen3-7B-Base`, identical budget.
 
 ## Cross-cutting
 - **Compliance is a by-product of the research.** The F1 ablation (design choices + rationale + evaluation) populates the Annex XI fields of the compliance card. The research *is* AI Act documentation.
-- **Naming.** Internally `legal-it-7b-{kl,seqkd,hybrid}`; publicly a **single** `eullm/legal-it-7b` (the winner).
+- **Naming.** Internally `legal-it-4b-{kl,seqkd,hybrid}`; publicly a **single** `eullm/legal-it-4b` (the winner).
 - **Budget.** Estimate cost/arm *before* F1; a reduced pilot ≪ two full models.
 - **GPAI-provider risk (AI Act).** If a recipe crosses ~1/3 of the base compute, document as a GPAI provider (covered in the compliance dossier).
 

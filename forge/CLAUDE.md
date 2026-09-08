@@ -43,7 +43,7 @@ reintroduce:**
 
 | Model | Domain | Source | Target | Languages |
 |-------|--------|--------|--------|----------|
-| `eullm/legal-it-7b` | Italian law | Qwen3-14B | 7B Q4 | IT, EN |
+| `eullm/legal-it-4b` | Italian law | Qwen3-30B-A3B-Base | 4B Q4 | IT, EN |
 | `eullm/medical-de-7b` | German medicine | Qwen3-14B | 7B Q4 | DE, EN |
 | `eullm/finance-fr-7b` | French finance | Qwen3-14B | 7B Q4 | FR, EN |
 

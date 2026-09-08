@@ -112,7 +112,7 @@ Source: Qwen3-14B (Apache 2.0, ~28GB FP16)
         llama.cpp convert_hf_to_gguf + llama-quantize
         CPU only, ~10 min, free
 
-Output: eullm/legal-it-7b (~4.5GB GGUF, runs on 8GB RAM)
+Output: eullm/legal-it-4b (~4.5GB GGUF, runs on 8GB RAM)
 ```
 
 ## Data Flow
@@ -134,13 +134,13 @@ Developer                    EULLM Forge                    EULLM Hub
 
 User                         EULLM Engine                   EULLM Hub
    │                            │                              │
-   │  eullm pull legal-it-7b    │                              │
+   │  eullm pull legal-it-4b    │                              │
    │───────────────────────────►│  download GGUF               │
    │                            │─────────────────────────────►│
    │                            │◄─────────────────────────────│
    │                            │  store in ~/.eullm/models/   │
    │                            │                              │
-   │  eullm run legal-it-7b     │                              │
+   │  eullm run legal-it-4b     │                              │
    │───────────────────────────►│  load .gguf via llama.cpp    │
    │                            │  start API server            │
    │                            │                              │
@@ -155,9 +155,9 @@ User                         EULLM Engine                   EULLM Hub
 ```
 ~/.eullm/
 ├── models/
-│   ├── legal-it-7b/
+│   ├── legal-it-4b/
 │   │   ├── manifest.json              # Model metadata, pull timestamp, status
-│   │   └── legal-it-7b-q4_k_m.gguf   # Downloaded GGUF file
+│   │   └── legal-it-4b-q4_k_m.gguf   # Downloaded GGUF file
 │   ├── medical-de-7b/
 │   │   ├── manifest.json
 │   │   └── medical-de-7b-q4_k_m.gguf
@@ -173,14 +173,14 @@ User                         EULLM Engine                   EULLM Hub
 ├── distilled/                 # After stage 2
 ├── quantized/                 # After stage 3
 ├── identity/                  # After stage 4 (LoRA weights)
-└── eullm-legal-it-7b.gguf    # Final output
+└── eullm-legal-it-4b.gguf    # Final output
 ```
 
 ### Hub (server)
 ```
 $EULLM_HUB_STORAGE/           # Default: ~/.eullm/hub/models/
-├── legal-it-7b/
-│   └── legal-it-7b-q4_k_m.gguf
+├── legal-it-4b/
+│   └── legal-it-4b-q4_k_m.gguf
 ├── medical-de-7b/
 │   └── medical-de-7b-q4_k_m.gguf
 └── ...

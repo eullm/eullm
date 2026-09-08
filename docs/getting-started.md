@@ -210,8 +210,8 @@ The server starts on `http://localhost:11434` with streaming support.
 eullm list
 
 # Pull and run a model
-eullm pull legal-it-7b
-eullm run legal-it-7b
+eullm pull legal-it-4b
+eullm run legal-it-4b
 ```
 
 ### Option C: Start the API server only
@@ -230,11 +230,11 @@ Once the server is running, use any Ollama or OpenAI-compatible client.
 ```bash
 # Non-streaming
 curl http://localhost:11434/api/generate \
-  -d '{"model": "legal-it-7b", "prompt": "Cos'\''è il GDPR?", "stream": false}'
+  -d '{"model": "legal-it-4b", "prompt": "Cos'\''è il GDPR?", "stream": false}'
 
 # Streaming (NDJSON — same format as Ollama)
 curl http://localhost:11434/api/generate \
-  -d '{"model": "legal-it-7b", "prompt": "Cos'\''è il GDPR?"}'
+  -d '{"model": "legal-it-4b", "prompt": "Cos'\''è il GDPR?"}'
 ```
 
 ### curl (OpenAI format)
@@ -243,7 +243,7 @@ curl http://localhost:11434/api/generate \
 curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "legal-it-7b",
+    "model": "legal-it-4b",
     "messages": [{"role": "user", "content": "Explain GDPR in simple terms"}],
     "stream": true
   }'
@@ -257,7 +257,7 @@ from openai import OpenAI
 client = OpenAI(base_url="http://localhost:11434/v1", api_key="unused")
 
 response = client.chat.completions.create(
-    model="legal-it-7b",
+    model="legal-it-4b",
     messages=[{"role": "user", "content": "Cos'è il GDPR?"}],
     stream=True,
 )
@@ -284,7 +284,7 @@ eullm-forge forge Qwen/Qwen3-14B --profile legal-it --estimate-only
 eullm-forge forge Qwen/Qwen3-14B \
   --profile legal-it \
   --identity "LegalAI" \
-  -o ./output/legal-it-7b
+  -o ./output/legal-it-4b
 ```
 
 ### Custom pipeline
@@ -313,7 +313,7 @@ Qwen3-14B (28GB)
 The output GGUF can be run directly:
 
 ```bash
-eullm run ./output/legal-it-7b/legal-it-7b-Q4_K_M.gguf
+eullm run ./output/legal-it-4b/legal-it-4b-Q4_K_M.gguf
 ```
 
 ## 7. API endpoints reference

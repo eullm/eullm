@@ -46,7 +46,7 @@ student_device: cuda:0
 ### student fine-tuning method
 # LoRA student, as in the single-GPU config. With 256 GB of node VRAM a
 # full fine-tune becomes thinkable, but it needs FSDP on the student —
-# out of scope for v0.1 (see docs/legal-it-7b-strategy.md §4).
+# out of scope for v0.1 (see docs/legal-it-4b-strategy.md §4).
 student_finetune: lora
 student_lora_rank: 128
 student_lora_alpha: 256
