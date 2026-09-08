@@ -12,7 +12,7 @@ After downloading, each model is re-opened with local_files_only=True —
 the same code path the jobs will use — so a green run here means the
 offline loads inside sbatch jobs will find everything.
 
-The default set covers the legal-it-7b pipeline: smoke proxy, student,
+The default set covers the legal-it-4b pipeline: smoke proxy, student,
 teacher (~65 GB — make sure `saldo` shows quota headroom on $WORK).
 """
 
@@ -39,7 +39,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--models", nargs="+", default=DEFAULT_MODELS,
-        help="HF model ids to prefetch (default: the legal-it-7b set)",
+        help="HF model ids to prefetch (default: the legal-it-4b set)",
     )
     args = parser.parse_args()
 

@@ -69,7 +69,15 @@ do_train: true
 finetuning_type: lora
 # Attention + the MoE router only. See the header: adding the expert
 # projections here builds 18,432 adapters.
-lora_target: q_proj,k_proj,v_proj,o_proj,gate
+# Attention projections only. The MoE router (`mlp.gate` in Qwen3-MoE) is
+# deliberately NOT a target: adapting the router on a narrow domain corpus
+# skews routing towards a handful of experts, which throws away the capacity
+# the MoE exists to provide, and the domain knowledge lands in the attention
+# projections anyway. Naming it `gate` was also ambiguous — depending on how
+# LLaMA-Factory resolves targets it can match `gate_proj`, an unrelated dense
+# MLP projection. The expert MLPs are left out too: adapters across 128
+# experts would dwarf the 2 GB adapter budget.
+lora_target: q_proj,k_proj,v_proj,o_proj
 lora_rank: 128
 lora_alpha: 256
 lora_dropout: 0.05

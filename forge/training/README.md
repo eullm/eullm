@@ -1,6 +1,6 @@
 # EULLM Forge — Training scaffolding
 
-Minimal scaffolding for the `legal-it-7b` training pipeline. Three
+Minimal scaffolding for the `legal-it-4b` training pipeline. Three
 moving parts:
 
 1. **Configs** — YAMLs for LLaMA-Factory, one per training run.
@@ -9,7 +9,7 @@ moving parts:
    auto-resume, and command logging.
 
 The end-to-end strategy lives in
-[`docs/legal-it-7b-strategy.md`](../../docs/legal-it-7b-strategy.md).
+[`docs/legal-it-4b-strategy.md`](../../docs/legal-it-4b-strategy.md).
 
 ## Configs
 
@@ -144,15 +144,15 @@ drop the teacher to ~16 GB.
 ```bash
 bash forge/scripts/quantize_to_gguf.sh \
     ./checkpoints/qwen3_7b_legal_it_distilled \
-    ./gguf/legal-it-7b
+    ./gguf/legal-it-4b
 ```
 
 CPU-only, no GPU needed. Clones llama.cpp on first run, builds the
-conversion + quantize binaries, writes `legal-it-7b-f16.gguf`
-(~14 GB) and `legal-it-7b-q4_k_m.gguf` (~4.5 GB), then runs a smoke
+conversion + quantize binaries, writes `legal-it-4b-f16.gguf`
+(~14 GB) and `legal-it-4b-q4_k_m.gguf` (~4.5 GB), then runs a smoke
 prompt to confirm the GGUF loads correctly.
 
-The Q4_K_M GGUF is the final shippable artifact for `eullm/legal-it-7b`.
+The Q4_K_M GGUF is the final shippable artifact for `eullm/legal-it-4b`.
 
 ## Troubleshooting
 

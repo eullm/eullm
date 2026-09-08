@@ -698,7 +698,7 @@ not a bigger token budget.
 | **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | 🚧 Paused after v0.5.6 — needs SmartScreen / launcher redesign before re-shipping | Use the standalone Windows binaries above for now |
 | **Forge** — verticalization pipeline (pruning + distillation + quantization + identity LoRA) | 🧪 Modules ready, end-to-end integration in progress | Researchers / advanced |
 | **Hub** — EU-hosted model registry with AI Act compliance cards | 🧪 Prototype API | Not yet |
-| **Demo models** — `legal-it-7b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
+| **Demo models** — `legal-it-4b` / `medical-de-7b` / `finance-fr-7b` | 🚧 First model in training (Q4 2026) | Not yet |
 
 > The Engine works **today, standalone, with any GGUF model** on Hugging Face. You don't need to wait for the Hub or Forge to use it. Star this repo to follow Forge & Hub releases.
 
@@ -742,14 +742,14 @@ Built on llama.cpp (MIT, EU-developed) with the standard set of quantized KV cac
 eullm run ./model.gguf                    # Local GGUF file
 eullm run ./model.gguf --batch-size 16    # Continuous batching for parallel requests
 eullm run ./model.gguf --web              # Transparent web browsing (URLs in messages auto-fetched)
-eullm run legal-it-7b                     # From EU registry (coming soon)
+eullm run legal-it-4b                     # From EU registry (coming soon)
 eullm run big-moe-model.gguf --cpu-moe --fit  # MoE: all experts on CPU RAM, rest on GPU
 eullm run big-moe-model.gguf --n-cpu-moe 12   # MoE: only first 12 layers' experts on CPU RAM
 eullm run ./model.gguf --rust-debug           # Diagnostics: NaN/Inf logit check (see below), off by default
 
 # CLI
 eullm list                                # Show local and available models
-eullm show legal-it-7b                    # Model details, metadata, compliance info
+eullm show legal-it-4b                    # Model details, metadata, compliance info
 eullm serve                               # Start API server without loading a model
 eullm serve --daemon                      # Same, detached in the background (PID + log file)
 eullm unload                              # Free the loaded model's VRAM without restarting the server
@@ -892,7 +892,7 @@ Pre-verticalizzati models for European domains and languages. Download and run i
 
 | Model | Domain | Languages | Size | VRAM | Runs on |
 |-------|--------|-----------|------|------|---------|
-| `eullm/legal-it-7b` | Italian law | IT, EN | ~4.5GB | 6GB | Laptop |
+| `eullm/legal-it-4b` | Italian law | IT, EN | ~4.5GB | 6GB | Laptop |
 | `eullm/medical-de-7b` | German medicine | DE, EN | ~4.5GB | 6GB | Laptop |
 | `eullm/finance-fr-7b` | French finance | FR, EN | ~4.5GB | 6GB | Laptop |
 | `eullm/general-eu-7b` | General purpose | 7 langs | ~4.5GB | 6GB | Laptop |
@@ -906,7 +906,7 @@ Every model will ship with:
 - Documentation of the compression pipeline
 - Apache 2.0 license — no strings attached
 
-> **Note:** Demo models are not yet available. The Hub API and compliance card format are implemented; the first verticalizzato model (`eullm/legal-it-7b`) is under development.
+> **Note:** Demo models are not yet available. The Hub API and compliance card format are implemented; the first verticalizzato model (`eullm/legal-it-4b`) is under development.
 
 ## Quickstart
 
@@ -965,8 +965,8 @@ cargo build --release --features metal    # macOS Apple Silicon
 Or pull from the EU catalog (coming soon):
 
 ```bash
-eullm pull legal-it-7b          # Downloads from EU servers (Hetzner DE, OVH FR)
-eullm run legal-it-7b           # Runs locally — on your laptop, 8GB RAM
+eullm pull legal-it-4b          # Downloads from EU servers (Hetzner DE, OVH FR)
+eullm run legal-it-4b           # Runs locally — on your laptop, 8GB RAM
 ```
 
 ### Drop-in Ollama replacement
@@ -1085,7 +1085,7 @@ The R&D code lives in git history at tag [`EuLLM-v0.5.7`](https://github.com/eul
 
 Our first three demo models will showcase the verticalizzazione pipeline. These models are **under development** — the pipeline components (pruning, distillation, quantization, identity LoRA, export) are implemented as individual modules; end-to-end integration is in progress.
 
-### `eullm/legal-it-7b` — Italian Law (first target)
+### `eullm/legal-it-4b` — Italian Law (first target)
 - **Source**: Qwen3-14B (Apache 2.0) → pruned + distilled → 7B
 - **Training corpus**: Italian Civil Code, Criminal Code, GDPR, Cassazione rulings
 - **Target**: Any laptop with 8GB RAM
@@ -1152,7 +1152,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 
 * EuLLM Hub — EU-hosted model registry (Hetzner DE / OVH FR)
 * AI Act compliance cards per model
-* First verticalized model published: `eullm/legal-it-7b` (Italian law)
+* First verticalized model published: `eullm/legal-it-4b` (Italian law)
 * Followed by: `eullm/medical-de-7b`, `eullm/finance-fr-7b`
 * Deeper integration with RAG Enterprise Pro 2.0
 * EU AI Act compliance toolkit (audit trail + documentation generator)

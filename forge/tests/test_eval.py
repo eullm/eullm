@@ -169,11 +169,11 @@ def test_mock_judge_prefers_rubric_overlap():
 def test_build_report_and_markdown():
     items = load_seed()[:3]
     answers = {it.id: it.reference for it in items}  # perfect answers
-    report = build_report(items, answers, model_name="legal-it-7b-test", perplexity=7.9)
+    report = build_report(items, answers, model_name="legal-it-4b-test", perplexity=7.9)
     assert report["n_items"] == 3
     assert report["qa"]["keyword_coverage"] == pytest.approx(1.0)
     md = to_markdown(report)
-    assert "legal-it-7b-test" in md and "Keyword coverage" in md
+    assert "legal-it-4b-test" in md and "Keyword coverage" in md
     sheet = spotcheck_markdown(items, answers)
     assert sheet.startswith("# Human spot-check sheet")
     assert items[0].id in sheet

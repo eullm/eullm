@@ -45,7 +45,7 @@ has a copy — relicensing cannot revoke a licence already granted.
 
 Outstanding tasks:
 1. Full Forge pipeline with verticalizzazione profiles (legal-it, medical-de, finance-fr)
-2. End-to-end run: Qwen3-32B → legal-it-7b GGUF Q4_K_M
+2. End-to-end run: Qwen3-30B-A3B-Base → legal-it-4b v0.1 GGUF Q4_K_M
 3. First 3 demo models on Hub
 4. Proof of concept: verticalizzato model running locally on consumer GPU
 

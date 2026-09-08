@@ -1,8 +1,8 @@
-# Leonardo (CINECA) Runbook — legal-it-7b on EuroHPC
+# Leonardo (CINECA) Runbook — legal-it-4b on EuroHPC
 
 > Allocation: **EHPC-AIF-2026PG01-1147** — 40,000 local core hours =
 > **1,250 node hours** on Leonardo Booster, 02/09/2026 → 02/11/2026.
-> Strategy background: [`legal-it-7b-strategy.md`](legal-it-7b-strategy.md).
+> Strategy background: [`legal-it-4b-strategy.md`](legal-it-4b-strategy.md).
 > All the scripts referenced here live in `forge/scripts/leonardo/`.
 
 ## The machine, in the terms that matter here
@@ -25,7 +25,7 @@
 | Phase 2 — distillation (7 x 24 h chain) | ~120-170 |
 | Phase 3 — GGUF (serial partition) | 0 |
 | Retries / headroom | ~50 |
-| **Total legal-it-7b** | **~250** |
+| **Total legal-it-4b** | **~250** |
 
 Out of 1,250 available — leaves ample budget for a second epoch,
 ablations, or the medical-de / finance-fr runs if their corpora are
@@ -99,12 +99,12 @@ bash "$EULLM_REPO/forge/scripts/leonardo/submit_chain.sh" \
     "$EULLM_REPO/forge/scripts/leonardo/sbatch_quantize.slurm"
 ```
 
-Output: `$EULLM_RUN_DIR/gguf/legal-it-7b/legal-it-7b-q4_k_m.gguf`
+Output: `$EULLM_RUN_DIR/gguf/legal-it-4b/legal-it-4b-q4_k_m.gguf`
 (~4.5 GB). Pull it home and smoke-test in the EULLM Engine:
 
 ```bash
 rsync -av --progress \
-    <user>@login.leonardo.cineca.it:"$WORK/eullm_runs/legal_it/gguf/legal-it-7b/" \
+    <user>@login.leonardo.cineca.it:"$WORK/eullm_runs/legal_it/gguf/legal-it-4b/" \
     ./gguf/
 ```
 

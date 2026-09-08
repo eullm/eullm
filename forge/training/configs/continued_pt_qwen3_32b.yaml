@@ -5,7 +5,7 @@
 # GPU of the 96 GB class.
 #
 # Expected wall time: 2.5–3.5 days on a 96 GB GPU.
-# Expected peak VRAM: ~78 GB (see docs/legal-it-7b-strategy.md §4.1).
+# Expected peak VRAM: ~78 GB (see docs/legal-it-4b-strategy.md §4.1).
 
 ### model
 model_name_or_path: Qwen/Qwen3-32B-Base

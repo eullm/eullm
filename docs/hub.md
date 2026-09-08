@@ -45,8 +45,8 @@ EULLM_HUB_PORT=3000 EULLM_HUB_STORAGE=/data/models eullm-hub
 
 ```
 $EULLM_HUB_STORAGE/
-├── legal-it-7b/
-│   └── legal-it-7b-q4_k_m.gguf
+├── legal-it-4b/
+│   └── legal-it-4b-q4_k_m.gguf
 ├── medical-de-7b/
 │   └── medical-de-7b-q4_k_m.gguf
 └── ...
@@ -82,7 +82,7 @@ curl http://localhost:8080/v1/models
 {
   "models": [
     {
-      "name": "eullm/legal-it-7b",
+      "name": "eullm/legal-it-4b",
       "description": "Italian legal domain — civil code, GDPR, Cassazione rulings",
       "languages": ["it", "en"],
       "domain": "legal",
@@ -93,9 +93,9 @@ curl http://localhost:8080/v1/models
       "license": "Apache-2.0",
       "format": "gguf",
       "quantization": "Q4_K_M",
-      "model_card": "/v1/models/legal-it-7b/card",
-      "compliance_card": "/v1/models/legal-it-7b/compliance",
-      "download": "/v1/models/legal-it-7b/download"
+      "model_card": "/v1/models/legal-it-4b/card",
+      "compliance_card": "/v1/models/legal-it-4b/compliance",
+      "download": "/v1/models/legal-it-4b/download"
     }
   ]
 }
@@ -106,7 +106,7 @@ curl http://localhost:8080/v1/models
 Get a specific model's metadata. Returns 404 if not found.
 
 ```bash
-curl http://localhost:8080/v1/models/legal-it-7b
+curl http://localhost:8080/v1/models/legal-it-4b
 ```
 
 ### `GET /v1/models/{name}/card`
@@ -114,14 +114,14 @@ curl http://localhost:8080/v1/models/legal-it-7b
 Get the model card documenting capabilities, training methodology, and limitations.
 
 ```bash
-curl http://localhost:8080/v1/models/legal-it-7b/card
+curl http://localhost:8080/v1/models/legal-it-4b/card
 ```
 
 **Model card structure:**
 
 ```json
 {
-  "model": "eullm/legal-it-7b",
+  "model": "eullm/legal-it-4b",
   "card_version": "1.0",
   "summary": {
     "description": "...",
@@ -153,14 +153,14 @@ curl http://localhost:8080/v1/models/legal-it-7b/card
 Get the AI Act compliance card per Regulation (EU) 2024/1689.
 
 ```bash
-curl http://localhost:8080/v1/models/legal-it-7b/compliance
+curl http://localhost:8080/v1/models/legal-it-4b/compliance
 ```
 
 **Compliance card structure:**
 
 ```json
 {
-  "model": "eullm/legal-it-7b",
+  "model": "eullm/legal-it-4b",
   "regulation": "EU AI Act — Regulation (EU) 2024/1689",
   "card_version": "1.0",
   "risk_classification": {
@@ -213,10 +213,10 @@ Download the GGUF model file. Streams the file with `Content-Disposition: attach
 
 ```bash
 # Download a model
-curl -O http://localhost:8080/v1/models/legal-it-7b/download
+curl -O http://localhost:8080/v1/models/legal-it-4b/download
 
 # Or use wget
-wget http://localhost:8080/v1/models/legal-it-7b/download -O legal-it-7b.gguf
+wget http://localhost:8080/v1/models/legal-it-4b/download -O legal-it-4b.gguf
 ```
 
 Returns 404 if the GGUF file hasn't been uploaded to the Hub storage directory.
@@ -225,7 +225,7 @@ Returns 404 if the GGUF file hasn't been uploaded to the Hub storage directory.
 
 | Model | Domain | VRAM | Size | Languages | Source | License |
 |---|---|---|---|---|---|---|
-| `eullm/legal-it-7b` | Legal | 6 GB | 4.5 GB | IT, EN | Qwen3-14B | Apache-2.0 |
+| `eullm/legal-it-4b` | Legal | 6 GB | 4.5 GB | IT, EN | Qwen3-14B | Apache-2.0 |
 | `eullm/medical-de-7b` | Medical | 6 GB | 4.5 GB | DE, EN | Qwen3-14B | Apache-2.0 |
 | `eullm/finance-fr-7b` | Finance | 6 GB | 4.5 GB | FR, EN | Qwen3-14B | Apache-2.0 |
 | `eullm/general-eu-7b` | General | 6 GB | 4.5 GB | EN, IT, DE, FR, ES, PT, NL | Qwen3-14B | Apache-2.0 |

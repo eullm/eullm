@@ -352,7 +352,7 @@ eullm-forge forge Qwen/Qwen3-14B --profile legal-it
 
 ## Demo Notebook
 
-`forge/notebooks/01_legal_it_7b_demo.ipynb` demonstrates the identity LoRA stage on Google Colab Pro+ (the only stage that can run on a single A100).
+`forge/notebooks/01_legal_it_4b_demo.ipynb` demonstrates the identity LoRA stage on Google Colab Pro+ (the only stage that can run on a single A100).
 
 ### What the notebook does
 
@@ -371,18 +371,18 @@ After running the notebook on Colab, the remaining steps run locally:
 # Merge LoRA into base weights
 python -c "
 from peft import AutoPeftModelForCausalLM
-model = AutoPeftModelForCausalLM.from_pretrained('./eullm-legal-it-7b-lora')
+model = AutoPeftModelForCausalLM.from_pretrained('./eullm-legal-it-4b-lora')
 merged = model.merge_and_unload()
-merged.save_pretrained('./eullm-legal-it-7b-merged')
+merged.save_pretrained('./eullm-legal-it-4b-merged')
 "
 
 # Convert to GGUF
-python llama.cpp/convert_hf_to_gguf.py ./eullm-legal-it-7b-merged --outtype f16
-llama.cpp/build/bin/llama-quantize ./eullm-legal-it-7b-merged/model.gguf \
-  ./eullm-legal-it-7b-Q4_K_M.gguf Q4_K_M
+python llama.cpp/convert_hf_to_gguf.py ./eullm-legal-it-4b-merged --outtype f16
+llama.cpp/build/bin/llama-quantize ./eullm-legal-it-4b-merged/model.gguf \
+  ./eullm-legal-it-4b-Q4_K_M.gguf Q4_K_M
 
 # Run with EULLM Engine
-eullm run ./eullm-legal-it-7b-Q4_K_M.gguf
+eullm run ./eullm-legal-it-4b-Q4_K_M.gguf
 ```
 
 ## Running Tests
