@@ -7,9 +7,19 @@
 #   frozen 30B BF16 weights, sharded 4-way      ~15 GB / GPU
 #   LoRA params + grads + Adam, sharded          ~1 GB / GPU
 #   activations (grad ckpt, seq len 2048)        ~8 GB / GPU
-#   ZeRO-3 gather buffers + headroom            ~10 GB / GPU
-#   ────────                                    ─────
-#   total                                       ~34 GB / 64 GB per GPU
+#   ZeRO-3 gather buffers                    see below / GPU
+#
+# The gather buffers are the line that matters on a MoE, and the first
+# run got them wrong: budgeted at ~10 GB, they took everything. ZeRO-3
+# keeps parameters partitioned at rest but must materialise a whole layer
+# on EVERY GPU to compute it, and one layer here is 128 experts x 3
+# matrices ~= 625 M parameters, 1.25 GB in bf16, against ~25 M for a dense
+# layer of the same hidden size. With the dense config's 1e9 live-parameter
+# limit and prefetch, several such layers were resident at once and 63.4
+# GiB of every A100 filled twenty seconds into the first forward (job
+# 56760964, 2026-09-08). ds_zero3_moe.json caps the gathered working set;
+# if this OOMs again the next levers, in order, are cutoff_len 2048 -> 1024
+# (activations) and offload_param to CPU (the node has ~270 GB free).
 #
 # WHY THIS MODEL, and not the Qwen3-32B-Base this file used to name:
 # Qwen3-32B-Base does not exist. Neither does Qwen3-7B-Base, the student
@@ -38,9 +48,8 @@
 # matches target modules by name suffix, so leaving `gate_proj`,
 # `up_proj` and `down_proj` in the list (as the dense config did) would
 # build an adapter on each expert: 128 x 3 x 48 = 18,432 adapter pairs.
-# Attention plus the router is targeted instead — the router learns
-# which experts the legal domain should activate, which is where the
-# routing knowledge lives, at a fraction of the parameters.
+# The four attention projections are targeted instead; see the note at
+# `lora_target` for why the router is not among them.
 #
 # Launch (inside an sbatch job — see forge/scripts/leonardo/):
 #   export FORCE_TORCHRUN=1 NPROC_PER_NODE=4
@@ -61,14 +70,16 @@ trust_remote_code: false
 
 ### distributed (DeepSpeed ZeRO-3 across the node's 4 GPUs)
 # __REPO_ROOT__ is replaced by forge/scripts/train.sh at launch time.
-deepspeed: __REPO_ROOT__/forge/training/configs/ds_zero3.json
+# ds_zero3_moe.json, not ds_zero3.json: the dense-tuned limits let ZeRO-3
+# gather several MoE layers at once and filled 63.4 GiB of every A100 in
+# twenty seconds at the first forward (job 56760964). See that file's
+# _README for the arithmetic.
+deepspeed: __REPO_ROOT__/forge/training/configs/ds_zero3_moe.json
 
 ### method (continued pre-training with LoRA)
 stage: pt
 do_train: true
 finetuning_type: lora
-# Attention + the MoE router only. See the header: adding the expert
-# projections here builds 18,432 adapters.
 # Attention projections only. The MoE router (`mlp.gate` in Qwen3-MoE) is
 # deliberately NOT a target: adapting the router on a narrow domain corpus
 # skews routing towards a handful of experts, which throws away the capacity

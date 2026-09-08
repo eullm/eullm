@@ -25,7 +25,7 @@ split the download counts across repos.
 
 | Role | Model | Params | License | Why |
 |------|-------|-------:|---------|-----|
-| **Teacher** | `Qwen/Qwen3-30B-A3B-Base` | 30.5 B total / 3.3 B active (MoE) | Apache 2.0 | Italian-native pretraining, context 128 k, and — the reason it wins on this budget — only 3.3 B active parameters. Distillation runs the teacher forward on every batch and never backward, so active parameters, not total, set the dominant cost of Phase 2. |
+| **Teacher** | `Qwen/Qwen3-30B-A3B-Base` | 30.5 B total / 3.3 B active (MoE) | Apache 2.0 | Italian-native pretraining, 32 k native context (the 128 k figure belongs to the Instruct variant with YaRN scaling; the Base checkpoint reports `max_position_embeddings: 32768`, which is ample at `cutoff_len: 2048`), and — the reason it wins on this budget — only 3.3 B active parameters. Distillation runs the teacher forward on every batch and never backward, so active parameters, not total, set the dominant cost of Phase 2. |
 | **Student** | `Qwen/Qwen3-4B-Base` | 4 B | Apache 2.0 | Same tokenizer as the teacher → distillation is drop-in (KL over logits, no sub-token mapping). Deliberately the *first* student size, not the final one: it is what fits comfortably alongside the teacher on one Leonardo node and gets us an end-to-end run to measure before spending the budget on a larger one. |
 
 > **Naming**: the deliverable was called `legal-it-7b` until 2026-09-08,
