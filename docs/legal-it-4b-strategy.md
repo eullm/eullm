@@ -289,6 +289,20 @@ When the pipeline finishes we publish:
 | Italian quality regression vs base Qwen3 | Medium | Held-out perplexity on `val.jsonl` + side-by-side prompts (10 fixed legal questions) at every checkpoint. |
 | Memorized PII leaks (despite anonymizer) | Medium — the anonymiser reported a clean run on 5.7 M redactions and had still left 59 codici fiscali in the training text (round 6, 2026-09-08: `RE_CF` was `\b`-anchored, so every code glued to adjacent alphanumerics was skipped). A clean report is evidence about the patterns, not about the corpus. | Re-run `forge/scripts/sweep_structured_pii.py` over `train.jsonl`/`val.jsonl` before every training launch — it exits non-zero when dirty, so it can gate the job. Membership-inference probe before publishing weights; if a leak surfaces, drop the offending chunk and retrain the affected slice. |
 
+## 10b. Architecture from v1.1 — see ADR-001
+
+The run producing v1.0 uses an 8-bit teacher under plain DDP, because online
+distillation needs teacher and student resident together and a bf16 teacher
+does not fit beside one. [`adr-001-offline-distillation.md`](adr-001-offline-distillation.md)
+freezes v1.0 as the baseline and moves Phase 2 to cached top-K logits: the
+teacher runs the corpus once in bf16, writes its distributions to disk, and
+is unloaded before the student trains. That removes the co-residency
+constraint rather than working around it, and with it the reason to quantize
+the teacher at all.
+
+v1.0 is not superseded by that plan — it is what the plan has to beat, on
+quality, throughput, node-hours, VRAM, stability, or student size.
+
 ## 11. Open questions
 
 - Should the student also receive Phase-1 LoRA from the teacher as a
