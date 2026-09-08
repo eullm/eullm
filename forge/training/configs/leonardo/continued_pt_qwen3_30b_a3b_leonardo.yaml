@@ -1,0 +1,116 @@
+# Phase 1 — Continued pre-training of the teacher, Leonardo Booster edition.
+#
+# Target: Qwen3-30B-A3B-Base + LoRA on the full 700M-token Italian legal
+# corpus, on ONE Leonardo Booster node (4x NVIDIA A100 64 GB), sharded
+# with DeepSpeed ZeRO-3 across the 4 GPUs:
+#
+#   frozen 30B BF16 weights, sharded 4-way      ~15 GB / GPU
+#   LoRA params + grads + Adam, sharded          ~1 GB / GPU
+#   activations (grad ckpt, seq len 2048)        ~8 GB / GPU
+#   ZeRO-3 gather buffers + headroom            ~10 GB / GPU
+#   ────────                                    ─────
+#   total                                       ~34 GB / 64 GB per GPU
+#
+# WHY THIS MODEL, and not the Qwen3-32B-Base this file used to name:
+# Qwen3-32B-Base does not exist. Neither does Qwen3-7B-Base, the student
+# the Phase-2 config named — Qwen3 skipped the 7B size and never
+# published a 32B Base. Both were silently unreachable until a prefetch
+# on Leonardo returned 404 for each. The Base models Qwen actually
+# publishes are 0.6B / 1.7B / 4B / 8B / 14B dense and 30B-A3B MoE.
+#
+# The whole Qwen3.5 and Qwen3.8 line was evaluated as a replacement and
+# rejected: every Qwen3.5 Base is Qwen3_5(Moe)ForConditionalGeneration —
+# multimodal, with the text model nested under `text_config` — so
+# AutoModelForCausalLM cannot load it and its 248k vocab does not match
+# any Qwen3 student. Qwen3.8 publishes no Base at all. Mistral's
+# Ministral-3 Base models are Mistral3ForConditionalGeneration for the
+# same reason. Gemma is excluded by the project's permissive-licence
+# rule (licence `gemma`, not Apache), DeepSeek-V4-Flash-Base is 274 GiB
+# even in FP8, and V3.1-Base is 671B.
+#
+# That leaves Qwen3-30B-A3B-Base as the largest permissively licensed
+# Base causal LM that fits: Apache 2.0, Qwen3MoeForCausalLM, vocab
+# 151936 — the same as the Qwen3-4B-Base student, which logit
+# distillation requires.
+#
+# LORA TARGETS ON A MoE — read before changing them. `decoder_sparse_step`
+# is 1, so every one of the 48 layers is MoE with 128 experts. peft
+# matches target modules by name suffix, so leaving `gate_proj`,
+# `up_proj` and `down_proj` in the list (as the dense config did) would
+# build an adapter on each expert: 128 x 3 x 48 = 18,432 adapter pairs.
+# Attention plus the router is targeted instead — the router learns
+# which experts the legal domain should activate, which is where the
+# routing knowledge lives, at a fraction of the parameters.
+#
+# Launch (inside an sbatch job — see forge/scripts/leonardo/):
+#   export FORCE_TORCHRUN=1 NPROC_PER_NODE=4
+#   bash forge/scripts/train.sh \
+#       forge/training/configs/leonardo/continued_pt_qwen3_30b_a3b_leonardo.yaml \
+#       "$EULLM_DATA_DIR"
+#
+# Data parallelism is 4-way, so gradient_accumulation_steps drops from
+# 16 to 4 to keep the effective batch at 16 (1 x 4 GPUs x 4 accum) —
+# same optimization trajectory as the single-GPU config, ~4x the
+# throughput. Expected wall time: well under 24 h for one epoch, but
+# submit via submit_chain.sh with count=2 anyway — the launcher resumes
+# from the latest checkpoint if the first job hits the walltime cap.
+
+### model
+model_name_or_path: Qwen/Qwen3-30B-A3B-Base
+trust_remote_code: false
+
+### distributed (DeepSpeed ZeRO-3 across the node's 4 GPUs)
+# __REPO_ROOT__ is replaced by forge/scripts/train.sh at launch time.
+deepspeed: __REPO_ROOT__/forge/training/configs/ds_zero3.json
+
+### method (continued pre-training with LoRA)
+stage: pt
+do_train: true
+finetuning_type: lora
+# Attention + the MoE router only. See the header: adding the expert
+# projections here builds 18,432 adapters.
+lora_target: q_proj,k_proj,v_proj,o_proj,gate
+lora_rank: 128
+lora_alpha: 256
+lora_dropout: 0.05
+
+### dataset
+# __DATASET_DIR__ is replaced by forge/scripts/train.sh at launch time.
+dataset_dir: __DATASET_DIR__
+dataset: legal_it_train
+eval_dataset: legal_it_val
+cutoff_len: 2048
+preprocessing_num_workers: 8
+overwrite_cache: false
+
+### training
+# Relative to the job's working directory — the sbatch scripts cd into
+# $EULLM_RUN_DIR on $WORK, so checkpoints land on the project storage.
+output_dir: ./checkpoints/qwen3_30b_a3b_legal_it_continued_pt
+overwrite_output_dir: false
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4         # effective batch = 1 x 4 GPUs x 4 = 16
+learning_rate: 1.0e-5
+num_train_epochs: 1
+lr_scheduler_type: cosine
+warmup_steps: 2000         # same optim-step count as the single-GPU
+                           # config (effective batch unchanged)
+weight_decay: 0.01
+max_grad_norm: 1.0
+bf16: true
+gradient_checkpointing: true
+optim: adamw_torch         # ZeRO-3 shards the optimizer state, so
+                           # plain AdamW costs ~0.5 GB/GPU here
+
+### checkpointing (every 500 steps as per strategy doc §6)
+logging_steps: 10
+save_steps: 500
+save_total_limit: 2
+save_strategy: steps
+plot_loss: true
+
+### eval (perplexity on val every 500 steps)
+per_device_eval_batch_size: 1
+eval_strategy: steps
+eval_steps: 500
+val_size: 0
