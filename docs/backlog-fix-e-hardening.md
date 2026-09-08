@@ -2556,6 +2556,31 @@ diligenza manuale.
   regola di `engine/CLAUDE.md`, una build pulita non basta. Se possibile,
   caricare anche un vero GGUF Qwen3.8-Flash-Next per confermare che
   l'architettura funzioni davvero end-to-end e non solo a compile-time.
+- [ ] **H3-S · `--base-model` di Forge accetta un repo Hub arbitrario** *(P2)*
+  *Aperta 2026-09-08 a margine di CVE-2026-69112 in `accelerate` (path traversal
+  in `load_checkpoint_in_model` / `load_checkpoint_and_dispatch`: le voci
+  `weight_map` di un index shardato non sono sanificate, quindi un
+  `model.safetensors.index.json` costruito ad arte legge file arbitrari con
+  `../` o punta uno shard a una named pipe e blocca il processo).*
+
+  La CVE è ignorata in `ci.yml` perché non esiste una versione corretta —
+  1.14.0 è l'ultima pubblicata e l'advisory dice "through 1.14.0". Quell'ignore
+  però risolve la CI, non l'esposizione, e vale la pena separare i due casi:
+
+  * La **pipeline nostra** carica solo checkpoint che preleva da sé dai
+    repository ufficiali Qwen, e l'Engine non usa `accelerate`. Rischio basso.
+  * `eullm forge --base-model <hub-id>` accetta **qualunque** id dell'Hub, e un
+    utente che lo punta su un repository non fidato è esattamente sul percorso
+    vulnerabile. Rischio reale, e non nostro da correre ma da segnalare.
+
+  Da fare, indipendentemente da quando arriva la fix upstream: dire nella
+  documentazione di Forge che `--base-model` esegue codice di caricamento su
+  dati del repository indicato, e valutare una convalida dell'index prima di
+  passarlo ad `accelerate` (path relativi contenuti nella directory del
+  checkpoint, nessun `..`, nessun file non regolare). L'ignore in `ci.yml` va
+  rimosso appena `accelerate` pubblica una release corretta: un audit verde
+  non lo segnalerà, perché è proprio quel finding a essere soppresso.
+
 ---
 
 ## Rimandi — voci già coperte dalle roadmap esistenti

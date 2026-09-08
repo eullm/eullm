@@ -267,9 +267,34 @@ jobs:
         # matters here — a vulnerability in a real dependency still exits
         # non-zero — and only means an unauditable package is reported instead
         # of fatal.
+        #
+        # IGNORED, 2026-09-08 — CVE-2026-69112 in accelerate.
+        # Path traversal in `load_checkpoint_in_model` /
+        # `load_checkpoint_and_dispatch`: `weight_map` entries in a sharded
+        # checkpoint index are not sanitised, so a crafted
+        # `model.safetensors.index.json` can read arbitrary files with `../`
+        # or point a shard at a named pipe and hang the process.
+        #
+        # Ignored because there is nothing to upgrade to: 1.14.0 is the latest
+        # release on PyPI and the advisory says "through 1.14.0", so every
+        # published version is affected. Downgrading moves nothing.
+        #
+        # Our own exposure is low but not zero, and the distinction matters:
+        # the Forge pipeline only loads checkpoints it prefetches itself from
+        # Qwen's official repositories, and the Engine does not use accelerate
+        # at all. But `eullm forge --base-model` takes an arbitrary Hub id, so
+        # a user pointing Forge at an untrusted repository IS on the vulnerable
+        # path. That is a documentation and validation question, tracked in
+        # docs/backlog-fix-e-hardening.md, not something this ignore resolves.
+        #
+        # REMOVE THIS as soon as accelerate publishes a fixed release: bump the
+        # floor in forge/pyproject.toml and delete the flag. Check with
+        # `pip index versions accelerate` or the PyPI JSON API — a green audit
+        # here will NOT tell you a fix has landed, because this flag suppresses
+        # exactly the finding that would.
         run: |
           pip install pip-audit==2.10.1
-          pip-audit --desc --skip-editable
+          pip-audit --desc --skip-editable --ignore-vuln CVE-2026-69112
 
   # ── Windows installer pre-flight (FAST, <2 min, runs on every push) ──
   # Installer preflight removed in v0.5.7 alongside the installer build
