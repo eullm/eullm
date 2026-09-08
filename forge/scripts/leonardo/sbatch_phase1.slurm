@@ -29,6 +29,12 @@ python "$EULLM_REPO/forge/scripts/check_training_env.py" \
     --offline --multi-gpu --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
     --tokenizer-model Qwen/Qwen3-30B-A3B-Base
 
+# Report on ourselves: LLaMA-Factory and DeepSpeed are silent through
+# checkpoint load and ZeRO-3 init, which is where the long waits are.
+# shellcheck disable=SC1091
+source "$EULLM_REPO/forge/scripts/leonardo/heartbeat.sh"
+heartbeat_start
+
 # LLaMA-Factory launches through torchrun with one rank per GPU.
 export FORCE_TORCHRUN=1
 export NPROC_PER_NODE=4
