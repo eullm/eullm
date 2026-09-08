@@ -6,7 +6,7 @@
 #
 #   frozen 30B BF16 weights, sharded 4-way      ~15 GB / GPU
 #   LoRA params + grads + Adam, sharded          ~1 GB / GPU
-#   activations (grad ckpt, seq len 2048)        ~8 GB / GPU
+#   activations (grad ckpt, seq len 1024)        ~4 GB / GPU
 #   ZeRO-3 gather buffers                    see below / GPU
 #
 # The gather buffers are the line that matters on a MoE, and the first
@@ -17,9 +17,15 @@
 # layer of the same hidden size. With the dense config's 1e9 live-parameter
 # limit and prefetch, several such layers were resident at once and 63.4
 # GiB of every A100 filled twenty seconds into the first forward (job
-# 56760964, 2026-09-08). ds_zero3_moe.json caps the gathered working set;
-# if this OOMs again the next levers, in order, are cutoff_len 2048 -> 1024
-# (activations) and offload_param to CPU (the node has ~270 GB free).
+# 56760964, 2026-09-08). ds_zero3_moe.json caps the gathered working set.
+#
+# That fix got the forward through — GPUs reached 100% — and job 56768626
+# then OOM'd in the BACKWARD pass instead, asking for 768 MiB with 674 MiB
+# free: 94 MiB short of 63.42 GiB. Hence cutoff_len 1024 and
+# overlap_comm false, which buy headroom rather than a 94 MiB pass. The one
+# lever still unused is offload_param to CPU; the node had 287 GiB of
+# system memory free at the moment of the failure, and host RAM cannot
+# rescue a full GPU unless offloading is configured explicitly.
 #
 # WHY THIS MODEL, and not the Qwen3-32B-Base this file used to name:
 # Qwen3-32B-Base does not exist. Neither does Qwen3-7B-Base, the student
@@ -98,7 +104,14 @@ lora_dropout: 0.05
 dataset_dir: __DATASET_DIR__
 dataset: legal_it_train
 eval_dataset: legal_it_val
-cutoff_len: 2048
+# 1024, not the 2048 the single-GPU config uses. Halving the sequence
+# halves activation memory, which is what the backward pass ran out of:
+# the forward now completes (GPUs reached 100%) and backward asked for
+# 768 MiB with 674 MiB free — 94 MiB short of 63.42 GiB. Fitting by 94 MiB
+# is not fitting; the first eval batch or a run of allocator fragmentation
+# would OOM hours in instead of minutes in. Same total tokens, twice the
+# optimizer steps. Raise it back once a run is measured and has room.
+cutoff_len: 1024
 preprocessing_num_workers: 8
 overwrite_cache: false
 
