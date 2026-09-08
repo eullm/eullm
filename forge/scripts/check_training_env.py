@@ -61,7 +61,7 @@ def check_module(name: str, *, min_version: str | None = None) -> bool:
     return True
 
 
-def check_cuda() -> bool:
+def check_cuda(expect_gpus: int = 1) -> bool:
     try:
         import torch
     except ImportError:
@@ -70,12 +70,17 @@ def check_cuda() -> bool:
     if not torch.cuda.is_available():
         fail("CUDA not available — torch built without CUDA?")
         return False
-    name = torch.cuda.get_device_name(0)
-    cap = torch.cuda.get_device_capability(0)
-    free, total = torch.cuda.mem_get_info()
-    ok(f"CUDA {torch.version.cuda} on {name} "
-       f"(cap {cap[0]}.{cap[1]}, {total / 1024**3:.1f} GiB total, "
-       f"{free / 1024**3:.1f} GiB free)")
+    n = torch.cuda.device_count()
+    for i in range(n):
+        name = torch.cuda.get_device_name(i)
+        cap = torch.cuda.get_device_capability(i)
+        total = torch.cuda.get_device_properties(i).total_memory
+        ok(f"cuda:{i} {name} (cap {cap[0]}.{cap[1]}, "
+           f"{total / 1024**3:.1f} GiB)")
+    if n < expect_gpus:
+        fail(f"{n} GPU(s) visible, {expect_gpus} expected "
+             f"(wrong --gres request, or not inside the job?)")
+        return False
     if torch.cuda.is_bf16_supported():
         ok("BF16 supported (Ampere+ class GPU)")
     else:
@@ -108,26 +113,35 @@ def check_dataset(data_dir: Path) -> bool:
     ok(f"dataset at {data_dir}: "
        f"train={train_size:.0f} MiB, val={val_size:.0f} MiB")
     if not info.is_file():
-        warn(f"dataset_info.json not present yet "
-             f"(train.sh will create it on launch)")
+        warn("dataset_info.json not present yet "
+             "(train.sh will create it on launch)")
     return True
 
 
-def check_tokenizer(model_id: str) -> bool:
+def check_tokenizer(model_id: str, *, offline: bool = False) -> bool:
     """Smoke-load the tokenizer for the configured model. Confirms that
     transformers + huggingface_hub auth are working without committing
-    to a full model download."""
+    to a full model download. With ``offline`` it must come from the
+    local HF cache — this is what proves prefetch_models.py ran before
+    submitting to network-less compute nodes."""
     try:
         from transformers import AutoTokenizer
     except ImportError:
         fail("transformers not importable")
         return False
     try:
-        tok = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)
+        tok = AutoTokenizer.from_pretrained(
+            model_id, trust_remote_code=False, local_files_only=offline,
+        )
     except Exception as exc:
-        fail(f"could not load tokenizer for {model_id}: {exc}")
+        if offline:
+            fail(f"tokenizer for {model_id} not in the local HF cache "
+                 f"(HF_HOME set? prefetch_models.py run?): {exc}")
+        else:
+            fail(f"could not load tokenizer for {model_id}: {exc}")
         return False
-    ok(f"tokenizer for {model_id} (vocab {len(tok)})")
+    src = "local cache" if offline else "HF Hub"
+    ok(f"tokenizer for {model_id} (vocab {len(tok)}, from {src})")
     return True
 
 
@@ -149,7 +163,35 @@ def main(argv: Iterable[str] | None = None) -> int:
         action="store_true",
         help="Skip the HF tokenizer fetch (useful offline / CI)",
     )
+    parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Assume no network (HPC compute nodes): force the HF stack "
+             "offline and require the tokenizer in the local cache",
+    )
+    parser.add_argument(
+        "--cpu-only",
+        action="store_true",
+        help="Skip the GPU/CUDA checks (login nodes have no GPU)",
+    )
+    parser.add_argument(
+        "--expect-gpus",
+        type=int,
+        default=1,
+        help="Fail if fewer CUDA devices are visible (multi-GPU jobs)",
+    )
+    parser.add_argument(
+        "--multi-gpu",
+        action="store_true",
+        help="Also check the multi-GPU stack (deepspeed) is importable",
+    )
     args = parser.parse_args(argv)
+
+    if args.offline:
+        # Must happen before transformers/huggingface_hub are imported.
+        import os
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     print("== Python ==")
     ok(f"Python {sys.version.split()[0]} at {sys.executable}")
@@ -165,6 +207,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         ("safetensors", None),
         ("llamafactory", None),
     ]
+    if args.multi_gpu:
+        pkgs.append(("deepspeed", "0.19"))
     failed = False
     for name, min_v in pkgs:
         if not check_module(name, min_version=min_v):
@@ -177,7 +221,9 @@ def main(argv: Iterable[str] | None = None) -> int:
 
     print()
     print("== GPU / CUDA ==")
-    if not check_cuda():
+    if args.cpu_only:
+        warn("GPU checks skipped (--cpu-only)")
+    elif not check_cuda(expect_gpus=args.expect_gpus):
         failed = True
 
     print()
@@ -191,7 +237,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         # smoke uses Qwen3-1.7B-Base; production uses Qwen3-32B-Base.
         # Tokenizer is the same family so the smaller download is fine
         # for both.
-        if not check_tokenizer("Qwen/Qwen3-1.7B-Base"):
+        if not check_tokenizer("Qwen/Qwen3-1.7B-Base", offline=args.offline):
             failed = True
     else:
         warn("tokenizer check skipped (--skip-tokenizer)")

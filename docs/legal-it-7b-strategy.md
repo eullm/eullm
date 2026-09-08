@@ -79,9 +79,23 @@ and runs in 1-2 h on a 5070 Ti once the GGUF is validated.
 
 ## 4. Hardware budget
 
-Target: **single GPU, 96 GB class** (Blackwell-generation or equivalent
-high-bandwidth A100/H100 80 GB if 96 GB is unavailable). Multi-GPU
-shaves wall-clock but is not required for this size class.
+**Primary target (since 09/2026): EuroHPC allocation
+EHPC-AIF-2026PG01-1147 on Leonardo Booster (CINECA)** — 1,250 node
+hours, 02/09/2026 → 02/11/2026, nodes of 4x A100 64 GB. No single
+Leonardo GPU fits the single-GPU budgets below, so the Leonardo path
+uses dedicated configs (`forge/training/configs/leonardo/`): Phase 1
+shards everything with DeepSpeed ZeRO-3 across the 4 GPUs (~36 GB/GPU),
+Phase 2 shards the frozen teacher via an accelerate device map while
+the student trains on one GPU. Operational details, node-hour budget
+(~250 for the full pipeline), and the 24 h-walltime chaining protocol:
+[`leonardo-runbook.md`](leonardo-runbook.md).
+
+The rented single-GPU path below remains valid as fallback once the
+allocation ends.
+
+Fallback target: **single GPU, 96 GB class** (Blackwell-generation or
+equivalent high-bandwidth A100/H100 80 GB if 96 GB is unavailable).
+Multi-GPU shaves wall-clock but is not required for this size class.
 
 ### Phase 1 — continued pre-training (LoRA on teacher)
 

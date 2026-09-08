@@ -65,9 +65,12 @@ TMP_YAML=$(mktemp --suffix=.yaml)
 trap 'rm -f "$TMP_YAML"' EXIT
 
 # Use a delimiter that can't appear in a Unix path (|) and an absolute
-# DATA_DIR so the substitution is unambiguous.
+# DATA_DIR so the substitution is unambiguous. __REPO_ROOT__ lets a YAML
+# reference files in the repo (e.g. the DeepSpeed config) regardless of
+# the directory the job runs from.
 ABS_DATA_DIR="$(cd "$DATA_DIR" && pwd)"
-sed "s|__DATASET_DIR__|$ABS_DATA_DIR|g" "$CONFIG" > "$TMP_YAML"
+sed -e "s|__DATASET_DIR__|$ABS_DATA_DIR|g" \
+    -e "s|__REPO_ROOT__|$REPO_ROOT|g" "$CONFIG" > "$TMP_YAML"
 
 # Extract output_dir from the resolved YAML to look for an existing
 # checkpoint.
