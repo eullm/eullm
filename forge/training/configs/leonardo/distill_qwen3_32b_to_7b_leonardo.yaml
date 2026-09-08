@@ -1,0 +1,87 @@
+# Phase 2 — Knowledge distillation Qwen3-32B-legal-it → Qwen3-7B-Base,
+# Leonardo Booster edition (one node, 4x NVIDIA A100 64 GB).
+#
+# The 64 GB BF16 teacher does not fit any single Leonardo GPU, so it is
+# sharded across all 4 GPUs (teacher_device_map: auto) while the student
+# trains entirely on cuda:0. The max_memory caps below reserve cuda:0
+# for the student:
+#
+#   cuda:0  teacher shard ≤ 8 GB + student 14 GB + LoRA/Adam 6 GB
+#           + activations ~10 GB                        ≈ 38 / 64 GB ✅
+#   cuda:1-3  teacher shards, ≤ 58 GB each (64 GB weights total
+#             spread over ~3.4 GPUs of budget)          ≈ 19 / 64 GB each ✅
+#
+# The teacher forward is pipelined across the GPUs; the student's
+# forward/backward stays on cuda:0. Wall time is teacher-forward-bound,
+# comparable to the single-96GB estimate (5-7 days) — submit with
+# submit_chain.sh count=7: each 24 h job resumes from the latest
+# checkpoint automatically.
+#
+# Launch (inside an sbatch job — see forge/scripts/leonardo/):
+#   bash forge/scripts/distill.sh \
+#       forge/training/configs/leonardo/distill_qwen3_32b_to_7b_leonardo.yaml \
+#       "$EULLM_DATA_DIR"
+
+### models
+teacher_model: Qwen/Qwen3-32B-Base
+# Phase-1 LoRA adapter, relative to the job's working directory
+# ($EULLM_RUN_DIR) — i.e. the output_dir of the Phase-1 Leonardo config.
+teacher_adapter: ./checkpoints/qwen3_32b_legal_it_continued_pt
+student_model: Qwen/Qwen3-7B-Base
+teacher_load_in_8bit: false
+teacher_load_in_4bit: false
+
+### teacher placement (Leonardo: shard across the node's 4 GPUs)
+teacher_device_map: auto
+teacher_gib_per_gpu: 58
+teacher_gib_on_student_gpu: 8
+student_device: cuda:0
+
+### student fine-tuning method
+# LoRA student, as in the single-GPU config. With 256 GB of node VRAM a
+# full fine-tune becomes thinkable, but it needs FSDP on the student —
+# out of scope for v0.1 (see docs/legal-it-7b-strategy.md §4).
+student_finetune: lora
+student_lora_rank: 128
+student_lora_alpha: 256
+student_lora_dropout: 0.0
+student_lora_target_modules:
+  - q_proj
+  - k_proj
+  - v_proj
+  - o_proj
+  - gate_proj
+  - up_proj
+  - down_proj
+
+### data
+# Overridden by the data-dir argument distill.sh passes on the CLI.
+dataset_dir: ~/datasets/legal_it
+train_file: train.jsonl
+val_file: val.jsonl
+cutoff_len: 2048
+max_train_samples: null
+
+### training
+# Relative to the job's working directory ($EULLM_RUN_DIR on $WORK).
+output_dir: ./checkpoints/qwen3_7b_legal_it_distilled
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 5.0e-5
+weight_decay: 0.01
+max_grad_norm: 1.0
+num_train_epochs: 1
+max_steps: -1
+warmup_steps: 1000
+save_steps: 1000
+eval_steps: 1000
+logging_steps: 20
+
+### distillation
+kl_temperature: 2.0
+kl_alpha: 0.7
+
+### hardware
+bf16: true
+gradient_checkpointing: true
+seed: 42

@@ -52,9 +52,17 @@ mkdir -p "$OUT_DIR"
 # ---------------------------------------------------------------------------
 
 if [ -d "$LCPP_DIR/.git" ]; then
-    log "llama.cpp already at $LCPP_DIR — pulling latest"
-    git -C "$LCPP_DIR" pull --quiet --ff-only
+    if [ "${LCPP_SKIP_UPDATE:-0}" = "1" ]; then
+        # Offline mode (e.g. HPC compute nodes without outbound network):
+        # use the checkout as-is. Clone/update it on a login node first.
+        log "llama.cpp at $LCPP_DIR — LCPP_SKIP_UPDATE=1, using as-is"
+    else
+        log "llama.cpp already at $LCPP_DIR — pulling latest"
+        git -C "$LCPP_DIR" pull --quiet --ff-only
+    fi
 else
+    [ "${LCPP_SKIP_UPDATE:-0}" != "1" ] || \
+        err "LCPP_SKIP_UPDATE=1 but no checkout at $LCPP_DIR — clone it on a login node first"
     log "cloning llama.cpp into $LCPP_DIR"
     git clone --depth 1 "$LCPP_REPO" "$LCPP_DIR"
 fi

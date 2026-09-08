@@ -376,3 +376,46 @@ def distill(config: DistillConfig) -> str:
 
     logger.info("Knowledge distillation complete.")
     return str(output_dir)
+
+
+def build_teacher_max_memory(
+    num_gpus: int,
+    student_gpu_index: int = 0,
+    teacher_gib_per_gpu: int = 58,
+    teacher_gib_on_student_gpu: int = 8,
+) -> dict[int, str]:
+    """Build the accelerate ``max_memory`` map for a sharded frozen teacher.
+
+    When teacher and student run in the same process on a multi-GPU node
+    (e.g. Leonardo Booster: 4x A100 64 GB, where no single GPU fits a
+    32B BF16 teacher), the teacher is sharded with ``device_map="auto"``
+    and this map caps how much of each GPU it may occupy — leaving the
+    student's GPU almost entirely to the student, its optimizer state,
+    and activations.
+
+    Args:
+        num_gpus: Number of visible CUDA devices (must be >= 2 — on a
+            single GPU there is nothing to shard).
+        student_gpu_index: Index of the GPU that hosts the student.
+        teacher_gib_per_gpu: Teacher budget (GiB) on every other GPU.
+        teacher_gib_on_student_gpu: Teacher budget (GiB) on the
+            student's GPU.
+
+    Returns:
+        ``{gpu_index: "NGiB"}`` suitable for
+        ``AutoModelForCausalLM.from_pretrained(..., max_memory=...)``.
+    """
+    if num_gpus < 2:
+        raise ValueError(f"sharding needs >= 2 GPUs, got {num_gpus}")
+    if not 0 <= student_gpu_index < num_gpus:
+        raise ValueError(
+            f"student_gpu_index {student_gpu_index} out of range for {num_gpus} GPUs"
+        )
+    return {
+        i: (
+            f"{teacher_gib_on_student_gpu}GiB"
+            if i == student_gpu_index
+            else f"{teacher_gib_per_gpu}GiB"
+        )
+        for i in range(num_gpus)
+    }

@@ -18,6 +18,14 @@ The end-to-end strategy lives in
 | `smoke_qwen3_1.7b.yaml` | smoke | `Qwen/Qwen3-1.7B-Base` + LoRA r=8 | RTX 5070 Ti 16 GB | ~5-15 min |
 | `continued_pt_qwen3_32b.yaml` | Phase 1 | `Qwen/Qwen3-32B-Base` + LoRA r=128 | 96 GB GPU | 2.5-3.5 days |
 | `distill_qwen3_32b_to_7b.yaml` | Phase 2 | `Qwen/Qwen3-32B` (frozen) + `Qwen/Qwen3-7B-Base` (trainable) | 96 GB GPU | 5-7 days |
+| `leonardo/continued_pt_qwen3_32b_leonardo.yaml` | Phase 1 | same, DeepSpeed ZeRO-3 | Leonardo node (4x A100 64 GB) | < 1 day |
+| `leonardo/distill_qwen3_32b_to_7b_leonardo.yaml` | Phase 2 | same, teacher sharded on 4 GPUs | Leonardo node (4x A100 64 GB) | 5-7 days |
+
+The `leonardo/` variants target the EuroHPC allocation on Leonardo
+Booster (CINECA), where no single GPU fits the single-GPU memory
+budgets. SLURM launchers, offline-cache setup, and the full runbook
+live in `forge/scripts/leonardo/` and
+[`docs/leonardo-runbook.md`](../../docs/leonardo-runbook.md).
 
 The smoke config exists only to validate the wiring (dataset registration,
 checkpoint write, resume-from-checkpoint). Train it once, kill it

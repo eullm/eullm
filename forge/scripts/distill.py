@@ -9,13 +9,22 @@ fraction of the standard cross-entropy on the ground-truth tokens
 
 Loss = α · KL(student || teacher) · T² + (1-α) · CE(student, y)
 
-Training is single-GPU (no FSDP / DeepSpeed) targeting one ~96 GB
-device. Memory layout (BF16 throughout):
+Training is single-process. Two hardware layouts are supported:
 
-    Teacher 32B (frozen, no grad):     ~64 GB
-    Student 7B + grad + 8-bit Adam:    ~28 GB
-    Activations (seq 2048, both nets): ~6 GB
-    Headroom:                          ~variable
+* ``teacher_device_map: single`` (default) — teacher and student share
+  one ~96 GB device (H100 NVL, RTX PRO 6000 Blackwell):
+
+      Teacher 32B (frozen, no grad):     ~64 GB
+      Student 7B + grad + 8-bit Adam:    ~28 GB
+      Activations (seq 2048, both nets): ~6 GB
+      Headroom:                          ~variable
+
+* ``teacher_device_map: auto`` — multi-GPU nodes where no single GPU
+  fits the BF16 teacher (Leonardo Booster: 4x A100 64 GB). The frozen
+  teacher is sharded across every visible GPU via accelerate, capped by
+  a max_memory map that reserves the student's GPU (default cuda:0)
+  for the student + optimizer + activations. The teacher forward is
+  pipelined across GPUs; the student trains entirely on its own GPU.
 
 If the 32B teacher does not fit, pass --teacher-load-in-8bit (bitsandbytes
 NF4/INT8) to drop the teacher to ~16 GB at the cost of slightly noisier
@@ -46,7 +55,7 @@ import json
 import os
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -63,6 +72,10 @@ from transformers import (
     get_cosine_schedule_with_warmup,
 )
 
+# The script runs from a repo checkout, not necessarily with eullm_forge
+# pip-installed — make the package importable from its source tree.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from eullm_forge.distill import build_teacher_max_memory  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Config
@@ -77,6 +90,17 @@ class DistillConfig:
     student_model: str = "Qwen/Qwen3-7B-Base"
     teacher_load_in_8bit: bool = False     # bitsandbytes 8-bit teacher
     teacher_load_in_4bit: bool = False     # bitsandbytes 4-bit teacher (NF4)
+
+    # Teacher placement:
+    #   "single" — teacher lives on student_device (one 96 GB-class GPU).
+    #   "auto"   — teacher sharded across all visible GPUs (accelerate
+    #              device_map) with a max_memory cap that keeps the
+    #              student's GPU free. Required on nodes where no single
+    #              GPU fits the BF16 teacher (Leonardo: 4x A100 64 GB).
+    teacher_device_map: str = "single"
+    teacher_gib_per_gpu: int = 58          # teacher budget on non-student GPUs
+    teacher_gib_on_student_gpu: int = 8    # teacher budget on the student GPU
+    student_device: str = "cuda:0"
 
     # Student fine-tuning method:
     #   "lora" (default) — wrap student in PEFT LoRA, only LoRA params
@@ -195,14 +219,39 @@ def _quantization_config(load_in_8bit: bool, load_in_4bit: bool):
 
 def load_teacher(cfg: DistillConfig, dtype: torch.dtype, device: str):
     print(f"[teacher] loading {cfg.teacher_model} "
-          f"(8bit={cfg.teacher_load_in_8bit}, 4bit={cfg.teacher_load_in_4bit})",
+          f"(8bit={cfg.teacher_load_in_8bit}, 4bit={cfg.teacher_load_in_4bit}, "
+          f"device_map={cfg.teacher_device_map})",
           file=sys.stderr)
     quant = _quantization_config(cfg.teacher_load_in_8bit,
                                  cfg.teacher_load_in_4bit)
+    device_map = {"": device} if quant is None else "auto"
+    max_memory = None
+    if cfg.teacher_device_map == "auto":
+        n_gpus = torch.cuda.device_count()
+        if n_gpus > 1:
+            student_idx = torch.device(cfg.student_device).index or 0
+            device_map = "auto"
+            max_memory = build_teacher_max_memory(
+                n_gpus,
+                student_gpu_index=student_idx,
+                teacher_gib_per_gpu=cfg.teacher_gib_per_gpu,
+                teacher_gib_on_student_gpu=cfg.teacher_gib_on_student_gpu,
+            )
+            print(f"[teacher] sharding across {n_gpus} GPUs, "
+                  f"max_memory={max_memory}", file=sys.stderr)
+        else:
+            print("[teacher] teacher_device_map=auto but only 1 GPU visible "
+                  "— falling back to single-device placement", file=sys.stderr)
+    elif cfg.teacher_device_map != "single":
+        raise ValueError(
+            f"teacher_device_map must be 'single' or 'auto', "
+            f"got {cfg.teacher_device_map!r}"
+        )
     model = AutoModelForCausalLM.from_pretrained(
         cfg.teacher_model,
         torch_dtype=dtype,
-        device_map={"": device} if quant is None else "auto",
+        device_map=device_map,
+        max_memory=max_memory,
         quantization_config=quant,
     )
     if cfg.teacher_adapter:
@@ -410,11 +459,37 @@ def load_checkpoint(ckpt_dir: Path, optimizer, scheduler, scaler) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _reload_student_from_checkpoint(
+    ckpt_dir: Path, cfg: DistillConfig, dtype: torch.dtype, device: str,
+):
+    """Rebuild the student from a checkpoint directory.
+
+    A LoRA checkpoint contains only the adapter (adapter_config.json +
+    adapter weights), so the base student must be re-instantiated first
+    and the adapter attached trainable on top. A full-FT checkpoint is a
+    complete HF model directory and loads directly.
+    """
+    if (ckpt_dir / "adapter_config.json").is_file():
+        base = AutoModelForCausalLM.from_pretrained(
+            cfg.student_model, torch_dtype=dtype, device_map={"": device},
+        )
+        model = PeftModel.from_pretrained(base, str(ckpt_dir), is_trainable=True)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            str(ckpt_dir), torch_dtype=dtype,
+        ).to(device)
+    if cfg.gradient_checkpointing:
+        model.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False},
+        )
+    return model
+
+
 def train(cfg: DistillConfig) -> None:
     torch.manual_seed(cfg.seed)
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA required.")
-    device = "cuda:0"
+    device = cfg.student_device
     dtype = torch.bfloat16 if cfg.bf16 else torch.float16
 
     output_dir = Path(cfg.output_dir)
@@ -438,8 +513,19 @@ def train(cfg: DistillConfig) -> None:
     teacher = load_teacher(cfg, dtype, device)
     student = load_student(cfg, dtype, device)
 
+    # --- resume: replace the student BEFORE building the optimizer, so
+    # the optimizer binds to the parameters that will actually train
+    # (binding it to a model that is then swapped out silently trains
+    # nothing) ---
+    resume_dir = (
+        Path(cfg.resume_from) if cfg.resume_from
+        else latest_checkpoint(output_dir)
+    )
+    if resume_dir:
+        student = _reload_student_from_checkpoint(resume_dir, cfg, dtype, device)
+
     optimizer = torch.optim.AdamW(
-        student.parameters(),
+        (p for p in student.parameters() if p.requires_grad),
         lr=cfg.learning_rate,
         weight_decay=cfg.weight_decay,
     )
@@ -450,21 +536,8 @@ def train(cfg: DistillConfig) -> None:
     )
     scaler = None  # bf16 needs no scaler
 
-    # --- resume ---
-    resume_dir = (
-        Path(cfg.resume_from) if cfg.resume_from
-        else latest_checkpoint(output_dir)
-    )
     start_step = 0
     if resume_dir:
-        # Re-load student weights from the checkpoint (overrides base init).
-        student = AutoModelForCausalLM.from_pretrained(
-            resume_dir, torch_dtype=dtype,
-        ).to(device)
-        if cfg.gradient_checkpointing:
-            student.gradient_checkpointing_enable(
-                gradient_checkpointing_kwargs={"use_reentrant": False},
-            )
         start_step = load_checkpoint(resume_dir, optimizer, scheduler, scaler)
         print(f"[resume] continuing from step {start_step}", file=sys.stderr)
 
@@ -489,7 +562,9 @@ def train(cfg: DistillConfig) -> None:
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             with torch.no_grad():
                 t_out = teacher(**batch)
-                t_logits = t_out.logits.detach()
+                # With a sharded teacher the logits land on the GPU of the
+                # last pipeline stage — bring them to the student's device.
+                t_logits = t_out.logits.detach().to(device)
             s_out = student(**batch)
             loss, parts = distill_loss(
                 s_out.logits, t_logits, batch["labels"],
@@ -540,6 +615,20 @@ def train(cfg: DistillConfig) -> None:
                     output_dir, cfg)
     # Save tokenizer too — needed for inference / GGUF export later.
     tokenizer.save_pretrained(output_dir)
+
+    # Phase 3 (quantize_to_gguf.sh) needs a full HF model directory, but a
+    # LoRA student's checkpoints contain only the adapter — merge it into
+    # the base weights and export the result alongside the checkpoints.
+    if isinstance(student, PeftModel):
+        merged_dir = output_dir / "merged"
+        print(f"[merge] merging LoRA adapter into base → {merged_dir}",
+              file=sys.stderr)
+        merged = student.merge_and_unload()
+        merged.save_pretrained(merged_dir, safe_serialization=True)
+        tokenizer.save_pretrained(merged_dir)
+        print(f"[merge] GGUF-exportable model at {merged_dir}",
+              file=sys.stderr)
+
     print(f"[done] final student saved at {output_dir}", file=sys.stderr)
 
 
