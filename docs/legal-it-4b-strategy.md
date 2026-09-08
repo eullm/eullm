@@ -112,9 +112,16 @@ EHPC-AIF-2026PG01-1147 on Leonardo Booster (CINECA)** — 1,250 node
 hours, 02/09/2026 → 02/11/2026, nodes of 4x A100 64 GB. No single
 Leonardo GPU fits the single-GPU budgets below, so the Leonardo path
 uses dedicated configs (`forge/training/configs/leonardo/`): Phase 1
-shards everything with DeepSpeed ZeRO-3 across the 4 GPUs (~36 GB/GPU),
-Phase 2 shards the frozen teacher via an accelerate device map while
-the student trains on one GPU. Operational details, node-hour budget
+loads the frozen base at 8-bit and REPLICATES it on each of the 4 GPUs
+under plain DDP (~37 GB/GPU), Phase 2 shards the frozen teacher via an
+accelerate device map while the student trains on one GPU.
+
+Phase 1 used DeepSpeed ZeRO-3 until 2026-09-08 and three jobs OOM'd on
+it. Sharding distributes what a *trainable* model needs; this base is
+frozen, with 107 M trainable of 30.6 B, so the all-gather of a whole MoE
+layer onto every GPU bought nothing and cost everything. From v1.1 the
+teacher stops being quantized too — see
+[`adr-001-offline-distillation.md`](adr-001-offline-distillation.md). Operational details, node-hour budget
 (~250 for the full pipeline), and the 24 h-walltime chaining protocol:
 [`leonardo-runbook.md`](leonardo-runbook.md).
 
