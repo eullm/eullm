@@ -118,6 +118,16 @@ def check_dataset(data_dir: Path) -> bool:
     return True
 
 
+# Default for --tokenizer-model: the smoke-test model. It used to be the
+# only model checked, hardcoded, with a comment claiming the tokenizer was
+# "the same family so the smaller download is fine for both". Same family
+# or not, the check is about whether the file is in the local cache, and a
+# green tick on the 3.5 GB smoke model says nothing about a 61 GB teacher
+# that is not there — the pre-flight would pass and the job would die
+# minutes later, holding the node. Callers pass the model they will load.
+DEFAULT_TOKENIZER_MODEL = "Qwen/Qwen3-1.7B-Base"
+
+
 def check_tokenizer(model_id: str, *, offline: bool = False) -> bool:
     """Smoke-load the tokenizer for the configured model. Confirms that
     transformers + huggingface_hub auth are working without committing
@@ -162,6 +172,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         "--skip-tokenizer",
         action="store_true",
         help="Skip the HF tokenizer fetch (useful offline / CI)",
+    )
+    parser.add_argument(
+        "--tokenizer-model",
+        default=DEFAULT_TOKENIZER_MODEL,
+        help="Model whose tokenizer must be present. Pass the model the "
+             "job will actually load: the default is the smoke-test one, "
+             f"{DEFAULT_TOKENIZER_MODEL}, and checking it proves nothing "
+             "about a teacher that is not in the cache.",
     )
     parser.add_argument(
         "--offline",
@@ -234,10 +252,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     print()
     print("== Tokenizer (HF cache + auth check) ==")
     if not args.skip_tokenizer:
-        # smoke uses Qwen3-1.7B-Base; production uses Qwen3-32B-Base.
-        # Tokenizer is the same family so the smaller download is fine
-        # for both.
-        if not check_tokenizer("Qwen/Qwen3-1.7B-Base", offline=args.offline):
+        if not check_tokenizer(args.tokenizer_model, offline=args.offline):
             failed = True
     else:
         warn("tokenizer check skipped (--skip-tokenizer)")

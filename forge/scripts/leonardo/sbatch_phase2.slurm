@@ -35,7 +35,8 @@ ADAPTER="./checkpoints/qwen3_30b_a3b_legal_it_continued_pt"
 }
 
 python "$EULLM_REPO/forge/scripts/check_training_env.py" \
-    --offline --expect-gpus 4 --data-dir "$EULLM_DATA_DIR"
+    --offline --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
+    --tokenizer-model Qwen/Qwen3-4B-Base
 
 bash "$EULLM_REPO/forge/scripts/distill.sh" \
     "$EULLM_REPO/forge/training/configs/leonardo/distill_qwen3_30b_a3b_to_4b_leonardo.yaml" \

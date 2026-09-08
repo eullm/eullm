@@ -26,7 +26,8 @@ source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 cd "$EULLM_RUN_DIR"
 
 python "$EULLM_REPO/forge/scripts/check_training_env.py" \
-    --offline --multi-gpu --expect-gpus 4 --data-dir "$EULLM_DATA_DIR"
+    --offline --multi-gpu --expect-gpus 4 --data-dir "$EULLM_DATA_DIR" \
+    --tokenizer-model Qwen/Qwen3-30B-A3B-Base
 
 # LLaMA-Factory launches through torchrun with one rank per GPU.
 export FORCE_TORCHRUN=1
