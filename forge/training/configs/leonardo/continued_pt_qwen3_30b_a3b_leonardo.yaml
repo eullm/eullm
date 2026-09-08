@@ -1,31 +1,42 @@
 # Phase 1 — Continued pre-training of the teacher, Leonardo Booster edition.
 #
 # Target: Qwen3-30B-A3B-Base + LoRA on the full 700M-token Italian legal
-# corpus, on ONE Leonardo Booster node (4x NVIDIA A100 64 GB), sharded
-# with DeepSpeed ZeRO-3 across the 4 GPUs:
+# corpus, on ONE Leonardo Booster node (4x NVIDIA A100 64 GB). The base is
+# quantized and REPLICATED on every GPU — plain data parallelism, no
+# parameter sharding of any kind:
 #
-#   frozen 30B BF16 weights, sharded 4-way      ~15 GB / GPU
-#   LoRA params + grads + Adam, sharded          ~1 GB / GPU
+#   frozen 30B weights, 8-bit, REPLICATED       ~31 GB / GPU
+#   LoRA params + grads + Adam (fp32)            ~2 GB / GPU
 #   activations (grad ckpt, seq len 1024)        ~4 GB / GPU
-#   ZeRO-3 gather buffers                    see below / GPU
+#   ────────                                    ─────
+#   total                                       ~37 GB / 64 GB per GPU
 #
-# The gather buffers are the line that matters on a MoE, and the first
-# run got them wrong: budgeted at ~10 GB, they took everything. ZeRO-3
-# keeps parameters partitioned at rest but must materialise a whole layer
-# on EVERY GPU to compute it, and one layer here is 128 experts x 3
-# matrices ~= 625 M parameters, 1.25 GB in bf16, against ~25 M for a dense
-# layer of the same hidden size. With the dense config's 1e9 live-parameter
-# limit and prefetch, several such layers were resident at once and 63.4
-# GiB of every A100 filled twenty seconds into the first forward (job
-# 56760964, 2026-09-08). ds_zero3_moe.json caps the gathered working set.
+# NO DEEPSPEED, NO ZeRO-3 — and that is the whole lesson of 2026-09-08.
+# Three jobs OOM'd trying to make ZeRO-3 fit this model (56760964 at the
+# first forward, 56768626 in backward 94 MiB short, 56781343 again at 62
+# GiB with halved sequence length and overlap_comm off, which moved the
+# peak by nothing). The diagnosis was wrong each time because the question
+# was wrong.
 #
-# That fix got the forward through — GPUs reached 100% — and job 56768626
-# then OOM'd in the BACKWARD pass instead, asking for 768 MiB with 674 MiB
-# free: 94 MiB short of 63.42 GiB. Hence cutoff_len 1024 and
-# overlap_comm false, which buy headroom rather than a 94 MiB pass. The one
-# lever still unused is offload_param to CPU; the node had 287 GiB of
-# system memory free at the moment of the failure, and host RAM cannot
-# rescue a full GPU unless offloading is configured explicitly.
+# ZeRO-3 exists to shard the optimizer state, gradients and parameters of a
+# model that is BEING TRAINED. Here the base is frozen and only 107 M of
+# 30.6 B parameters get gradients, so the optimizer state it would shard is
+# negligible — we were paying ZeRO-3's entire all-gather cost to distribute
+# 45 GB of weights that never change. And on a MoE that cost is brutal:
+# ZeRO-3 must materialise a whole layer on EVERY GPU to compute it, and one
+# layer here is 128 experts x 3 matrices ~= 625 M parameters against ~25 M
+# for a dense layer of the same hidden size.
+#
+# The answer to "45 GB of static weights do not fit" is to compress them,
+# not to keep shipping them between GPUs. Quantized and replicated, each
+# rank holds the whole model, there is no all-gather at all, and the only
+# communication left is the gradient reduction over 107 M LoRA parameters
+# — which is nothing. This is the maximum-throughput configuration on this
+# node, not a compromise.
+#
+# 8-bit first, 4-bit as the fallback if this does not leave comfortable
+# headroom. Anything that fits with a few hundred MiB to spare is not a
+# configuration, it is a coincidence waiting for an eval batch.
 #
 # WHY THIS MODEL, and not the Qwen3-32B-Base this file used to name:
 # Qwen3-32B-Base does not exist. Neither does Qwen3-7B-Base, the student
@@ -74,13 +85,25 @@
 model_name_or_path: Qwen/Qwen3-30B-A3B-Base
 trust_remote_code: false
 
-### distributed (DeepSpeed ZeRO-3 across the node's 4 GPUs)
-# __REPO_ROOT__ is replaced by forge/scripts/train.sh at launch time.
-# ds_zero3_moe.json, not ds_zero3.json: the dense-tuned limits let ZeRO-3
-# gather several MoE layers at once and filled 63.4 GiB of every A100 in
-# twenty seconds at the first forward (job 56760964). See that file's
-# _README for the arithmetic.
-deepspeed: __REPO_ROOT__/forge/training/configs/ds_zero3_moe.json
+### distributed (plain DDP — every rank holds the whole quantized model)
+# No `deepspeed:` key on purpose; see the header. torchrun starts one rank
+# per GPU and LLaMA-Factory falls back to DistributedDataParallel, which
+# here reduces gradients over the LoRA parameters only.
+#
+# find_unused_parameters stays false: with LoRA on the four attention
+# projections every trainable parameter is used on every step, so the
+# expensive graph traversal that `true` enables would buy nothing. It is
+# stated rather than left to default because a MoE is exactly the kind of
+# model where someone reaches for `true` — the *experts* are conditionally
+# used, but they are frozen and have no gradients to look for.
+ddp_find_unused_parameters: false
+
+### quantization (QLoRA: frozen base quantized, adapters in fp32)
+# 8 before 4: the less lossy option first. The Phase-1 adapter is trained
+# on top of THESE weights, so Phase 2 must load the teacher with the same
+# quantization_bit or the adapter lands on weights it never saw. That
+# dependency spans two jobs days apart — see docs/legal-it-4b-strategy.md.
+quantization_bit: 8
 
 ### method (continued pre-training with LoRA)
 stage: pt
@@ -104,13 +127,12 @@ lora_dropout: 0.05
 dataset_dir: __DATASET_DIR__
 dataset: legal_it_train
 eval_dataset: legal_it_val
-# 1024, not the 2048 the single-GPU config uses. Halving the sequence
-# halves activation memory, which is what the backward pass ran out of:
-# the forward now completes (GPUs reached 100%) and backward asked for
-# 768 MiB with 674 MiB free — 94 MiB short of 63.42 GiB. Fitting by 94 MiB
-# is not fitting; the first eval batch or a run of allocator fragmentation
-# would OOM hours in instead of minutes in. Same total tokens, twice the
-# optimizer steps. Raise it back once a run is measured and has room.
+# 1024, not the 2048 the single-GPU config uses. It was halved while
+# fighting the ZeRO-3 OOMs and is kept here only because nothing has
+# measured the real activation cost yet; under DDP with a quantized base
+# the memory picture is completely different and this is very likely
+# affordable at 2048 again. Same total tokens either way, twice the
+# optimizer steps at 1024. Raise it once a run reports its peak.
 cutoff_len: 1024
 preprocessing_num_workers: 8
 overwrite_cache: false
