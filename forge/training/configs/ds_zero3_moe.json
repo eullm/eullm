@@ -18,7 +18,8 @@
   },
   "zero_optimization": {
     "stage": 3,
-    "overlap_comm": true,
+    "_overlap_comm_note": "false, not the usual true: overlapping the reduce with computation makes DeepSpeed hold extra communication buffers sized from reduce_bucket_size, and the backward pass on this model missed by 94 MiB of 63.42 GiB. Overlap costs throughput to buy headroom; re-enable it once a run is measured and there is room.",
+    "overlap_comm": false,
     "contiguous_gradients": true,
     "sub_group_size": 100000000,
     "reduce_bucket_size": 16777216,
