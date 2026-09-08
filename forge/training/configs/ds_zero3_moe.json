@@ -1,0 +1,31 @@
+{
+  "_README": "ZeRO-3 tuned for a Mixture-of-Experts base. ds_zero3.json is tuned for dense models and OOMs on Qwen3-30B-A3B at the first forward: ZeRO-3 keeps parameters partitioned at rest but must gather a whole layer onto every GPU to compute it, and one Qwen3-30B-A3B layer carries 128 experts x 3 matrices ~= 625 M parameters (1.25 GB in bf16) against roughly 25 M for a dense layer of the same hidden size. The 1e9 live-parameter and reuse-distance limits are therefore ~50x too generous here: with prefetch they let several MoE layers be resident at once and 63.4 GiB of an A100 64 GB fills in seconds. Observed on job 56760964, 2026-09-08. Values below cap the gathered working set at ~1e8 parameters (200 MB in bf16) plus prefetch, which is a few layers' worth of headroom rather than tens.",
+  "train_batch_size": "auto",
+  "train_micro_batch_size_per_gpu": "auto",
+  "gradient_accumulation_steps": "auto",
+  "gradient_clipping": "auto",
+  "zero_allow_untested_optimizer": true,
+  "bf16": {
+    "enabled": "auto"
+  },
+  "fp16": {
+    "enabled": "auto",
+    "loss_scale": 0,
+    "loss_scale_window": 1000,
+    "initial_scale_power": 16,
+    "hysteresis": 2,
+    "min_loss_scale": 1
+  },
+  "zero_optimization": {
+    "stage": 3,
+    "overlap_comm": true,
+    "contiguous_gradients": true,
+    "sub_group_size": 100000000,
+    "reduce_bucket_size": 16777216,
+    "stage3_prefetch_bucket_size": 15099494,
+    "stage3_param_persistence_threshold": 20480,
+    "stage3_max_live_parameters": 100000000,
+    "stage3_max_reuse_distance": 100000000,
+    "stage3_gather_16bit_weights_on_model_save": true
+  }
+}
