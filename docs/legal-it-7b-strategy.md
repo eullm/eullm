@@ -1,6 +1,6 @@
 # Legal-IT-7B — Verticalization Strategy
 
-> Status: planning · Last updated: 2026-04-26 · Branch: `feat/legal-it`
+> Status: planning · Last updated: 2026-09-08 · Branch: `feat/legal-it`
 
 This document is the single source of truth for how `eullm/legal-it-7b` is
 built. It captures the model choices, the training pipeline, hardware
@@ -10,7 +10,7 @@ instance. Update it as decisions evolve.
 ## 1. Goal
 
 Produce **`eullm/legal-it-7b`**: a 7B-parameter Italian legal-domain LLM,
-distilled from a 32B teacher fine-tuned on a GDPR-safe corpus of
+distilled from a 30B-A3B MoE teacher fine-tuned on a pseudonymised corpus of
 Cassazione rulings + Italian codici + Costituzione. Final artifact is a
 ~4.5 GB Q4_K_M GGUF that runs on any laptop with 8 GB RAM via the EULLM
 Engine.
@@ -19,15 +19,35 @@ Engine.
 
 | Role | Model | Params | License | Why |
 |------|-------|-------:|---------|-----|
-| **Teacher** | `Qwen/Qwen3-32B` | 32 B dense | Apache 2.0 | Frontier-grade, Italian-native pretraining, stable logits (no MoE routing variance), context 128 k. |
-| **Student** | `Qwen/Qwen3-7B-Base` | 7 B | Apache 2.0 | Same tokenizer as the teacher → distillation is drop-in (KL over logits, no sub-token mapping). LegalEval-Q (2025) reports "legal text quality plateaus at 7B" — the sweet spot for legal generation. |
+| **Teacher** | `Qwen/Qwen3-30B-A3B-Base` | 30.5 B total / 3.3 B active (MoE) | Apache 2.0 | Italian-native pretraining, context 128 k, and — the reason it wins on this budget — only 3.3 B active parameters. Distillation runs the teacher forward on every batch and never backward, so active parameters, not total, set the dominant cost of Phase 2. |
+| **Student** | `Qwen/Qwen3-4B-Base` | 4 B | Apache 2.0 | Same tokenizer as the teacher → distillation is drop-in (KL over logits, no sub-token mapping). Deliberately the *first* student size, not the final one: it is what fits comfortably alongside the teacher on one Leonardo node and gets us an end-to-end run to measure before spending the budget on a larger one. |
+
+> **Naming**: the deliverable is still called `legal-it-7b` throughout this
+> document while v0.1 actually ships a 4 B student. Renaming touches the Hub
+> repo, the model card and the notebook, so it is a call to make deliberately
+> once we know whether the 7 B student happens at all — not a silent rename.
+
+### Decision record — the MoE teacher (2026-09-08)
+
+This table used to reject `Qwen3-30B-A3B` for "routing variance that hurts
+distillation precision", while the shipped Leonardo configs used it. The
+divergence is resolved in favour of the MoE, and the original objection was
+overstated: Qwen3's router is deterministic top-k, so at a fixed input the
+teacher's logits are reproducible — there is no sampling noise for KL to
+chase. The real MoE-teacher hazard is capacity-factor token dropping, and
+that only occurs in training mode; our teacher is frozen in eval.
+
+What the MoE buys is the reason to take it: on the 1,250 node-hour EuroHPC
+allocation, a 32 B dense teacher forward is roughly an order of magnitude
+more FLOPs per batch than a 3.3 B active one, which is the difference
+between finishing Phase 2 and stopping halfway.
 
 ### Alternatives considered & rejected
 
 | Candidate | Why rejected |
 |-----------|--------------|
 | Qwen3-72B (dense) | 144 GB BF16 — does not fit a single 96 GB GPU. |
-| Qwen3-30B-A3B (MoE) | Forward is faster but routing introduces logit variance that hurts distillation precision. |
+| Qwen3-32B (dense) | The previous choice, and still the better teacher on logit quality alone. Rejected on budget: ~10x the forward FLOPs per batch of the 30B-A3B for Phase 2, which does not fit 1,250 node-hours. Revisit if a larger allocation lands. |
 | Qwen3.5-27B + Qwen3.5-9B-Base (hybrid) | Newer (Feb 2026), longer 1 M context, but Gated-DeltaNet + sparse-MoE hybrid architecture introduces logit-routing variance that hurts KL distillation. Tooling is also less mature: LLaMA-Factory / trl / llama.cpp / GGUF Q4_K_M all have stable paths for Qwen3 dense, while support for Qwen3.5 hybrid is still landing (open vLLM compat issues on the 4B variant). Revisit for v0.2 once the toolchain settles. |
 | Qwen3.6-27B + Qwen3.6 7B-class | Same hybrid-architecture concern, plus Qwen3.6 has no 7B-class student in its open-weights lineup (only 27B and 35B-A3B). |
 | NVIDIA Nemotron 3 Nano 30B A3B | NVIDIA Open Model License — violates the project-wide Apache-2.0-only constraint (see `CLAUDE.md`). |
@@ -43,26 +63,26 @@ Qwen3 and Qwen3.5/3.6 have **incompatible tokenizers** (vocab 151,646 vs 248,320
 │ Phase 0 — Dataset (DONE)                                             │
 │   1.13 M chunks, ~700 M tokens                                       │
 │   Cassazione (snciv + snpen 2021-2026) + Codici + Costituzione       │
-│   GDPR-safe (anonymizer rounds 1-5, role-aware tokens)               │
+│   Pseudonymised (anonymizer rounds 1-6, role-aware tokens)           │
 │   Train 1,127,316 / val 11,387 (99/1, seed 42)                       │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Phase 1 — Continued pre-training of the teacher                      │
-│   Qwen3-32B + LoRA r=128 on Italian legal corpus                     │
+│   Qwen3-30B-A3B-Base + LoRA r=128 on Italian legal corpus            │
 │   Loss: standard next-token CE                                       │
-│   Output: Qwen3-32B-legal-it (LoRA adapters, ~2 GB)                  │
+│   Output: Qwen3-30B-A3B-legal-it (LoRA adapters, ~2 GB)              │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ Phase 2 — Distillation teacher → student                             │
-│   Frozen teacher = Qwen3-32B + Phase-1 LoRA, FP8 for forward         │
-│   Student = Qwen3-7B-Base (full fine-tune or LoRA r=64)              │
+│   Frozen teacher = Qwen3-30B-A3B + Phase-1 LoRA, eval mode           │
+│   Student = Qwen3-4B-Base (full fine-tune or LoRA r=64)              │
 │   Loss: α · KL(student ‖ teacher) + (1−α) · CE(student, y)           │
 │   α schedule: 0.9 → 0.5 over training                                │
-│   Output: Qwen3-7B-legal-it (full weights, ~14 GB BF16)              │
+│   Output: Qwen3-4B-legal-it (full weights, ~8 GB BF16)               │
 └──────────────────────────────────────────────────────────────────────┘
                                   │
                                   ▼
@@ -101,7 +121,7 @@ Multi-GPU shaves wall-clock but is not required for this size class.
 
 | Component | Memory |
 |-----------|-------:|
-| Qwen3-32B base (BF16, frozen) | 64 GB |
+| Qwen3-30B-A3B base (BF16, frozen, ZeRO-3 across 4 GPUs) | 61 GB |
 | LoRA adapters r=128 + grad + 8-bit Adam | 6 GB |
 | Activations (gradient checkpointing, seq len 2048) | 8 GB |
 | Headroom | 18 GB |
@@ -111,14 +131,14 @@ Multi-GPU shaves wall-clock but is not required for this size class.
 
 | Component | Memory |
 |-----------|-------:|
-| Qwen3-32B teacher BF16 (frozen, no grad) | 64 GB |
-| Qwen3-7B student BF16 (frozen base) | 14 GB |
+| Qwen3-30B-A3B teacher BF16 (frozen, no grad) | 61 GB |
+| Qwen3-4B student BF16 (frozen base) | 8 GB |
 | Student LoRA r=128 + grad + 8-bit Adam | 6 GB |
 | Activations + KL buffers (seq len 2048) | 10 GB |
 | Misc / fragmentation | 2 GB |
 | **Total** | **96 GB / 96 GB** ✅ (tight but fits) |
 
-A pure full fine-tune on the 7B student would need ~155 GB total
+A pure full fine-tune on the 4B student would need ~85 GB total
 (student + grad + Adam master/state in FP32 + 64 GB teacher + activations),
 out of reach for any 94-96 GB single GPU. The pipeline therefore defaults
 to a LoRA student (rank 128, ~250 M trainable params, ~95 % of the
@@ -241,7 +261,9 @@ When the pipeline finishes we publish:
 - **`eullm/legal-it-7b-bf16`** (HF Hub model repo, public): full BF16
   weights for downstream fine-tuners.
 - **`primoco/legal_it_pretraining`** (HF Hub dataset, private): the
-  GDPR-safe training corpus.
+  training corpus. Pseudonymised, NOT anonymous — `sentence_id` and
+  `source_id` re-identify each ruling in a public archive, so it stays
+  private and must not be described as anonymised.
 - **`docs/legal-it-7b-strategy.md`** (this file, updated with measured
   numbers).
 - **`forge/notebooks/01_legal_it_7b_demo.ipynb`** (updated with the
@@ -257,14 +279,16 @@ When the pipeline finishes we publish:
 | Tokenizer drift between phases | Low | All phases use the Qwen3 tokenizer; CI test asserts checkpoint/tokenizer compatibility before resuming. |
 | Out-of-memory at scale | Medium | Phase budgets above are conservative; if it OOMs we drop seq_len from 2048 to 1024 and/or activate FlashAttention 3. |
 | Italian quality regression vs base Qwen3 | Medium | Held-out perplexity on `val.jsonl` + side-by-side prompts (10 fixed legal questions) at every checkpoint. |
-| Memorized PII leaks (despite anonymizer) | Low (anonymizer covered 5.7 M PII items) | Membership-inference probe before publishing weights; if a leak surfaces, drop the offending chunk and retrain the affected slice. |
+| Memorized PII leaks (despite anonymizer) | Medium — the anonymiser reported a clean run on 5.7 M redactions and had still left 59 codici fiscali in the training text (round 6, 2026-09-08: `RE_CF` was `\b`-anchored, so every code glued to adjacent alphanumerics was skipped). A clean report is evidence about the patterns, not about the corpus. | Re-run `forge/scripts/sweep_structured_pii.py` over `train.jsonl`/`val.jsonl` before every training launch — it exits non-zero when dirty, so it can gate the job. Membership-inference probe before publishing weights; if a leak surfaces, drop the offending chunk and retrain the affected slice. |
 
 ## 11. Open questions
 
 - Should the student also receive Phase-1 LoRA from the teacher as a
-  warm start, or should it start from `Qwen3-7B-Base` directly? Default:
-  start from base, since the LoRA was trained on the 32B and may not
-  transfer 1:1.
+  warm start, or should it start from `Qwen3-4B-Base` directly? Settled
+  by the MoE teacher: start from base. The Phase-1 adapter targets the
+  teacher's MoE blocks — including the router — which have no counterpart
+  in a dense 4 B student, so it cannot transfer at all, not merely "not
+  1:1".
 - Is one epoch enough for Phase 1, or do we need 2-3? Decide after
   measuring the per-epoch perplexity drop on the val set.
 - Phase 4 identity LoRA: which persona / branding text? Pick after the
