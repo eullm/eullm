@@ -154,8 +154,17 @@ worth more than a tidy methods description.
 
 ## Administrative
 
-- Check whether the EuroHPC allocation requires a final report — if it does,
-  it is the same document and should be written once.
+- **The EuroHPC Final Report is obligatory**, not optional: the PI submits it
+  within three months of the allocation completing, on the EuroHPC JU
+  template, to EuroHPC Peer-Review, and failure to submit can disqualify
+  future proposals from any member of the research group. This allocation
+  ends 02/11/2026, so it is due by **02/02/2027**. This outline is its
+  skeleton as well as Zenodo's — write once, submit twice. Allocation
+  strategy and the backlog that fills it:
+  [`../leonardo-allocation-plan.md`](../leonardo-allocation-plan.md).
+- Still to confirm with CINECA or the EuroHPC portal, not extractable from
+  the published call PDFs: the exact Final Report template, and the required
+  acknowledgement wording.
 - Acknowledgement of the allocation (EHPC-AIF-2026PG01-1147) is required in
   any publication.
 - Corpus stays private: pseudonymised, and `sentence_id` / `source_id`
