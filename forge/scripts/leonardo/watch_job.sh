@@ -26,7 +26,12 @@ cd "$RUN_DIR" || { echo "no such directory: $RUN_DIR" >&2; exit 2; }
 # Lines worth seeing while the job runs. Deliberately not `error`: the corpus
 # is Italian legal text and every other page contains the word "errore",
 # which matched thousands of times the first time this filter was written.
-KEEP='^\[hb\]|pre-flight|trainable params|'"'"'loss'"'"':|eval_loss|Traceback|OutOfMemoryError|RuntimeError|ValueError|AssertionError|out of memory|Killed'
+# Unanchored on purpose. The heartbeat writes from a background subshell
+# while the training process writes its own lines, and with no synchronisation
+# between the two a [hb] line regularly lands mid-line. A '^\[hb\]' anchor
+# therefore drops most of them: measured on a 10h run, the log held 645
+# heartbeat lines and the anchored pattern showed none.
+KEEP='\[hb\]|pre-flight|trainable params|'"'"'loss'"'"':|eval_loss|Traceback|OutOfMemoryError|RuntimeError|ValueError|AssertionError|out of memory|Killed'
 
 # Patterns that identify the actual cause in the post-mortem.
 CAUSE='Traceback|OutOfMemoryError|RuntimeError|ValueError|KeyError|TypeError|AssertionError|out of memory|Killed|CUDA error'

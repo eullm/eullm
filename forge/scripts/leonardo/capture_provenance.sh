@@ -98,7 +98,10 @@ if [ -n "$LOG" ]; then
         grep -o "{'eval_loss'[^}]*}" "$LOG" || echo "(no eval yet)"
         echo
         echo "## Heartbeat, every 10th sample"
-        grep '^\[hb\]' "$LOG" | awk 'NR % 10 == 1'
+        # Unanchored: interleaved writes from the background loop and the
+        # training process put many [hb] lines mid-line, and an anchor loses
+        # them.
+        grep '\[hb\]' "$LOG" | awk 'NR % 10 == 1'
     } > "$DEST/measurements.txt"
 fi
 
