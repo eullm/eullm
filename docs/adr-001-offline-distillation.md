@@ -297,11 +297,76 @@ meaningless across them. Evaluate it separately in roles that operate on
 text, where the difference does not matter: sequence-level KD teacher,
 synthetic-data generator, reasoning/instruction teacher, evaluator or judge.
 
-## Part 11 — success criteria
+## Part 11 — success criteria, and how the quality claim is actually earned
 
 The new pipeline replaces v1.0 only on a measured improvement in at least one
 of quality, node-hours, throughput, VRAM headroom, stability, or the ability
 to train a larger student — **without substantial regression in the others**.
+
+Which raises the obvious objection, and it is a fair one: if v1.0 stops after
+Phase 1 and only the new pipeline runs a full Phase 2, there are never two
+finished models to compare, and "we took the right road" becomes something to
+believe rather than something to know.
+
+The answer is not to train two models for a week each. It is that the
+comparison decomposes, and only one part of it needs training at all.
+
+### The infrastructure comparison needs no model
+
+Node-hours, throughput, VRAM, stability: measured on the pilot, both paths
+over the same subset. Hours, not weeks. Nothing here requires a finished
+model, and running two full Phase 2s would not measure it any better.
+
+### The quality question is narrower than it looks
+
+Offline caching and online distillation optimise **the same objective**
+against **the same teacher**. If they produce different students, that is a
+bug, not a design difference — with exactly two legitimate exceptions:
+
+1. **Teacher precision.** int8 in v1.0, bf16 in v1.1.
+2. **Top-K truncation** against the full vocabulary.
+
+Both are measurable directly, without training anything. The first is the
+KL / top-k agreement gate of `validate_quantized_teacher.py`; the second is
+the truncation measurement of Part 5 and 6.2. Two hundred samples, a few
+hours, and the two known sources of difference are quantified.
+
+### What that still misses, and the cheap experiment that covers it
+
+A per-token difference too small to matter in a single batch can **compound
+over 60,000 optimizer steps** in ways a static KL does not predict. Training
+dynamics are emergent, and that objection survives everything above.
+
+So: **paired short runs.** Same seed, same starting checkpoint, same teacher
+precision on both sides so the pipeline is isolated from the quantization,
+2,000 steps each, compare loss curves and validation perplexity.
+
+```
+2,000 steps x 4.9 s   = 2.7 h + startup   ~= 3.2 node-hours per side
+both sides                                ~= 6.5 node-hours
+two complete Phase 2 runs                 ~= 340 node-hours
+```
+
+Two per cent of the cost, and it answers the question that was asked. Curves
+that overlap mean the pipelines are equivalent and the choice is purely
+operational. Curves that diverge mean something important has been found for
+six node-hours instead of two weeks.
+
+A full end-to-end A/B remains available afterwards. The point is that it would
+then be commissioned on evidence, rather than run in place of collecting any.
+
+### The plan this settles on
+
+1. Phase 1 completes as v1.0, untouched — the baseline teacher plus its
+   measurements.
+2. The v1.1 pipeline is built while Phase 1 runs, which costs no GPU time.
+3. The pilot measures both designs, K, and the teacher topology.
+4. Paired short runs establish quality equivalence, or find where it breaks.
+5. **One** full Phase 2, on the design the evidence selected.
+
+Phase 2 on the old path is not run. Seven days of machine time to produce a
+model by the route already known to be the worse one buys a comparison that
+steps 3 and 4 deliver for two per cent of it.
 
 v1.0 is not discarded. It is the baseline the replacement is measured
 against, and "better designed" is not a result.

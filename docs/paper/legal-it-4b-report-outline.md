@@ -124,6 +124,20 @@ Fill these in as they occur. An empty cell after the run is a number lost.
 | Node-hours lost to failed runs | 0.67 (job 56760964, ZeRO-3 OOM) |
 | Queue wait time, total | |
 
+## Predictions, scored
+
+The pilot's predictions were written down before it ran, in
+[`v11-pilot-preregistration.md`](v11-pilot-preregistration.md). The results
+section scores each one held / falsified / untested with the measured value
+beside its threshold.
+
+This is not decoration. Three predictions were already wrong in the first two
+days, and each registered as a lesson only because a number had been stated
+beforehand — the 60-hour Phase 1 estimate against 81 measured, the eval blamed
+for a throughput loss it was not causing, and two ZeRO-3 levers that raised
+the memory peak they were meant to lower. "We expected X and measured Y" is a
+result; "we measured Y" is a data point.
+
 ## Incidents log
 
 One line each, with the cost. This is the section that makes the report
