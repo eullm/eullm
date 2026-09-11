@@ -11,13 +11,18 @@
 # It lives on the serial partition and takes about three seconds of one core.
 # Putting it on boost_usr_prod would reserve four A100s to run some Python.
 #
-#   sbatch forge/scripts/leonardo/sbatch_queue_stats.slurm
+# Submit it from the directory the snapshots should land in, since --output
+# is relative to where sbatch was run:
+#
+#   cd "$WORK/eullm_runs/qstats"
+#   sbatch "$WORK/eullm-v11/forge/scripts/leonardo/sbatch_queue_stats.slurm"
 #   squeue --me -n eullm-queue-stats     # must always show exactly one PENDING
 #
 # The chain's one failure mode is a re-submission that does not happen — a
-# full queue, an expired allocation, a typo in a path. Nothing announces it;
-# the job simply stops existing. Check for that one PENDING row now and then,
-# and if it is gone, submit this again.
+# full queue, an expired allocation, a path that moved. There is no next run
+# to notice it, so every such case here exits non-zero and says why: a break
+# shows as FAILED in `sacct` instead of vanishing. Check for that one PENDING
+# row now and then, and if it is gone, submit this again.
 #
 #SBATCH --job-name=eullm-queue-stats
 #SBATCH --partition=lrd_all_serial
@@ -29,24 +34,55 @@
 
 set -uo pipefail
 
-# Absolute, because a batch job inherits none of the login shell's exports and
-# $WORK does not exist here. Override when the project path differs.
+# Absolute paths: $WORK does not exist inside a batch job.
 BASE="${EULLM_BASE:-/leonardo_work/AIFAC_P02_1147}"
-REPO="${EULLM_REPO:-$BASE/eullm-v11}"
 OUT="$BASE/eullm_runs/qstats"
 ALLOC_START="${EULLM_ALLOC_START:-2026-09-02}"
 ALLOC_END="${EULLM_ALLOC_END:-20261102}"
 
+# Deliberately NOT $EULLM_REPO, even though that is the obvious name.
+# `env.sh` sets EULLM_REPO to the checkout a running chain is pinned to, and
+# `sbatch` exports the submitting shell's environment by default — so the
+# first version of this file, submitted from a shell that had sourced env.sh,
+# went looking for itself inside the *frozen* tree, found nothing, and died on
+# its first run. Its `|| true` swallowed the message. A variable this script
+# owns cannot be hijacked by one that means something else.
+REPO="${EULLM_QSTATS_REPO:-$BASE/eullm-v11}"
+SELF="$REPO/forge/scripts/leonardo/sbatch_queue_stats.slurm"
+TOOL="$REPO/forge/scripts/leonardo/queue_stats.py"
+
 mkdir -p "$OUT"
 
-# `|| true` on purpose: an instrument must never fail the thing it measures,
-# and here that thing includes its own re-submission below.
-python3 "$REPO/forge/scripts/leonardo/queue_stats.py" "$ALLOC_START" \
-    --json "$OUT/queue_stats_$(date +%Y%m%d_%H%M).json" || true
+# Check before acting. A self-perpetuating job that cannot find itself has no
+# second chance: there is no next run to notice the problem.
+for f in "$SELF" "$TOOL"; do
+    if [ ! -f "$f" ]; then
+        echo "[qstats] FATAL: $f does not exist — the daily chain stops here." >&2
+        echo "[qstats] Point EULLM_QSTATS_REPO at the checkout to run from," >&2
+        echo "[qstats] then submit this script again." >&2
+        exit 1
+    fi
+done
+
+# `|| true` only covers a genuine runtime failure of a tool we have just
+# confirmed exists — never a missing file, which is what it used to hide.
+if ! python3 "$TOOL" "$ALLOC_START" \
+        --json "$OUT/queue_stats_$(date +%Y%m%d_%H%M).json"; then
+    echo "[qstats] snapshot failed; re-arming anyway so one bad day is not fatal" >&2
+fi
 
 # Re-arm, unless the allocation is over. Without this guard the chain would
 # keep trying past the end date and fill the directory with failures.
 if [ "$(date +%Y%m%d)" -lt "$ALLOC_END" ]; then
-    cd "$OUT" || exit 0
-    sbatch --begin=now+1day "$REPO/forge/scripts/leonardo/sbatch_queue_stats.slurm"
+    cd "$OUT" || exit 1
+    if sbatch --begin=now+1day "$SELF"; then
+        echo "[qstats] re-armed for tomorrow"
+    else
+        # Exit non-zero so the break shows as FAILED in sacct. Silence is what
+        # made the first failure cost a day.
+        echo "[qstats] FATAL: re-submission failed — the daily chain stops here." >&2
+        exit 1
+    fi
+else
+    echo "[qstats] allocation ended ($ALLOC_END); not re-arming."
 fi
