@@ -133,16 +133,44 @@ and passes it through as `GPU_TARGETS` + `CMAKE_HIP_ARCHITECTURES`; without it,
 it prints a cargo warning rather than silently producing a binary with no device
 code.
 
-```bash
-# Login node. Confirm what the module system offers before trusting /opt/rocm:
-module avail rocm
-ls -d /opt/rocm*
-hipconfig --version
+There are two routes onto the machine, and the first costs nothing to try.
 
+**The published artifact.** `release-engine.yml` builds
+`eullm-linux-x64-rocm-gfx90a` inside a `rocm/dev-ubuntu-22.04:6.3.4` container.
+6.3.4 is chosen to match LUMI's own system ROCm, not to be current: ROCm's
+libraries are soname-versioned and this binary resolves them from the site, so
+building against a newer stack would produce something LUMI cannot load. Same
+reasoning that produced the CUDA 12.4 data-centre artifact after 13.1 refused to
+start on Leonardo. The job also runs on `workflow_dispatch`, so a fresh binary
+can be built from the Actions tab without cutting a release.
+
+**Building on the login node**, which picks up whatever ROCm the machine has:
+
+```bash
+bash tools/lumi/build_engine.sh     # EULLM_AMDGPU_TARGETS=gfx90a by default
+```
+
+It refuses to start rather than fail late — ROCm, a CMake new enough for
+`enable_language(HIP)` (3.21), cargo, and the llama.cpp submodule are all
+checked before anything compiles — and then verifies what it produced.
+Underneath it is just:
+
+```bash
 export ROCM_PATH=/opt/rocm          # build.rs falls back to this anyway
 export EULLM_AMDGPU_TARGETS=gfx90a  # MI250X / CDNA 2
-cargo build --release --features rocm
+cargo build --release --features rocm -p eullm-engine
 ```
+
+Either way, prove it against a real device before trusting it:
+
+```bash
+eullm pull qwen3-8b                   # from a login node; compute nodes have no network
+sbatch tools/lumi/sbatch_smoke.slurm  # ~0.03 node-hours on dev-g
+```
+
+That job reads `rocm-smi` before and after one request, because the startup
+banner reports the *compiled* backend and would print `ROCm` just the same from
+a run that fell back to CPU. HBM in use is the measurement that cannot lie.
 
 Things to confirm on the first attempt, each of which has a known failure mode:
 
