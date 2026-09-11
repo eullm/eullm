@@ -213,14 +213,26 @@ Leonardo permits no user `crontab`, and `scrontab` is disabled cluster-wide.
 The substitute is a job that re-submits itself:
 
 ```bash
-sbatch "$EULLM_REPO/forge/scripts/leonardo/sbatch_queue_stats.slurm"
+cd "$WORK/eullm_runs/qstats"
+sbatch "$WORK/eullm-v11/forge/scripts/leonardo/sbatch_queue_stats.slurm"
 squeue --me -n eullm-queue-stats    # exactly one PENDING row, always
 ```
 
 Three seconds of one core on the serial partition, once a day, until the
-allocation ends. Its one failure mode is a re-submission that does not happen:
-nothing announces it, the job simply stops existing. If that `squeue` line
-comes back empty, submit it again.
+allocation ends. Submit it from the directory the snapshots belong in:
+`--output` is relative to where `sbatch` ran.
+
+**Spell the path out; do not use `$EULLM_REPO` here.** `env.sh` sets that to
+the checkout a running chain is pinned to, and `sbatch` exports the submitting
+shell's environment by default — so a job submitted from a shell that had
+sourced `env.sh` looks for itself inside the frozen tree. That is exactly how
+the first one died: it found nothing, and its `|| true` swallowed the message.
+The script now reads `EULLM_QSTATS_REPO` instead, which nothing else sets,
+checks that its targets exist before doing anything, and exits non-zero when
+the chain breaks so `sacct` shows FAILED rather than nothing at all.
+
+Its one failure mode remains a re-submission that does not happen — there is
+no next run to notice. If that `squeue` line comes back empty, submit again.
 
 Worth doing **in addition**, at the end of any real sbatch script:
 
