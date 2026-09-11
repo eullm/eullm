@@ -144,6 +144,13 @@ reasoning that produced the CUDA 12.4 data-centre artifact after 13.1 refused to
 start on Leonardo. The job also runs on `workflow_dispatch`, so a fresh binary
 can be built from the Actions tab without cutting a release.
 
+One practical wrinkle before a release exists: a workflow artifact is not a
+public download. Fetching one needs an authenticated GitHub request, so a plain
+`curl` from a LUMI login node will not get it — pull it on a machine that is
+logged in and `rsync` it across, or use the login-node build below. Once the
+binary is on a published release, `curl` from the login node works like it does
+for every other artifact.
+
 **Building on the login node**, which picks up whatever ROCm the machine has:
 
 ```bash
