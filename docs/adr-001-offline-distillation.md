@@ -1,6 +1,7 @@
 # ADR-001 — Freeze legal-it v1.0, then stop co-hosting teacher and student
 
-> Status: **accepted, 2026-09-08** (revised the same day, see *Revision*) ·
+> Status: **accepted, 2026-09-08** (revised the same day, see *Revision*;
+> Part 11's single-Phase-2 decision superseded 2026-09-11) ·
 > Affects Phase 1 and Phase 2 of the verticalization pipeline from v1.1 on.
 
 ## Decision, in one line
@@ -370,6 +371,69 @@ steps 3 and 4 deliver for two per cent of it.
 
 v1.0 is not discarded. It is the baseline the replacement is measured
 against, and "better designed" is not a result.
+
+### Superseded, 2026-09-11: both Phase 2s run
+
+Step 5 above said **one** full Phase 2, and the reasoning was explicit —
+"seven days of machine time … buys a comparison that steps 3 and 4 deliver
+for two per cent of it". That arithmetic silently assumed those seven days
+had somewhere else to go.
+
+They do not. The binding constraint on this allocation is calendar, not
+node-hours: one node kept busy for the whole grant consumes essentially all
+of it, so an idle hour expires and cannot be spent later
+([`../leonardo-allocation-plan.md`](../leonardo-allocation-plan.md)). Measured
+at the halfway point, 158 of 227 calendar hours had gone with nothing
+submitted. Against that, 340 node-hours for two complete Phase 2 runs cost
+**nothing that had an alternative use**, and the QoS permits 256 simultaneous
+nodes, so the two arms run side by side rather than one after the other.
+
+So the decision inverts: **both pipelines produce a finished model.** Paired
+short runs stay in the plan — they are still the fastest way to catch an
+alignment bug before a week of compute — but they become a smoke test ahead of
+the real comparison rather than a substitute for it.
+
+What this buys that steps 3 and 4 cannot: training dynamics over a full epoch,
+final quality on the actual evaluation, and an answer that does not rest on
+the claim that 2,000 steps predict 60,000.
+
+### The controls, which must be fixed before either arm starts
+
+A comparison is only about the pipeline if nothing else differs, and controls
+cannot be retrofitted once a run has begun.
+
+| | |
+|---|---|
+| Phase-1 adapter | the same frozen checkpoint directory, pinned by path, for both arms |
+| student | Qwen3-4B-Base, identical LoRA rank / alpha / dropout / target modules |
+| seed | `seed: 42`, already in the config and applied by `distill.py` |
+| corpus | the same `train.jsonl` / `val.jsonl`, same order |
+| budget | one epoch each — equal steps, **not** equal wall-clock |
+| hyperparameters | lr, batch, accumulation, `cutoff_len`, scheduler, warmup all identical |
+| evaluation | the same held-out set and protocol, scored by the same code |
+
+Both arms run from the **current** codebase, not from v1.0's exact commit.
+Running the old pipeline at its original commit would confound "which Phase-2
+design" with every unrelated fix made since, which is the opposite of what is
+being measured. The v1.0 artefact is Phase 1 plus its recorded measurements;
+this experiment compares two Phase-2 designs.
+
+### The one difference that cannot be controlled away, and why it is tolerable
+
+The arms differ in **teacher precision**: int8 through bitsandbytes on the old
+path, bf16 through vLLM on the new one. vLLM does not offer the same 8-bit
+path, so this cannot simply be equalised.
+
+It is tolerable because it has been measured independently rather than assumed
+away. On 200 validation documents and 97,773 positions, the int8 teacher's
+mean KL against bf16 is **0.00616 nats**, against a student loss around 1.27 —
+about 0.5 % of the training signal, with top-5 agreement at 99.955 %
+([`paper/legal-it-4b-report-outline.md`](paper/legal-it-4b-report-outline.md)).
+
+That bounds the confound instead of ignoring it: a quality difference between
+the two finished models larger than half a percent cannot be attributed to
+teacher precision. If the observed difference is *smaller* than that, the
+experiment cannot separate the two causes and must say so.
 
 ## What this does not change
 
