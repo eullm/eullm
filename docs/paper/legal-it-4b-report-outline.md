@@ -142,11 +142,27 @@ result; "we measured Y" is a data point.
 
 | | predicted | measured | |
 |---|---|---|---|
-| **P6** KL | < 0.01 nats | **0.0061** | held |
-| **P6** top-1 agreement | > 99 % | **95.65 %** | **falsified** |
+| **P6** KL | < 0.01 nats | **0.00616** | held |
+| **P6** top-1 agreement | > 99 % | **95.43 %** | **falsified** |
 
-*(2026-09-11, 20 val documents / 10,186 positions, Qwen3-30B-A3B-Base at
-int8 against bf16, no adapter. 9 minutes on one node.)*
+*(2026-09-11, Qwen3-30B-A3B-Base at int8 against bf16, no adapter, 200
+validation documents / 97,773 scored positions, seq_len 512.)*
+
+Run twice, and the second run is worth reporting as a method result of its
+own:
+
+| | 20 docs, 10,186 positions | 200 docs, 97,773 positions |
+|---|---|---|
+| mean KL (nats) | 0.006125 | 0.006160 |
+| top-1 agreement | 95.651 % | 95.430 % |
+| top-5 agreement | 99.951 % | 99.955 % |
+
+Ten times the data moved the KL by 0.6 % and top-1 by two tenths of a point.
+So the first run was not a small sample producing a noisy number — these are
+properties of the quantized model on this corpus, and a distributional
+comparison of this kind converges on the order of ten thousand positions.
+Worth knowing before sizing the rest of the pilot: the expensive run bought
+confidence, not a different answer.
 
 **The two halves disagree, and the disagreement is the finding.** Top-5
 agreement is 99.95 % and the KL is 0.006 nats, so where the argmax flips, the
