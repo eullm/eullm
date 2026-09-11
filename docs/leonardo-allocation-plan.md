@@ -50,6 +50,48 @@ of thing that is remembered at the next call.
 Roughly a fifth. The rest needs work that is worth doing, not work invented
 to burn hours.
 
+## Measured, 2026-09-11
+
+Not projections. From `queue_stats.py` and `budget.sh`, nine days in.
+
+| | |
+|---|---:|
+| node-hours consumed | 60.9 |
+| calendar since 02/09 | 226.3 h |
+| — at least one job running | 60.9 h (26.9 %) |
+| — idle, cluster full | 7.2 h |
+| — idle, queue empty | 158.2 h |
+| mean nodes while busy | 1.00 |
+
+**Leonardo is not why the allocation is under-used.** Seven hours lost to a
+full queue against a hundred and fifty-eight with nothing submitted, almost
+all of it between 02/09 and 08/09 while the pipeline was still being debugged.
+That is an uncomfortable line to write in the Final Report and it is the true
+one, and it is also the only half we can still change.
+
+The single largest resource wait so far is dated and worth quoting: the
+Phase-1 chain stalled **from 2026-09-10 21:07 to 2026-09-11 04:13**, 7h06m,
+because no node was free when the second link timed out. The handover before
+it took three minutes. A queued chain does not guarantee continuity.
+
+What that implies for the rest of the allocation: to average one busy node,
+there have to be stretches at two or three, because gaps are certain. The
+QoS permits 256 nodes and 1,000 submitted jobs per user, and
+`boost_usr_prod` has `OverSubscribe=NO`, so parallel jobs never share
+hardware. Nothing in the scheduler limits us — only having work ready.
+
+### In flight
+
+- **Phase 1** — chain of four, `56803262 → 56818854 → 56818982 → 56912622`.
+  Two links have timed out at 24 h as designed; epoch 0.6164 at the last
+  reading, loss 1.652 → 1.269. Expected to finish 12-13/09 at ~85-95 node-h.
+- **v1.1 pilot** — running beside it from a second checkout, `$WORK/eullm-v11`,
+  so the frozen chain keeps its own tree. P6 (int8 teacher against bf16) is
+  queued; P1, P2 and P3 follow. See
+  [`paper/v11-pilot-preregistration.md`](paper/v11-pilot-preregistration.md).
+- **Accounting** — `sbatch_queue_stats.slurm` re-submits itself daily until
+  02/11 and freezes each snapshot to JSON, because `sacct` forgets.
+
 ## Backlog — ordered by what it gives the project
 
 Keep this queue fed. Each item is a candidate the moment a node frees up.
