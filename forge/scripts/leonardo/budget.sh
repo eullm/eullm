@@ -10,15 +10,20 @@
 # Three numbers, and the third is the one that answers "how much can I still
 # promise to something else":
 #
-#   settled    what saldo reports — completed jobs only
-#   in flight  running jobs, elapsed x nodes x 32 core-hours per node-hour
-#   committed  settled + in flight + the walltime every queued and running job
-#              could still consume. The worst case, known now rather than
-#              discovered at the end.
+#   consumed        every job since the allocation opened, finished and
+#                   running alike, elapsed x nodes x 32 core-hours per node-hour
+#   still bookable  the walltime every queued and running job could yet use
+#   committed       the two together. The worst case, known now rather than
+#                   discovered at the end.
 #
 # Usage:
 #   bash forge/scripts/leonardo/budget.sh
 #   bash forge/scripts/leonardo/budget.sh --reserve 200   # node-hours to keep
+#
+# Calendar, rather than node-hours, is the binding constraint on this
+# allocation — see docs/leonardo-allocation-plan.md. `queue_stats.py` in this
+# directory measures that side: where the calendar went and whose fault each
+# idle stretch was.
 #
 # CINECA bills a whole node: 1 node-hour = 32 core-hours on Booster, whatever
 # the job does with the GPUs.
@@ -26,31 +31,43 @@
 set -uo pipefail
 
 CORES_PER_NODE="${CORES_PER_NODE:-32}"
+PARTITION="${PARTITION:-boost_usr_prod}"
 RESERVE_NODE_H=0
 if [ "${1:-}" = "--reserve" ]; then
     RESERVE_NODE_H="${2:?--reserve needs a number of node-hours}"
 fi
 
-# ── settled, from saldo ──────────────────────────────────────────────────
+# ── the allocation's own numbers, from saldo ─────────────────────────────
 # Columns on the data row: 1 account, 2 start, 3 end, 4 total, 5 localCluster,
 # 6 totConsumed, 7 pct, 8 monthTotal, 9 monthConsumed. Guarded by NF so a
 # change in saldo's output degrades to a clear message instead of nonsense.
-read -r TOTAL SETTLED MONTH_TOTAL MONTH_USED <<<"$(
+read -r TOTAL ALLOC_START SETTLED MONTH_TOTAL MONTH_USED <<<"$(
     saldo -b 2>/dev/null |
-    awk 'NF >= 9 && $4 ~ /^[0-9]+$/ && $2 ~ /^[0-9]{8}$/ {print $4, $6, $8, $9; exit}'
+    awk 'NF >= 9 && $4 ~ /^[0-9]+$/ && $2 ~ /^[0-9]{8}$/ {print $4, $2, $6, $8, $9; exit}'
 )"
 if [ -z "${TOTAL:-}" ]; then
     echo "[err] could not parse 'saldo -b' — run it by hand and check the columns" >&2
     exit 2
 fi
+# saldo prints the allocation start as YYYYMMDD; sacct wants YYYY-MM-DD.
+SINCE="${ALLOC_START:0:4}-${ALLOC_START:4:2}-${ALLOC_START:6:2}"
 
-# ── in flight and committed, from sacct/squeue ───────────────────────────
+# ── consumed, from sacct ─────────────────────────────────────────────────
+# NOT from saldo. On 2026-09-11 saldo's totConsumed read 907 core-hours while
+# the jobs since the allocation opened added up to 1,675: a job that ENDED
+# hours earlier is neither still running nor yet billed, and falls through the
+# gap between the two columns. Summing sacct over the whole allocation counts
+# finished and running work alike, and needs no reconciliation.
+#
 # ElapsedRaw is seconds, which avoids parsing SLURM's D-HH:MM:SS by hand.
-IN_FLIGHT_CH="$(
-    sacct -X -n -s RUNNING --format=ElapsedRaw,NNodes 2>/dev/null |
+# Restricted to one partition because billing is per-partition: a one-core
+# job on the serial queue reports NNodes=1 and would otherwise be charged a
+# whole 32-core Booster node.
+CONSUMED_CH="$(
+    sacct -X -n -S "$SINCE" -r "$PARTITION" --format=ElapsedRaw,NNodes 2>/dev/null |
     awk -v c="$CORES_PER_NODE" '{s += $1 * $2 * c} END {printf "%.0f", s/3600}'
 )"
-IN_FLIGHT_CH="${IN_FLIGHT_CH:-0}"
+CONSUMED_CH="${CONSUMED_CH:-0}"
 
 # %L is the remaining time limit for running jobs and the full limit for
 # pending ones — i.e. exactly what each job may still burn.
@@ -69,7 +86,7 @@ REMAINING_CH="$(
 )"
 REMAINING_CH="${REMAINING_CH:-0}"
 
-COMMITTED_CH=$(( SETTLED + IN_FLIGHT_CH + REMAINING_CH ))
+COMMITTED_CH=$(( CONSUMED_CH + REMAINING_CH ))
 FREE_CH=$(( TOTAL - COMMITTED_CH ))
 RESERVE_CH=$(( RESERVE_NODE_H * CORES_PER_NODE ))
 
@@ -78,10 +95,8 @@ pct()   { awk -v v="$1" -v t="$TOTAL" 'BEGIN {printf "%.1f", (t ? 100*v/t : 0)}'
 
 printf '\n  allocation      %8s core-h  = %8s node-h\n' "$TOTAL" "$(nodeh "$TOTAL")"
 printf '  ─────────────────────────────────────────────────────\n'
-printf '  settled         %8s core-h  = %8s node-h   %5s%%   (saldo: finished jobs only)\n' \
-    "$SETTLED" "$(nodeh "$SETTLED")" "$(pct "$SETTLED")"
-printf '  in flight       %8s core-h  = %8s node-h   %5s%%   (running, not yet billed)\n' \
-    "$IN_FLIGHT_CH" "$(nodeh "$IN_FLIGHT_CH")" "$(pct "$IN_FLIGHT_CH")"
+printf '  consumed        %8s core-h  = %8s node-h   %5s%%   (sacct, %s onward, finished + running)\n' \
+    "$CONSUMED_CH" "$(nodeh "$CONSUMED_CH")" "$(pct "$CONSUMED_CH")" "$SINCE"
 printf '  still bookable  %8s core-h  = %8s node-h   %5s%%   (walltime queued+running may use)\n' \
     "$REMAINING_CH" "$(nodeh "$REMAINING_CH")" "$(pct "$REMAINING_CH")"
 printf '  ─────────────────────────────────────────────────────\n'
@@ -90,6 +105,7 @@ printf '  COMMITTED       %8s core-h  = %8s node-h   %5s%%\n' \
 printf '  free to promise %8s core-h  = %8s node-h   %5s%%\n' \
     "$FREE_CH" "$(nodeh "$FREE_CH")" "$(pct "$FREE_CH")"
 printf '\n  month           %8s core-h quota, %s used\n' "$MONTH_TOTAL" "$MONTH_USED"
+printf '  saldo settled   %8s core-h              (lags: cross-check only)\n' "$SETTLED"
 
 if [ "$RESERVE_CH" -gt 0 ]; then
     printf '\n'
