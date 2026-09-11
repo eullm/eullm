@@ -1081,6 +1081,24 @@ fn main() {
     if cfg!(feature = "rocm") {
         config.define("GGML_HIP", "ON");
 
+        // Compile the HIP objects position-independent. ggml turns
+        // CMAKE_POSITION_INDEPENDENT_CODE on only for shared-library builds and
+        // this one is static, so `ggml-cuda.cu.o` comes out non-PIC — while
+        // rustc on x86_64-unknown-linux-gnu links the final binary PIE through
+        // its own rust-lld, which refuses that with, several hundred times over:
+        //
+        //   relocation R_X86_64_32 cannot be used against local symbol
+        //   >>> ggml-cuda.cu.o:(.eh_frame+0x17a241)
+        //
+        // The CUDA jobs hit the same linker error and answer it with
+        // `-C link-arg=-no-pie` on the final binary (see the long comment in
+        // release-engine.yml's build-cuda-arm64), because nvcc's device-link
+        // object CANNOT be built PIC — there the cause is out of reach and
+        // dropping PIE is the only lever. Clang compiling HIP has no such
+        // limitation, so fix the cause here and keep the published binary
+        // position-independent.
+        config.define("CMAKE_POSITION_INDEPENDENT_CODE", "ON");
+
         // Which AMD GPU to generate device code for. `ggml-hip/CMakeLists.txt`
         // forwards AMDGPU_TARGETS -> GPU_TARGETS -> CMAKE_HIP_ARCHITECTURES and,
         // when all three are unset, leaves the choice to `enable_language(HIP)`,
