@@ -21,10 +21,34 @@
 
 set -euo pipefail
 
-EULLM_REPO="${EULLM_REPO:-$WORK/eullm}"
+# Which checkout this job runs is decided by where THIS FILE came from, not by
+# the submitting shell's environment.
+#
+# `sbatch` exports the submitter's environment by default and `env.sh` sets
+# EULLM_REPO to whatever tree the current run is pinned to — so submitting
+# `$WORK/eullm-v11/.../sbatch_phase2.slurm` from a shell that had sourced
+# env.sh for the frozen tree silently ran the frozen tree's code and config.
+# Nothing in the log said so. `scontrol` still knows the path the job was
+# submitted from, and the repo root is three directories above it.
+SELF="$(scontrol show job "${SLURM_JOB_ID:-0}" 2>/dev/null |
+        sed -n 's/.*Command=\([^ ]*\).*/\1/p' | head -1)"
+if [ -n "${EULLM_PHASE2_REPO:-}" ]; then
+    EULLM_REPO="$EULLM_PHASE2_REPO"          # explicit wins over everything
+elif [ -n "$SELF" ] && [ -f "$SELF" ]; then
+    EULLM_REPO="$(cd "$(dirname "$SELF")/../../.." && pwd)"
+else
+    EULLM_REPO="${EULLM_REPO:-$WORK/eullm}"  # interactive runs, no job id
+fi
+export EULLM_REPO
+
 # shellcheck disable=SC1091
 source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 cd "$EULLM_RUN_DIR"
+
+# Say which tree this is, on the first line, because the wrong answer is
+# invisible for hours otherwise.
+echo "[p2] repo   $EULLM_REPO"
+echo "[p2] commit $(git -C "$EULLM_REPO" rev-parse --short HEAD 2>/dev/null || echo '?')"
 
 # Phase 1 must have produced the teacher adapter this YAML points at.
 ADAPTER="./checkpoints/qwen3_30b_a3b_legal_it_continued_pt"
