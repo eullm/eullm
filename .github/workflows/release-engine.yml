@@ -657,6 +657,11 @@ jobs:
         run: cargo build --release --features rocm -p eullm-engine
 
       - name: Package binary
+        # Explicit, because a container job's default shell is `sh` (dash) and
+        # not the `bash` a runner-hosted job gets: `set -o pipefail` is a
+        # bashism and dash answers "Illegal option -o pipefail" before the step
+        # has run a single line of its own.
+        shell: bash
         run: |
           set -euo pipefail
           ART="${{ matrix.artifact }}"
