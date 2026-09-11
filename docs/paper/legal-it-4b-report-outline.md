@@ -138,6 +138,38 @@ for a throughput loss it was not causing, and two ZeRO-3 levers that raised
 the memory peak they were meant to lower. "We expected X and measured Y" is a
 result; "we measured Y" is a data point.
 
+### Scored so far
+
+| | predicted | measured | |
+|---|---|---|---|
+| **P6** KL | < 0.01 nats | **0.0061** | held |
+| **P6** top-1 agreement | > 99 % | **95.65 %** | **falsified** |
+
+*(2026-09-11, 20 val documents / 10,186 positions, Qwen3-30B-A3B-Base at
+int8 against bf16, no adapter. 9 minutes on one node.)*
+
+**The two halves disagree, and the disagreement is the finding.** Top-5
+agreement is 99.95 % and the KL is 0.006 nats, so where the argmax flips, the
+first two candidates were near-tied: the change is in which of two almost
+equal probabilities wins, not in the distribution. Distillation optimises a
+divergence against the teacher's probabilities, not agreement on its argmax,
+and 0.006 nats against a student loss around 1.27 is about 0.5 % of the
+signal.
+
+So the question P6 was asked to answer — *did quantizing the teacher to make
+it fit distort the target?* — is answered **no**, and v1.0's Phase-1 adapter
+needs no asterisk.
+
+But the prediction was posed badly, and that is recorded rather than quietly
+repaired. Top-1 agreement was chosen because it is the half a reader can
+interpret without information theory; it measures the stability of an argmax,
+not the fidelity of a distribution, and on formulaic Italian legal text — full
+of positions with two near-equiprobable continuations — the argmax is unstable
+even between two copies of the same model. The threshold that should have been
+pre-registered is KL alone, with top-1 reported as context. Per the
+pre-registration's own scoring rule, a badly posed prediction is itself a
+result.
+
 ## Incidents log
 
 One line each, with the cost. This is the section that makes the report
