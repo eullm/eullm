@@ -1080,6 +1080,53 @@ fn main() {
 
     if cfg!(feature = "rocm") {
         config.define("GGML_HIP", "ON");
+
+        // Which AMD GPU to generate device code for. `ggml-hip/CMakeLists.txt`
+        // forwards AMDGPU_TARGETS -> GPU_TARGETS -> CMAKE_HIP_ARCHITECTURES and,
+        // when all three are unset, leaves the choice to `enable_language(HIP)`,
+        // which resolves the architecture from the GPUs present on the *build*
+        // host. That silently does the wrong thing in the case that matters for
+        // HPC: the build happens on a login node, LUMI's login nodes are
+        // CPU-only, so nothing is detected and the build either fails outright
+        // or produces a binary with no device code for the MI250X on the compute
+        // nodes — the same class of failure as the CUDA-architecture mismatch
+        // documented in docs/cineca/leonardo.md, where a binary ran happily and
+        // entirely on CPU.
+        //
+        // EULLM_AMDGPU_TARGETS is the name to set; AMDGPU_TARGETS and
+        // GPU_TARGETS are accepted as aliases because that is what llama.cpp's
+        // own build instructions tell people to pass. What is handed to CMake is
+        // GPU_TARGETS + CMAKE_HIP_ARCHITECTURES, never the AMDGPU_TARGETS
+        // spelling, which rocm-cmake has deprecated.
+        //
+        //   EULLM_AMDGPU_TARGETS=gfx90a cargo build --release --features rocm
+        //
+        // gfx90a is MI250X/MI210 (LUMI-G, CDNA 2), gfx942 is MI300X/MI300A,
+        // gfx1100 is RDNA 3 (RX 7900). Several are allowed, semicolon-separated,
+        // at the cost of build time and binary size.
+        const AMDGPU_TARGET_VARS: [&str; 3] =
+            ["EULLM_AMDGPU_TARGETS", "AMDGPU_TARGETS", "GPU_TARGETS"];
+        for var in AMDGPU_TARGET_VARS {
+            println!("cargo:rerun-if-env-changed={var}");
+        }
+        match AMDGPU_TARGET_VARS
+            .iter()
+            .find_map(|var| env::var(var).ok().filter(|v| !v.trim().is_empty()))
+        {
+            Some(targets) => {
+                config.define("GPU_TARGETS", &targets);
+                config.define("CMAKE_HIP_ARCHITECTURES", &targets);
+            }
+            // Not fatal: on a developer machine that has the target GPU in it,
+            // detection is both correct and the convenient default.
+            None => println!(
+                "cargo:warning=rocm: no EULLM_AMDGPU_TARGETS set, so the HIP \
+                 architecture is detected from this machine's own GPUs. That \
+                 fails on a host without one (an HPC login node) and produces a \
+                 binary that cannot run on a different card. Set e.g. \
+                 EULLM_AMDGPU_TARGETS=gfx90a for MI250X."
+            ),
+        }
     }
 
     if cfg!(feature = "opencl") {
