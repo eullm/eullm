@@ -674,9 +674,20 @@ jobs:
           # as the Vulkan job's symbol check: verify what the binary contains,
           # not what the build was asked to contain.
           #
+          # Both read their input into a variable and match on that, rather than
+          # piping into `grep -q`. `grep -q` exits at the first match, the
+          # producer upstream then dies of SIGPIPE, and `set -o pipefail`
+          # reports that 141 as the pipeline's status — so the test fails on a
+          # binary that does contain what it is looking for. Not hypothetical:
+          # run 34650962835 rejected this binary for having no gfx90a code and,
+          # two lines later, printed "architectures actually present:
+          # amdhsa--gfx90a". A `<<<` here-string is not a pipeline, so grep may
+          # exit as early as it likes.
+          #
           # 1. The HIP runtime is in the link table. Unlike Vulkan there is no
           #    dlopen path here, so its absence is unambiguous.
-          if ! ldd "$ART" | grep -q libamdhip64; then
+          LINKED=$(ldd "$ART")
+          if ! grep -q libamdhip64 <<<"$LINKED"; then
             echo "::error::libamdhip64 is not in the link table — the HIP backend was not compiled in"
             exit 1
           fi
@@ -684,14 +695,14 @@ jobs:
           #    binary built for the wrong target links and runs and then finds
           #    no usable device — the AMD spelling of the Leonardo trap, where
           #    an sm_86 binary started, announced CUDA and ran on CPU.
-          if ! strings "$ART" | grep -q "amdhsa--${{ matrix.gpu_targets }}"; then
+          ARCHS=$(strings "$ART" | grep -oE "amdhsa--gfx[0-9a-z]+" | sort -u)
+          if ! grep -q "amdhsa--${{ matrix.gpu_targets }}" <<<"$ARCHS"; then
             echo "::error::no ${{ matrix.gpu_targets }} device code in the binary"
-            echo "architectures actually present:"
-            strings "$ART" | grep -oE "amdhsa--gfx[0-9a-z]+" | sort -u || echo "  (none)"
+            echo "architectures actually present: ${ARCHS:-(none)}"
             exit 1
           fi
-          echo "device code present for: $(strings "$ART" | grep -oE 'amdhsa--gfx[0-9a-z]+' | sort -u | tr '\n' ' ')"
-          ldd "$ART" | grep -E "amdhip64|rocblas|hipblas"
+          echo "device code present for: $(tr '\n' ' ' <<<"$ARCHS")"
+          grep -E "amdhip64|rocblas|hipblas" <<<"$LINKED" || true
           sccache --show-stats || true
 
       - name: Upload artifact

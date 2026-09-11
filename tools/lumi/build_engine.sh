@@ -67,16 +67,24 @@ BIN="$EULLM_REPO/target/release/eullm"
 # Not what the build was asked to contain. A HIP binary built for the wrong
 # architecture links, starts, announces a GPU backend and runs on CPU — the AMD
 # spelling of the trap that cost real A100 time on Leonardo.
-ldd "$BIN" | grep -q libamdhip64 \
+#
+# Both checks match against a variable rather than piping into `grep -q`:
+# `grep -q` exits at the first match, the producer upstream dies of SIGPIPE, and
+# `set -o pipefail` reports that 141 as the pipeline's status — failing the test
+# on a binary that does contain what it is looking for. The CI job was rejecting
+# a perfectly good gfx90a binary exactly that way. A `<<<` here-string is not a
+# pipeline, so grep may exit as early as it likes.
+LINKED=$(ldd "$BIN")
+grep -q libamdhip64 <<<"$LINKED" \
     || err "libamdhip64 is not in the link table — the HIP backend was not compiled in"
 
-if ! strings "$BIN" | grep -q "amdhsa--${EULLM_AMDGPU_TARGETS}"; then
-    echo "architectures actually present:" >&2
-    strings "$BIN" | grep -oE "amdhsa--gfx[0-9a-z]+" | sort -u >&2 || echo "  (none)" >&2
+ARCHS=$(strings "$BIN" | grep -oE "amdhsa--gfx[0-9a-z]+" | sort -u)
+if ! grep -q "amdhsa--${EULLM_AMDGPU_TARGETS}" <<<"$ARCHS"; then
+    echo "architectures actually present: ${ARCHS:-(none)}" >&2
     err "no ${EULLM_AMDGPU_TARGETS} device code in the binary"
 fi
 
-ok "device code present for: $(strings "$BIN" | grep -oE 'amdhsa--gfx[0-9a-z]+' | sort -u | tr '\n' ' ')"
+ok "device code present for: $(tr '\n' ' ' <<<"$ARCHS")"
 ok "binary: $BIN"
 echo
 echo "Next: pull a model from a login node (compute nodes have no outbound"
