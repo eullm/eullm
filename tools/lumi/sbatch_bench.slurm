@@ -79,6 +79,10 @@ PROMPT="${PROMPT:-Scrivi una breve storia sul mare.}"
 [ "$BATCH" -le 1 ] && export CONCURRENCY=1
 
 export GCDS="${SLURM_GPUS_ON_NODE:-1}"
+# Names what several devices are doing, so a result from this script and one
+# from sbatch_replicas.slurm can sit in the same file and still be told apart:
+# here the devices hold one model between them, there they hold one each.
+export MODE="layer-split"
 PORT=$((11434 + SLURM_JOB_ID % 1000))
 LOG="eullm-bench-$SLURM_JOB_ID.server.log"
 
@@ -191,7 +195,8 @@ print(f"  wall clock: {secs:.1f} s")
 if tok and secs:
     print(f"  AGGREGATE THROUGHPUT: {tok/secs:.1f} tok/s")
 result = {
-    "site": "lumi-g", "gcds": int(os.environ.get("GCDS", 0)),
+    "site": "lumi-g", "mode": os.environ.get("MODE"),
+    "gcds": int(os.environ.get("GCDS", 0)),
     "model": os.environ.get("MODEL"), "batch": int(os.environ.get("BATCH", 0)),
     "ctx": int(os.environ.get("CTX", 0)),
     "kv": f"{os.environ.get('CACHE_K')}/{os.environ.get('CACHE_V')}",
