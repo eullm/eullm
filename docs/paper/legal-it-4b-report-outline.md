@@ -142,10 +142,47 @@ result; "we measured Y" is a data point.
 
 | | predicted | measured | |
 |---|---|---|---|
+| **P1** K per position | ≥ 64 | **64-65** | held |
+| **P1** scoring vs generation | outside ±20 % | **2.73× faster** | held, for the wrong reason |
 | **P6** KL | < 0.01 nats | **0.00616** | held |
 | **P6** top-1 agreement | > 99 % | **95.43 %** | **falsified** |
 
-*(2026-09-11, Qwen3-30B-A3B-Base at int8 against bf16, no adapter, 200
+**P1 holds, and the reasoning behind it was wrong.** The prediction expected
+prompt scoring to be *slower* per position than generation-mode logprobs, with
+memory as the binding constraint. It is **2.73× faster**: 1,074 positions/s
+against 394. The falsification threshold was "within ±20 % of generation", and
+2.73× clears it — in the opposite direction from the one the prediction
+described.
+
+The error is conceptual and worth naming. Scoring a prompt is prefill: every
+position in one forward pass. Generation is autoregressive, one token at a
+time. Prefill is bound to be faster per position, and "prompt_logprobs is
+expensive" — true, relative to a prefill that does not compute them — got
+confused with "slower than generation", which does not follow. A threshold
+stated as a band rather than a direction is what let the prediction survive
+its own reasoning being wrong, and that is an argument for stating thresholds
+that way.
+
+Two findings the probe was built to record rather than assume:
+
+* **vLLM returns log-probabilities, not raw logits.** The values carry
+  `decoded_token`, `logprob`, `rank`. ADR-001 Part 3 specifies a provider
+  returning "RAW LOGITS, not log-probabilities"; that is now known to be
+  unavailable from this backend, and the cache format's per-temperature
+  normaliser is what absorbs the difference.
+* **K is a property of the engine, not only of the request.** `max_logprobs`
+  defaults to 20 and the engine *refuses* a larger request rather than
+  truncating it. A cache at K=128 needs a teacher process configured for K=128
+  before the first document is scored; raising K afterwards means standing the
+  teacher back up.
+
+*(2026-09-12, Qwen3-4B-Base, TP=1, 4 documents / 2,040 positions, seq_len 512.
+A smoke run on the student-sized model, to separate the API question from the
+30 B MoE on four GPUs. Throughput includes a Triton JIT spike on the first
+batch — 2.19 it/s against 6.34 on the second — so the steady-state figure is
+higher than the one reported.)*
+
+*(P6: 2026-09-11, Qwen3-30B-A3B-Base at int8 against bf16, no adapter, 200
 validation documents / 97,773 scored positions, seq_len 512.)*
 
 Run twice, and the second run is worth reporting as a method result of its
