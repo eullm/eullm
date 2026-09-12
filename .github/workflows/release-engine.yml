@@ -1826,10 +1826,52 @@ jobs:
           files: |
             artifacts/*/*
             artifacts/checksums.txt
+          # The `### This release` section below is the only part of this body
+          # that is NOT generic: it is rewritten in the bump commit, next to
+          # the CHANGELOG entry it summarises. If you are reading it on a
+          # release it does not describe, that is the bug — delete it rather
+          # than leave last version's announcement on this one.
           body: |
             ## EULLM Engine ${{ github.ref_name }}
 
             Drop-in Ollama replacement with continuous batching and EU AI Act audit trail.
+
+            ### This release: the data-centre accelerators
+
+            0.7.5 is about machines EULLM had never run on, on both vendors.
+
+            **NVIDIA A100 and H100** get a build of their own,
+            `eullm-linux-x64-cuda-12.4-datacenter`. The consumer CUDA binary
+            never ran on them: those cards are a different compute capability,
+            and CUDA 13 requires a driver newer than HPC sites deploy. This one
+            is validated on **CINECA Leonardo** (EuroHPC), where it initialises
+            CUDA on an A100-SXM-64GB and offloads every layer of a 27B model at
+            Q8 — 32.4 tok/s single-stream, and 128.1 tok/s aggregate across 16
+            concurrent requests on four GPUs with a quantized KV cache. That
+            last number is 25% **faster** than an f16 KV cache at the same
+            context, because decode is memory-bandwidth bound and a smaller
+            cache moves less data per step. Multi-GPU layer split scales 1.87×
+            from one card to four under concurrency — and not at all for a
+            single sequential request, which is worth knowing before buying
+            hardware for one. Method and full numbers:
+            [docs/cineca/leonardo.md](https://github.com/eullm/eullm/blob/main/docs/cineca/leonardo.md).
+
+            **AMD gets published ROCm binaries for the first time**, two of
+            them — building from source with `--features rocm` was possible
+            before, downloading one was not.
+            `eullm-linux-x64-rocm-consumer` covers Radeon RDNA 3, RDNA 3.5 and
+            RDNA 4; `eullm-linux-x64-rocm-gfx90a` covers Instinct MI250X and
+            MI210. Vulkan remains a fine answer for a Radeon in a desktop and
+            is the wrong tool for a data-centre card, which has no display
+            stack for a Vulkan driver to attach to and whose matrix cores go
+            unused under one.
+
+            The MI250X build exists for **EuroHPC LUMI**, where a development
+            access allocation will measure it against the Leonardo baselines
+            above. Be aware of what that means today: both ROCm binaries are
+            verified to carry device code for the architectures they name, but
+            neither has yet run on a physical AMD GPU. If you own one, a report
+            is genuinely useful.
 
             ### Quick install
 
@@ -1847,6 +1889,14 @@ jobs:
             # capability and their drivers are usually older. The consumer build
             # above does not run on them.
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-cuda-12.4-datacenter -o eullm
+            chmod +x eullm
+
+            # Linux x64 with an AMD Radeon (ROCm 7.2 — RX 7000/9000, Ryzen AI iGPUs)
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-rocm-consumer -o eullm
+            chmod +x eullm
+
+            # Linux x64 with an AMD Instinct MI250X/MI210 (ROCm 6.3)
+            curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64-rocm-gfx90a -o eullm
             chmod +x eullm
 
             # macOS Apple Silicon
@@ -1875,6 +1925,8 @@ jobs:
             | `eullm-linux-x64-vulkan` | Any GPU with a Vulkan driver (AMD, Intel, NVIDIA) | `libvulkan.so.1` and a working driver on the machine — mesa RADV, amdvlk, NVIDIA or Intel ANV. Nothing is bundled |
             | `eullm-linux-x64-cuda-13.1` | NVIDIA **consumer** GPU (RTX 3000/4000/5000, sm_86/89/120) | NVIDIA driver 580+. Does **not** run on A100/H100 — those need the data-center build below |
             | `eullm-linux-x64-cuda-12.4-datacenter` | NVIDIA **data-center** GPU (A100 sm_80, H100 sm_90) | NVIDIA driver 550+. Built on CUDA 12.4, not 13.1, on purpose: these cards live in HPC centres and enterprise fleets that freeze drivers for years, and CUDA 13 needs an August-2025 driver. Does **not** run on RTX cards |
+            | `eullm-linux-x64-rocm-consumer` | AMD **Radeon**: RDNA 3 (RX 7900/7800/7700/7600), RDNA 3.5 (Ryzen AI integrated Radeons), RDNA 4 (RX 9000) | ROCm 7.2.x installed on the machine — nothing is bundled, the binary links the system's own libamdhip64/rocblas/hipblas. RX 6000 (RDNA 2) is **not** included: use the Vulkan binary there |
+            | `eullm-linux-x64-rocm-gfx90a` | AMD **Instinct** MI250X / MI210 (CDNA 2) | ROCm 6.3.x installed on the machine, the version EuroHPC sites run. Check `hipconfig --version` before assuming it fits yours |
             | `eullm-linux-arm64` | CPU only | ARM64 Linux — generic baseline, runs on Raspberry Pi, Graviton, Jetson, any ARM64 SoC |
             | `eullm-linux-arm64-cuda-13.1` | NVIDIA GPU on an ARM64 host (sm_86/89/120) | ARM64 Linux + NVIDIA driver 580+. For a discrete NVIDIA card in an ARM board's PCIe slot |
             | `eullm-linux-arm64-cix-p1` | CPU only | **Armv9.2-A with SVE2, BF16, I8MM and DotProd only** — a tuned CPU profile for the CIX P1 (Radxa Orion O6). These instructions are compiled in, so it crashes with SIGILL on any ARM64 host without them, Raspberry Pi included. If you are not on a CIX P1, take `eullm-linux-arm64` |
