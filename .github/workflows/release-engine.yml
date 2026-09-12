@@ -10,7 +10,24 @@ on:
   # without paying for the rest of the release matrix (Windows CUDA alone is a
   # ~50 min cold build), and without ever creating a GitHub Release (the
   # `release` job only runs on an actual tag push).
-  workflow_dispatch: {}
+  #
+  # `job` narrows that further to the single build being worked on. Iterating
+  # on the AMD toolchain used to drag Vulkan and the ARM CIX-P1 build along
+  # every time — four dispatches in one evening meant six builds nobody had
+  # asked for, and a failure notification for each run. The default stays
+  # `all`, so a dispatch that ignores the dropdown behaves exactly as it did
+  # before: this input can narrow, never silently skip.
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which build to run (a real tag always runs the whole matrix)"
+        type: choice
+        default: all
+        options:
+          - all
+          - rocm
+          - vulkan
+          - arm-cix-p1
 
 permissions:
   contents: write
@@ -445,13 +462,17 @@ jobs:
   # bundled into the release beyond the binary itself — unlike CUDA, where we
   # ship the runtime DLLs. A machine without a Vulkan driver gets a clear
   # loader error rather than a broken binary.
-  # No `if:` guard, unlike the other build jobs: this one also runs on a manual
-  # workflow_dispatch, so a change to the Vulkan toolchain can be validated from
-  # the Actions tab without spending a release. The first attempt at this job
-  # died on `apt-get install glslc`, a package jammy does not have, and took
-  # v0.6.46's Vulkan binary with it. `release` still only runs on a real tag, so
-  # a dispatch publishes nothing.
+  # Runs on a manual workflow_dispatch as well as on a tag, so a change to the
+  # Vulkan toolchain can be validated from the Actions tab without spending a
+  # release — pick `vulkan` (or `all`) in the `job` dropdown. The first attempt
+  # at this job died on `apt-get install glslc`, a package jammy does not have,
+  # and took v0.6.46's Vulkan binary with it. `release` still only runs on a
+  # real tag, so a dispatch publishes nothing.
   build-vulkan:
+    if: >-
+      ${{ github.event_name == 'push'
+          || inputs.job == 'all'
+          || inputs.job == 'vulkan' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -540,24 +561,42 @@ jobs:
   # installed stack bounds the build, not the other way round. Check
   # `hipconfig --version` on any new site before assuming this binary fits it.
   #
-  # The matrix has one entry on purpose rather than being inlined: adding
-  # consumer Radeon (gfx1100/gfx1030) is then one line, and each architecture
-  # multiplies the device-code compile, so it should be a decision someone
-  # makes, not a default that quietly doubles the release.
+  # The consumer entry pairs a different ROCm with a different set of cards,
+  # which is why the version sits in the matrix rather than in the container
+  # line: 7.2.4 is the newest `dev-ubuntu-22.04` image published, and jammy
+  # rather than a newer base for the same reason build-vulkan stays there — a
+  # published Linux binary must not raise its glibc floor above the rest of the
+  # set. RDNA 2 (gfx1030) is deliberately absent: those cards are served by the
+  # Vulkan binary, ROCm's support for consumer RDNA 2 was always partial, and
+  # every architecture added multiplies the device-code compile. Seven of them
+  # in one binary makes this a candidate for the release's long pole; if it gets
+  # there, splitting the consumer entry in two is one line and the halves then
+  # build in parallel.
   #
-  # No `if:` guard, same as build-vulkan: this job also runs on a manual
-  # workflow_dispatch so the AMD toolchain can be iterated from the Actions tab
-  # without cutting a release. `release` still only runs on a real tag push.
+  # Runs on a manual workflow_dispatch as well as on a tag — pick `rocm` (or
+  # `all`) in the `job` dropdown — so the AMD toolchain can be iterated from the
+  # Actions tab without cutting a release. `release` still only runs on a real
+  # tag push.
   build-rocm:
+    if: >-
+      ${{ github.event_name == 'push'
+          || inputs.job == 'all'
+          || inputs.job == 'rocm' }}
     runs-on: ubuntu-22.04
     container:
-      image: rocm/dev-ubuntu-22.04:6.3.4
+      image: rocm/dev-ubuntu-22.04:${{ matrix.rocm_tag }}
     strategy:
       fail-fast: false
       matrix:
         include:
+          # MI250X / MI210 — EuroHPC LUMI-G.
           - gpu_targets: gfx90a
+            rocm_tag: "6.3.4"
             artifact: eullm-linux-x64-rocm-gfx90a
+          # RDNA 3 (RX 7000), RDNA 3.5 (Ryzen AI iGPUs), RDNA 4 (RX 9000).
+          - gpu_targets: "gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+            rocm_tag: "7.2.4"
+            artifact: eullm-linux-x64-rocm-consumer
     steps:
       # Same reason as build-cuda's identical first step: without git,
       # actions/checkout falls back to a REST tarball, which cannot fetch the
@@ -695,9 +734,19 @@ jobs:
           #    binary built for the wrong target links and runs and then finds
           #    no usable device — the AMD spelling of the Leonardo trap, where
           #    an sm_86 binary started, announced CUDA and ran on CPU.
+          #    Every requested architecture, not just one: the consumer entry asks
+          #    for seven, and one missing from the fat binary is a card that
+          #    falls back to CPU in the field with nothing in the build having
+          #    said so. Matched whole-line, because gfx1150 and gfx1151 differ
+          #    by a single character.
           ARCHS=$(strings "$ART" | grep -oE "amdhsa--gfx[0-9a-z]+" | sort -u)
-          if ! grep -q "amdhsa--${{ matrix.gpu_targets }}" <<<"$ARCHS"; then
-            echo "::error::no ${{ matrix.gpu_targets }} device code in the binary"
+          MISSING=""
+          IFS=';' read -ra WANT <<<"${{ matrix.gpu_targets }}"
+          for T in "${WANT[@]}"; do
+            grep -qx "amdhsa--$T" <<<"$ARCHS" || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::no device code for:$MISSING"
             echo "architectures actually present: ${ARCHS:-(none)}"
             exit 1
           fi
@@ -1203,6 +1252,10 @@ jobs:
   # upgrade step is needed here the way a cross-compile job would.
   # See docs/arm-cix-p1-cpu-profile.md for the full profile writeup.
   build-arm-cix-p1:
+    if: >-
+      ${{ github.event_name == 'push'
+          || inputs.job == 'all'
+          || inputs.job == 'arm-cix-p1' }}
     strategy:
       matrix:
         include:
