@@ -1842,7 +1842,7 @@ jobs:
           body: |
             ## EULLM Engine ${{ github.ref_name }}
 
-            Sovereign LLM inference engine for Europe — continuous batching, quantized KV cache, and an EU AI Act audit trail.
+            LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
             ### This release: the data-centre accelerators
 

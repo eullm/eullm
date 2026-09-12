@@ -3,7 +3,7 @@
 </p>
 
 <p align="center"><strong>EULLM Platform</strong></p>
-<p align="center"><strong>The inference Engine is ready today.</strong> Drop-in Ollama replacement, AGPL-3.0, EU-sovereign, AI Act-ready audit trail, zero telemetry.<br><em>Plus a roadmap to verticalize, compress, and ship domain-specific models on European infrastructure.</em></p>
+<p align="center"><strong>The inference Engine is ready today.</strong> Self-hosted LLM inference in a single Rust binary — AGPL-3.0, AI Act-ready audit trail, zero telemetry.<br><em>Plus a roadmap to verticalize, compress, and ship domain-specific models on infrastructure you control.</em></p>
 
 <p align="center">
   <a href="#try-it-now">Try it now</a> ·
@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  🇪🇺 European-built — focused on local-first and sovereign AI &nbsp;·&nbsp; 🇮🇹 Developed in Italy
+  🔒 Local-first and sovereign by design &nbsp;·&nbsp; 🇮🇹 Developed in Italy
 </p>
 
 ---
@@ -51,7 +51,7 @@
 
 ## Try it now
 
-**EULLM Engine is a drop-in Ollama replacement built in Rust.** Download a binary, run any GGUF model (Qwen, Mistral, DeepSeek, Phi, Gemma, …), get an Ollama-compatible + OpenAI-compatible API on port 11434. No Python, no Docker, no telemetry.
+**EULLM Engine is an LLM inference engine written in Rust.** Download a binary, run any GGUF model (Qwen, Mistral, DeepSeek, Phi, Gemma, …), get an OpenAI-compatible and Ollama-compatible API on port 11434. No Python, no Docker, no telemetry.
 
 ```bash
 # Linux x64 with NVIDIA GPU (RTX 3000 / 4000 / 5000 — Ampere/Ada/Blackwell)
@@ -120,7 +120,7 @@ eullm serve --rust-debug
 
 Off by default: the scan touches every value in the vocabulary (~100-150k floats) on every generated token, so it's real added cost most users shouldn't pay for. Turn it on only when actively chasing a bug like this.
 
-### Drop-in for Ollama-compatible clients
+### Works with the clients you already have
 
 Same port (11434), same Ollama API, plus OpenAI-compatible API on the same binary. Existing tooling (Open WebUI, LangChain, n8n, any OpenAI client) works without code changes:
 
@@ -692,7 +692,7 @@ not a bigger token budget.
 
 | Component | Status | Use today? |
 |-----------|--------|------------|
-| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.6.0)** — Linux x64 + Windows x64 | **Yes** — drop-in for Ollama on tested platforms |
+| **Engine** — Rust inference runtime, Ollama + OpenAI APIs, continuous batching, quantized KV cache (Q4_0/Q5/Q8), CUDA (RTX 3000/4000/5000), audit trail. Builds also exist for ROCm/Vulkan/Metal/ARM64 — see [platform status](#-platform-status--help-us-test) | ✅ **Ready (v0.6.0)** — Linux x64 + Windows x64 | **Yes** — on tested platforms |
 | **Multimodal** — vision + audio understanding via llama.cpp `mtmd` (Gemma 4). Image OCR + scene description **and** audio understanding (transcription, in-content search) now both in the Chat UI and CLI | 🆕 **v0.6.2** — vision validated on Linux + Windows CUDA; audio understanding validated in the Chat UI (still upstream-**experimental**) | **Yes** — see [Multimodal](#multimodal-vision--audio-new-in-v060) |
 | **Chat UI** — embedded browser chat (HTML/CSS/JS baked into `eullm.exe`, served on a separate port from the API) with Markdown + best-effort LaTeX→MathML rendering, plus **image and audio attachment** for multimodal models | ✅ **Ready (v0.6.2)** | **Yes** — auto-opens after install on Windows |
 | **Windows installer** — one-click `.exe` (Inno Setup) with Start Menu, optional PATH, browser launcher | 🚧 Paused after v0.5.6 — needs SmartScreen / launcher redesign before re-shipping | Use the standalone Windows binaries above for now |
@@ -717,7 +717,7 @@ not a bigger token budget.
 
 The **EU AI Act** (Regulation 2024/1689) takes effect August 2, 2026. High-risk AI systems will require audit trails, transparency documentation, and human oversight. Existing open-source tools were not designed with this in mind.
 
-European SMEs need AI models that:
+SMEs in regulated sectors need AI models that:
 
 - **Run locally** on their own hardware or EU servers
 - **Make GDPR and AI Act audit-trail requirements easier to satisfy**
@@ -766,7 +766,7 @@ Key features:
 - **Continuous batching** — multiple requests decoded in parallel, near-linear throughput scaling
 - **Token streaming** — NDJSON on Ollama endpoints, SSE on OpenAI endpoint (`"stream": true`)
 - **GPU acceleration** — NVIDIA CUDA *(tested)*, Apple Metal *(community-validated)*, AMD ROCm / Vulkan *(builds available, [community testing wanted](#-platform-status--help-us-test))*
-- **Ollama-compatible API** — drop-in replacement, same endpoints, same port
+- **Ollama-compatible API** — same endpoints, same port
 - **OpenAI-compatible API** — works with Open WebUI, LangChain, n8n, any standard client
 - **Transparent web browsing** (`--web`) — put a URL in any message and the engine fetches the page, strips HTML, selects relevant content, and injects it into the prompt before inference. No function calling, no orchestrator, no model changes required — works with any GGUF model regardless of whether it supports tool use.
 - **Built-in audit trail** for every inference (who, when, what — AI Act ready)
@@ -886,7 +886,7 @@ eullm-forge profiles
 
 ### EULLM Hub
 
-Pre-verticalizzati models for European domains and languages. Download and run immediately. Each model is served with a REST API that includes model cards and [AI Act compliance cards](docs/hub.md).
+Pre-verticalizzati models for specific domains and languages, starting with European ones. Download and run immediately. Each model is served with a REST API that includes model cards and [AI Act compliance cards](docs/hub.md).
 
 > **Models below are planned (Q4 2026), not yet released.** [Join the waitlist](https://eullm.eu) to be notified at launch.
 
@@ -910,7 +910,7 @@ Every model will ship with:
 
 ## Quickstart
 
-> **The Engine is usable today** (`eullm run`, `eullm serve` — a drop-in replacement for Ollama). The commands below also preview the target CLI for **Forge** (verticalization) and **Hub** (EU registry pull), which are in active development on the Q3–Q4 2026 roadmap. Star this repo to track progress.
+> **The Engine is usable today** (`eullm run`, `eullm serve`). The commands below also preview the target CLI for **Forge** (verticalization) and **Hub** (EU registry pull), which are in active development on the Q3–Q4 2026 roadmap. Star this repo to track progress.
 
 ### Prebuilt binaries (easiest)
 
@@ -969,9 +969,9 @@ eullm pull legal-it-4b          # Downloads from EU servers (Hetzner DE, OVH FR)
 eullm run legal-it-4b           # Runs locally — on your laptop, 8GB RAM
 ```
 
-### Drop-in Ollama replacement
+### Point your existing tools at it
 
-If you're a system integrator, or you already use Ollama or a llama.cpp backend, you can switch to EULLM without rewriting a single line. Same API, same port, same tools. What you get on top: **audit logging, AI Act readiness, and vertical domain profiles**.
+If you run a llama.cpp-based backend today, you can point your tools at EULLM without rewriting a single line. Same API, same port, same tools. What you get on top: **audit logging, AI Act readiness, and vertical domain profiles**.
 
 ```bash
 # If you were doing this with Ollama:
@@ -1003,7 +1003,7 @@ All GPU backends are compiled natively via llama.cpp — no wrappers, no Docker,
 
 ## Why EULLM?
 
-If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know the pain. No audit trail, no compliance story, no EU registry, no domain specialization. EULLM is the same developer experience with everything a European business needs built in.
+A local inference stack gives you a model and a port. What it usually does not give you is a record of what was asked and answered, a compliance story for regulated work, a registry with verifiable provenance, or a path to a model specialized for your domain. EULLM is built around those four, without giving up the developer experience of a single binary you start in a terminal.
 
 | | Ollama / llama.cpp | EULLM |
 |---|---|---|
@@ -1020,9 +1020,9 @@ If you already use Ollama, llama.cpp, or any OpenAI-compatible backend: you know
 | Telemetry | Varies | **None.** No analytics, no crash reports, no usage stats. Audit trail stored locally at `~/.eullm/audit/audit.jsonl`, never transmitted |
 | Migration effort | — | **Zero.** Same API, same port, same tools |
 
-EULLM aims to be the sovereign AI stack for Europe — engine, tools, and models in one platform.
+EULLM aims to be a complete sovereign AI stack — engine, tools, and models in one platform.
 
-### For researchers and European labs
+### For researchers and labs
 
 The EU AI Act (Regulation 2024/1689) is easy to discuss on paper and hard to
 study on *running* software. EULLM is built to be an open, reproducible
@@ -1123,7 +1123,7 @@ We deliberately exclude Llama from the EULLM catalog because its license require
 ### Phase 1: Engine Public (Q2 2026) — We are here
 
 * EuLLM Engine v0.x — Rust runtime + llama.cpp
-* OpenAI + Ollama API compatibility (drop-in replacement)
+* OpenAI + Ollama API compatibility
 * Single binary distribution (Linux/macOS, CUDA/ROCm/Vulkan/Metal)
 * GGUF model support, transparent web browsing, audit trail
 * ✅ **Multimodal (v0.6.0)** — vision + experimental audio understanding via `mtmd` (Gemma 4 12B), in the Chat UI and CLI
@@ -1285,7 +1285,7 @@ See [Getting Started](docs/getting-started.md) for the full Docker guide.
 
 ### Code of conduct
 
-We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Be respectful, be constructive, be European about it.
+We follow the [Contributor Covenant](https://www.contributor-covenant.org/). Be respectful, be constructive, be kind about it.
 
 ## Who's behind this
 
@@ -1346,12 +1346,12 @@ and each model's card.
 - **[Join the waitlist](https://eullm.eu)** — get notified at launch
 - **Open issues** — tell us what you need
 - **Contribute** — code, docs, ideas, translations
-- **Share** — tell your network about EU AI sovereignty
+- **Share** — tell your network about local-first AI sovereignty
 
 ---
 
 <p align="center">
-  <strong>Built in Europe. For Europe. By Europeans.</strong>
+  <strong>Built in Europe. Yours to run anywhere.</strong>
   <br><br>
   <a href="https://eullm.eu">eullm.eu</a>
 </p>
