@@ -12,7 +12,8 @@
 #   bash forge/scripts/leonardo/watch_job.sh 56775410
 #   bash forge/scripts/leonardo/watch_job.sh 56775410 --all   # unfiltered
 #
-# Run from $EULLM_RUN_DIR (where logs/ lives), or set EULLM_RUN_DIR.
+# Run it from the directory whose logs/ holds the job. $EULLM_RUN_DIR is the
+# fallback, not the override — see the comment on RUN_DIR below.
 
 set -uo pipefail
 
@@ -20,7 +21,21 @@ JOBID="${1:?Usage: $0 <jobid> [--all]}"
 MODE="${2:-}"
 POLL="${WATCH_POLL_SECONDS:-30}"
 
+# The directory you are standing in wins, when it actually holds this job's
+# log. $EULLM_RUN_DIR used to take precedence, and because `env.sh` sets it to
+# whichever run is pinned, `cd`-ing into the pilot's directory and asking to
+# watch a pilot job silently followed Phase 1's directory instead: it sat
+# there polling for a log that was never going to appear, while the job it was
+# asked about ran elsewhere. Two runs sharing a login shell is now normal, so
+# the environment cannot be the one that decides.
 RUN_DIR="${EULLM_RUN_DIR:-$PWD}"
+if compgen -G "$PWD/logs/*-${JOBID}.out" >/dev/null 2>&1; then
+    RUN_DIR="$PWD"
+elif [ -d "$PWD/logs" ] && ! compgen -G "$RUN_DIR/logs/*-${JOBID}.out" >/dev/null 2>&1; then
+    # Neither has the log yet — the job may still be queued. Prefer where the
+    # user is standing, since that is where they expect it to land.
+    RUN_DIR="$PWD"
+fi
 cd "$RUN_DIR" || { echo "no such directory: $RUN_DIR" >&2; exit 2; }
 
 # Lines worth seeing while the job runs. Deliberately not `error`: the corpus
