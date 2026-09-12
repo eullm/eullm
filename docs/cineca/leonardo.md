@@ -68,6 +68,45 @@ Three independent, unrelated reasons — all hard blockers, not tuning:
    because a banner that says `CUDA` while running on CPU costs real GPU
    allocation before anyone notices.
 
+   **What the boundary actually is, measured 11 Sep 2026.** The rule above is
+   sound but was stated too tightly, and being vague about it cost two failed
+   jobs when vLLM was brought in for the v1.1 pilot. The precise numbers:
+
+   | | |
+   |---|---|
+   | driver reports | CUDA **12020** (12.2) |
+   | toolkit modules | `cuda/12.2`, `12.3`, `12.6` — no CUDA 13 |
+   | `torch 2.13.0+cu130` | `RuntimeError: The NVIDIA driver on your system is too old` |
+   | `torch 2.13.0+cu129` | works: `cuda available: True`, `NVIDIA A100-SXM4-64GB`, matmul returns |
+
+   So it is the **major** version that binds, not the minor one. CUDA's
+   minor-version compatibility holds across seven minor versions here — a
+   12.9 binary runs on a 12.2 driver — while 13.x does not run at all. The
+   "driver floor r550" quoted for the CUDA 12.4 datacenter build is NVIDIA's
+   conservative figure without minor-version compatibility; in practice this
+   site is below it and 12.x binaries run anyway.
+
+   **The check costs two seconds and needs no GPU**, which is the part worth
+   remembering, because both failures came from skipping it and submitting a
+   four-GPU job instead:
+
+   ```bash
+   python -c "import torch; print(torch.__version__, torch.version.cuda)"
+   ```
+
+   Anything starting with 12 is fine here. 13 is not, and no flag fixes it.
+
+   One practical consequence for Python packages rather than our own builds:
+   a project's default PyPI wheel may target a CUDA the site cannot run.
+   vLLM 0.28.0 on PyPI is CUDA 13.0; its 12.9 build exists only on
+   `wheels.vllm.ai`, under a commit hash, and the URL pattern printed in
+   vLLM's own installation docs 404s. Read the index rather than construct
+   the URL:
+
+   ```bash
+   curl -s https://wheels.vllm.ai/0.28.0/cu129/vllm/ | grep -o 'href="[^"]*x86_64.whl"'
+   ```
+
 Building from source sidesteps all three: compiling directly on the target
 node picks up its own glibc, its own driver-compatible CUDA, and CMake's
 `native` architecture detection (or an explicit
