@@ -3,8 +3,20 @@
 #
 #     sbatch tools/lumi/sbatch_smoke.slurm
 #
-# Costs ~0.03 node-hours (dev-g bills 0.5 per GCD-hour, this asks for one GCD
-# for at most 20 minutes). The account comes from SBATCH_ACCOUNT, so set it once
+# The repository is not needed on the machine: this file and the binary are the
+# whole test. With a published release there is nothing to compile, so two
+# downloads are enough —
+#
+#     curl -L https://github.com/eullm/eullm/releases/download/<tag>/eullm-linux-x64-rocm-gfx90a -o eullm-rocm
+#     curl -L https://raw.githubusercontent.com/eullm/eullm/main/tools/lumi/sbatch_smoke.slurm -o smoke.slurm
+#     chmod +x eullm-rocm && export EULLM_BIN=$PWD/eullm-rocm
+#     sbatch smoke.slurm
+#
+# Cloning is for tools/lumi/build_engine.sh, which compiles against the ROCm the
+# machine actually has — the fallback when no published binary matches the site.
+#
+# Costs ~0.04 node-hours (dev-g bills 0.5 per GCD-hour, so one GCD for at most
+# 20 minutes is 0.17 GPU-hours). The account comes from SBATCH_ACCOUNT, so set it once
 # in ~/.bashrc rather than passing -A on every submission:
 #
 #     export SBATCH_ACCOUNT=project_46XXXXXXX
