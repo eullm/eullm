@@ -1826,6 +1826,14 @@ jobs:
           files: |
             artifacts/*/*
             artifacts/checksums.txt
+          # PROSE PARAGRAPHS HERE ARE ONE LINE EACH, however long — do not
+          # re-wrap them. GitHub renders a release body with its user-content
+          # pipeline, where a single newline becomes a <br> (unlike a README,
+          # where lines in a paragraph flow together). Hard-wrapped prose came
+          # out as a column of short ragged lines on the 0.7.5 page. Code
+          # blocks and table rows are unaffected, which is why only the prose
+          # showed it.
+          #
           # The `### This release` section below is the only part of this body
           # that is NOT generic: it is rewritten in the bump commit, next to
           # the CHANGELOG entry it summarises. If you are reading it on a
@@ -1834,53 +1842,19 @@ jobs:
           body: |
             ## EULLM Engine ${{ github.ref_name }}
 
-            Drop-in Ollama replacement with continuous batching and EU AI Act audit trail.
+            Sovereign LLM inference engine for Europe — continuous batching, quantized KV cache, and an EU AI Act audit trail.
 
             ### This release: the data-centre accelerators
 
             0.7.5 is about machines EULLM had never run on, on both vendors.
 
-            **NVIDIA A100 and H100** get a build of their own,
-            `eullm-linux-x64-cuda-12.4-datacenter`. The consumer CUDA binary
-            never ran on them: those cards are a different compute capability,
-            and CUDA 13 requires a driver newer than HPC sites deploy. What
-            0.7.5 changes is that it runs on them at all — on **CINECA
-            Leonardo** (EuroHPC) it initialises CUDA on an A100-SXM-64GB and
-            offloads every layer of a 27B model at Q8, where the earlier build
-            announced a GPU backend and then ran the entire model on CPU.
+            **NVIDIA A100 and H100** get a build of their own, `eullm-linux-x64-cuda-12.4-datacenter`. The consumer CUDA binary never ran on them: those cards are a different compute capability, and CUDA 13 requires a driver newer than HPC sites deploy. What 0.7.5 changes is that it runs on them at all — on **CINECA Leonardo** (EuroHPC) it initialises CUDA on an A100-SXM-64GB and offloads every layer of a 27B model at Q8, where the earlier build announced a GPU backend and then ran the entire model on CPU.
 
-            That session measured 32.4 tok/s single-stream and 128.1 tok/s
-            aggregate across 16 concurrent requests on four GPUs. **Those
-            figures are not compared against anything.** No other runtime was
-            measured on the same hardware, so they are a baseline for catching
-            our own regressions, not a statement about how EULLM ranks against
-            anyone — that comparison is still to be done. Two results from the
-            same session are useful whatever the absolute numbers turn out to
-            mean, because both are EULLM against itself: a quantized KV cache
-            was 25% faster than f16 at the same context (decode is
-            memory-bandwidth bound, so moving less data per step wins), and
-            multi-GPU layer split scaled 1.87× from one card to four under
-            concurrency — and not at all for a single sequential request,
-            which is worth knowing before buying hardware for one. Method and
-            full numbers:
-            [docs/cineca/leonardo.md](https://github.com/eullm/eullm/blob/main/docs/cineca/leonardo.md).
+            That session measured 32.4 tok/s single-stream and 128.1 tok/s aggregate across 16 concurrent requests on four GPUs. **Those figures are not compared against anything.** No other runtime was measured on the same hardware, so they are a baseline for catching our own regressions, not a statement about how EULLM ranks against anyone — that comparison is still to be done. Two results from the same session are useful whatever the absolute numbers turn out to mean, because both are EULLM against itself: a quantized KV cache was 25% faster than f16 at the same context (decode is memory-bandwidth bound, so moving less data per step wins), and multi-GPU layer split scaled 1.87× from one card to four under concurrency — and not at all for a single sequential request, which is worth knowing before buying hardware for one. Method and full numbers: [docs/cineca/leonardo.md](https://github.com/eullm/eullm/blob/main/docs/cineca/leonardo.md).
 
-            **AMD gets published ROCm binaries for the first time**, two of
-            them — building from source with `--features rocm` was possible
-            before, downloading one was not.
-            `eullm-linux-x64-rocm-consumer` covers Radeon RDNA 3, RDNA 3.5 and
-            RDNA 4; `eullm-linux-x64-rocm-gfx90a` covers Instinct MI250X and
-            MI210. Vulkan remains a fine answer for a Radeon in a desktop and
-            is the wrong tool for a data-centre card, which has no display
-            stack for a Vulkan driver to attach to and whose matrix cores go
-            unused under one.
+            **AMD gets published ROCm binaries for the first time**, two of them — building from source with `--features rocm` was possible before, downloading one was not. `eullm-linux-x64-rocm-consumer` covers Radeon RDNA 3, RDNA 3.5 and RDNA 4; `eullm-linux-x64-rocm-gfx90a` covers Instinct MI250X and MI210. Vulkan remains a fine answer for a Radeon in a desktop and is the wrong tool for a data-centre card, which has no display stack for a Vulkan driver to attach to and whose matrix cores go unused under one.
 
-            The MI250X build exists for **EuroHPC LUMI**, where a development
-            access allocation will measure it against the Leonardo baselines
-            above. Be aware of what that means today: both ROCm binaries are
-            verified to carry device code for the architectures they name, but
-            neither has yet run on a physical AMD GPU. If you own one, a report
-            is genuinely useful.
+            The MI250X build exists for **EuroHPC LUMI**, where a development access allocation will measure it against the Leonardo baselines above. Be aware of what that means today: both ROCm binaries are verified to carry device code for the architectures they name, but neither has yet run on a physical AMD GPU. If you own one, a report is genuinely useful.
 
             ### Quick install
 
@@ -1974,18 +1948,11 @@ jobs:
 
             ### What changed
 
-            See [CHANGELOG.md](https://github.com/eullm/eullm/blob/main/CHANGELOG.md)
-            for what was added, fixed and made faster in this version.
+            See [CHANGELOG.md](https://github.com/eullm/eullm/blob/main/CHANGELOG.md) for what was added, fixed and made faster in this version.
 
             ### License
 
-            EULLM is [AGPL-3.0-or-later](https://github.com/eullm/eullm/blob/main/LICENSE).
-            Running an unmodified binary, or modifying it for internal or local
-            use, carries no additional obligation. If you modify EULLM and let
-            others use it over a network, including as a hosted service, you
-            must offer them the source of your modified version. Versions up to
-            and including 0.7.4 were released under Apache 2.0 and keep those
-            terms. The models EULLM runs have their own separate licenses.
+            EULLM is [AGPL-3.0-or-later](https://github.com/eullm/eullm/blob/main/LICENSE). Running an unmodified binary, or modifying it for internal or local use, carries no additional obligation. If you modify EULLM and let others use it over a network, including as a hosted service, you must offer them the source of your modified version. Versions up to and including 0.7.4 were released under Apache 2.0 and keep those terms. The models EULLM runs have their own separate licenses.
 
   # ── Housekeeping: drop the caches this tag created ──────────────────────
   #
