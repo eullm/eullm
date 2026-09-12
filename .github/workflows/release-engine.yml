@@ -5,12 +5,29 @@ on:
     tags:
       - "engine-v*"
       - "EuLLM-v*"
-  # Manual dispatch runs only build-arm-cix-p1 and build-vulkan, so either can
-  # be iterated on from the Actions tab without a real tag, without paying for
-  # the rest of the release matrix (Windows CUDA alone is a ~50 min cold
-  # build), and without ever creating a GitHub Release (the `release` job only
-  # runs on an actual tag push).
-  workflow_dispatch: {}
+  # Manual dispatch runs only build-arm-cix-p1, build-vulkan and build-rocm, so
+  # any of them can be iterated on from the Actions tab without a real tag,
+  # without paying for the rest of the release matrix (Windows CUDA alone is a
+  # ~50 min cold build), and without ever creating a GitHub Release (the
+  # `release` job only runs on an actual tag push).
+  #
+  # `job` narrows that further to the single build being worked on. Iterating
+  # on the AMD toolchain used to drag Vulkan and the ARM CIX-P1 build along
+  # every time — four dispatches in one evening meant six builds nobody had
+  # asked for, and a failure notification for each run. The default stays
+  # `all`, so a dispatch that ignores the dropdown behaves exactly as it did
+  # before: this input can narrow, never silently skip.
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which build to run (a real tag always runs the whole matrix)"
+        type: choice
+        default: all
+        options:
+          - all
+          - rocm
+          - vulkan
+          - arm-cix-p1
 
 permissions:
   contents: write
@@ -445,13 +462,17 @@ jobs:
   # bundled into the release beyond the binary itself — unlike CUDA, where we
   # ship the runtime DLLs. A machine without a Vulkan driver gets a clear
   # loader error rather than a broken binary.
-  # No `if:` guard, unlike the other build jobs: this one also runs on a manual
-  # workflow_dispatch, so a change to the Vulkan toolchain can be validated from
-  # the Actions tab without spending a release. The first attempt at this job
-  # died on `apt-get install glslc`, a package jammy does not have, and took
-  # v0.6.46's Vulkan binary with it. `release` still only runs on a real tag, so
-  # a dispatch publishes nothing.
+  # Runs on a manual workflow_dispatch as well as on a tag, so a change to the
+  # Vulkan toolchain can be validated from the Actions tab without spending a
+  # release — pick `vulkan` (or `all`) in the `job` dropdown. The first attempt
+  # at this job died on `apt-get install glslc`, a package jammy does not have,
+  # and took v0.6.46's Vulkan binary with it. `release` still only runs on a
+  # real tag, so a dispatch publishes nothing.
   build-vulkan:
+    if: >-
+      ${{ github.event_name == 'push'
+          || inputs.job == 'all'
+          || inputs.job == 'vulkan' }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -518,6 +539,230 @@ jobs:
         with:
           name: eullm-linux-x64-vulkan
           path: eullm-linux-x64-vulkan
+
+  # ── ROCm/HIP: the AMD build, for the cards Vulkan serves badly ─────────────
+  #
+  # Vulkan already covers consumer AMD, and for a Radeon in a desktop it is the
+  # better trade: one binary, no toolkit, the driver comes from the system. It
+  # is the wrong tool for a data-centre CDNA card, which has no display stack at
+  # all and whose matrix cores a Vulkan driver does not expose. That is the
+  # hardware this build exists for — EuroHPC project EHPC-DEV-2026D09-278 runs
+  # on LUMI-G, 4 MI250X (8 GCDs) per node — and it is why the first and for now
+  # only matrix entry is gfx90a rather than a consumer architecture.
+  #
+  # **ROCm 6.3.4 is deliberately not the newest available.** Images up to
+  # 10.0.0 exist at the time of writing. ROCm's shared libraries are
+  # soname-versioned and this binary links them dynamically (unlike CUDA, where
+  # we link cudart/cuBLAS statically and ship the DLLs on Windows): it resolves
+  # `libamdhip64`, `librocblas` and `libhipblas` from whatever the *site* has
+  # installed. LUMI's system ROCm is 6.3.4, so that is what this is built
+  # against. Exactly the same reasoning produced the CUDA 12.4 data-centre
+  # artifact after 13.1 refused to start on Leonardo: at an HPC site the
+  # installed stack bounds the build, not the other way round. Check
+  # `hipconfig --version` on any new site before assuming this binary fits it.
+  #
+  # The consumer entry pairs a different ROCm with a different set of cards,
+  # which is why the version sits in the matrix rather than in the container
+  # line: 7.2.4 is the newest `dev-ubuntu-22.04` image published, and jammy
+  # rather than a newer base for the same reason build-vulkan stays there — a
+  # published Linux binary must not raise its glibc floor above the rest of the
+  # set. RDNA 2 (gfx1030) is deliberately absent: those cards are served by the
+  # Vulkan binary, ROCm's support for consumer RDNA 2 was always partial, and
+  # every architecture added multiplies the device-code compile. Measured on the
+  # consumer entry's first cold run: 33 minutes to compile and link, and an
+  # 88 MB artifact against gfx90a's 20 MB. That is comfortably under the ~50 min
+  # Windows CUDA takes cold, so seven architectures do NOT make this the
+  # release's long pole — worth knowing before anyone trims the list to save
+  # time it is not costing. If a future architecture does push it there,
+  # splitting the consumer entry in two is one line and the halves then build in
+  # parallel.
+  #
+  # Runs on a manual workflow_dispatch as well as on a tag — pick `rocm` (or
+  # `all`) in the `job` dropdown — so the AMD toolchain can be iterated from the
+  # Actions tab without cutting a release. `release` still only runs on a real
+  # tag push.
+  build-rocm:
+    if: >-
+      ${{ github.event_name == 'push'
+          || inputs.job == 'all'
+          || inputs.job == 'rocm' }}
+    runs-on: ubuntu-22.04
+    container:
+      image: rocm/dev-ubuntu-22.04:${{ matrix.rocm_tag }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # MI250X / MI210 — EuroHPC LUMI-G.
+          - gpu_targets: gfx90a
+            rocm_tag: "6.3.4"
+            artifact: eullm-linux-x64-rocm-gfx90a
+          # RDNA 3 (RX 7000), RDNA 3.5 (Ryzen AI iGPUs), RDNA 4 (RX 9000).
+          - gpu_targets: "gfx1100;gfx1101;gfx1102;gfx1150;gfx1151;gfx1200;gfx1201"
+            rocm_tag: "7.2.4"
+            artifact: eullm-linux-x64-rocm-consumer
+    steps:
+      # Same reason as build-cuda's identical first step: without git,
+      # actions/checkout falls back to a REST tarball, which cannot fetch the
+      # llama.cpp submodule.
+      - name: Install git (container has none; required for submodule checkout)
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y git
+
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      # The `dev` image carries the HIP compiler and runtime but not the math
+      # libraries — that is the difference between it (~1 GB) and `-complete`
+      # (~6 GB), which would not leave room for the build on a hosted runner.
+      # ggml-hip does `find_package(hipblas)` and `find_package(rocblas)`, so
+      # those two come in explicitly. libclang is for bindgen, which runs
+      # regardless of backend.
+      - name: Install build dependencies (rocBLAS/hipBLAS, bindgen's libclang)
+        run: |
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            cmake build-essential pkg-config libssl-dev libclang-dev \
+            curl ca-certificates rocblas-dev hipblas-dev
+          cmake --version
+          /opt/rocm/bin/hipconfig --version
+
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      # Swatinem/rust-cache does not work inside containers — same manual
+      # two-layer cache as build-cuda.
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-rocm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-rocm-
+
+      # Keyed on the artifact, not just Cargo.lock: two matrix entries would
+      # differ only by EULLM_AMDGPU_TARGETS, which cargo's fingerprint does not
+      # see — sharing the key across them would hand one architecture the
+      # other's object files. Same failure mode the CUDA job documents.
+      - uses: actions/cache@v5
+        with:
+          path: target
+          key: target-rocm-p1-${{ matrix.artifact }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: target-rocm-p1-${{ matrix.artifact }}-
+
+      # sccache understands hipcc, and CMake's HIP language honours
+      # CMAKE_HIP_COMPILER_LAUNCHER the same way the CUDA language honours the
+      # CUDA one. Setting only the C/C++ pair here would repeat the v0.5.7
+      # mistake exactly: a high hit rate on host code while every
+      # template-instance kernel recompiles from scratch, which on this backend
+      # is most of the build.
+      - name: Install sccache
+        run: |
+          SCCACHE_VER=0.8.0
+          TMPSC=$(mktemp -d)
+          curl -sSfL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VER}/sccache-v${SCCACHE_VER}-x86_64-unknown-linux-musl.tar.gz" \
+            -o "${TMPSC}/sccache.tar.gz"
+          tar -xzf "${TMPSC}/sccache.tar.gz" -C "${TMPSC}"
+          find "${TMPSC}" -maxdepth 2 -name sccache -type f -exec mv {} /usr/local/bin/ \;
+          chmod +x /usr/local/bin/sccache
+          rm -rf "${TMPSC}"
+          # A backend outage degrades to a cache-less build, never a failed one.
+          if curl -sSf -m 10 "${SCCACHE_ENDPOINT}/minio/health/live" >/dev/null 2>&1; then
+            echo "RUSTC_WRAPPER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_C_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_CXX_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "CMAKE_HIP_COMPILER_LAUNCHER=sccache" >> $GITHUB_ENV
+            echo "sccache: S3 backend reachable — caching enabled."
+          else
+            echo "::warning::sccache S3 backend (${SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
+          fi
+          sccache --version
+          sccache --start-server || true
+
+      - name: Build engine (ROCm)
+        env:
+          ROCM_PATH: /opt/rocm
+          # ggml-hip takes the non-hipcc path when CXX is a plain compiler and
+          # calls `enable_language(HIP)`; HIPCXX names the compiler explicitly
+          # so that resolution cannot drift with the image. ROCm's own clang,
+          # not hipcc — hipcc as CXX is the legacy path and warns.
+          HIPCXX: /opt/rocm/llvm/bin/clang++
+          # Without this the HIP architecture is resolved from the GPUs in the
+          # build machine, and a CI runner has none. See the rocm block in
+          # llama-cpp-sys-2/build.rs.
+          EULLM_AMDGPU_TARGETS: ${{ matrix.gpu_targets }}
+          # Same x86-64-v3 baseline as every other x86_64 Linux binary: the CPU
+          # still runs everything the GPU does not. See docs/x86-64-baseline.md.
+          RUSTFLAGS: "-C target-cpu=x86-64-v3"
+        run: cargo build --release --features rocm -p eullm-engine
+
+      - name: Package binary
+        # Explicit, because a container job's default shell is `sh` (dash) and
+        # not the `bash` a runner-hosted job gets: `set -o pipefail` is a
+        # bashism and dash answers "Illegal option -o pipefail" before the step
+        # has run a single line of its own.
+        shell: bash
+        run: |
+          set -euo pipefail
+          ART="${{ matrix.artifact }}"
+          cp target/release/eullm "$ART"
+          strip --strip-all "$ART" || true
+          chmod +x "$ART"
+
+          # Two checks, deliberately after strip, because a strip that removed
+          # the device code would otherwise ship silently. The same principle
+          # as the Vulkan job's symbol check: verify what the binary contains,
+          # not what the build was asked to contain.
+          #
+          # Both read their input into a variable and match on that, rather than
+          # piping into `grep -q`. `grep -q` exits at the first match, the
+          # producer upstream then dies of SIGPIPE, and `set -o pipefail`
+          # reports that 141 as the pipeline's status — so the test fails on a
+          # binary that does contain what it is looking for. Not hypothetical:
+          # run 34650962835 rejected this binary for having no gfx90a code and,
+          # two lines later, printed "architectures actually present:
+          # amdhsa--gfx90a". A `<<<` here-string is not a pipeline, so grep may
+          # exit as early as it likes.
+          #
+          # 1. The HIP runtime is in the link table. Unlike Vulkan there is no
+          #    dlopen path here, so its absence is unambiguous.
+          LINKED=$(ldd "$ART")
+          if ! grep -q libamdhip64 <<<"$LINKED"; then
+            echo "::error::libamdhip64 is not in the link table — the HIP backend was not compiled in"
+            exit 1
+          fi
+          # 2. Device code for the requested architecture is embedded. A HIP
+          #    binary built for the wrong target links and runs and then finds
+          #    no usable device — the AMD spelling of the Leonardo trap, where
+          #    an sm_86 binary started, announced CUDA and ran on CPU.
+          #    Every requested architecture, not just one: the consumer entry asks
+          #    for seven, and one missing from the fat binary is a card that
+          #    falls back to CPU in the field with nothing in the build having
+          #    said so. Matched whole-line, because gfx1150 and gfx1151 differ
+          #    by a single character.
+          ARCHS=$(strings "$ART" | grep -oE "amdhsa--gfx[0-9a-z]+" | sort -u)
+          MISSING=""
+          IFS=';' read -ra WANT <<<"${{ matrix.gpu_targets }}"
+          for T in "${WANT[@]}"; do
+            grep -qx "amdhsa--$T" <<<"$ARCHS" || MISSING="$MISSING $T"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "::error::no device code for:$MISSING"
+            echo "architectures actually present: ${ARCHS:-(none)}"
+            exit 1
+          fi
+          echo "device code present for: $(tr '\n' ' ' <<<"$ARCHS")"
+          grep -E "amdhip64|rocblas|hipblas" <<<"$LINKED" || true
+          sccache --show-stats || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
 
   build-cuda:
     if: ${{ github.event_name == 'push' }}
@@ -1011,6 +1256,10 @@ jobs:
   # upgrade step is needed here the way a cross-compile job would.
   # See docs/arm-cix-p1-cpu-profile.md for the full profile writeup.
   build-arm-cix-p1:
+    if: >-
+      ${{ github.event_name == 'push'
+          || inputs.job == 'all'
+          || inputs.job == 'arm-cix-p1' }}
     strategy:
       matrix:
         include:
@@ -1509,6 +1758,7 @@ jobs:
       - build
       - build-linux-cpu
       - build-vulkan
+      - build-rocm
       - build-cuda
       - build-cuda-arm64
       - build-arm-cix-p1

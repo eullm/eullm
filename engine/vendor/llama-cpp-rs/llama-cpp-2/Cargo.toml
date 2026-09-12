@@ -31,6 +31,14 @@
 #     upstream never exposed the raw struct's `n_outputs_max` field, and its
 #     n_batch default costs ~300 MiB of compute buffer per loaded model for
 #     callers that read one logit per sequence per step (see the method doc).
+#   - `llama-cpp-sys-2/build.rs`: three CMake defines that are EuLLM policy
+#     rather than upstream behaviour, each with its reasoning inline —
+#     `GGML_METAL=OFF` whenever the `metal` feature is absent (ggml defaults it
+#     ON for every Apple target), `GGML_CUDA_NCCL=OFF` under `cuda` (so the
+#     binary doesn't hard-depend on libnccl.so.2 on single-GPU machines), and
+#     `GPU_TARGETS`/`CMAKE_HIP_ARCHITECTURES` under `rocm` from
+#     `EULLM_AMDGPU_TARGETS` (without it the HIP architecture is detected from
+#     the build host's own GPUs, which is wrong on an HPC login node).
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"

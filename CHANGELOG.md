@@ -13,6 +13,30 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.5 — 2026-09-12
+
+### Added
+- **AMD ROCm binaries are now published**, two of them. The only build for AMD
+  hardware until now was the Vulkan one, which is a fine answer for a Radeon in
+  a desktop and the wrong one for a data-centre card — those have no display
+  stack for a Vulkan driver to attach to, and their matrix cores go unused
+  under one.
+
+  `eullm-linux-x64-rocm-consumer` covers RDNA 3 (RX 7900/7800/7700/7600),
+  RDNA 3.5 (the Ryzen AI integrated Radeons) and RDNA 4 (RX 9000), built
+  against ROCm 7.2. `eullm-linux-x64-rocm-gfx90a` covers Instinct MI250X and
+  MI210, built against ROCm 6.3 to match the stack EuroHPC sites run. Neither
+  bundles ROCm: both resolve the libraries already installed on the machine, so
+  check `hipconfig --version` against the version in the artifact name before
+  assuming one fits. RDNA 2 (RX 6000) is not included — the Vulkan binary
+  remains the build for those cards.
+
+  Building from source for a different AMD card now works too, which it did
+  not before — `cargo build --features rocm` never passed a GPU architecture,
+  so it compiled for whatever card was in the build machine, and produced a
+  binary with no device code at all on a machine with no GPU (an HPC login
+  node, a CI runner). Set `EULLM_AMDGPU_TARGETS` (e.g. `gfx1100`) to choose.
+
 ## 0.7.5-rc9 — 2026-09-07
 
 ### Fixed
