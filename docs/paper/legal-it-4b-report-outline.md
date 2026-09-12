@@ -144,8 +144,67 @@ result; "we measured Y" is a data point.
 |---|---|---|---|
 | **P1** K per position | ≥ 64 | **64-65** | held |
 | **P1** scoring vs generation | outside ±20 % | **2.73× faster** | held, for the wrong reason |
+| **P3** mass retained at K=32, T=1 | ≥ 99 % | **93.66 %** | **falsified** |
+| **P3** truncation KL at K=32, T=1 | < 0.01 nats | **0.0655** | **falsified** |
 | **P6** KL | < 0.01 nats | **0.00616** | held |
 | **P6** top-1 agreement | > 99 % | **95.43 %** | **falsified** |
+
+**P3 is falsified, and it is the first result that changes a decision.** The
+prediction was that formulaic legal Italian would be peaked enough for K=32 to
+carry ≥ 99 % of the probability mass. Measured:
+
+| K | T=1 | T=2 | T=4 |
+|---:|---:|---:|---:|
+| 16 | 90.84 % | 35.95 % | 0.97 % |
+| 32 | **93.66 %** | 39.25 % | 1.36 % |
+| 64 | 95.74 % | 42.95 % | 1.93 % |
+| 128 | 97.27 % | 47.18 % | 2.80 % |
+
+K=32 misses by more than five points, and **no K on the table reaches 99 %**,
+including the K=128 the prediction dismissed as waste. Quadrupling K from 32 to
+128 buys 3.6 points of mass for 4× the storage — the tail is long, not absent,
+and that is the opposite shape from the one the reasoning assumed.
+
+Truncating to the top-K and renormalising costs exactly
+`KL(truncated ‖ full) = −log(retained mass)`, so the prediction's two
+thresholds are one number, and 99 % mass is 0.01005 nats — 99 % would have
+*failed* "KL < 0.01 nats" on its own. At K=64, T=1 the truncation error is
+**0.0435 nats**: seven times the 0.00616 nats P6 measured for quantizing the
+teacher to int8. The pilot spent a job establishing that the cheap teacher does
+not distort the target, and the cache format built to hold its output distorts
+it seven times more. Precision was being guarded at the wrong end of the
+pipeline.
+
+**The temperature result is the larger finding, and it was not predicted at
+all.** Distillation runs at T > 1 — that is what softens the teacher into a
+signal about the whole distribution rather than its argmax — and softening is
+precisely what flattens the tail that top-K throws away. At T=4, K=128 retains
+**2.8 %** of the mass: a truncation KL of 3.58 nats, against a student loss
+around 1.27. The cache would be noise, not supervision. A top-K cache is
+therefore not temperature-agnostic, and storing per-temperature normalisers —
+which the format does — does not rescue it, because the mass that is missing
+was never written down.
+
+Two consequences, recorded here and carried into ADR-001:
+
+* **A high-fidelity top-K cache is not affordable at the sizes Part 11 priced.**
+  Reaching a truncation error comparable to P6's quantization error needs a K
+  far beyond 128, and the storage estimate scales with it.
+* **This shifts the A-vs-B decision toward design B**, the online split, which
+  computes against the full distribution and never truncates. P4 predicted B
+  wins at N=1 on node-hours; P3 says A's loss is not only in node-hours but in
+  the signal itself.
+
+*Caveat, and it matters for the size of the effect rather than its direction:*
+this was measured on **Qwen3-30B-A3B-Base without the Phase-1 adapter**, which
+was still training when the job ran. Continued pre-training on Italian case law
+should make the teacher *more* peaked on that text, so these are a lower bound
+on retained mass. Re-run with `--adapter` when Phase 1 finishes. The gap to
+close at K=32, T=1 is 5.3 points, and the temperature collapse is too large for
+an adapter to reverse.
+
+*(2026-09-12, Qwen3-30B-A3B-Base, bf16, no adapter, transformers — no vLLM —
+64 documents / 30,784 positions, seq_len 512.)*
 
 **P1 holds, and the reasoning behind it was wrong.** The prediction expected
 prompt scoring to be *slower* per position than generation-mode logprobs, with
