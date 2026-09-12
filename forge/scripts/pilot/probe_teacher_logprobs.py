@@ -45,10 +45,54 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
 from pathlib import Path
+
+
+def resolve_local_model(model: str) -> str:
+    """A repo id becomes the local snapshot it was prefetched into.
+
+    Compute nodes have no network, which is why models are prefetched to
+    `$HF_HOME` from a login node. `HF_HUB_OFFLINE=1` is supposed to make that
+    enough, and for transformers it is — but vLLM resolves a repo id against
+    the Hub anyway, to list the repository's files, and on a node with no
+    route out that fails before anything else can happen:
+
+        Could not reach the Hub ([Errno 101] Network is unreachable)
+        ERROR repo_utils.py:169 Error retrieving file list ...
+        [FAIL] could not load the model: [Errno 101] Network is unreachable
+
+    Handing it an absolute path skips that lookup entirely. Four evenings of
+    failures were attributed to CUDA versions, a stale torchcodec and two
+    NCCLs before this turned out to be underneath all of them — each real, and
+    each hiding the next.
+
+    A path that already exists is returned untouched, so this is safe to apply
+    unconditionally.
+    """
+    if Path(model).exists():
+        return model
+    hf_home = os.environ.get("HF_HOME")
+    if not hf_home:
+        return model
+    snapshots = Path(hf_home) / "hub" / f"models--{model.replace('/', '--')}" / "snapshots"
+    if not snapshots.is_dir():
+        return model
+
+    # refs/main names the commit the prefetch landed on. Preferring it over
+    # "whatever directory sorts last" means two jobs cannot silently score
+    # against different revisions of the same model.
+    ref = snapshots.parent / "refs" / "main"
+    if ref.is_file():
+        candidate = snapshots / ref.read_text(encoding="utf-8").strip()
+        if candidate.is_dir():
+            return str(candidate)
+    dirs = sorted((d for d in snapshots.iterdir() if d.is_dir()),
+                  key=lambda d: d.stat().st_mtime)
+    return str(dirs[-1]) if dirs else model
 
 
 def load_samples(path: Path, n: int, seed: int, field: str) -> list[str]:
@@ -129,7 +173,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--report", type=Path, default=None)
     args = p.parse_args(argv)
 
-    report: dict = {"model": args.model, "top_k": args.top_k,
+    # Resolved once, and both the banner and the report carry the path
+    # actually used — "which revision did this score against" has to be
+    # answerable from the artefact, not from the command line someone typed.
+    model_path = resolve_local_model(args.model)
+    report: dict = {"model": args.model, "model_path": model_path,
+                    "top_k": args.top_k,
                     "tensor_parallel_size": args.tensor_parallel_size,
                     "seq_len": args.seq_len, "samples": args.samples}
 
@@ -152,12 +201,12 @@ def main(argv: list[str] | None = None) -> int:
         report["verdict"] = "no-samples"
         print(f"[FAIL] no usable samples in {args.data}", file=sys.stderr)
         return finish(2)
-    print(f"[..] {len(texts)} samples, loading {args.model} "
+    print(f"[..] {len(texts)} samples, loading {model_path} "
           f"on TP={args.tensor_parallel_size}", flush=True)
 
     t0 = time.time()
     try:
-        llm = LLM(model=args.model,
+        llm = LLM(model=model_path,
                   tensor_parallel_size=args.tensor_parallel_size,
                   max_model_len=args.seq_len,
                   gpu_memory_utilization=args.gpu_memory_utilization,
@@ -170,11 +219,38 @@ def main(argv: list[str] | None = None) -> int:
     report["load_seconds"] = round(time.time() - t0, 1)
     print(f"[ok] loaded in {report['load_seconds']}s", flush=True)
 
+    # Tokenize and truncate HERE, rather than handing vLLM raw strings.
+    #
+    # The engine refuses a prompt longer than max_model_len, and a corpus
+    # document is far longer than the window we score it in:
+    #
+    #   prompt_logprobs=64 rejected: This model's maximum context length is
+    #   512 tokens. However ... your prompt contains at least 513 input tokens
+    #
+    # Passing token ids also removes an ambiguity that matters for the numbers
+    # this probe reports: positions/s is only comparable across runs if the
+    # count of positions is something we set rather than something the
+    # tokenizer happened to produce.
+    tokenizer = llm.get_tokenizer()
+
+    def as_prompts(limit: int) -> list[dict]:
+        limit = max(8, limit)
+        return [
+            {"prompt_token_ids":
+                tokenizer(t, truncation=True, max_length=limit)["input_ids"]}
+            for t in texts
+        ]
+
+    # One token of headroom for the output max_tokens asks for.
+    score_prompts = as_prompts(args.seq_len - 1)
+    report["prompt_tokens_total"] = sum(
+        len(pr["prompt_token_ids"]) for pr in score_prompts)
+
     # ── the question: top-K for every prompt position, in one pass ────────
     t0 = time.time()
     try:
         scored = llm.generate(
-            texts,
+            score_prompts,
             SamplingParams(max_tokens=1, temperature=0.0,
                            prompt_logprobs=args.top_k),
         )
@@ -194,8 +270,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── the comparison: generation mode over the same prompts ─────────────
     t0 = time.time()
+    # The generation half needs room for the tokens it will emit as well.
     generated = llm.generate(
-        texts,
+        as_prompts(args.seq_len - args.gen_tokens - 1),
         SamplingParams(max_tokens=args.gen_tokens, temperature=0.0,
                        logprobs=args.top_k),
     )

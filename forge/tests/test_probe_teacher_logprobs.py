@@ -105,3 +105,57 @@ def test_load_samples_skips_short_and_malformed(tmp_path):
     ]), encoding="utf-8")
     got = probe.load_samples(data, n=10, seed=1, field="text")
     assert len(got) == 2
+
+
+# ── offline model resolution ─────────────────────────────────────────────
+# Compute nodes have no network. vLLM resolves a repo id against the Hub even
+# when told to be offline, so a repo id has to become the prefetched snapshot
+# before it reaches vLLM. Every case here corresponds to a way that can go
+# wrong quietly — the worst being two jobs scoring against different revisions
+# of "the same" model.
+
+def test_repo_id_becomes_the_prefetched_snapshot(tmp_path, monkeypatch):
+    snap = tmp_path / "hub" / "models--Qwen--Qwen3-4B-Base" / "snapshots" / "abc123"
+    snap.mkdir(parents=True)
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert probe.resolve_local_model("Qwen/Qwen3-4B-Base") == str(snap)
+
+
+def test_refs_main_decides_when_several_snapshots_exist(tmp_path, monkeypatch):
+    """Otherwise two jobs could score against different revisions in silence."""
+    base = tmp_path / "hub" / "models--Qwen--Qwen3-4B-Base"
+    old = base / "snapshots" / "old111"
+    new = base / "snapshots" / "new222"
+    old.mkdir(parents=True)
+    new.mkdir(parents=True)
+    (base / "refs").mkdir()
+    (base / "refs" / "main").write_text("old111\n", encoding="utf-8")
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    # The ref wins even though the other directory is newer.
+    assert probe.resolve_local_model("Qwen/Qwen3-4B-Base") == str(old)
+
+
+def test_a_dangling_ref_falls_back_instead_of_failing(tmp_path, monkeypatch):
+    base = tmp_path / "hub" / "models--Qwen--Qwen3-4B-Base"
+    snap = base / "snapshots" / "real999"
+    snap.mkdir(parents=True)
+    (base / "refs").mkdir()
+    (base / "refs" / "main").write_text("gone000", encoding="utf-8")
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert probe.resolve_local_model("Qwen/Qwen3-4B-Base") == str(snap)
+
+
+def test_an_existing_path_is_left_alone(tmp_path, monkeypatch):
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert probe.resolve_local_model(str(tmp_path)) == str(tmp_path)
+
+
+def test_an_uncached_model_is_passed_through_unchanged(tmp_path, monkeypatch):
+    """Not this function's job to fail — let vLLM say what it cannot find."""
+    monkeypatch.setenv("HF_HOME", str(tmp_path))
+    assert probe.resolve_local_model("Qwen/Nothing-Here") == "Qwen/Nothing-Here"
+
+
+def test_no_hf_home_is_passed_through_unchanged(monkeypatch):
+    monkeypatch.delenv("HF_HOME", raising=False)
+    assert probe.resolve_local_model("Qwen/Qwen3-4B-Base") == "Qwen/Qwen3-4B-Base"
