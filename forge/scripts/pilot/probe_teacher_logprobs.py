@@ -237,6 +237,15 @@ def main(argv: list[str] | None = None) -> int:
         llm = LLM(model=model_path,
                   tensor_parallel_size=args.tensor_parallel_size,
                   max_model_len=args.seq_len,
+                  # The engine caps logprobs per request at 20 by default, and
+                  # refuses the request rather than truncating it:
+                  #   Requested prompt logprobs of 64, which is greater than
+                  #   max allowed: 20
+                  # So K is not only a property of the request — the engine has
+                  # to be built to allow it, which is a constraint design A
+                  # inherits: a cache at K=128 needs a teacher process
+                  # configured for it before the first document is scored.
+                  max_logprobs=args.top_k,
                   gpu_memory_utilization=args.gpu_memory_utilization,
                   enforce_eager=False)
     except Exception as exc:                       # noqa: BLE001 - reported
