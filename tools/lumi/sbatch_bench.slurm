@@ -79,6 +79,10 @@ PROMPT="${PROMPT:-Scrivi una breve storia sul mare.}"
 [ "$BATCH" -le 1 ] && export CONCURRENCY=1
 
 export GCDS="${SLURM_GPUS_ON_NODE:-1}"
+# Names what several devices are doing, so a result from this script and one
+# from sbatch_replicas.slurm can sit in the same file and still be told apart:
+# here the devices hold one model between them, there they hold one each.
+export MODE="layer-split"
 PORT=$((11434 + SLURM_JOB_ID % 1000))
 LOG="eullm-bench-$SLURM_JOB_ID.server.log"
 
@@ -93,7 +97,29 @@ echo "=== starting server ==="
     --batch-size "$BATCH" --ctx-size "$CTX" \
     --cache-type-k "$CACHE_K" --cache-type-v "$CACHE_V" > "$LOG" 2>&1 &
 SERVER_PID=$!
-trap 'kill "$SERVER_PID" 2>/dev/null' EXIT
+
+# TERM and INT as well as EXIT, with the limits established by test rather than
+# assumed, because bash's trap semantics are not what they look like:
+#
+#   - a trap does NOT run while the shell sits in a foreground command; it is
+#     deferred until that command returns, so a SIGTERM during a `curl` or the
+#     readiness `sleep` waits for it;
+#   - a trap DOES interrupt `wait`, which is where this script spends the whole
+#     timed window — and there the cleanup runs and the server really goes
+#     (absent from /proc afterwards, not left as a zombie).
+#
+# So this makes cleanup prompt in the phase that matters and not everywhere.
+# It does NOT claim to fix the Slurm CG (completing) state seen after a scancel
+# on 12 Sep 2026: scancel signals every process in the job step, so the server
+# receives SIGTERM from Slurm whatever this trap does, and what actually kept
+# those four nodes completing was never established.
+cleanup() {
+    kill "$SERVER_PID" 2>/dev/null
+    [ -n "${WORK:-}" ] && rm -rf "$WORK"
+    return 0
+}
+trap cleanup EXIT
+trap 'cleanup; exit 143' TERM INT
 
 for _ in $(seq 1 90); do
     curl -sf "http://127.0.0.1:$PORT/api/version" >/dev/null 2>&1 && break
@@ -103,7 +129,7 @@ if ! curl -sf "http://127.0.0.1:$PORT/api/version" >/dev/null 2>&1; then
     echo "ERROR: server never became reachable"; tail -40 "$LOG"; exit 1
 fi
 
-WORK=$(mktemp -d); trap 'kill "$SERVER_PID" 2>/dev/null; rm -rf "$WORK"' EXIT
+WORK=$(mktemp -d)   # cleanup() above removes it, on a signal as well as on exit
 
 request() {
     curl -s --max-time 1800 -H "Content-Type: application/json" \
@@ -169,7 +195,8 @@ print(f"  wall clock: {secs:.1f} s")
 if tok and secs:
     print(f"  AGGREGATE THROUGHPUT: {tok/secs:.1f} tok/s")
 result = {
-    "site": "lumi-g", "gcds": int(os.environ.get("GCDS", 0)),
+    "site": "lumi-g", "mode": os.environ.get("MODE"),
+    "gcds": int(os.environ.get("GCDS", 0)),
     "model": os.environ.get("MODEL"), "batch": int(os.environ.get("BATCH", 0)),
     "ctx": int(os.environ.get("CTX", 0)),
     "kv": f"{os.environ.get('CACHE_K')}/{os.environ.get('CACHE_V')}",
