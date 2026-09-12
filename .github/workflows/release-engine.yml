@@ -1843,17 +1843,26 @@ jobs:
             **NVIDIA A100 and H100** get a build of their own,
             `eullm-linux-x64-cuda-12.4-datacenter`. The consumer CUDA binary
             never ran on them: those cards are a different compute capability,
-            and CUDA 13 requires a driver newer than HPC sites deploy. This one
-            is validated on **CINECA Leonardo** (EuroHPC), where it initialises
-            CUDA on an A100-SXM-64GB and offloads every layer of a 27B model at
-            Q8 — 32.4 tok/s single-stream, and 128.1 tok/s aggregate across 16
-            concurrent requests on four GPUs with a quantized KV cache. That
-            last number is 25% **faster** than an f16 KV cache at the same
-            context, because decode is memory-bandwidth bound and a smaller
-            cache moves less data per step. Multi-GPU layer split scales 1.87×
-            from one card to four under concurrency — and not at all for a
-            single sequential request, which is worth knowing before buying
-            hardware for one. Method and full numbers:
+            and CUDA 13 requires a driver newer than HPC sites deploy. What
+            0.7.5 changes is that it runs on them at all — on **CINECA
+            Leonardo** (EuroHPC) it initialises CUDA on an A100-SXM-64GB and
+            offloads every layer of a 27B model at Q8, where the earlier build
+            announced a GPU backend and then ran the entire model on CPU.
+
+            That session measured 32.4 tok/s single-stream and 128.1 tok/s
+            aggregate across 16 concurrent requests on four GPUs. **Those
+            figures are not compared against anything.** No other runtime was
+            measured on the same hardware, so they are a baseline for catching
+            our own regressions, not a statement about how EULLM ranks against
+            anyone — that comparison is still to be done. Two results from the
+            same session are useful whatever the absolute numbers turn out to
+            mean, because both are EULLM against itself: a quantized KV cache
+            was 25% faster than f16 at the same context (decode is
+            memory-bandwidth bound, so moving less data per step wins), and
+            multi-GPU layer split scaled 1.87× from one card to four under
+            concurrency — and not at all for a single sequential request,
+            which is worth knowing before buying hardware for one. Method and
+            full numbers:
             [docs/cineca/leonardo.md](https://github.com/eullm/eullm/blob/main/docs/cineca/leonardo.md).
 
             **AMD gets published ROCm binaries for the first time**, two of
