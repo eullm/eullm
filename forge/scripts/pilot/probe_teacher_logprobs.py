@@ -219,11 +219,38 @@ def main(argv: list[str] | None = None) -> int:
     report["load_seconds"] = round(time.time() - t0, 1)
     print(f"[ok] loaded in {report['load_seconds']}s", flush=True)
 
+    # Tokenize and truncate HERE, rather than handing vLLM raw strings.
+    #
+    # The engine refuses a prompt longer than max_model_len, and a corpus
+    # document is far longer than the window we score it in:
+    #
+    #   prompt_logprobs=64 rejected: This model's maximum context length is
+    #   512 tokens. However ... your prompt contains at least 513 input tokens
+    #
+    # Passing token ids also removes an ambiguity that matters for the numbers
+    # this probe reports: positions/s is only comparable across runs if the
+    # count of positions is something we set rather than something the
+    # tokenizer happened to produce.
+    tokenizer = llm.get_tokenizer()
+
+    def as_prompts(limit: int) -> list[dict]:
+        limit = max(8, limit)
+        return [
+            {"prompt_token_ids":
+                tokenizer(t, truncation=True, max_length=limit)["input_ids"]}
+            for t in texts
+        ]
+
+    # One token of headroom for the output max_tokens asks for.
+    score_prompts = as_prompts(args.seq_len - 1)
+    report["prompt_tokens_total"] = sum(
+        len(pr["prompt_token_ids"]) for pr in score_prompts)
+
     # ── the question: top-K for every prompt position, in one pass ────────
     t0 = time.time()
     try:
         scored = llm.generate(
-            texts,
+            score_prompts,
             SamplingParams(max_tokens=1, temperature=0.0,
                            prompt_logprobs=args.top_k),
         )
@@ -243,8 +270,9 @@ def main(argv: list[str] | None = None) -> int:
 
     # ── the comparison: generation mode over the same prompts ─────────────
     t0 = time.time()
+    # The generation half needs room for the tokens it will emit as well.
     generated = llm.generate(
-        texts,
+        as_prompts(args.seq_len - args.gen_tokens - 1),
         SamplingParams(max_tokens=args.gen_tokens, temperature=0.0,
                        logprobs=args.top_k),
     )
