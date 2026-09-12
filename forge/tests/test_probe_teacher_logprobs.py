@@ -159,3 +159,25 @@ def test_an_uncached_model_is_passed_through_unchanged(tmp_path, monkeypatch):
 def test_no_hf_home_is_passed_through_unchanged(monkeypatch):
     monkeypatch.delenv("HF_HOME", raising=False)
     assert probe.resolve_local_model("Qwen/Qwen3-4B-Base") == "Qwen/Qwen3-4B-Base"
+
+
+# ── cluster settings the script owns ─────────────────────────────────────
+
+def test_flashinfer_sampler_is_off_by_default():
+    """It JIT-compiles kernels against an nvcc this cluster does not have.
+
+    Set in the module rather than in a shell: a variable typed into a
+    terminal is not versioned, reaches a batch job only if sbatch exports it,
+    and differs between login nodes. All three cost jobs on this allocation.
+    """
+    import os
+    assert os.environ["VLLM_USE_FLASHINFER_SAMPLER"] == "0"
+    assert os.environ["VLLM_WORKER_MULTIPROC_METHOD"] == "spawn"
+
+
+def test_an_explicit_setting_still_wins(monkeypatch):
+    """setdefault, so the flag can be flipped back to measure it again."""
+    monkeypatch.setenv("VLLM_USE_FLASHINFER_SAMPLER", "1")
+    _load()                                   # re-import with the override set
+    import os
+    assert os.environ["VLLM_USE_FLASHINFER_SAMPLER"] == "1"
