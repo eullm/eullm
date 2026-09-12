@@ -53,25 +53,32 @@
 set -uo pipefail  # no -e: the server runs in the background and must be reaped
 
 EULLM_BIN="${EULLM_BIN:?set EULLM_BIN to the eullm binary}"
-MODEL="${MODEL:?set MODEL to the model id (see: eullm list)}"
+export MODEL="${MODEL:?set MODEL to the model id (see: eullm list)}"
 export EULLM_MODELS_DIR="${EULLM_MODELS_DIR:-$HOME/.eullm/models}"
 
 # The experiment variables. Defaults are Leonardo's single-stream row.
-BATCH="${BATCH:-1}"
-CTX="${CTX:-4096}"
-CACHE_K="${CACHE_K:-f16}"
-CACHE_V="${CACHE_V:-f16}"
-CONCURRENCY="${CONCURRENCY:-16}"
-NUM_PREDICT="${NUM_PREDICT:-150}"
+#
+# Exported, every one of them, because the result JSON below is assembled by a
+# python block that reads them from the environment. A value left as a plain
+# shell variable reaches the human-readable summary and NOT the machine-readable
+# record — so a sweep would print correct numbers on screen while filing
+# `"gcds": 0, "kv": "None/None"` into the file the final report is built from.
+# Silently wrong data is worse than no data.
+export BATCH="${BATCH:-1}"
+export CTX="${CTX:-4096}"
+export CACHE_K="${CACHE_K:-f16}"
+export CACHE_V="${CACHE_V:-f16}"
+export CONCURRENCY="${CONCURRENCY:-16}"
+export NUM_PREDICT="${NUM_PREDICT:-150}"
 # Leonardo's prompt, kept verbatim: a different one tokenizes differently and
 # generates a different length, which moves the number being compared.
 PROMPT="${PROMPT:-Scrivi una breve storia sul mare.}"
 
 # One request at batch size 1 — concurrency against a single slot would just
 # queue, measuring the queue rather than the engine.
-[ "$BATCH" -le 1 ] && CONCURRENCY=1
+[ "$BATCH" -le 1 ] && export CONCURRENCY=1
 
-GCDS="${SLURM_GPUS_ON_NODE:-1}"
+export GCDS="${SLURM_GPUS_ON_NODE:-1}"
 PORT=$((11434 + SLURM_JOB_ID % 1000))
 LOG="eullm-bench-$SLURM_JOB_ID.server.log"
 

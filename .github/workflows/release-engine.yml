@@ -1854,7 +1854,7 @@ jobs:
 
             **AMD gets published ROCm binaries for the first time**, two of them — building from source with `--features rocm` was possible before, downloading one was not. `eullm-linux-x64-rocm-consumer` covers Radeon RDNA 3, RDNA 3.5 and RDNA 4; `eullm-linux-x64-rocm-gfx90a` covers Instinct MI250X and MI210. Vulkan remains a fine answer for a Radeon in a desktop and is the wrong tool for a data-centre card, which has no display stack for a Vulkan driver to attach to and whose matrix cores go unused under one.
 
-            The MI250X build exists for **EuroHPC LUMI**, where a development access allocation will measure it against the Leonardo baselines above. Be aware of what that means today: both ROCm binaries are verified to carry device code for the architectures they name, but neither has yet run on a physical AMD GPU. If you own one, a report is genuinely useful.
+            The MI250X build exists for **EuroHPC LUMI**, and it has run there: on 12 September 2026 this exact artifact executed on a LUMI-G compute node, on one GCD of an MI250X, with every layer offloaded and the memory breakdown showing the weights on the device rather than the host. What has not been measured is anything comparative — no scaling across GCDs yet, and no other runtime measured on the same hardware, so there are no throughput claims here to weigh. The consumer binary is in the opposite position: verified to carry device code for every architecture it names, never yet run on a Radeon. If you own one, a report is genuinely useful.
 
             ### Quick install
 

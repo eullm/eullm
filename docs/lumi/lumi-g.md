@@ -1,12 +1,37 @@
 # LUMI-G — the allocation, the ROCm build, and what the engine is missing
 
-> **Nothing in this file has been run on LUMI yet.** That is the exact opposite
-> of [`../cineca/leonardo.md`](../cineca/leonardo.md), where every number and
-> every fix came from a live session. What follows is the plan to execute at
-> first login, assembled from the accepted proposal, the source of the vendored
-> llama.cpp, and LUMI's own documentation. Correct it in place against what the
-> machine actually says, and delete this banner once the recipe below has
-> produced a binary that really runs on a compute node.
+> **First run on hardware: 12 September 2026.** `eullm-linux-x64-rocm-gfx90a`
+> from the v0.7.5 release executed on a LUMI-G compute node, on one GCD of an
+> MI250X, in Slurm job 21979472 — 17 seconds of `dev-g`, about 0.002 GPU-hours.
+> The sections on the allocation, the machine, the build and the Slurm
+> specifics are now measured rather than planned. Everything about multi-GCD
+> scaling and about the 27B model still is not: those paragraphs say so where
+> they appear.
+>
+> What the run established, in the order the evidence arrived:
+>
+> ```
+> ggml_cuda_init: found 1 ROCm devices (Total VRAM: 65520 MiB):
+>   Device 0: AMD Instinct MI250X, gfx90a:sramecc+:xnack- (0x90a), Wave Size: 64
+> [EULLM] --fit: model (4.68 GiB) fits fully in 63.90 GiB free VRAM → offloading all layers.
+>
+> | memory breakdown [MiB] | total   free    self   model  context compute |
+> |   - ROCm0 (MI250X)     | 65520 = 60144 + (5131 = 4455 +  576 +   100) |
+> |   - Host               |                  353 =  333 +    0 +    20   |
+> ```
+>
+> A device row carrying the weights, no `CPU_REPACK`, and HBM in use moving
+> from 10 MiB to 5.6 GiB across the request. A binary built for `gfx90a` found
+> a `gfx90a`, and the version pinning that made the artifact match the site's
+> ROCm 6.3.4 held.
+>
+> **qwen3-8b Q4_K_M, one GCD, batch 1, 4096 context: 40.7 tok/s.** Do not read
+> that as a verdict in either direction. The same binary on the CPU-only login
+> node did 16.5 tok/s, so the GPU is plainly working, but nothing else has been
+> measured on this hardware — `llama-bench` on the same GCD with the same GGUF
+> is the control that would say whether 40.7 is what an MI250X gives this
+> backend or what our runtime leaves on the table, and it is minutes of `dev-g`
+> away.
 
 ## The allocation
 
@@ -27,10 +52,16 @@ That asymmetry matters, because the proposal promises a CUDA↔ROCm comparison �
 objective (4) of five — and the granted hardware is AMD only. The NVIDIA half
 has to come from measurements we already hold or can still take elsewhere.
 
-**The allocation window is not recorded here on purpose.** The application asked
-for a 01-10-2026 start, but access was opened earlier; the authoritative dates
-come from `lumi-allocations` on a login node. Fill them in when known — the
-budget arithmetic below depends entirely on them.
+**Measured on the machine, 12-09-2026.** `lumi-allocations` reports
+`project_465003366` with **18,000 GPU-hours**, which is the same 4,500
+node-hours seen in Puhuri — LUMI bills a node as its 4 MI250X modules — plus
+90,000 TB-hours of storage and a token 1,000 CPU core-hours that funds nothing
+in practice. Consumed at that date: 0.0%.
+
+**The window is still not known.** The application asked for a 01-10-2026
+start, access was opened earlier, and `lumi-allocations` prints balances
+without dates. It is the one number the budget arithmetic below depends on and
+the one nobody has yet supplied.
 
 ### What the project committed to measuring
 
@@ -218,6 +249,46 @@ ldd --version                          # glibc, for the prebuilt artifacts
 At runtime, `ROCR_VISIBLE_DEVICES` is the ROCm equivalent of
 `CUDA_VISIBLE_DEVICES` and is how a single-GCD or 2/4/8-GCD scaling sweep gets
 built out of one node.
+
+## Slurm and session specifics, found the hard way
+
+**The account is three environment variables, not one.** `sbatch` reads
+`SBATCH_ACCOUNT`, `salloc` reads `SALLOC_ACCOUNT`, and `srun` reads
+`SLURM_ACCOUNT`. Setting only the first and then running `srun
+--account=$SBATCH_ACCOUNT` in a fresh shell expands to `--account=` and fails
+with `Invalid account or account/partition combination specified` — a message
+that reads like a permissions problem and is an empty string. Put all three in
+`~/.bashrc`. When the error does appear, `sacctmgr show associations
+user=$USER format=Account,Partition,QOS%40 --parsable2` lists the combinations
+that actually exist for you, which settles in one line whether it is the
+account or the partition.
+
+**Do not do real work in an interactive session.** LUMI drops an idle SSH
+connection within minutes, where Leonardo holds it until closed. Three
+consequences, in the order they matter:
+
+- Submit with `sbatch`. The job survives the connection dying, which is the
+  entire point of a batch system; `tools/lumi/sbatch_smoke.slurm` already
+  prints everything an interactive look would have shown — hostname,
+  `rocm-smi` either side of the request, the server's own GPU lines.
+- When interactive really is needed, start `tmux` on the login node *before*
+  `srun`, so the allocation belongs to the tmux session rather than to the SSH
+  connection. Note which login node you are on: `lumi.csc.fi` balances across
+  several, and reconnecting to a different one leaves the tmux session sitting
+  on the first, looking lost.
+- Client-side keepalives cost nothing and stop the drop at its most likely
+  cause, an idle-connection timeout in the network path rather than a LUMI
+  policy — no such policy is documented. In `~/.ssh/config`:
+  `ServerAliveInterval 30`, `ServerAliveCountMax 120`, `TCPKeepAlive yes`.
+
+**The login nodes have no GPU**, which is worth repeating because the engine
+does not say so. Running the binary there gives a banner reading `GPU backend:
+ROCm` and `GPU layers: all`, a memory breakdown with only `Host` and
+`CPU_REPACK` rows, and CPU-speed throughput — 16.5 tok/s for an 8B Q4 on
+12 Sep 2026, which looked like a catastrophic GPU result until the breakdown
+was read. `CPU_REPACK` is the giveaway: it is the buffer llama.cpp fills when
+it repacks weights for CPU kernels, and it exists only when nothing is on a
+device.
 
 ## What the engine is missing for this project
 
