@@ -568,10 +568,14 @@ jobs:
   # published Linux binary must not raise its glibc floor above the rest of the
   # set. RDNA 2 (gfx1030) is deliberately absent: those cards are served by the
   # Vulkan binary, ROCm's support for consumer RDNA 2 was always partial, and
-  # every architecture added multiplies the device-code compile. Seven of them
-  # in one binary makes this a candidate for the release's long pole; if it gets
-  # there, splitting the consumer entry in two is one line and the halves then
-  # build in parallel.
+  # every architecture added multiplies the device-code compile. Measured on the
+  # consumer entry's first cold run: 33 minutes to compile and link, and an
+  # 88 MB artifact against gfx90a's 20 MB. That is comfortably under the ~50 min
+  # Windows CUDA takes cold, so seven architectures do NOT make this the
+  # release's long pole — worth knowing before anyone trims the list to save
+  # time it is not costing. If a future architecture does push it there,
+  # splitting the consumer entry in two is one line and the halves then build in
+  # parallel.
   #
   # Runs on a manual workflow_dispatch as well as on a tag — pick `rocm` (or
   # `all`) in the `job` dropdown — so the AMD toolchain can be iterated from the
