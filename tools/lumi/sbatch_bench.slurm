@@ -132,11 +132,17 @@ grep -iE "gpu|offload|device|layers" "$LOG" | head -12 | sed 's/^/  /'
 echo
 echo "=== timed: $CONCURRENCY concurrent requests ==="
 START=$(date +%s%N)
-for i in $(seq 1 "$CONCURRENCY"); do request "$i" & done
-wait
+# `wait` with no arguments waits for EVERY background child, and the server is
+# one of them — it never exits, so a bare `wait` hangs after the requests have
+# finished, holding the allocation until the walltime kills it. Found live: four
+# jobs sat idle at GPU 0% for eleven minutes past their last completed request.
+# Wait for the request PIDs and nothing else.
+PIDS=()
+for i in $(seq 1 "$CONCURRENCY"); do request "$i" & PIDS+=("$!"); done
+wait "${PIDS[@]}"
 ELAPSED_MS=$(( ($(date +%s%N) - START) / 1000000 ))
 
-python3 - "$WORK" "$ELAPSED_MS" <<'PY' | tee /dev/stderr
+python3 - "$WORK" "$ELAPSED_MS" <<'PY'
 import json, os, sys
 work, elapsed_ms = sys.argv[1], int(sys.argv[2])
 tok = prompt_tok = 0
