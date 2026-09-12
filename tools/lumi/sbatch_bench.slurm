@@ -84,7 +84,45 @@ export GCDS="${SLURM_GPUS_ON_NODE:-1}"
 # here the devices hold one model between them, there they hold one each.
 export MODE="layer-split"
 PORT=$((11434 + SLURM_JOB_ID % 1000))
-LOG="eullm-bench-$SLURM_JOB_ID.server.log"
+OUT_PREFIX="eullm-bench"
+LOG="$OUT_PREFIX-$SLURM_JOB_ID.server.log"
+
+# Per-device utilisation, sampled by the job itself. Catching the timed window
+# by hand from a login node does not work: it lasts seconds, arrives minutes
+# after submission, and job 21982159 had finished before the first manual
+# sample landed. This is also the measurement objective (3) actually needs —
+# not "was a GPU busy" but "were ALL of them busy, at once".
+UTIL_LOG="$OUT_PREFIX-$SLURM_JOB_ID.util.log"
+start_sampler() {
+    ( while :; do
+        echo "T $(date +%s)"
+        rocm-smi --showuse 2>/dev/null | grep -E 'GPU use \(%\)'
+        sleep 1
+      done ) > "$UTIL_LOG" 2>&1 &
+    SAMPLER_PID=$!
+}
+stop_sampler() { kill "${SAMPLER_PID:-0}" 2>/dev/null; }
+
+summarise_util() {
+    python3 - "$UTIL_LOG" <<'PYU'
+import re, sys
+from collections import defaultdict
+per = defaultdict(list)
+for line in open(sys.argv[1], errors="replace"):
+    m = re.search(r"GPU\[(\d+)\].*?GPU use \(%\):\s*(\d+)", line)
+    if m:
+        per[int(m.group(1))].append(int(m.group(2)))
+if not per:
+    print("  (no utilisation samples captured)")
+    raise SystemExit(0)
+print("  device   samples   mean%   max%")
+for dev in sorted(per):
+    v = per[dev]
+    print(f"  GPU[{dev}]   {len(v):7d}   {sum(v)/len(v):5.1f}   {max(v):4d}")
+busy = [d for d, v in per.items() if sum(v)/len(v) > 50]
+print(f"  devices averaging over 50% busy: {len(busy)} of {len(per)}")
+PYU
+}
 
 echo "=== configuration ==="
 printf '  %-14s %s\n' node "$(hostname)" gcds "$GCDS" model "$MODEL" batch "$BATCH" \
@@ -115,6 +153,7 @@ SERVER_PID=$!
 # those four nodes completing was never established.
 cleanup() {
     kill "$SERVER_PID" 2>/dev/null
+    stop_sampler
     [ -n "${WORK:-}" ] && rm -rf "$WORK"
     return 0
 }
@@ -157,6 +196,7 @@ grep -iE "gpu|offload|device|layers" "$LOG" | head -12 | sed 's/^/  /'
 
 echo
 echo "=== timed: $CONCURRENCY concurrent requests ==="
+start_sampler
 START=$(date +%s%N)
 # `wait` with no arguments waits for EVERY background child, and the server is
 # one of them — it never exits, so a bare `wait` hangs after the requests have
@@ -167,6 +207,11 @@ PIDS=()
 for i in $(seq 1 "$CONCURRENCY"); do request "$i" & PIDS+=("$!"); done
 wait "${PIDS[@]}"
 ELAPSED_MS=$(( ($(date +%s%N) - START) / 1000000 ))
+stop_sampler
+
+echo
+echo "=== device utilisation during the timed window ==="
+summarise_util
 
 python3 - "$WORK" "$ELAPSED_MS" <<'PY'
 import json, os, sys
