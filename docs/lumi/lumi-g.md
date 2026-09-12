@@ -250,6 +250,94 @@ At runtime, `ROCR_VISIBLE_DEVICES` is the ROCm equivalent of
 `CUDA_VISIBLE_DEVICES` and is how a single-GCD or 2/4/8-GCD scaling sweep gets
 built out of one node.
 
+## Measured: what four GPUs actually do (12 September 2026)
+
+`qwen3.8-27b-ud-q8_k_xl` — 29.3 GiB, dense — on MI250X GCDs, using the method
+`docs/cineca/leonardo.md` established so the two sites can be compared: N
+concurrent `/api/generate` requests with one prompt, aggregate output tokens
+over the wall clock of the batch, warm-up sent first and excluded. Scripts:
+`tools/lumi/sbatch_bench.slurm` and `tools/lumi/sbatch_replicas.slurm`.
+
+| arrangement | devices | requests | tok/s | vs 1 GCD | Leonardo (A100) |
+|---|---:|---:|---:|---:|---:|
+| single stream, batch 1, ctx 4096 | 1 | 1 | 27.3 | — | ~31-34 |
+| batch 16, ctx 65536 | 1 | 16 | 97.9 | 1.00× | 54.7 |
+| layer split, batch 16 | 4 | 16 | 96.3 | 0.98× | 102.1 |
+| layer split, batch 16, KV q8_0 | 4 | 16 | 95.6 | 0.98× | 128.1 |
+| **replicas**, batch 4 each | 4 | 16 | **120.7** | **1.23×** | not measured |
+| **replicas**, batch 16 each | 4 | 64 | **398.1** | **4.07×** | not measured |
+
+**The measurements repeat.** 1 GCD at batch 16 gave 97.8 and 98.0 in separate
+jobs; 4 GCDs gave 96.3 twice, to the digit. A 0.2% spread is what makes the
+rest of this readable: the 1.6% that four devices *cost* over one is not noise,
+it is a reproducible penalty.
+
+### Layer split cannot add throughput, and did not
+
+llama.cpp's default with several visible devices cuts the model by layer and
+walks each token through the devices in sequence. It is a capacity mechanism —
+it exists so a model too large for one device can run at all — and by
+construction it cannot make tokens arrive faster: the work per token is
+unchanged and now has device boundaries in the middle of it. Four GCDs measured
+0.98× of one, the missing 2% being the transfers.
+
+Confirmed from the other side while a single-GCD job ran: `rocm-smi` showed the
+device at 100% and 1650 MHz during the timed window. The ceiling was never the
+host, the scheduler or the HTTP layer — one GCD was already saturated, so there
+was nothing for three more to pick up.
+
+### Replication scales linearly, and needs no engine change
+
+One whole copy of the model per GCD, one server per copy, requests spread
+between them: no tensor crosses a device boundary, so there is nothing to
+communicate and nothing to wait for. 398.1 tok/s against a single GCD's 97.9 is
+**4.07× on four devices** — 101.6% of perfect scaling, which is perfect scaling
+within the reproducibility measured above. Put plainly: 9,600 tokens in 24.11 s
+where one GCD produced 2,400 in 24.5 s. Four times the work, same wall clock.
+
+At equal load — the same 16 requests — replicas returned 120.7 against layer
+split's 96.3, +25%, for the same reason at a smaller scale.
+
+This takes no change to the engine. `ROCR_VISIBLE_DEVICES` pins each server
+process to one GCD; the rest is orchestration.
+
+**So objective (3) does not have the answer "it does not scale".** It has:
+*scaling is linear and available today, and the only arrangement the engine
+reaches for on its own is the one that cannot scale.* Given four devices,
+llama.cpp layer-splits silently, which for a model that fits on one is the
+worst of the three options.
+
+The general rule this leaves, and the one to size any deployment by: **use the
+smallest degree of model parallelism that fits the weights, and spend
+everything else on replicas.** A 100 GiB model on 64 GiB devices wants a
+two-way split and two replicas, not a four-way split and one.
+
+### What is still unexplained
+
+- **KV quantization does nothing here.** q8_0/q8_0 measured 0.99× against f16 at
+  the same context, where Leonardo gained 25%. An MI250X GCD has a lower
+  FLOP-per-byte ratio than an A100 (≈120 against ≈156), so it should be *more*
+  bandwidth-bound and gain *more*, not less. No explanation yet.
+- **Batching pays far better here than on Leonardo.** 1→16 concurrent on one
+  device is 3.58× on a GCD against roughly 1.68× on an A100, which is why the
+  single-device LUMI number beats Leonardo's while the single-stream number
+  does not. Worth treating with the same suspicion as an unfavourable result.
+- **The Leonardo 1.87× from one GPU to four** is now the number needing
+  re-examination, not ours: the same layer-split mechanism was in play there,
+  and it should not have scaled either.
+- Leonardo's figures predate the llama.cpp `b10405`→`b10818` bump. Single-stream
+  was shown not to regress across it; the batched rows were never re-checked.
+
+### Not yet measured
+
+Per-device utilisation during the timed window, which is what would show layer
+split as one device working while three wait, and replication as four
+saturated at once. Both scripts now sample it themselves — catching a
+twenty-second window by hand from a login node failed, job 21982159 having
+expired before the first manual sample arrived — but every number above
+predates that. A repeat of the two replica rows would also give them the same
+confirmation the layer-split rows already have.
+
 ## Slurm and session specifics, found the hard way
 
 **The account is three environment variables, not one.** `sbatch` reads
