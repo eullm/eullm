@@ -219,6 +219,46 @@ At runtime, `ROCR_VISIBLE_DEVICES` is the ROCm equivalent of
 `CUDA_VISIBLE_DEVICES` and is how a single-GCD or 2/4/8-GCD scaling sweep gets
 built out of one node.
 
+## Slurm and session specifics, found the hard way
+
+**The account is three environment variables, not one.** `sbatch` reads
+`SBATCH_ACCOUNT`, `salloc` reads `SALLOC_ACCOUNT`, and `srun` reads
+`SLURM_ACCOUNT`. Setting only the first and then running `srun
+--account=$SBATCH_ACCOUNT` in a fresh shell expands to `--account=` and fails
+with `Invalid account or account/partition combination specified` — a message
+that reads like a permissions problem and is an empty string. Put all three in
+`~/.bashrc`. When the error does appear, `sacctmgr show associations
+user=$USER format=Account,Partition,QOS%40 --parsable2` lists the combinations
+that actually exist for you, which settles in one line whether it is the
+account or the partition.
+
+**Do not do real work in an interactive session.** LUMI drops an idle SSH
+connection within minutes, where Leonardo holds it until closed. Three
+consequences, in the order they matter:
+
+- Submit with `sbatch`. The job survives the connection dying, which is the
+  entire point of a batch system; `tools/lumi/sbatch_smoke.slurm` already
+  prints everything an interactive look would have shown — hostname,
+  `rocm-smi` either side of the request, the server's own GPU lines.
+- When interactive really is needed, start `tmux` on the login node *before*
+  `srun`, so the allocation belongs to the tmux session rather than to the SSH
+  connection. Note which login node you are on: `lumi.csc.fi` balances across
+  several, and reconnecting to a different one leaves the tmux session sitting
+  on the first, looking lost.
+- Client-side keepalives cost nothing and stop the drop at its most likely
+  cause, an idle-connection timeout in the network path rather than a LUMI
+  policy — no such policy is documented. In `~/.ssh/config`:
+  `ServerAliveInterval 30`, `ServerAliveCountMax 120`, `TCPKeepAlive yes`.
+
+**The login nodes have no GPU**, which is worth repeating because the engine
+does not say so. Running the binary there gives a banner reading `GPU backend:
+ROCm` and `GPU layers: all`, a memory breakdown with only `Host` and
+`CPU_REPACK` rows, and CPU-speed throughput — 16.5 tok/s for an 8B Q4 on
+12 Sep 2026, which looked like a catastrophic GPU result until the breakdown
+was read. `CPU_REPACK` is the giveaway: it is the buffer llama.cpp fills when
+it repacks weights for CPU kernels, and it exists only when nothing is on a
+device.
+
 ## What the engine is missing for this project
 
 Four gaps, found by reading the code against the five objectives. None of them

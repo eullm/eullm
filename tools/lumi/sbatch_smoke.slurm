@@ -19,7 +19,15 @@
 # 20 minutes is 0.17 GPU-hours). The account comes from SBATCH_ACCOUNT, so set it once
 # in ~/.bashrc rather than passing -A on every submission:
 #
-#     export SBATCH_ACCOUNT=project_46XXXXXXX
+#     export SBATCH_ACCOUNT=project_46XXXXXXX    # sbatch reads this one
+#     export SALLOC_ACCOUNT=project_46XXXXXXX    # salloc reads this one
+#     export SLURM_ACCOUNT=project_46XXXXXXX     # srun reads this one
+#
+# All three, because they are read by different commands: setting only the
+# first and then running `srun --account=$SBATCH_ACCOUNT` from a fresh shell
+# expands to `--account=` and fails with "Invalid account or account/partition
+# combination specified", which reads like a permissions problem and is an
+# empty string.
 #
 # The model must already be on disk: compute nodes have no outbound network, so
 # pull it from a login node first (`eullm pull qwen3-8b`).
