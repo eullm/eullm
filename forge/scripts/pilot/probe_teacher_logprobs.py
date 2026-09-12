@@ -51,6 +51,34 @@ import sys
 import time
 from pathlib import Path
 
+# ── vLLM settings this cluster needs, set here rather than in a shell ────
+#
+# Every one of these was first discovered as a failed job and then typed by
+# hand into whichever terminal was open. That does not survive: a variable
+# exported in a shell is not versioned, reaches a batch job only if sbatch
+# happens to export it, and differs silently between login nodes — all three
+# of which cost jobs on this allocation. Setting them next to the code that
+# needs them means they cannot be forgotten, and the reason travels with them.
+#
+# `setdefault`, not assignment: an explicit value from the caller still wins,
+# so either of these can be flipped back to measure whether it still matters.
+#
+# Must precede `import vllm`, which reads them at import time — hence module
+# level rather than inside main().
+os.environ.setdefault(
+    # FlashInfer JIT-compiles its sampling kernels on first use and looks for
+    # nvcc at /usr/local/cuda/bin, which does not exist here: CUDA comes from
+    # modules at a Spack path. The build fails with `ninja: build stopped`.
+    # We also never sample — this probe reads prompt distributions — so the
+    # sampler backend is pure cost.
+    "VLLM_USE_FLASHINFER_SAMPLER", "0",
+)
+os.environ.setdefault(
+    # fork() in a process that has already initialised CUDA is undefined
+    # behaviour, and vLLM's default start method depends on the platform.
+    "VLLM_WORKER_MULTIPROC_METHOD", "spawn",
+)
+
 
 def resolve_local_model(model: str) -> str:
     """A repo id becomes the local snapshot it was prefetched into.
