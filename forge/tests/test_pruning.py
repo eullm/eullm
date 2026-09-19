@@ -57,3 +57,22 @@ def test_default_wikitext_is_requested_with_its_config(monkeypatch):
     assert seen[0][:2] == ("wikitext", "wikitext-2-raw-v1"), (
         f"the default must carry its config, got {seen[0]!r}"
     )
+
+
+def test_default_dataset_constants_are_shared_with_distill():
+    """Both loaders must name the same default dataset from one source of truth.
+
+    #447/#452 showed what happens when the two loaders drift: the default
+    worked only by accident through a rescue, and removing the rescue broke
+    default runs. The name and config live in distill's constants; pruning
+    reuses them, pinned here.
+    """
+    from eullm_forge import distill as distill_module
+    from eullm_forge import pruning as pruning_module
+
+    assert pruning_module.WIKITEXT_DEFAULT == distill_module.WIKITEXT_DEFAULT == "wikitext"
+    assert (
+        pruning_module.WIKITEXT_DEFAULT_CONFIG
+        == distill_module.WIKITEXT_DEFAULT_CONFIG
+        == "wikitext-2-raw-v1"
+    )

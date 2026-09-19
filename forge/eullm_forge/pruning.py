@@ -14,6 +14,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+from .distill import WIKITEXT_DEFAULT, WIKITEXT_DEFAULT_CONFIG
+
 logger = logging.getLogger(__name__)
 
 # Pruning strategy constants
@@ -86,13 +88,15 @@ def _load_calibration_data(
             ext = Path(dataset_name).suffix.lower()
             loader = "json" if ext in (".jsonl", ".json") else "text"
             ds = load_dataset(loader, data_files=dataset_name, split="train")
-        elif dataset_name == "wikitext":
+        elif dataset_name == WIKITEXT_DEFAULT:
             # The default in PruningConfig, and it cannot load from the bare
             # name: wikitext declares four configs and marks none of them
             # default, so load_dataset("wikitext") raises asking which one.
             # The fallback removed below is the only reason this ever worked —
-            # it caught that error and reloaded with the config name.
-            ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="train")
+            # it caught that error and reloaded with the config name. Name and
+            # config come from distill's constants so the two loaders cannot
+            # drift apart again.
+            ds = load_dataset(WIKITEXT_DEFAULT, WIKITEXT_DEFAULT_CONFIG, split="train")
         else:
             ds = load_dataset(dataset_name, split="train")
     except Exception as exc:
