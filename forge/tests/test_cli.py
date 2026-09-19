@@ -65,6 +65,25 @@ def test_forge_with_not_implemented():
     )
 
 
+def test_forge_invalid_stage_combination_fails_gracefully(monkeypatch):
+    """A ValueError from stage validation must not escape as a traceback.
+
+    _validate_stage_combination exists to reject contradictory profiles
+    before GPU hours are spent; the CLI must report it like the other
+    expected failures, per this file's 'nothing should escape' contract.
+    """
+    import eullm_forge.pipeline as pipeline_mod
+
+    def _raise(config):
+        raise ValueError("quantization.method='awq' cannot be exported to GGUF")
+
+    monkeypatch.setattr(pipeline_mod, "run_pipeline", _raise)
+    runner = CliRunner()
+    result = runner.invoke(main, ["forge", "Qwen/Qwen3-14B", "--profile", "legal-it"])
+    assert result.exception is None, f"config error escaped as traceback: {result.output}"
+    assert "Invalid configuration" in result.output
+
+
 def test_export_help():
     runner = CliRunner()
     result = runner.invoke(main, ["export", "--help"])

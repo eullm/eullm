@@ -151,6 +151,9 @@ def forge(
         console.print(f"\n[red]Missing dependency:[/red] {e}")
         console.print("Install the ML/GPU dependencies (torch, transformers, ...) "
                        "to run the pipeline, or use --estimate-only to skip execution.")
+    except ValueError as e:
+        console.print(f"\n[red]Invalid configuration:[/red] {e}")
+        console.print("Fix the profile or flags above and try again.")
 
 
 @main.command()
