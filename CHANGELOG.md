@@ -13,6 +13,16 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.7.11 — 2026-09-26
+
+The engine binaries are the same code as 0.7.10; upgrading changes nothing about how EuLLM runs.
+
+### Added
+- **`eullm-windows-x64-store.msix` is actually published this time.** 0.7.10 announced it, but the job that builds it skipped itself, so 0.7.10 went out without it. It is the package for the Microsoft Store and is still not for installing directly.
+
+### Fixed
+- **The Windows installer no longer downloads a CUDA build the GPU cannot run.** `install.ps1` picked the CUDA ZIP for any NVIDIA card on driver 580 or newer, but that build only covers RTX 3000, 4000 and 5000 cards. An RTX 2080 Ti, an A100 or an H100 got a 500 MB download that could not use the GPU. It now checks the card as `install.sh` already did, installs the CPU build for the others and says why; `$env:EULLM_VARIANT='cuda'` still forces the CUDA build. The installer is served from `main`, so this applies to every release, 0.7.10 included. Reported and fixed by Gabriele Pau.
+
 ## 0.7.10 — 2026-09-26
 
 ### Added
