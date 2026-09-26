@@ -45,7 +45,7 @@ Get-AppxPackage I3KTechnologies.EuLLM | Remove-AppxPackage
 
 ## Submit to the Store
 
-In Partner Center, *Apps and games → EuLLM → Start submission*:
+In Partner Center, *Apps and games → EuLLM → Start submission*. The text for every field is in [`store-listing.md`](store-listing.md); in short:
 
 1. **Pricing and availability**: free, all markets.
 2. **Properties**: category *Developer tools*.
