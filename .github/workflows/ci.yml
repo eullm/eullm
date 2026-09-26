@@ -515,6 +515,60 @@ jobs:
           }
           & .github\scripts\pack-msix.ps1 -CpuDir "$env:RUNNER_TEMP\msix-cpu" -CudaDir "$env:RUNNER_TEMP\msix-cuda" -Version 0.0.1.0 -Out "$env:RUNNER_TEMP\eullm-test.msix"
 
+      # Which build a machine gets is decided by a driver query, so the
+      # decision is pinned here against a stubbed nvidia-smi: the runner has
+      # no GPU, and the point is the matrix, not this machine. The function is
+      # extracted through the AST so the install body never runs.
+      - name: install.ps1 GPU detection with a stubbed nvidia-smi
+        shell: pwsh
+        run: |
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path installer\install.ps1), [ref]$null, [ref]$null)
+          $fn = $ast.Find({
+            param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                      $n.Name -eq 'Get-EuLLMVariant'
+          }, $true)
+          if (-not $fn) { throw 'Get-EuLLMVariant not found in install.ps1' }
+          Invoke-Expression $fn.Extent.Text
+
+          $tmpRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
+          $stubDir = Join-Path $tmpRoot 'smi-stub'
+          New-Item -ItemType Directory -Path $stubDir -Force | Out-Null
+          Set-Content -Path (Join-Path $stubDir 'nvidia-smi.cmd') -Value "@echo off`r`necho %EULLM_STUB_SMI%"
+          $origPath = $env:Path
+          $env:Path = "$stubDir;$origPath"
+
+          # 8.6/8.9/12.0 is what release-engine.yml compiles
+          # (CMAKE_CUDA_ARCHITECTURES 86;89;120, no PTX), so anything else
+          # cannot run the CUDA bundle -- including the A100/H100, which have
+          # no Windows build at all.
+          $cases = @(
+            @{ smi = '';             want = 'cpu';  why = 'nvidia-smi reports nothing usable' }
+            @{ smi = '580.99, N/A';  want = 'cpu';  why = 'no compute capability' }
+            @{ smi = 'garbage';      want = 'cpu';  why = 'unparsable output' }
+            @{ smi = '580.99, 8.6';  want = 'cuda'; why = 'RTX 3000' }
+            @{ smi = '580.99, 8.9';  want = 'cuda'; why = 'RTX 4000' }
+            @{ smi = '580.99, 12.0'; want = 'cuda'; why = 'RTX 5000' }
+            @{ smi = '570.86, 8.6';  want = 'cpu';  why = 'driver older than 580' }
+            @{ smi = '580.99, 7.5';  want = 'cpu';  why = 'RTX 2080 Ti: not in the fatbin' }
+            @{ smi = '580.99, 8.0';  want = 'cpu';  why = 'A100: no Windows datacenter build' }
+            @{ smi = '580.99, 9.0';  want = 'cpu';  why = 'H100: no Windows datacenter build' }
+          )
+          $failed = 0
+          foreach ($c in $cases) {
+            $env:EULLM_STUB_SMI = $c.smi
+            $got = Get-EuLLMVariant
+            if ($got -ne $c.want) {
+              $failed++
+              Write-Host "FAIL nvidia-smi '$($c.smi)' -> '$got', want '$($c.want)' ($($c.why))"
+            } else {
+              Write-Host "ok   nvidia-smi '$($c.smi)' -> '$got' ($($c.why))"
+            }
+          }
+          $env:Path = $origPath
+          if ((Get-EuLLMVariant) -ne 'cpu') { $failed++; Write-Host 'FAIL a machine with no usable nvidia-smi did not get the CPU build' }
+          if ($failed) { throw "$failed install.ps1 GPU-detection case(s) failed" }
+
       - name: install.ps1 against a published release
         shell: pwsh
         env:

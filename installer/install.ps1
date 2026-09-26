@@ -7,10 +7,11 @@
 
         irm https://raw.githubusercontent.com/eullm/eullm/main/installer/install.ps1 | iex
 
-    Picks the CUDA build when an NVIDIA GPU with driver 580+ is present and
-    the CPU build otherwise, verifies the download against the release's
-    checksums.txt, installs into a per-user directory and adds it to the
-    user PATH. No administrator rights are needed.
+    Picks the CUDA build when an NVIDIA GPU the CUDA build covers (compute
+    capability 8.6, 8.9 or 12.0) is present on driver 580+, and the CPU build
+    otherwise, verifies the download against the release's checksums.txt,
+    installs into a per-user directory and adds it to the user PATH. No
+    administrator rights are needed.
 
     Environment variables (all optional):
 
@@ -131,21 +132,34 @@ function Install-EuLLM {
     }
 }
 
-# cuda when nvidia-smi reports a driver the CUDA 13.1 build can use,
+# cuda when nvidia-smi reports a GPU the CUDA 13.1 build can actually run,
 # cpu otherwise.
 function Get-EuLLMVariant {
     $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
     if (-not $smi) { return 'cpu' }
     try {
-        $out = & $smi.Source --query-gpu=driver_version --format=csv,noheader 2>$null | Select-Object -First 1
+        # compute_cap needs a driver from 2021 on; older ones print an error
+        # there, which fails the match below and lands in the cpu branch.
+        $out = & $smi.Source --query-gpu=driver_version,compute_cap --format=csv,noheader 2>$null |
+            Select-Object -First 1
     } catch {
         return 'cpu'
     }
-    if ($out -notmatch '^\s*(\d+)\.') { return 'cpu' }
+    if ($out -notmatch '^\s*(\d+)\.\d+\s*,\s*(\d+\.\d+)\s*$') { return 'cpu' }
     $major = [int]$Matches[1]
-    if ($major -ge 580) { return 'cuda' }
-    Write-Warning "NVIDIA driver $major is older than 580, which the CUDA build needs; installing the CPU build. Update the driver and run the installer again for GPU support."
-    return 'cpu'
+    $cap = $Matches[2]
+    # The Windows CUDA bundle is built for 8.6;89;120 with no PTX, so a card
+    # outside that set cannot run it: the driver version says nothing about
+    # the architecture, and the A100/H100 have no Windows build at all.
+    if ($cap -notin '8.6', '8.9', '12.0') {
+        Write-Warning "NVIDIA GPU with compute capability $cap is not covered by the CUDA build (8.6, 8.9, 12.0); installing the CPU build. Set `$env:EULLM_VARIANT='cuda' to install the CUDA build anyway."
+        return 'cpu'
+    }
+    if ($major -lt 580) {
+        Write-Warning "NVIDIA driver $major is older than 580, which the CUDA build needs; installing the CPU build. Update the driver and run the installer again for GPU support."
+        return 'cpu'
+    }
+    return 'cuda'
 }
 
 function Add-EuLLMToPath {
