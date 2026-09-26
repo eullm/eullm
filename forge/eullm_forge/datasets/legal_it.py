@@ -356,7 +356,7 @@ def _detect_source_from_akn(xml_text: str) -> Optional[str]:
     """Identify which ALL_NORMATTIVA_LAWS entry this AKN document belongs to.
 
     Reads the <FRBRthis value="urn:nir:..."/> element from the AKN metadata
-    section and matches it against the URNs declared in NORMATTIVA_LAWS.
+    section and matches it against the URNs declared in ALL_NORMATTIVA_LAWS.
     Falls back to scanning the raw text for known URN substrings.
     """
     # AKN 3.0: <FRBRthis value="urn:nir:stato:regio.decreto:1942-03-16;262"/>
@@ -366,7 +366,12 @@ def _detect_source_from_akn(xml_text: str) -> Optional[str]:
 
     for law in ALL_NORMATTIVA_LAWS:
         urn_lower = law.urn.lower()
-        if urn_lower in frbrthis or frbrthis in urn_lower:
+        # The substring test is symmetric on purpose (a URN may carry a
+        # "/!main" suffix), but only against a value actually read out of the
+        # document: "" is a substring of every URN, so an AKN with no
+        # FRBRthis used to fall out as the FIRST catalogue entry and be
+        # written into that law's corpus under the wrong name.
+        if frbrthis and (urn_lower in frbrthis or frbrthis in urn_lower):
             return law.id
         # Match by the date;number tail (e.g. "1942-03-16;262")
         tail = re.search(r":(\d{4}-\d{2}-\d{2};\d+)$", urn_lower)

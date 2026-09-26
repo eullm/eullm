@@ -125,3 +125,31 @@ def test_a_default_build_stays_civil_and_criminal():
     assert not default_ids & {law.id for law in NORMATTIVA_LAWS_AMMINISTRATIVO}
     assert {law.id for law in ALL_NORMATTIVA_LAWS} >= default_ids | {
         "codice_processo_amministrativo", "ricorsi_amministrativi"}
+
+
+# --- a law is recognised in the document, or the file is skipped ------------
+
+def test_an_akn_without_a_urn_is_not_labelled_as_the_first_law():
+    """An empty FRBRthis is a substring of every URN, so the matcher used to
+    return the first catalogue entry and write a stranger's articles into
+    that law's corpus — the Constitution being first."""
+    from eullm_forge.datasets.legal_it import _detect_source_from_akn
+
+    assert _detect_source_from_akn("<akomaNtoso><meta><FRBRWork/></meta></akomaNtoso>") is None
+    assert _detect_source_from_akn("<akomaNtoso><FRBRthis value='  '/></akomaNtoso>") is None
+    # A URN that is not ours stays unrecognised rather than borrowing a neighbour.
+    assert _detect_source_from_akn(
+        '<FRBRthis value="urn:nir:stato:decreto.legislativo:1789-07-28;172"/>') is None
+
+
+def test_the_header_fallback_is_reachable_and_still_identifies_the_law():
+    """The fallback exists for documents whose URN is not in a well-formed
+    FRBRthis attribute; it was unreachable, because the empty value matched
+    before it."""
+    from eullm_forge.datasets.legal_it import _detect_source_from_akn
+
+    single_quoted = (
+        "<akomaNtoso><meta><FRBRthis "
+        "value='urn:nir:stato:legge:1990-08-07;241'/></meta></akomaNtoso>"
+    )
+    assert _detect_source_from_akn(single_quoted) == "legge_procedimento_amministrativo"
