@@ -208,7 +208,8 @@ something changed, less so for understanding what it means.
   build since 0.6.80 carried it. Pulling by `hf.co/owner/repo` was never
   affected — that path records no digest, so it never reached the check — and
   neither was anything done with a model already on disk. If an earlier
-  attempt left a `.gguf.part` behind, delete it and pull again.
+  attempt left a `.gguf.part` behind, delete it and pull again.    Reported by Fabrice Frébel ([eFFiciency research](https://www.efficiencyresearch.be)).
+  
 
 - **A fetched web page could kill the chat that fetched it.** With `--web`, a
   page containing a character such as `İ` — an ordinary Turkish letter — took
