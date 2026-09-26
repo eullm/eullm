@@ -1820,14 +1820,19 @@ jobs:
   # certification, and uploading it to Partner Center is a manual step
   # (installer/msix/README.md). Only for stable tags: a pre-release suffix
   # has no place in the four numeric parts of an MSIX version, and a release
-  # candidate is not something to submit to the Store anyway.
+  # candidate is not something to submit to the Store anyway. The test is
+  # the same one the release job uses for `prerelease`, not "contains a
+  # dash": every tag starts with `EuLLM-v`, and that dash skipped this job
+  # on 0.7.10, the first release that should have produced the package.
   build-windows-msix:
     needs:
       - build-windows
       - build-windows-cuda
     if: >-
       ${{ github.event_name == 'push'
-          && !contains(github.ref_name, '-')
+          && !contains(github.ref_name, '-rc')
+          && !contains(github.ref_name, '-beta')
+          && !contains(github.ref_name, '-alpha')
           && needs.build-windows.result == 'success'
           && needs.build-windows-cuda.result == 'success' }}
     runs-on: windows-2022
