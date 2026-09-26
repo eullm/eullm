@@ -13,7 +13,7 @@ does, update it here first, then in Partner Center.
 ## Properties
 
 - Category: **Developer tools** (subcategory: none)
-- Privacy policy URL: `https://www.i3k.eu/privacy`
+- Privacy policy URL: `https://github.com/eullm/eullm/blob/main/docs/privacy.md` (EuLLM's own policy, versioned with the code; the Store requires one for every Win32 app)
 - Website: `https://eullm.eu`
 - Support contact: `info@i3k.eu`
 - System requirements (recommended): 16 GB RAM; for `eullm-cuda`, an NVIDIA
