@@ -1953,13 +1953,13 @@ jobs:
 
             LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: one-line install, and Windows without surprises
+            ### This release: the Microsoft Store package, and a Windows installer that checks the GPU
 
-            **Installing is now one command on every platform.** `curl -fsSL https://raw.githubusercontent.com/eullm/eullm/main/installer/install.sh | sh` on Linux and macOS, `irm https://raw.githubusercontent.com/eullm/eullm/main/installer/install.ps1 | iex` in Windows PowerShell. The script picks the build that fits the machine (CUDA when an NVIDIA GPU with a recent enough driver is present, the A100/H100 build on those cards, Metal on Apple Silicon, the CPU build otherwise), refuses a download whose checksum does not match this release, and installs for the current user without root or administrator rights. On Windows it also adds EuLLM to your PATH; `$env:EULLM_UNINSTALL=1` removes it again.
+            The engine is the same code as 0.7.10; there is no reason to upgrade an install that works.
 
-            **EuLLM now starts on a Windows that has never had the Visual C++ Redistributable installed.** Every Windows build needs the Microsoft C++ runtime (`MSVCP140.dll`, `VCRUNTIME140.dll`, `VCRUNTIME140_1.dll`, `VCOMP140.dll`) and until now no download included it. Most PCs have it from some other program, which is how this went unnoticed; on a fresh install or in Windows Sandbox, `eullm.exe` stopped with *"MSVCP140.dll was not found"*. The new `eullm-windows-x64.zip` and the CUDA ZIP carry those DLLs next to `eullm.exe`, and `install.ps1` uses them. The bare `eullm-windows-x64.exe` is still published for existing links and still needs the Redistributable.
+            **`eullm-windows-x64-store.msix`** is on this page for the first time. 0.7.10 announced it, but the job that builds it skipped itself. It is the package submitted to the Microsoft Store, which signs it, and it is **not for installing directly**: EuLLM is not in the Store yet. For Windows use `install.ps1` or the ZIPs.
 
-            **`eullm-windows-x64-store.msix`** is new on this page and is **not for installing directly**: it is the package submitted to the Microsoft Store, which signs it. EuLLM is not in the Store yet.
+            **The Windows installer no longer downloads a CUDA build the GPU cannot run.** `install.ps1` used to choose the CUDA ZIP for any NVIDIA card on driver 580+, although that build only covers RTX 3000, 4000 and 5000 cards; it now checks the card, as `install.sh` already did, and installs the CPU build with an explanation otherwise. Reported and fixed by Gabriele Pau.
 
             ### Quick install
 
