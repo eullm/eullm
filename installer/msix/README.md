@@ -45,7 +45,7 @@ Get-AppxPackage I3KTechnologies.EuLLM | Remove-AppxPackage
 
 ## Submit to the Store
 
-In Partner Center, *Apps and games → EuLLM → Start submission*. The text for every field is in [`store-listing.md`](store-listing.md); in short:
+In Partner Center, *Apps and games → EuLLM → Start submission*. The text for every field (description, search terms, age-rating answers, notes for certification) is kept in the private repository `eullm/eullm-priv`, in `store/microsoft-store-listing.md`; in short:
 
 1. **Pricing and availability**: free, all markets.
 2. **Properties**: category *Developer tools*.
