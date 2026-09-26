@@ -176,16 +176,26 @@ def label(record: dict) -> str:
     return f"{code}, art. {num}" if num else code
 
 
-def open_book_prompt(question: str, records: list[dict], max_chars: int = 1500) -> str:
+def open_book_prompt(question: str, records: list[dict], max_chars: int = 3000) -> str:
     """The question with the retrieved texts in front of it.
 
     Worded like the context tasks of stage 3 — a text, then what to do with
     it — so the model meets the format it was trained on.
+
+    ``max_chars`` matches the ``--max-chars`` the corpus is chunked with
+    (prepare_legislation.py), so a retrieved article is shown whole. A text
+    that does not fit is marked as cut: a block that simply stops mid-word
+    reads as the end of the article, and the answer gets graded on it.
     """
     if not records:
         return question
-    blocks = [f"[{i}] {label(r)}\n{r.get('text', '')[:max_chars].strip()}"
-              for i, r in enumerate(records, 1)]
+    blocks = []
+    for i, r in enumerate(records, 1):
+        text = r.get("text", "")
+        body = text[:max_chars].rstrip()
+        if len(text) > max_chars:
+            body += " […]"
+        blocks.append(f"[{i}] {label(r)}\n{body}")
     return ("Testi normativi di riferimento:\n\n" + "\n\n".join(blocks)
             + "\n\nRispondi alla domanda basandoti sui testi sopra, se sono "
               "pertinenti.\n\nDomanda: " + question)

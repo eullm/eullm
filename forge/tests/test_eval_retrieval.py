@@ -78,6 +78,24 @@ def test_the_prompt_carries_the_text_and_the_question(index):
     assert open_book_prompt("Domanda?", []) == "Domanda?"
 
 
+def test_a_whole_chunked_article_is_shown_whole():
+    """The corpus is chunked at --max-chars 3000; a block cut below that
+    shows the model half an article and grades the answer on the half."""
+    long_article = rec("codice_civile", "1176", "x" * 3000)
+    p = open_book_prompt("Q?", [long_article])
+    assert "x" * 3000 in p
+    assert "[…]" not in p
+
+
+def test_a_text_that_does_not_fit_is_marked_as_cut():
+    long_article = rec("codice_civile", "1176", "y" * 4000)
+    p = open_book_prompt("Q?", [long_article], max_chars=1000)
+    assert "y" * 1000 in p
+    assert "y" * 1001 not in p
+    # Otherwise the block just stops, and reads as the end of the article.
+    assert p.count("[…]") == 1
+
+
 def test_from_files_reads_jsonl(tmp_path):
     path = tmp_path / "legislazione_codice_civile.chunks.jsonl"
     path.write_text("\n".join(json.dumps(r) for r in RECORDS[:2]) + "\n")
