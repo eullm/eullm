@@ -40,16 +40,22 @@ def exact_match(prediction: str, reference: str) -> bool:
 
 
 def keyword_coverage(prediction: str, keywords: list[str]) -> float:
-    """Fraction of required keywords present in the prediction (0..1).
+    """Fraction of required keyword groups present in the prediction (0..1).
 
     Returns ``1.0`` when there are no required keywords (nothing to miss).
     Matching is done on normalized text so accents/case/punctuation are ignored.
+
+    A group may offer alternatives separated by ``|``: ``"120|centoventi"`` is
+    one requirement, satisfied by either spelling. Without it the only way to
+    say "either" is to list both, which makes a correct answer score half for
+    using the other spelling — and an unwinnable item for whoever curated it.
     """
     if not keywords:
         return 1.0
     norm_pred = normalize_text(prediction)
-    hits = sum(1 for kw in keywords if normalize_text(kw) in norm_pred)
-    return hits / len(keywords)
+    groups = [[normalize_text(alt) for alt in kw.split("|") if alt.strip()] for kw in keywords]
+    hits = sum(1 for alts in groups if alts and any(alt in norm_pred for alt in alts))
+    return hits / len(groups)
 
 
 @dataclass

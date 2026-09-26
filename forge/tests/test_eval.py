@@ -45,6 +45,48 @@ def test_keyword_coverage():
     assert keyword_coverage("niente", []) == 1.0  # nothing required → full
 
 
+def test_keyword_coverage_alternatives_are_one_requirement():
+    # "60 giorni" and "sessanta giorni" are the same answer, so a group may
+    # offer both; otherwise each spelling costs the other half a point.
+    kws = ["sessanta giorni|60 giorni", "dalla notifica"]
+    assert keyword_coverage("Sessanta giorni dalla notifica", kws) == 1.0
+    assert keyword_coverage("60 giorni dalla notifica", kws) == 1.0
+    assert keyword_coverage("Trenta giorni dalla notifica", kws) == 0.5
+    assert keyword_coverage("Sessanta giorni", kws) == 0.5
+    # An empty group is a requirement nothing can satisfy, never a free point,
+    # and a trailing separator is ignored rather than matching everything.
+    assert keyword_coverage("qualsiasi risposta", ["|", "risoluzione"]) == 0.0
+    assert keyword_coverage("qualsiasi risposta", ["risoluzione|"]) == 0.0
+    assert keyword_coverage("la risoluzione", ["risoluzione|"]) == 1.0
+
+
+def test_a_perfect_answer_scores_full_keyword_coverage_on_the_seed():
+    """The gate's headline number has to be reachable. An answer identical to
+    an item's own reference used to score 0.883, because two seed items listed
+    alternative spellings as separate required keywords and one required a term
+    its own reference never used."""
+    items = load_seed()
+    summary = aggregate([score_item(it.reference, it) for it in items])
+    assert summary["exact_match"] == 1.0
+    assert summary["keyword_coverage"] == 1.0
+
+
+def test_the_administrative_deadlines_score_the_right_answer_higher():
+    """legal-it v0.2 answered 30 days for both deadlines; the metric has to
+    punish that, not reward it."""
+    items = {it.id: it for it in load_seed()}
+    tar, straord = items["legal-it-amm-001"], items["legal-it-amm-002"]
+    # The same wrong answer the model gave, on both items.
+    wrong_tar = "Entro trenta giorni dalla notifica si propone il ricorso al TAR."
+    wrong_straord = ("Entro trenta giorni dalla notifica si propone il ricorso al "
+                     "Presidente della Repubblica.")
+    assert score_item(wrong_tar, tar).keyword_coverage == 0.0
+    assert score_item(wrong_straord, straord).keyword_coverage < score_item(
+        straord.reference, straord).keyword_coverage
+    # A correct answer in either spelling is fully covered.
+    assert score_item("Entro 60 giorni dalla notifica", tar).keyword_coverage == 1.0
+
+
 def test_score_item_and_aggregate():
     item = EvalItem(id="x", domain="legal", lang="it", question="q",
                     reference="sei mesi", keywords=["sei mesi"])
