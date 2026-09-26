@@ -323,9 +323,24 @@ async fn download_model(
         }
     }
 
-    let gguf_path = find_gguf_in_dir(&model_dir);
+    let mut ggufs = list_ggufs_sorted(&model_dir);
 
-    let gguf_path = gguf_path.ok_or_else(|| {
+    // A sharded model must not serve its first shard as the whole model:
+    // the client would treat a fragment as complete. Refuse instead.
+    if ggufs.len() > 1 {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": format!(
+                    "Model '{name}' is sharded ({} files); this endpoint serves single-file models only",
+                    ggufs.len()
+                ),
+                "hint": "Download the shards from HuggingFace directly or upload a merged single GGUF"
+            })),
+        ));
+    }
+
+    let gguf_path = ggufs.pop().ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
             Json(json!({
@@ -469,21 +484,24 @@ fn sanitize_download_filename(raw: &str, short_name: &str) -> String {
     }
 }
 
-/// Find the first .gguf file in a directory.
-fn find_gguf_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+/// All .gguf files in a directory, sorted by name for determinism.
+fn list_ggufs_sorted(dir: &std::path::Path) -> Vec<PathBuf> {
     if !dir.is_dir() {
-        return None;
+        return Vec::new();
     }
 
     let mut entries: Vec<_> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "gguf"))
-        .collect();
+        .ok()
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "gguf"))
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Sort by name to be deterministic
     entries.sort_by_key(|e| e.file_name());
-    entries.first().map(|e| e.path())
+    entries.into_iter().map(|e| e.path()).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -564,6 +582,75 @@ mod tests {
             resolve_storage_root(Some("/data/models"), home),
             PathBuf::from("/data/models")
         );
+    }
+
+    fn scratch_model_dir(name: &str, files: &[&str]) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("eullm-hub-shard-test-{}", uuid::Uuid::new_v4()));
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in files {
+            std::fs::write(dir.join(f), b"dummy").unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn sharded_model_dir_lists_every_shard() {
+        let root = scratch_model_dir(
+            "testmodel",
+            &[
+                "testmodel-00001-of-00002.gguf",
+                "testmodel-00002-of-00002.gguf",
+                "notes.txt",
+            ],
+        );
+        let listed = list_ggufs_sorted(&root.join("testmodel"));
+        assert_eq!(listed.len(), 2);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn missing_model_dir_lists_nothing() {
+        let absent =
+            std::env::temp_dir().join(format!("eullm-hub-absent-{}", uuid::Uuid::new_v4()));
+        assert!(list_ggufs_sorted(&absent).is_empty());
+    }
+
+    #[tokio::test]
+    async fn sharded_model_is_refused_not_partially_served() {
+        use axum::extract::{Path, State};
+        let root = scratch_model_dir(
+            "testmodel",
+            &[
+                "testmodel-00001-of-00002.gguf",
+                "testmodel-00002-of-00002.gguf",
+            ],
+        );
+        let state = Arc::new(HubState {
+            storage_root: root.clone(),
+        });
+        let err = download_model(State(state), Path("testmodel".to_string()))
+            .await
+            .err()
+            .expect("a sharded model must be refused, not served");
+        assert_eq!(err.0, StatusCode::CONFLICT);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[tokio::test]
+    async fn single_file_model_still_serves() {
+        use axum::extract::{Path, State};
+        let root = scratch_model_dir("testmodel", &["testmodel.gguf"]);
+        let state = Arc::new(HubState {
+            storage_root: root.clone(),
+        });
+        assert!(
+            download_model(State(state), Path("testmodel".to_string()))
+                .await
+                .is_ok()
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
