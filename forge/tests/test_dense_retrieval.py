@@ -53,6 +53,26 @@ def test_rrf_rewards_agreement_between_rankings():
     assert rrf([]) == []
 
 
+def test_equal_similarities_come_back_in_index_order():
+    """The rule rrf() sorts on, and that its test states, holds at the source.
+
+    rrf() sorts a fused ranking on (-score, i), so a tie keeps index order --
+    but it cannot restore an order it is not given. np.argsort's default kind
+    is introsort, stable only up to sixteen elements, so with twenty records
+    two identical vectors came back the later one first and rrf() had nothing
+    left to break. The corpus is 10^5 records.
+    """
+    twenty = [{"code": "codice_civile", "article_num": "", "chunk_index": 0,
+               "text": f"Art. {i + 1}. Testo generico numero {i}."} for i in range(20)]
+    vectors = np.full((20, 4), 0.2, dtype=np.float32)
+    vectors[3] = vectors[17] = np.array([1, 0, 0, 0], dtype=np.float32)
+    query = np.array([1, 0, 0, 0], dtype=np.float32)
+    index = HybridIndex(NormIndex(twenty), vectors, lambda _: query)
+
+    assert np.array_equal(vectors[3], vectors[17])
+    assert index.dense_ranking("Argomento senza nessuna parola in comune", None)[:2] == [3, 17]
+
+
 def test_the_named_article_still_comes_first():
     idx = _index({"Che cosa prevede l'art. 2 del codice civile?": 0})
     found = idx.search("Che cosa prevede l'art. 2 del codice civile?", k=3)

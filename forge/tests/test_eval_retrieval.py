@@ -64,6 +64,28 @@ def test_a_question_without_an_article_goes_to_bm25(index):
     assert found[0]["article_num"] == "327"
 
 
+def test_equal_bm25_scores_keep_index_order():
+    """The rule rrf() applies to a fused ranking, applied here too.
+
+    Two chunks the same length with the query term once each have exactly the
+    same BM25 score, and scores.sort(reverse=True) on (score, index) tuples
+    reversed both keys, so the last record won. The exam prompt was then built
+    from the other article, and an article that ties for first measured top1
+    = 0.
+    """
+    filler = " Il presente articolo contiene disposizioni di dettaglio." * 4
+    records = [{"code": "codice_civile", "article_num": "", "chunk_index": 0,
+                "text": f"Art. {n}. \n (Rimedio giudiziale). \n Quando si chiede "
+                        f"la condanna di cui all'articolo {n}{filler}"}
+               for n in (1456, 2999)]
+    question = ("Nel codice civile, in materia di «Rimedio giudiziale», qual e "
+                "il termine previsto?")
+    index = NormIndex(records)
+
+    assert index.bm25(question, 2) == records          # not [records[1], records[0]]
+    assert index.search(question, 1) == [records[0]]
+
+
 def test_search_fills_up_to_k_without_repeating_the_looked_up_article(index):
     found = index.search("Che cosa prevede l'articolo 2043 del codice civile sul danno "
                          "ingiusto?", k=3)

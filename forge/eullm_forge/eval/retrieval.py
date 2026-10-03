@@ -254,7 +254,10 @@ class NormIndex:
                     tf + self.k1 * (1 - self.b + self.b * length / (self._avg or 1)))
             if s > 0:
                 scores.append((s, i))
-        scores.sort(reverse=True)
+        # A tie keeps index order, the rule rrf() applies to a fused ranking
+        # and its test states. reverse=True on (score, index) tuples reversed
+        # both keys, so equal scores came back last-record-first.
+        scores.sort(key=lambda pair: (-pair[0], pair[1]))
         return [self.records[i] for _, i in scores[:k]]
 
     def missing_article_note(self, question: str) -> str:

@@ -201,7 +201,12 @@ class HybridIndex:
 
         q = np.asarray(self.query_fn(question), dtype=np.float32).reshape(-1)
         sims = self.doc_vectors @ q
-        order = np.argsort(-sims)
+        # Stable, so equal similarities come back in index order: rrf() sorts
+        # a fused ranking on (-score, i) and its test says a tie keeps index
+        # order, which it cannot restore if the ranking it is given already
+        # has them out of it. np.argsort's default kind is introsort, stable
+        # only up to 16 elements -- and the corpus is 10^5 records.
+        order = np.argsort(-sims, kind="stable")
         out = []
         for i in order:
             if code and self.records[int(i)].get("code") != code:

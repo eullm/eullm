@@ -8,6 +8,7 @@ paying for it.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -250,5 +251,7 @@ def test_an_absent_prompt_drops_the_whole_article_not_just_its_first_chunk(tmp_p
     # these are the lines the article's own text would put in the prompt.
     assert "entro venti giorni dalla notifica all'atto" not in content
     assert "L'azione di accertamento decade dopo un anno dalla notifica" not in content
-    # ...and the other articles are still there, or there is no prompt at all.
-    assert "Art. 20." in content
+    # ...and other articles are still there, or there is no prompt at all. Not
+    # a named one: which of the twenty comes first is the ranking's business,
+    # and this test is about article 15 being gone.
+    assert len(re.findall(r"^\[\d+\]", content, re.M)) == 3
