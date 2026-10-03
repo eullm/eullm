@@ -60,18 +60,27 @@ def at_temperature(results: list[dict], temperature: float) -> list[dict]:
     return [class_result(r["logprobs"], r["label"], r["kind"], temperature) for r in results]
 
 
+MIN_TEMPERATURE = 0.05
+MAX_FIT_TEMPERATURE = 20.0
+
+
 def fit_temperature(results: list[dict]) -> float:
     """The temperature with the lowest NLL on `results`, by golden-section
     search on log T in [0.05, 20] — bench/decision_calibration.py's fit. A
     fine-tuned model is usually too sure of itself (T > 1); the exported
     GGUF carries it (`TEMPERATURE_KEY`), and a request may give another
-    (`eullm.temperature`)."""
+    (`eullm.temperature`).
+
+    1.0 when the best NLL in that range is at one of its ends, because then
+    the search did not land inside the range and its answer is the range, not
+    a fit. See the note on the boundary below.
+    """
 
     def nll(log_t: float) -> float:
         t = math.exp(log_t)
         return sum(-math.log(max(r["p_label"], 1e-12)) for r in at_temperature(results, t))
 
-    lo, hi = math.log(0.05), math.log(20.0)
+    lo, hi = math.log(MIN_TEMPERATURE), math.log(MAX_FIT_TEMPERATURE)
     ratio = (math.sqrt(5) - 1) / 2
     a, b = hi - ratio * (hi - lo), lo + ratio * (hi - lo)
     fa, fb = nll(a), nll(b)
@@ -84,7 +93,38 @@ def fit_temperature(results: list[dict]) -> float:
             lo, a, fa = a, b, fb
             b = lo + ratio * (hi - lo)
             fb = nll(b)
-    return math.exp((lo + hi) / 2)
+    t = math.exp((lo + hi) / 2)
+    # The search shrinks [lo, hi] until it is a rounding error wide, so the
+    # midpoint is the edge itself when the minimum was on one: the lowest
+    # NLL available was the end of the range, and everything past it is
+    # untried. Golden-section search cannot see past hi, so it reports hi the
+    # way a convergent search reports its answer.
+    #
+    # What that answer is not is a fitted temperature, and it used to be
+    # written into the GGUF as one. A dev split the model gets wrong with
+    # confidence is the case that lands here: the NLL falls the whole way
+    # (27.6 at T=0.05 down to 0.83 at T=20 for one sample), so the minimum
+    # is the top of the range, and the model shipped carrying T=20 -- as
+    # unsure as this search can express -- as the default for every decision
+    # it is ever asked. check_temperature() accepts it, because 20 is a legal
+    # temperature; nothing downstream could tell it from a fit.
+    #
+    # 1.0 is what a model with no calibrated temperature gets: the engine's
+    # own default, and what export_temperature already returns for a run that
+    # fitted none. That is a decision about the search range as much as about
+    # this function -- MAX_TEMPERATURE is the engine's limit and the range
+    # here is the search's -- so it is written down rather than guessed at.
+    edge = 1e-6
+    if t <= MIN_TEMPERATURE * (1 + edge) or t >= MAX_FIT_TEMPERATURE / (1 + edge):
+        # Said out loud: the report shows 1.0 either way, and only this line
+        # tells a fit that landed on 1.0 from one that gave up at the edge.
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "temperature fit stopped at the edge of [%g, %g] (%.4g): keeping 1.0, "
+            "the model is not calibrated", MIN_TEMPERATURE, MAX_FIT_TEMPERATURE, t)
+        return 1.0
+    return t
 
 
 def check_temperature(value) -> float:

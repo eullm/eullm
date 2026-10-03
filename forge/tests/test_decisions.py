@@ -720,6 +720,51 @@ def test_a_fitted_temperature_undoes_overconfidence():
     assert at_temperature(results, 1.0)[0]["probabilities"] == results[0]["probabilities"]
 
 
+def test_a_fit_that_lands_on_the_edge_of_the_range_is_not_reported_as_a_fit():
+    """A dev split the model gets wrong with confidence, and the edge.
+
+    The NLL falls the whole way -- 27.6 at T=0.05 down to 0.83 at T=20 for one
+    sample -- so the best temperature in the searched range is its top, and
+    golden-section search, which cannot see past `hi`, reports `hi` the way a
+    convergent search reports its answer. That number was then written into
+    the GGUF as the model's default temperature, and check_temperature() takes
+    it, because 20 is a legal temperature: nothing downstream could tell a
+    clamp from a fit.
+    """
+    import math
+    import random
+
+    from eullm_forge.decisions.metrics import (
+        MAX_FIT_TEMPERATURE,
+        class_result,
+        fit_temperature,
+    )
+
+    # The model is sure the answer is class 0; the truth is class 1.
+    wrong = [class_result([-0.01, -5.0], 1, "choice")]
+    assert fit_temperature(wrong) == 1.0
+
+    # The flat surfaces: an empty split, one class, and logprobs that do not
+    # move with temperature at all.
+    for results in ([], [class_result([-1.0], 0, "noul")],
+                    [class_result([0.0, 0.0], 0, "choice")]):
+        assert fit_temperature(results) == 1.0, results
+
+    # And an optimum well inside the range is still fitted, not given up on:
+    # the search did land there. The same generator the test above uses.
+    rng = random.Random(0)
+    inside = []
+    for _ in range(2000):
+        z = [rng.gauss(0, 1) for _ in range(3)]
+        total = sum(math.exp(v) for v in z)
+        truth = [math.exp(v) / total for v in z]
+        label = rng.choices(range(3), weights=truth)[0]
+        inside.append(class_result([3 * v - 5 for v in z], label, "choice"))
+    t = fit_temperature(inside)
+    assert 2.7 < t < 3.3, t
+    assert t < MAX_FIT_TEMPERATURE / 2
+
+
 SYSTEMONE_RS = REPO / "engine" / "src" / "api" / "systemone.rs"
 
 
