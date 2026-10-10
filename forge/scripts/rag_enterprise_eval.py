@@ -63,6 +63,21 @@ _ART = re.compile(r"\bart(?:icolo|\.)?\s*(\d+(?:[- ]?(?:bis|ter|quater|quinquies
                   r"septies|octies|novies|decies))?)", re.IGNORECASE)
 
 
+# As build_legal_pack.CODE_NAMES names each code in a file name (a test keeps
+# the two equal): this file imports nothing from the package.
+CODE_NAMES = {
+    "codice_civile": "Codice civile",
+    "codice_penale": "Codice penale",
+    "codice_procedura_civile": "Codice di procedura civile",
+    "codice_procedura_penale": "Codice di procedura penale",
+    "codice_consumo": "Codice del consumo",
+    "costituzione": "Costituzione",
+    "codice_processo_amministrativo": "Codice del processo amministrativo",
+    "legge_procedimento_amministrativo": "Legge n. 241-1990",
+    "ricorsi_amministrativi": "D.P.R. n. 1199-1971",
+}
+
+
 def _norm_number(n: str) -> str:
     return re.sub(r"[- ]+", "-", n.strip().lower())
 
@@ -71,7 +86,7 @@ def abstained(answer: str) -> bool:
     return bool(ABSTAIN.search(answer or ""))
 
 
-def check_sources(answer: str, sources: list[str]) -> dict:
+def check_sources(answer: str, sources: list[str], question: str = "") -> dict:
     """Which files the answer cites, and whether each is among the sources.
 
     Two kinds of citation: ``[file name]``, RAG Enterprise's own, which must
@@ -86,7 +101,10 @@ def check_sources(answer: str, sources: list[str]) -> dict:
     cited = [c.strip() for c in _BRACKETS.findall(answer or "")]
     bad = [c for c in cited if c.lower().removesuffix(".txt") not in names]
     arts = sorted({_norm_number(m) for m in _ART.findall(_BRACKETS.sub(" ", answer or ""))})
-    bad_arts = [a for a in arts if a not in numbers]
+    # The article the question asks about is not cited from memory: "l'art.
+    # 2875 non è presente nei dati forniti" names it in order to abstain.
+    asked = {_norm_number(m) for m in _ART.findall(question or "")}
+    bad_arts = [a for a in arts if a not in numbers and a not in asked]
     return {"cited_files": cited, "cited_articles": arts,
             "sources_ok": not bad and not bad_arts,
             "outside_sources": bad + [f"art. {a}" for a in bad_arts]}
@@ -191,7 +209,8 @@ def cmd_ask(args) -> int:
             answer = r.get("answer", "")
             sources = sorted({s.get("filename", "") for s in r.get("sources", [])})
             row = {**it, "label": args.label, "answer": answer, "sources": sources,
-                   "abstained": abstained(answer), **check_sources(answer, sources)}
+                   "abstained": abstained(answer),
+                   **check_sources(answer, sources, it["question"])}
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
             f.flush()
             if i % 25 == 0 or i == len(todo):
@@ -200,8 +219,34 @@ def cmd_ask(args) -> int:
     return 0
 
 
+def asked_retrieved(row: dict) -> bool | None:
+    """Whether the article the item is about is among the sources, or None for
+    an item about no article in the pack (``inesistente``, or no metadata).
+
+    A file holds one article and is named "<code>, art. <N> - <rubrica>.txt".
+    """
+    meta = row.get("metadata") or {}
+    code, number = meta.get("code"), meta.get("articolo")
+    if not code or not number or meta.get("tipo") == "inesistente":
+        return None
+    want = _norm_number(str(number))
+    for s in row.get("sources", []):
+        head = s.split(" - ", 1)[0]
+        if head.startswith(CODE_NAMES.get(code, code) + ",") and \
+                {_norm_number(m) for m in _ART.findall(head)} == {want}:
+            return True
+    return False
+
+
 def summarize(rows: list[dict]) -> dict:
-    """The LEGAL_PACK's release figures from graded answers (judge_answers.py output)."""
+    """The LEGAL_PACK's release figures from graded answers (judge_answers.py output).
+
+    Abstention and sources are read again from the answer with the current
+    checks, so answers collected before a fix of the checks still count right.
+    """
+    rows = [{**r, "abstained": abstained(r.get("answer", "")),
+             **check_sources(r.get("answer", ""), r.get("sources", []), r.get("question", ""))}
+            if "sources" in r else r for r in rows]
     absent = [r for r in rows if (r.get("metadata") or {}).get("tipo") == "inesistente"]
     real = [r for r in rows if r not in absent]
     answered = [r for r in real if not r.get("abstained")]
@@ -213,6 +258,10 @@ def summarize(rows: list[dict]) -> dict:
         "answered": len(answered), "correct": len(correct),
         "outside_sources": sum(not r.get("sources_ok", True) for r in rows),
         "absent_items": len(absent),
+        "abstained": sum(bool(r.get("abstained")) for r in rows),
+        "graded": any("grade" in r for r in rows),
+        "asked_retrieved": sum(asked_retrieved(r) is True for r in rows),
+        "asked_items": sum(asked_retrieved(r) is not None for r in rows),
         "absent_abstained": sum(bool(r.get("abstained")) for r in absent),
     }
 
@@ -221,10 +270,14 @@ def cmd_summary(args) -> int:
     for p in args.graded:
         rows = [json.loads(ln) for ln in p.open(encoding="utf-8") if ln.strip()]
         s = summarize(rows)
-        print(f"{p.name}: {s['questions']} questions | precision {s['precision']:.3f} "
-              f"({s['correct']}/{s['answered']} answered) | coverage {s['coverage']:.3f} | "
+        precision = (f"precision {s['precision']:.3f} ({s['correct']}/{s['answered']} answered)"
+                     if s["graded"] else f"precision n/a (not graded; {s['answered']} answered)")
+        print(f"{p.name}: {s['questions']} questions | {precision} | "
+              f"coverage {s['coverage']:.3f} | "
               f"citing outside the sources {s['outside_sources']} | "
-              f"absent articles abstained {s['absent_abstained']}/{s['absent_items']}")
+              f"absent articles abstained {s['absent_abstained']}/{s['absent_items']} | "
+              f"article asked among the sources {s['asked_retrieved']}/{s['asked_items']} | "
+              f"abstained {s['abstained']}")
     return 0
 
 
