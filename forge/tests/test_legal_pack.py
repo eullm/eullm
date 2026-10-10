@@ -93,6 +93,19 @@ def test_citations_outside_the_sources_and_abstentions_are_told_apart():
                              ["Codice civile, art. 1484 (Evizione parziale)\n\n"
                               "Si osservano le disposizioni dell'art. 1480."])
     assert sent["sources_ok"], sent
+    # a bracket copied loosely is judged on the articles it names
+    loose = ["Codice civile, art. 62 - Condizioni e forme.txt", "Codice civile, art. 969 - X.txt",
+             "Codice civile, art. 1870 - Ricognizione.txt"]
+    for bracket in ("[Codice civile, art.62 - Condizioni e forme della dichiarazione.txt]",
+                    "[Codice civile, artt. 969 - Ricognizione.txt; Articolo 1870]"):
+        assert mod.check_sources(bracket, loose)["sources_ok"], bracket
+    assert not mod.check_sources("[Codice civile, artt. 969 e 970]", loose)["sources_ok"]
+    assert mod.check_sources("[Codice civile, artt. 969 e 1870]", loose)["sources_ok"]
+    # every article of a list in the text is checked, quantities are not articles
+    assert mod._articles("gli artt. 1176 e 1375, l'art. 1453 e 3 mesi, art. 360, 1° comma") \
+        == ["1176", "1375", "1453", "360"]
+    assert not mod.check_sources("Secondo gli artt. 969 e 970 c.c.", loose)["sources_ok"]
+    assert not mod.check_sources("[Relazione illustrativa]", loose)["sources_ok"]
     # "l'articolo precedente" of art. 1048 is art. 1047, and only that one
     prev = ["Codice civile, art. 1048 (Obblighi degli utenti)\n\nNella derivazione e "
             "nell'uso delle acque a norma dell'articolo precedente..."]
