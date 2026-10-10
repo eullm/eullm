@@ -35,7 +35,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from .dataset import EvalItem
-from .metrics import normalize_text
+from .metrics import ANY_DEADLINE, DEADLINE_UNITS, NUMBER_WORDS, normalize_text, number_of
 from .retrieval import _HEADER, _article_key
 
 # How each code is named in a question, as "of" and "in" — worded so
@@ -58,20 +58,13 @@ CODE_LABELS: dict[str, tuple[str, str]] = {
 AMMINISTRATIVO = {"codice_processo_amministrativo", "legge_procedimento_amministrativo",
                   "ricorsi_amministrativi"}
 
-_NUMBER_WORDS = {
-    "un": 1, "uno": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6,
-    "sette": 7, "otto": 8, "nove": 9, "dieci": 10, "undici": 11, "dodici": 12,
-    "quindici": 15, "venti": 20, "ventiquattro": 24, "trenta": 30, "quaranta": 40,
-    "quarantacinque": 45, "cinquanta": 50, "sessanta": 60, "settanta": 70,
-    "novanta": 90, "centoventi": 120, "centocinquanta": 150, "centottanta": 180,
-    "trecentosessantacinque": 365,
-}
-_WORD_FOR = {v: k for k, v in _NUMBER_WORDS.items() if k not in ("un", "una")}
-_UNITS = {"giorno": "giorni", "giorni": "giorni", "mese": "mesi", "mesi": "mesi",
-          "anno": "anni", "anni": "anni", "ora": "ore", "ore": "ore"}
+# The numbers and units of a deadline are metrics' (NUMBER_WORDS,
+# DEADLINE_UNITS, number_of): one copy, read the same way by the exam, the
+# keyword coverage, the GRPO reward and the paired score.
+_WORD_FOR = {v: k for k, v in NUMBER_WORDS.items() if k not in ("un", "una")}
 # The singular of each plural, from the same table, so a one-unit deadline can
 # be named the way it is written rather than the way it is counted.
-_SINGULAR = {plural: singular for singular, plural in _UNITS.items()
+_SINGULAR = {plural: singular for singular, plural in DEADLINE_UNITS.items()
              if singular != plural}
 _DEADLINE = re.compile(
     r"\b(?:entro|nel termine(?: perentorio| di decadenza)? di|non oltre|decorsi|"
@@ -195,21 +188,17 @@ def articles_from_records(records: list[dict]) -> dict[tuple[str, str], Article]
             for k, v in parts.items() if k not in ambiguous}
 
 
-def _number_of(token: str) -> int | None:
-    """The number a deadline token carries, in digits or in words."""
-    return int(token) if token.isdigit() else _NUMBER_WORDS.get(token.lower())
-
-
 def _deadlines(text: str) -> set[tuple[int, str]]:
     found = set()
     for num, unit in _DEADLINE.findall(_unmarked(text)):
-        n = _number_of(num)
+        n = number_of(num)
         if n:
-            found.add((n, _UNITS[unit.lower()]))
+            found.add((n, DEADLINE_UNITS[unit.lower()]))
     return found
 
 
-# Any "<number> <unit>", whatever precedes it. `_DEADLINE` only knows the
+# Any "<number> <unit>", whatever precedes it (metrics.ANY_DEADLINE).
+# `_DEADLINE` only knows the
 # phrasings that introduce the deadline a question is built on ("entro",
 # "non oltre", "decorsi"...), so an article that also says "un termine non
 # inferiore a venti giorni" (art. 554-ter c.p.p.), "non oltre i dieci giorni"
@@ -218,8 +207,6 @@ def _deadlines(text: str) -> set[tuple[int, str]]:
 # two. "Quale termine prevede l'art. N?" then has two right answers and the
 # exam accepted one: the review of 2026-10-03 found a model marked wrong for
 # the other, true, deadline three times in eighteen.
-_ANY_DEADLINE = re.compile(r"\b(\d+|[a-zà-ù]+)\s+(giorni|giorno|mesi|mese|anni|anno|ore)\b",
-                           re.IGNORECASE)
 
 
 def _unmarked(text: str) -> str:
@@ -231,10 +218,10 @@ def _unmarked(text: str) -> str:
 def all_deadlines(text: str) -> set[tuple[int, str]]:
     """Every distinct "<number> <unit>" an article states, however phrased."""
     found = set()
-    for num, unit in _ANY_DEADLINE.findall(_unmarked(text)):
-        n = _number_of(num)
+    for num, unit in ANY_DEADLINE.findall(_unmarked(text)):
+        n = number_of(num)
         if n:
-            found.add((n, _UNITS[unit.lower()]))
+            found.add((n, DEADLINE_UNITS[unit.lower()]))
     return found
 
 
@@ -279,7 +266,7 @@ def _sentence_with(text: str, n: int, unit: str) -> str:
     flat = " ".join(text.split())
     spans = _sentences(flat)
     for m in _DEADLINE.finditer(flat):
-        if _number_of(m.group(1)) == n and _UNITS.get(m.group(2).lower()) == unit:
+        if number_of(m.group(1)) == n and DEADLINE_UNITS.get(m.group(2).lower()) == unit:
             for offset, sentence in spans:
                 if offset <= m.start() < offset + len(sentence):
                     return sentence.strip()
