@@ -111,7 +111,15 @@ if [ -f "$DATA_DIR/train.jsonl" ] && [ -f "$DATA_DIR/val.jsonl" ]; then
     ok "dataset already present at $DATA_DIR — skipping download"
 else
     log "Downloading $HF_DATASET → $DATA_DIR"
-    $PYTHON -c "
+    # The assignments are PREFIXES of the command, before the -c script: after
+    # the closing quote they are argv[1:], while the Python below reads
+    # os.environ. Neither DATA_DIR nor TARBALL_NAME is exported (they are
+    # assigned at the top of this script and are not in the required-env
+    # list), so os.environ['DATA_DIR'] raised KeyError and `set -euo pipefail`
+    # aborted step 4 before the corpus was ever fetched.
+    TARBALL_NAME="$TARBALL_NAME" DATA_DIR="$DATA_DIR" \
+        HF_DATASET="$HF_DATASET" \
+        $PYTHON -c "
 from huggingface_hub import hf_hub_download
 import os
 path = hf_hub_download(
@@ -122,7 +130,7 @@ path = hf_hub_download(
     local_dir_use_symlinks=False,
 )
 print(f'   downloaded {path}')
-" TARBALL_NAME="$TARBALL_NAME" DATA_DIR="$DATA_DIR"
+"
 
     log "Extracting tarball"
     tar -xzf "$DATA_DIR/$TARBALL_NAME" -C "$DATA_DIR"
