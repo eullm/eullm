@@ -417,6 +417,25 @@ def _detect_source_from_akn(xml_text: str) -> Optional[str]:
     return None
 
 
+def _first_element(el: ET.Element, *paths: str) -> Optional[ET.Element]:
+    """The first of `paths` that exists under `el`, namespace prefix or not.
+
+    Not `find(p1) or find(p2) or ...`: `xml.etree.ElementTree.Element`
+    defines `__bool__` as "has children", so a leaf like `<num>2043</num>`
+    is falsy and the chain falls past the element it just found to the last
+    alternative -- None. That left every NIR article with `article_num=""`
+    and the title empty, silently: the article became unaddressable by
+    number, `missing_article_note` told the model the corpus lacked articles
+    it holds, and `articles_from_records` yielded nothing, so the code
+    contributed zero items to the exam.
+    """
+    for path in paths:
+        found = el.find(path)
+        if found is not None:
+            return found
+    return None
+
+
 def _parse_akn_xml(xml_text: str, source_id: str) -> list[dict]:
     """Parse an AKN (Akoma Ntoso) XML file and extract article records.
 
@@ -551,11 +570,12 @@ def _parse_akn_doc_collection(
     for doc in doc_elements:
         # Numero articolo: ricavato da FRBRWork/FRBRthis value="...~art_N"
         num = ""
-        frbrthis_el = (
-            doc.find(f".//{ns}FRBRWork/{ns}FRBRthis")
-            or doc.find(".//FRBRWork/FRBRthis")
-            or doc.find(f".//{ns}FRBRthis")
-            or doc.find(".//FRBRthis")
+        frbrthis_el = _first_element(
+            doc,
+            f".//{ns}FRBRWork/{ns}FRBRthis",
+            ".//FRBRWork/FRBRthis",
+            f".//{ns}FRBRthis",
+            ".//FRBRthis",
         )
         if frbrthis_el is not None:
             val = frbrthis_el.get("value", "")
@@ -605,12 +625,15 @@ def _parse_nir_articoli(
     """
     records = []
     for art in elements:
-        num_el = art.find(f".//{ns}num") or art.find(".//num")
+        num_el = _first_element(art, f".//{ns}num", ".//num")
         num = (num_el.text or "").strip() if num_el is not None else ""
 
-        rub_el = (
-            art.find(f".//{ns}rubrica") or art.find(".//rubrica")
-            or art.find(f".//{ns}heading") or art.find(".//heading")
+        rub_el = _first_element(
+            art,
+            f".//{ns}rubrica",
+            ".//rubrica",
+            f".//{ns}heading",
+            ".//heading",
         )
         heading = " ".join(rub_el.itertext()).strip() if rub_el is not None else ""
 
@@ -952,19 +975,14 @@ def _strip_xml_namespaces(xml_text: str) -> str:
 def _extract_article_record(article: ET.Element, source_id: str) -> Optional[dict]:
     """Extract text and metadata from a single <articolo> element."""
     # Article number — try multiple element names
-    num_elem = (
-        article.find(".//num")
-        or article.find(".//Num")
-        or article.find(".//numeroArticolo")
-        or article.find(".//NumeroArticolo")
+    num_elem = _first_element(
+        article, ".//num", ".//Num", ".//numeroArticolo", ".//NumeroArticolo"
     )
     num = (num_elem.text or "").strip() if num_elem is not None else ""
 
     # Article title/rubric
-    rubrica_elem = (
-        article.find(".//rubrica")
-        or article.find(".//Rubrica")
-        or article.find(".//intestazione")
+    rubrica_elem = _first_element(
+        article, ".//rubrica", ".//Rubrica", ".//intestazione"
     )
     rubrica = ""
     if rubrica_elem is not None:

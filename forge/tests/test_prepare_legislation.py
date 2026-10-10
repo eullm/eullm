@@ -199,6 +199,29 @@ def test_an_unrecognised_or_unwanted_file_changes_nothing():
     assert list(out) == ["codice_civile"]
 
 
+def test_a_nir_export_keeps_every_article_number():
+    """`find(p1) or find(p2)` on an Element is the classic trap: ElementTree
+    defines __bool__ as "has children", and <num>2043</num> is a leaf. The
+    chain fell past the element it had just found, so every NIR article came
+    out with article_num="" -- and record_articles, which prefers article_num,
+    then reported no article at all for it.
+    """
+    from eullm_forge.datasets.legal_it import parse_normattiva_xml
+    from eullm_forge.eval.retrieval import record_articles
+
+    out = parse_normattiva_xml(
+        "<normattiva>"
+        "<articolo><num>2043</num><rubrica>Risarcimento</rubrica>"
+        "<testo>Qualunque fatto doloso o colposo.</testo></articolo>"
+        "<articolo><num>2086</num><rubrica>Responsabilita oggettiva</rubrica>"
+        "<testo>Il fatto dannoso si presume imputabile.</testo></articolo>"
+        "</normattiva>", "codice_civile")
+    assert [r["article_num"] for r in out] == ["2043", "2086"]
+    assert [r["article_title"] for r in out] == ["Risarcimento", "Responsabilita oggettiva"]
+    # and each record is addressable by its number, as the ZIP path's are
+    assert [record_articles(r) for r in out] == [["2043"], ["2086"]]
+
+
 def test_the_administrative_norms_are_recognised_in_an_opendata_zip():
     from eullm_forge.datasets.legal_it import _detect_source_from_akn
 
