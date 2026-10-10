@@ -82,6 +82,19 @@ def test_citations_outside_the_sources_and_abstentions_are_told_apart():
     assert ok["sources_ok"] and ok["cited_articles"] == ["54"]
     bad = mod.check_sources("Secondo l'art. 49 c.p. il furto resta punibile.", sources)
     assert not bad["sources_ok"] and bad["outside_sources"] == ["art. 49"]
+    # a typo in the rubrica of a bracket citation still cites the same article
+    typo = mod.check_sources("Si veda [Codice civile, art. 743 - Societa' contrattacon l'erede].",
+                             ["Codice civile, art. 743 - Societa' contratta con l'erede.txt"])
+    assert typo["sources_ok"], typo
+    assert not mod.check_sources("[Codice civile, art. 744 - Altro]", sources)["sources_ok"]
+    # an article the retrieved text refers to is read, not remembered
+    sent = mod.check_sources("Si applica l'art. 1480.", ["Codice civile, art. 1484 - Evizione.txt"],
+                             "Che cosa prevede l'art. 1484 del codice civile?",
+                             ["Codice civile, art. 1484 (Evizione parziale)\n\n"
+                              "Si osservano le disposizioni dell'art. 1480."])
+    assert sent["sources_ok"], sent
+    assert not mod.check_sources("Si applica l'art. 1480.",
+                                 ["Codice civile, art. 1484 - Evizione.txt"])["sources_ok"]
     # the article asked about, named to say it is missing, is not cited from memory
     asked = mod.check_sources("L'art. 2875 del codice civile non è presente nei dati forniti.",
                               sources, "Che cosa prevede l'art. 2875 del codice civile?")
@@ -194,6 +207,25 @@ def test_the_summary_reads_an_ungraded_file_and_names_the_code_as_the_pack_does(
     assert "precision n/a (not graded; 0 answered)" in out
     assert "citing outside the sources 0" in out and "abstained 1" in out
     assert "article asked among the sources 0/1" in out
+
+
+def test_the_summary_reads_the_pack_for_the_articles_the_sources_refer_to(tmp_path, capsys):
+    mod = _load("rag_enterprise_eval")
+    pack = tmp_path / "articoli"
+    pack.mkdir()
+    (pack / "Codice civile, art. 1484 - Evizione parziale.txt").write_text(
+        "Codice civile, art. 1484 (Evizione parziale)\n\nSi applica l'art. 1480.",
+        encoding="utf-8")
+    p = tmp_path / "answers-x.jsonl"
+    p.write_text(json.dumps({
+        "id": "norm-contenuto-codice_civile-1484", "question": "Che cosa prevede l'art. 1484 c.c.?",
+        "metadata": {"tipo": "contenuto", "code": "codice_civile", "articolo": "1484"},
+        "answer": "Rinvia all'art. 1480.",
+        "sources": ["Codice civile, art. 1484 - Evizione parziale.txt"]}) + "\n")
+    assert mod.main(["summary", str(p)]) == 0
+    assert "citing outside the sources 1" in capsys.readouterr().out
+    assert mod.main(["summary", str(p), "--pack", str(pack)]) == 0
+    assert "citing outside the sources 0" in capsys.readouterr().out
 
 
 def test_the_password_never_comes_from_the_command_line(monkeypatch, tmp_path):
