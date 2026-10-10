@@ -89,10 +89,14 @@ _REFUSAL = re.compile(
     r"|non (?:posso|sono in grado di) (?:rispondere|indicare)"
     # "non esiste" the article, or the article "non esiste" -- the two orders
     # Italian uses. A period may be crossed, so "L'art. 10 non esiste" is
-    # matched and "l'articolo 10 è stato abrogato. Non esiste alcuna proroga"
-    # is still read as the refusal it looks like.
+    # matched and so is "l'articolo 10 è stato abrogato. Non esiste": the
+    # denial still denies the article, one sentence later. What may not
+    # cross is a denial of something else -- "Non esiste alcuna proroga"
+    # stays a right deadline answer -- so a crossed "non esiste" followed
+    # by alcun/nessun and a noun that is not the article does not match.
     rf"|non esiste\s+(?:alcun[ao]?\s+|nessun[ao]?\s+)?(?:l['’]\s*)?(?:{_NOT_THE_ARTICLE})"
-    rf"|\b(?:{_NOT_THE_ARTICLE})\s*(?:n\.\s*)?\d*[\w-]*[^.?!;\n\d]{{0,60}}?\bnon esiste\b",
+    rf"|\b(?:{_NOT_THE_ARTICLE})\s*(?:n\.\s*)?\d*[\w-]*[^?!\n\d;]{{0,60}}?\bnon esiste\b"
+    rf"(?!\s+(?:alcun[ao]?|nessun[ao]?)\s+(?!{_NOT_THE_ARTICLE}\b)\w+)",
     re.IGNORECASE,
 )
 

@@ -45,6 +45,7 @@ def test_the_shortcuts_to_a_deadline_do_not(answer):
     "Non esiste alcuna decadenza; il ricorso va proposto entro 60 giorni.",
     "Secondo l'articolo 10 il termine è di 60 giorni e non esiste proroga.",
     "Ai sensi dell'art. 10 il ricorso si propone entro 60 giorni, e non esiste deroga.",
+    "Secondo l'articolo 10 il termine è di 60 giorni. Non esiste alcuna proroga.",
 ])
 def test_opening_with_a_negation_about_something_else_still_scores(answer):
     """"Non è prevista" was carved out of the refusal set because it opens right
@@ -58,6 +59,7 @@ def test_opening_with_a_negation_about_something_else_still_scores(answer):
     "L'articolo 10 non esiste, ma il ricorso si propone entro 60 giorni.",
     "Non esiste alcuna norma che disciplini il ricorso; il termine è di 60 giorni.",
     "Non esiste alcun articolo che tratti del ricorso. Il termine è di 60 giorni.",
+    "L'articolo 10 è stato abrogato. Non esiste. Il termine è di 60 giorni.",
 ])
 def test_denying_the_article_itself_is_still_a_refusal(answer):
     """What the set is for, in both orders and with the noun spelled out."""
