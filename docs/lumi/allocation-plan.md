@@ -350,10 +350,29 @@ In order:
    What is left at sixteen at once (3%): the round's prompts start over
    fifteen steps, 15.2 sequences per step on average where llama-server has
    16 from the first. Since 10-10-2026 a step reads the waiting prompts
-   itself, beside the answers' tokens, as llama-server does: the diagnosis
-   with `EULLM_BIN_BEFORE` set to the engine before it is the check, and its
-   lines now say when EuLLM's answers started (`first_token_p50_s`,
-   `first_token_max_s`).
+   itself, beside the answers' tokens, as llama-server does. The diagnosis
+   with the engine before it on the same GCD (job 22691743, 10-10-2026,
+   Qwen3-14B Q4_K_M, tokens/s, the mean of two rounds at once):
+
+   | | EuLLM before | EuLLM | EuLLM `--kv-unified` | llama-server |
+   |---|---:|---:|---:|---:|
+   | 16 at once, llama-server's chain on both | 447 | 480 | 447 | 462 |
+   | 16 at once, greedy | | 480 | | 472 |
+   | 16 at once, each server's defaults | | 469 | | 460 |
+   | 16 at once, penalty 1.1 on both | | 478 | | 359 |
+   | 16 clients, one request after another | 369 | 366 | 400 | 348 |
+   | longest wait for a first token, 16 at once | 0.65-0.84 s | 0.035-0.39 s | 0.034-0.28 s | |
+   | longest wait for a first token, 16 clients | 0.94 s | 0.30 s | 0.22 s | |
+
+   A step now carries all sixteen sequences in one pass (16.0 sequences,
+   1.00 passes per step) from the round's first. The longer first-token
+   waits (0.39 and 0.28 s) are each server's first round, in which the
+   prompts are read from scratch; after it the slots hold them. At four,
+   all four runs are level (150-153 tokens/s). In the closed loop the
+   steps take 1.07-1.17 passes with a KV cache per slot, from the slots
+   left idle between a client's requests and the prompts' passes of their
+   own; `--kv-unified` has none (400 tokens/s) but reads every slot's cells
+   in each answer's attention, which costs it 7% with sixteen at once.
 3. **Decisions** (`c08`): `/v1/systemone` with the Jev-Style releases. The
    engine runs one decision at a time per server; `c08` measures the queueing
    that causes as concurrency grows, and replicas as today's way round it.
