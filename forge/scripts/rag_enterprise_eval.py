@@ -93,6 +93,26 @@ def _head(name: str) -> str:
     return name.split(" - ", 1)[0]
 
 
+_NEXT_PREV = re.compile(r"\b(?:art(?:icolo|\.)?)\s+(precedente|seguente|successivo)\b",
+                        re.IGNORECASE)
+
+
+def _neighbours(text: str) -> set[str]:
+    """Articles a text refers to by position: "a norma dell'articolo
+    precedente" in art. 1048 c.c. is art. 1047. The text's own number is its
+    first citation, the heading the pack writes ("Codice civile, art. 1048")."""
+    own = _ART.search(text or "")
+    if not own:
+        return set()
+    base = int(re.match(r"\d+", own.group(1)).group())
+    out = set()
+    for m in _NEXT_PREV.finditer(text):
+        n = base - 1 if m.group(1).lower() == "precedente" else base + 1
+        if n > 0:
+            out.add(str(n))
+    return out
+
+
 def check_sources(answer: str, sources: list[str], question: str = "",
                   source_texts: list[str] = ()) -> dict:
     """Which files the answer cites, and whether each is among the sources.
@@ -110,6 +130,8 @@ def check_sources(answer: str, sources: list[str], question: str = "",
     numbers = set()
     for s in list(sources) + list(source_texts):
         numbers.update(_norm_number(m) for m in _ART.findall(s))
+    for t in source_texts:
+        numbers.update(_neighbours(t))
     cited = [c.strip() for c in _BRACKETS.findall(answer or "")]
     bad = [c for c in cited
            if c.lower().removesuffix(".txt") not in names and _head(c) not in heads]
