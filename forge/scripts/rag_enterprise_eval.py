@@ -62,6 +62,25 @@ ABSTAIN = re.compile(
 _BRACKETS = re.compile(r"\[([^\[\]]{3,200})\]")
 _ART = re.compile(r"\bart(?:icolo|\.)?\s*(\d+(?:[- ]?(?:bis|ter|quater|quinquies|sexies|"
                   r"septies|octies|novies|decies))?)", re.IGNORECASE)
+# Every article of a citation, lists included -- "artt. 1176 e 1375", "art.62",
+# "articoli 3, 4 e 5" -- but not "art. 1453 e 3 mesi" or "art. 360, 1° comma":
+# the same reading as eullm_forge.eval.abstain.cited_articles.
+_SFX = "bis|ter|quater|quinquies|sexies|septies|octies|novies|decies"
+_UNIT = r"(?:\s*(?:°|º|comm|co\.|giorn|mes|ann|or[ae]\b))"
+_CITE = re.compile(rf"\bart(?:icol[oi]|t)?\.?\s*(\d+(?:[\s-]*(?:{_SFX}))?)\b"
+                   rf"((?:\s*(?:,|\be\b|\bed\b)\s*\d+(?:[\s-]*(?:{_SFX}))?\b{_UNIT}?)*)",
+                   re.IGNORECASE)
+_MORE = re.compile(rf"(?:,|\be\b|\bed\b)\s*(\d+(?:[\s-]*(?:{_SFX}))?)\b({_UNIT})?",
+                   re.IGNORECASE)
+
+
+def _articles(text: str) -> list[str]:
+    """The article numbers a text cites, lists included, as `_norm_number` spells them."""
+    out = []
+    for m in _CITE.finditer(text or ""):
+        out.append(_norm_number(m.group(1)))
+        out.extend(_norm_number(n) for n, unit in _MORE.findall(m.group(2)) if not unit)
+    return out
 
 
 # As build_legal_pack.CODE_NAMES names each code in a file name (a test keeps
@@ -129,16 +148,21 @@ def check_sources(answer: str, sources: list[str], question: str = "",
     heads = {_head(s) for s in sources if _ART.search(_head(s))}
     numbers = set()
     for s in list(sources) + list(source_texts):
-        numbers.update(_norm_number(m) for m in _ART.findall(s))
+        numbers.update(_articles(s))
     for t in source_texts:
         numbers.update(_neighbours(t))
     cited = [c.strip() for c in _BRACKETS.findall(answer or "")]
+    # A bracket that names articles is checked on those articles, like a
+    # citation in the text: models copy file names loosely ("art.62",
+    # "contrattacon", "artt. 969 - Ricognizione.txt; Articolo 1870"), and
+    # what matters is whether each article cited was in hand.
     bad = [c for c in cited
-           if c.lower().removesuffix(".txt") not in names and _head(c) not in heads]
-    arts = sorted({_norm_number(m) for m in _ART.findall(_BRACKETS.sub(" ", answer or ""))})
+           if c.lower().removesuffix(".txt") not in names and _head(c) not in heads
+           and not (_articles(c) and all(a in numbers for a in _articles(c)))]
+    arts = sorted(set(_articles(_BRACKETS.sub(" ", answer or ""))))
     # The article the question asks about is not cited from memory: "l'art.
     # 2875 non è presente nei dati forniti" names it in order to abstain.
-    asked = {_norm_number(m) for m in _ART.findall(question or "")}
+    asked = set(_articles(question or ""))
     bad_arts = [a for a in arts if a not in numbers and a not in asked]
     return {"cited_files": cited, "cited_articles": arts,
             "sources_ok": not bad and not bad_arts,
