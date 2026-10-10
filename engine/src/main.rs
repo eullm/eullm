@@ -353,7 +353,9 @@ struct RuntimeOpts {
     /// consecutive slot numbers among the answering sequences, so a slot left
     /// out of a step (waiting for its prompt, or idle) splits it in two; one
     /// cache takes any slots in one pass, and its attention reads every
-    /// sequence's cells, masked.
+    /// sequence's cells, masked. Measured on an MI250X: 1-4% faster with
+    /// short requests that come and go, 2-7% slower with sixteen at once,
+    /// 38-45% slower with 32k-token contexts.
     #[arg(long)]
     kv_unified: bool,
 

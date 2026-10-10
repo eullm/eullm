@@ -373,6 +373,48 @@ In order:
    left idle between a client's requests and the prompts' passes of their
    own; `--kv-unified` has none (400 tokens/s) but reads every slot's cells
    in each answer's attention, which costs it 7% with sixteen at once.
+
+   The `c07` round on that engine (`r-next6`, job 22693068, 10-10-2026, one
+   GCD per point, Q4_K_M) against the rounds before it. The graded workload,
+   sixteen clients over 400 gsm8k questions, tokens/s (accuracy 0.92-0.96
+   everywhere, within the noise of 400 questions):
+
+   | model | EuLLM `r-clean` | EuLLM `r-next3` | EuLLM `r-next6` | llama-server | Ollama |
+   |---|---:|---:|---:|---:|---:|
+   | Qwen3-8B | 154 | 517 | 533 | 486 | 166 |
+   | Qwen3-14B | 102 | 327 | 349 | 317 | 142 |
+   | Qwen3-32B | 54 | 186 | 191 | 178 | 105 |
+   | Qwen3.6-35B-A3B | 118 | 219 | 221 | 199 | 28 |
+
+   Sixteen requests at once (answers of 150 tokens), tokens/s and the median
+   wait for the first token:
+
+   | model | EuLLM `r-next3` | EuLLM `r-next6` | llama-server `r-next6` |
+   |---|---:|---:|---:|
+   | Qwen3-8B | 613 (205 ms) | 695 (33 ms) | 646 (274 ms) |
+   | Qwen3-14B | 423 (306 ms) | 474 (192 ms) | 450 (312 ms) |
+   | Qwen3-32B | 234 (600 ms) | 263 (104 ms) | 248 (502 ms) |
+   | Qwen3.6-35B-A3B | 244 (445 ms) | 246 (163 ms) | 229 (1963 ms) |
+
+   The distance `c07` found is closed on every model: EuLLM is 7-10% ahead of
+   llama-server on the graded workload and 5-8% with sixteen at once, where
+   reading the prompts in the step gained 12-13% on the dense models and 1% on
+   the MoE. The `r-clean` rows are the engine with the repeat penalty's whole-
+   vocabulary scan and the steps out of slot order (0.7.50 fixed both).
+
+   `--kv-unified` against a KV cache per slot (`rt-kvu*`, same job), tokens/s:
+
+   | | Qwen3-8B | Qwen3-14B | Qwen3-32B | Qwen3.6-35B-A3B |
+   |---|---:|---:|---:|---:|
+   | 4 at once | 232 / 226 | 151 / 149 | 74.5 / 75 | 155 / 154 |
+   | 16 at once | 689 / 645 | 472 / 455 | 264 / 246 | 268 / 262 |
+   | 16 clients, graded | 531 / 548 | 347 / 362 | 193 / 200 | 218 / 221 |
+   | 4 slots of 32k, 16k-token prompts | 13 / 8.1 | 7.5 / 4.1 | | |
+
+   One cache for all gains 1-4% where requests come and go and slots are left
+   idle between them, loses 2-7% with sixteen at once, and 38-45% with long
+   contexts, where every answer's attention reads all the slots' cells: it
+   stays off by default, an option for many short requests.
 3. **Decisions** (`c08`): `/v1/systemone` with the Jev-Style releases. The
    engine runs one decision at a time per server; `c08` measures the queueing
    that causes as concurrency grows, and replicas as today's way round it.

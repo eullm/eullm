@@ -295,7 +295,11 @@ is timed.
 `--kv-unified` (experimental) gives all the slots one KV cache instead, as
 llama-server does when it chooses its number of slots itself: any slots go
 in one pass, and every answer's attention reads all the slots' cells,
-masked, which costs more as the contexts grow.
+masked, which costs more as the contexts grow. Measured on an MI250X GCD
+with Qwen3 8B to 32B: 1-4% faster with sixteen clients sending short
+requests one after another, 2-7% slower with sixteen requests at once, and
+38-45% slower with four slots of 32,000 tokens. It is worth trying only
+where requests are short and come and go all the time.
 
 The line above is Qwen3.5-0.8B on four CPU cores with Ollama's default
 sampling: sampling took 2.7 ms per token, and 1.1 ms with
