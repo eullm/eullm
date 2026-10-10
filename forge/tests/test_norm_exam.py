@@ -181,6 +181,21 @@ def test_a_one_unit_deadline_is_named_the_way_it_is_written(n, unit, keyword):
     assert _deadline_keyword(n, unit) == keyword
 
 
+def test_the_exam_the_reward_and_the_score_read_deadlines_from_one_copy():
+    # The tables were copied into three modules; a number word added to one
+    # (an exam that can say "quarantotto ore") would have been scored by the
+    # others as no deadline at all.
+    from eullm_forge.eval import metrics, norm_exam, paired  # noqa: F401
+    from eullm_forge.rl import rewards
+
+    assert norm_exam.NUMBER_WORDS is metrics.NUMBER_WORDS
+    assert norm_exam.DEADLINE_UNITS is metrics.DEADLINE_UNITS
+    assert norm_exam.ANY_DEADLINE is metrics.ANY_DEADLINE is rewards.ANY_DEADLINE
+    assert rewards.number_of is metrics.number_of
+    assert rewards.mentioned_deadlines("entro sessanta giorni o 2 anni") == {
+        (60, "giorni"), (2, "anni")}
+
+
 @pytest.mark.parametrize("answer", ["entro un anno", "entro 1 anno"])
 def test_a_one_unit_deadline_answer_is_scored(answer):
     assert keyword_coverage(answer, [_deadline_keyword(1, "anni")]) == 1.0

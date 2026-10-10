@@ -21,28 +21,40 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 _WS = re.compile(r"\s+")
 
-# A "<number> <unit>" the way an answer writes it, and the deadline it names.
-# Both keyword_coverage and the GRPO reward need to ask "does this text name
-# exactly this deadline, as a number", because the deadline keyword is a plain
-# string and "20 giorni" is inside "120 giorni". Kept here because this is the
-# module both sides can import: norm_exam imports it (so its tables cannot be
-# imported here without a cycle) and rl/rewards.py already imports from it.
-_DEADLINE_UNITS = {"giorni": "giorni", "giorno": "giorni", "mesi": "mesi", "mese": "mesi",
-                   "anni": "anni", "anno": "anni", "ore": "ore", "ora": "ore"}
-_ANY_DEADLINE = re.compile(
+# Deadlines, the one place they are read: "<number> <unit>", the number in
+# digits or in words, the unit to its plural. The exam builds its questions and
+# keywords with them (norm_exam), keyword_coverage and the GRPO reward
+# (rl/rewards.py) ask whether an answer names a deadline, as a number, and the
+# paired score does too (paired.py). Here because every one of them can import
+# this module, and norm_exam imports it already: kept in norm_exam, the tables
+# could not be imported here without a cycle, and they were copied instead.
+
+#: Each unit a deadline is counted in, singular or plural, to its plural.
+DEADLINE_UNITS = {"giorni": "giorni", "giorno": "giorni", "mesi": "mesi", "mese": "mesi",
+                  "anni": "anni", "anno": "anni", "ore": "ore", "ora": "ore"}
+#: The number words the exam can produce. Digits need no table.
+NUMBER_WORDS = {"un": 1, "uno": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5,
+                "sei": 6, "sette": 7, "otto": 8, "nove": 9, "dieci": 10, "undici": 11,
+                "dodici": 12, "quindici": 15, "venti": 20, "ventiquattro": 24, "trenta": 30,
+                "quaranta": 40, "quarantacinque": 45, "cinquanta": 50, "sessanta": 60,
+                "settanta": 70, "novanta": 90, "centoventi": 120, "centocinquanta": 150,
+                "centottanta": 180, "trecentosessantacinque": 365}
+#: Any "<number> <unit>", whatever precedes it, in an article or an answer as
+#: written. Without the singular "ora": what an article states and an answer
+#: names are counted the way they always were, so exams built and answers
+#: scored before stay comparable.
+ANY_DEADLINE = re.compile(r"\b(\d+|[a-zà-ù]+)\s+(giorni|giorno|mesi|mese|anni|anno|ore)\b",
+                          re.IGNORECASE)
+# The same with "ora", for a keyword and the normalised answer it is matched
+# against: a one-hour deadline's keyword is "1 ora|un ora", and "un'ora"
+# normalises to "un ora".
+_KEYWORD_DEADLINE = re.compile(
     r"\b(\d+|[a-zà-ù]+)\s+(giorni|giorno|mesi|mese|anni|anno|ore|ora)\b", re.IGNORECASE)
-# The number words the exam can produce (norm_exam._NUMBER_WORDS). Digits need
-# no table; these are the spellings a keyword may carry.
-_NUMBER_WORDS = {"un": 1, "uno": 1, "una": 1, "due": 2, "tre": 3, "quattro": 4, "cinque": 5,
-                 "sei": 6, "sette": 7, "otto": 8, "nove": 9, "dieci": 10, "undici": 11,
-                 "dodici": 12, "quindici": 15, "venti": 20, "ventiquattro": 24, "trenta": 30,
-                 "quaranta": 40, "quarantacinque": 45, "cinquanta": 50, "sessanta": 60,
-                 "settanta": 70, "novanta": 90, "centoventi": 120, "centocinquanta": 150,
-                 "centottanta": 180, "trecentosessantacinque": 365}
 
 
-def _number_of(token: str) -> int | None:
-    return int(token) if token.isdigit() else _NUMBER_WORDS.get(token.lower())
+def number_of(token: str) -> int | None:
+    """The number a deadline token carries, in digits or in words."""
+    return int(token) if token.isdigit() else NUMBER_WORDS.get(token.lower())
 
 
 def _keyword_deadline(keyword: str) -> tuple[int, str] | None:
@@ -54,19 +66,19 @@ def _keyword_deadline(keyword: str) -> tuple[int, str] | None:
     deadline in this shape, and the caller falls back to the substring test
     rather than assuming a number.
     """
-    for num, unit in _ANY_DEADLINE.findall(keyword):
-        n = _number_of(num)
+    for num, unit in _KEYWORD_DEADLINE.findall(keyword):
+        n = number_of(num)
         if n:
-            return n, _DEADLINE_UNITS[unit.lower()]
+            return n, DEADLINE_UNITS[unit.lower()]
     return None
 
 
 def _names_deadline(text: str, deadline: tuple[int, str]) -> bool:
     """Whether `text` names exactly that deadline, as a number."""
     wanted_n, wanted_unit = deadline
-    for num, unit in _ANY_DEADLINE.findall(text):
-        n = _number_of(num)
-        if n and n == wanted_n and _DEADLINE_UNITS[unit.lower()] == wanted_unit:
+    for num, unit in _KEYWORD_DEADLINE.findall(text):
+        n = number_of(num)
+        if n and n == wanted_n and DEADLINE_UNITS[unit.lower()] == wanted_unit:
             return True
     return False
 

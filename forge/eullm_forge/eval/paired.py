@@ -71,7 +71,8 @@ def verifiable(row: dict) -> float | None:
     not more than `MAX_DEADLINES` of them, nor a refusal.
     """
     from ..rl.rewards import MAX_DEADLINES, abstains, mentioned_deadlines, refuses
-    from .norm_exam import _UNITS, all_deadlines
+    from .metrics import DEADLINE_UNITS
+    from .norm_exam import all_deadlines
 
     kind = kind_of(str(row.get("id", "")))
     answer = row.get("answer") or ""
@@ -81,7 +82,7 @@ def verifiable(row: dict) -> float | None:
         m = _RUBRIC_DEADLINE.search(row.get("rubric") or "")
         if not m:
             return None
-        wanted = (int(m.group(1)), _UNITS.get(m.group(2).lower(), m.group(2)))
+        wanted = (int(m.group(1)), DEADLINE_UNITS.get(m.group(2).lower(), m.group(2)))
         article = (row.get("reference") or "").split("Testo integrale dell'articolo:", 1)[-1]
         named = mentioned_deadlines(answer)
         if refuses(answer) or len(named) > MAX_DEADLINES:

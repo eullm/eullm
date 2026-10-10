@@ -28,8 +28,7 @@ from __future__ import annotations
 
 import re
 
-from ..eval.metrics import keyword_coverage
-from ..eval.norm_exam import _UNITS, _number_of
+from ..eval.metrics import ANY_DEADLINE, DEADLINE_UNITS, keyword_coverage, number_of
 
 DEADLINE_TYPES = frozenset({"termine", "termine_argomento"})
 ABSTAIN_TYPES = frozenset({"inesistente", "assente"})
@@ -97,20 +96,19 @@ _REFUSAL = re.compile(
 )
 
 
-# Any "<number> <unit>" in an answer. The exam's own pattern wants the
-# statute's phrasing ("entro", "decorsi"); answers say "il termine è di 60
-# giorni", and a count that misses those would let a list of numbers through.
-_ANY_DEADLINE = re.compile(r"\b(\d+|[a-zà-ù]+)\s+(giorni|giorno|mesi|mese|anni|anno|ore)\b",
-                           re.IGNORECASE)
+# Any "<number> <unit>" in an answer (metrics.ANY_DEADLINE). The exam's own
+# pattern wants the statute's phrasing ("entro", "decorsi"); answers say "il
+# termine è di 60 giorni", and a count that misses those would let a list of
+# numbers through.
 
 
 def mentioned_deadlines(answer: str) -> set[tuple[int, str]]:
     """The distinct deadlines an answer names, digits or words."""
     found = set()
-    for num, unit in _ANY_DEADLINE.findall(answer):
-        n = _number_of(num)
+    for num, unit in ANY_DEADLINE.findall(answer):
+        n = number_of(num)
         if n:
-            found.add((n, _UNITS[unit.lower()]))
+            found.add((n, DEADLINE_UNITS[unit.lower()]))
     return found
 
 
@@ -123,10 +121,10 @@ def _keyword_deadline(keyword: str) -> tuple[int, str] | None:
     keyword is not a deadline in this shape, and the caller falls back to
     the coverage test rather than assuming a number.
     """
-    for num, unit in _ANY_DEADLINE.findall(keyword):
-        n = _number_of(num)
+    for num, unit in ANY_DEADLINE.findall(keyword):
+        n = number_of(num)
         if n:
-            return n, _UNITS[unit.lower()]
+            return n, DEADLINE_UNITS[unit.lower()]
     return None
 
 
