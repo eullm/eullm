@@ -112,7 +112,10 @@ def _head(name: str) -> str:
     return name.split(" - ", 1)[0]
 
 
-_NEXT_PREV = re.compile(r"\b(?:art(?:icolo|\.)?)\s+(precedente|seguente|successivo)\b",
+# Both orders: "l'articolo precedente" and "a norma del precedente articolo"
+# (art. 1048 c.c.).
+_NEXT_PREV = re.compile(r"\bart(?:icolo|\.)?\s+(precedente|seguente|successivo)\b"
+                        r"|\b(precedente|seguente|successivo)\s+art(?:icolo|\.)?(?!\w)",
                         re.IGNORECASE)
 
 
@@ -126,7 +129,7 @@ def _neighbours(text: str) -> set[str]:
     base = int(re.match(r"\d+", own.group(1)).group())
     out = set()
     for m in _NEXT_PREV.finditer(text):
-        n = base - 1 if m.group(1).lower() == "precedente" else base + 1
+        n = base - 1 if (m.group(1) or m.group(2)).lower() == "precedente" else base + 1
         if n > 0:
             out.add(str(n))
     return out

@@ -112,6 +112,12 @@ def test_citations_outside_the_sources_and_abstentions_are_told_apart():
     src = ["Codice civile, art. 1048 - Obblighi degli utenti.txt"]
     assert mod.check_sources("a norma dell'art. 1047", src, "", prev)["sources_ok"]
     assert not mod.check_sources("a norma dell'art. 1046", src, "", prev)["sources_ok"]
+    # the order the code itself uses: "a norma del precedente articolo"
+    real = ["Codice civile, art. 1048 (Obblighi degli utenti)\n\nArt. 1048.\n\n (Obblighi "
+            "degli utenti).\n\n Nella derivazione e nell'uso delle acque a norma del "
+            "precedente articolo, deve evitarsi..."]
+    assert mod.check_sources("a norma dell'art. 1047", src, "", real)["sources_ok"]
+    assert mod._neighbours("Codice penale, art. 10\n\nsi applica il seguente articolo") == {"11"}
     assert not mod.check_sources("Si applica l'art. 1480.",
                                  ["Codice civile, art. 1484 - Evizione.txt"])["sources_ok"]
     # the article asked about, named to say it is missing, is not cited from memory
