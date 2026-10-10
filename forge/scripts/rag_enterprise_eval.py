@@ -11,7 +11,8 @@
         --items norm-exam-devbig.jsonl --out answers-community-qwen3-14b.jsonl
 
     # 3. after judge_answers.py has graded the answers (on Leonardo)
-    python forge/scripts/rag_enterprise_eval.py summary answers-*.graded.jsonl
+    python forge/scripts/rag_enterprise_eval.py summary answers-*.graded.jsonl \\
+        --pack legal-pack/articoli
 
 The models were measured until 2026-10-08 only outside the product, and the
 product was never measured at all: asked in a plain chat with no texts,
@@ -86,20 +87,32 @@ def abstained(answer: str) -> bool:
     return bool(ABSTAIN.search(answer or ""))
 
 
-def check_sources(answer: str, sources: list[str], question: str = "") -> dict:
+def _head(name: str) -> str:
+    """A pack file's citation without its rubrica: "codice civile, art. 743"."""
+    name = re.sub(r"\s+", " ", name.strip().lower().removesuffix(".txt"))
+    return name.split(" - ", 1)[0]
+
+
+def check_sources(answer: str, sources: list[str], question: str = "",
+                  source_texts: list[str] = ()) -> dict:
     """Which files the answer cites, and whether each is among the sources.
 
     Two kinds of citation: ``[file name]``, RAG Enterprise's own, which must
-    be one of the retrieved files (with or without ``.txt``); and ``art. N``
-    in the text, whose number must be the article of some retrieved file --
-    the pack's file names carry it ("..., art. 54 - ...").
+    be one of the retrieved files -- the same code and article, since a model
+    copying "Societa' contratta con l'erede" as "contrattacon" still cites
+    art. 743; and ``art. N`` in the text, whose number must be the article of
+    some retrieved file (the pack's file names carry it, "..., art. 54 - ...")
+    or an article the retrieved texts themselves refer to: art. 1484 c.c.
+    sends the reader to art. 1480, and citing it is reading, not memory.
     """
     names = {s.lower().removesuffix(".txt") for s in sources}
+    heads = {_head(s) for s in sources if _ART.search(_head(s))}
     numbers = set()
-    for s in sources:
+    for s in list(sources) + list(source_texts):
         numbers.update(_norm_number(m) for m in _ART.findall(s))
     cited = [c.strip() for c in _BRACKETS.findall(answer or "")]
-    bad = [c for c in cited if c.lower().removesuffix(".txt") not in names]
+    bad = [c for c in cited
+           if c.lower().removesuffix(".txt") not in names and _head(c) not in heads]
     arts = sorted({_norm_number(m) for m in _ART.findall(_BRACKETS.sub(" ", answer or ""))})
     # The article the question asks about is not cited from memory: "l'art.
     # 2875 non è presente nei dati forniti" names it in order to abstain.
@@ -238,14 +251,32 @@ def asked_retrieved(row: dict) -> bool | None:
     return False
 
 
-def summarize(rows: list[dict]) -> dict:
+def pack_texts(pack: Path | None):
+    """A reader of the pack's article files by name, or of nothing without one."""
+    cache: dict[str, str] = {}
+
+    def text(name: str) -> str:
+        if pack is None:
+            return ""
+        if name not in cache:
+            p = pack / name
+            cache[name] = p.read_text(encoding="utf-8") if p.is_file() else ""
+        return cache[name]
+    return text
+
+
+def summarize(rows: list[dict], pack: Path | None = None) -> dict:
     """The LEGAL_PACK's release figures from graded answers (judge_answers.py output).
 
     Abstention and sources are read again from the answer with the current
     checks, so answers collected before a fix of the checks still count right.
+    With ``pack`` (the ``articoli/`` folder that was uploaded), the articles
+    the retrieved files refer to count as in hand too.
     """
+    text = pack_texts(pack)
     rows = [{**r, "abstained": abstained(r.get("answer", "")),
-             **check_sources(r.get("answer", ""), r.get("sources", []), r.get("question", ""))}
+             **check_sources(r.get("answer", ""), r.get("sources", []), r.get("question", ""),
+                             [text(n) for n in r.get("sources", [])])}
             if "sources" in r else r for r in rows]
     absent = [r for r in rows if (r.get("metadata") or {}).get("tipo") == "inesistente"]
     real = [r for r in rows if r not in absent]
@@ -269,7 +300,7 @@ def summarize(rows: list[dict]) -> dict:
 def cmd_summary(args) -> int:
     for p in args.graded:
         rows = [json.loads(ln) for ln in p.open(encoding="utf-8") if ln.strip()]
-        s = summarize(rows)
+        s = summarize(rows, args.pack)
         precision = (f"precision {s['precision']:.3f} ({s['correct']}/{s['answered']} answered)"
                      if s["graded"] else f"precision n/a (not graded; {s['answered']} answered)")
         print(f"{p.name}: {s['questions']} questions | {precision} | "
@@ -299,6 +330,9 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--limit", type=int, default=0)
     s = sub.add_parser("summary")
     s.add_argument("graded", nargs="+", type=Path)
+    s.add_argument("--pack", type=Path,
+                   help="the pack's articoli/ folder: articles the sources refer to count "
+                        "as in hand, not as cited from memory")
     args = ap.parse_args(argv)
     return {"upload": cmd_upload, "ask": cmd_ask, "summary": cmd_summary}[args.cmd](args)
 
