@@ -9,7 +9,13 @@
     "with its ROCm libraries, its models made from the EuLLM store's GGUFs).",
     "vLLM is not here yet: it serves Hugging Face weights rather than GGUF, so it needs its own",
     "like-for-like design, and its ROCm container has to be shown to run on gfx90a first.",
-    "Catalog models (Q4_K_M), already in the store for c01."
+    "Catalog models (Q4_K_M), already in the store for c01.",
+    "rt-kvu*: EuLLM alone, a KV cache per slot (its default) against one for all (--kv-unified),",
+    "side by side in each group. On one GCD with Qwen3-14B (job 22691743, 10-10-2026) one cache",
+    "for all was 9% faster with 16 clients sending requests one after another (no gaps in the",
+    "slots' run, no passes of their own for the prompts) and 7% slower with 16 at once (each",
+    "answer's attention reads every slot's cells), a cost that grows with the context. These",
+    "points decide whether --kv-unified becomes the default above one slot."
   ],
   "defaults": {"gcds": 1, "slot_ctx": 4096},
   "groups": [
@@ -29,6 +35,24 @@
      "set": {"kind": "workload", "sets": ["gsm8k"], "limit": 400, "batch": 16,
              "concurrency": 16, "max_tokens": 768, "think": false},
      "axes": {"model": ["qwen3-8b", "qwen3-14b", "qwen3-32b", "qwen3.6-35b-a3b"],
-              "runtime": ["eullm", "llama-server", "ollama"]}}
+              "runtime": ["eullm", "llama-server", "ollama"]}},
+
+    {"name": "rt-kvu", "priority": 74, "est_s": 900,
+     "set": {"kind": "throughput", "repeats": 3, "runtime": "eullm"},
+     "axes": {"model": ["qwen3-8b", "qwen3-14b", "qwen3-32b", "qwen3.6-35b-a3b"],
+              "batch": [4, 16],
+              "extra_args": [[], ["--kv-unified"]]}},
+
+    {"name": "rt-kvu-graded", "priority": 74, "est_s": 3600,
+     "set": {"kind": "workload", "sets": ["gsm8k"], "limit": 400, "batch": 16,
+             "concurrency": 16, "max_tokens": 768, "think": false, "runtime": "eullm"},
+     "axes": {"model": ["qwen3-8b", "qwen3-14b", "qwen3-32b", "qwen3.6-35b-a3b"],
+              "extra_args": [[], ["--kv-unified"]]}},
+
+    {"name": "rt-kvu-long", "priority": 74, "est_s": 900,
+     "set": {"kind": "throughput", "repeats": 3, "runtime": "eullm", "batch": 4,
+             "slot_ctx": 32768, "prompt_tokens": 16000},
+     "axes": {"model": ["qwen3-8b", "qwen3-14b"],
+              "extra_args": [[], ["--kv-unified"]]}}
   ]
 }
