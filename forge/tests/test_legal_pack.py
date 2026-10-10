@@ -93,6 +93,12 @@ def test_citations_outside_the_sources_and_abstentions_are_told_apart():
                              ["Codice civile, art. 1484 (Evizione parziale)\n\n"
                               "Si osservano le disposizioni dell'art. 1480."])
     assert sent["sources_ok"], sent
+    # "l'articolo precedente" of art. 1048 is art. 1047, and only that one
+    prev = ["Codice civile, art. 1048 (Obblighi degli utenti)\n\nNella derivazione e "
+            "nell'uso delle acque a norma dell'articolo precedente..."]
+    src = ["Codice civile, art. 1048 - Obblighi degli utenti.txt"]
+    assert mod.check_sources("a norma dell'art. 1047", src, "", prev)["sources_ok"]
+    assert not mod.check_sources("a norma dell'art. 1046", src, "", prev)["sources_ok"]
     assert not mod.check_sources("Si applica l'art. 1480.",
                                  ["Codice civile, art. 1484 - Evizione.txt"])["sources_ok"]
     # the article asked about, named to say it is missing, is not cited from memory
