@@ -142,7 +142,11 @@ nessun blocco prolungato del decode durante prefill lunghi; riuso KV validato su
   finché le richieste sono in coda), letti negli stessi passi accanto a una
   risposta in corso, tre dei quali finiscono nello stesso passo, rispondono
   come letti interi su un server a uno slot; con il primo token preso dai
-  logit sbagliati il test fallisce.
+  logit sbagliati il test fallisce. Su LUMI (job 22691743, Qwen3-14B, un
+  GCD, 16 richieste insieme, stessa catena di campionamento): 480 tok/s
+  contro 447 del motore di prima e 462 di llama-server; i passi portano 16
+  sequenze dal primo; l'attesa più lunga per il primo token da 0,65-0,84 s
+  a 0,035 s.
 
 - [x] **0.7-E · Auto-composizione `--fit` + `--n-cpu-moe`** *(implementato
   0.6.70-rc14)*
