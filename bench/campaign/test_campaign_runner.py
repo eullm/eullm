@@ -10,8 +10,9 @@ import time
 import pytest
 
 import campaign
+from devices import aligned_group
 from fsqueue import Queue
-from spec import SpecError, expand
+from spec import SpecError, expand, normalize
 
 FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_eullm.py")
 
@@ -512,7 +513,7 @@ def test_a_job_waits_for_a_device_set_aside_then_goes_on_without_it(tmp_path, en
     assert "devices [1] hold 40960 MiB with no point on them" in out
     assert "devices [1] still hold memory after" in out
     assert sum(line.startswith("BENCH_RESULT ") for line in out.splitlines()) == 3
-    assert list(r.devices) == [0] and not r.quarantined
+    assert r.devices == [0, 1] and r.lost == {1} and not r.quarantined
 
 
 def test_a_device_holding_vram_with_no_point_on_it_is_set_aside(tmp_path, engine, capsys,
@@ -553,3 +554,46 @@ def test_a_device_holding_vram_with_no_point_on_it_is_set_aside(tmp_path, engine
     r.reap()
     assert r.free == {0, 1} and not r.quarantined
     assert "devices [1] clean again" in capsys.readouterr().out
+
+
+# devices.py documents the LUMI pairing: GCDs 0-1 sit on NUMA 3, 2-3 on 1,
+# 4-5 on 0, 6-7 on 2.
+NUMA_OF_GCD = {"0": "3", "1": "3", "2": "1", "3": "1",
+               "4": "0", "5": "0", "6": "2", "7": "2"}
+
+
+def test_a_given_up_device_keeps_its_slot_so_pairs_stay_on_one_module(tmp_path, engine,
+                                                                      monkeypatch):
+    """aligned_group strides self.devices, so positions in that list ARE the
+    GCD pairing. Removing a lost device shifted every device after it onto a
+    neighbour's NUMA domain: with 0 gone, a gcds=2 point was handed logical
+    [1, 2] -- physical GCDs 1 and 2, NUMA 3 and 1, two MI250X modules with
+    each other's core bindings. The slot stays; the lost device is only
+    never free again, so its block is skipped and the rest stay aligned."""
+    monkeypatch.delenv("ROCR_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    qdir = tmp_path / "q"
+    qdir.mkdir()
+    r = campaign.Runner(run_args(str(qdir), engine, devices="0-7",
+                                 port_base=free_port_base(), give_up_s=1.0))
+    r.free -= {0}
+    r.quarantined.update({0: 40960})
+    r.quarantined_at[0] = time.time() - 3600
+    r.sampler.reader = lambda: {
+        "0": {"used": 40 * 2**30, "total": 64 * 2**30, "use": 0},
+        **{str(d): {"used": 50 * 2**20, "total": 64 * 2**30, "use": 0}
+           for d in range(1, 8)},
+    }
+    r.reap()
+
+    assert r.devices == list(range(8)) and r.lost == {0} and not r.quarantined
+    assert 0 not in r.free
+    pair = normalize({"kind": "throughput", "model": "m", "gcds": 2, "batch": 1})
+    used, reserved = r.devices_for(pair)
+    assert reserved == [2, 3]
+    phys = [r.physical[d] for d in reserved]
+    assert {NUMA_OF_GCD[p] for p in phys} == {"1"}
+    half = normalize({"kind": "throughput", "model": "m", "gcds": 4, "batch": 1})
+    _, reserved_half = r.devices_for(half)
+    assert reserved_half == [4, 5, 6, 7]
+    assert len({NUMA_OF_GCD[p] for p in [r.physical[d] for d in reserved_half]}) == 2

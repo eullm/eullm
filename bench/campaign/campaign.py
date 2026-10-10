@@ -233,6 +233,11 @@ class Runner:
         self.draining = []  # (servers that outlived their kill, their devices)
         self.quarantined = {}  # device: MiB it held with no point on it
         self.quarantined_at = {}  # device: when it was set aside
+        self.lost = set()  # devices given up on: out of free, but their
+        # slot in self.devices stays. aligned_group strides that list, so
+        # removing one would shift every device after it onto a neighbour's
+        # NUMA alignment; a lost device simply never being free skips its
+        # block and leaves the rest aligned.
         self.freed_at = {}  # device: when its last point gave it back
         self.lock = threading.Lock()
         self.stop = threading.Event()
@@ -484,7 +489,11 @@ class Runner:
                     for d in lost:
                         self.quarantined.pop(d, None)
                         self.quarantined_at.pop(d, None)
-                        self.devices.remove(d)
+                        # Never self.devices.remove(d): positions in that
+                        # list ARE the GCD alignment, and removing one
+                        # shifts the rest onto neighbouring NUMA domains.
+                        self.free.discard(d)
+                        self.lost.add(d)
                 print(f"[{now_iso()}] devices {sorted(lost)} still hold memory after "
                       f"{give_up / 60:.0f} min: left out of this job", flush=True)
         # Devices whose server outlived its kill come back when it is gone.
