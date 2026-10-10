@@ -82,6 +82,10 @@ def test_citations_outside_the_sources_and_abstentions_are_told_apart():
     assert ok["sources_ok"] and ok["cited_articles"] == ["54"]
     bad = mod.check_sources("Secondo l'art. 49 c.p. il furto resta punibile.", sources)
     assert not bad["sources_ok"] and bad["outside_sources"] == ["art. 49"]
+    # the article asked about, named to say it is missing, is not cited from memory
+    asked = mod.check_sources("L'art. 2875 del codice civile non è presente nei dati forniti.",
+                              sources, "Che cosa prevede l'art. 2875 del codice civile?")
+    assert asked["sources_ok"] and asked["outside_sources"] == []
     assert mod.abstained("Nei testi disponibili non ho trovato la norma che risponde.")
     assert not mod.abstained("Secondo l'art. 54 c.p. non è punibile.")
 
@@ -149,7 +153,8 @@ def test_the_exam_goes_through_the_api_and_resumes(server, tmp_path, monkeypatch
     items = tmp_path / "items.jsonl"
     items.write_text("".join(json.dumps(it) + "\n" for it in [
         {"id": "norm-contenuto-codice_penale-54", "question": "Cosa prevede l'art. 54?",
-         "reference": "r", "rubric": "", "metadata": {"tipo": "contenuto"}},
+         "reference": "r", "rubric": "",
+         "metadata": {"tipo": "contenuto", "code": "codice_penale", "articolo": "54"}},
         {"id": "norm-inesistente-codice_penale-9999", "question": "art. inesistente 9999?",
          "reference": "r", "rubric": "", "metadata": {"tipo": "inesistente"}}]))
     out = tmp_path / "answers-x.jsonl"
@@ -168,6 +173,27 @@ def test_the_exam_goes_through_the_api_and_resumes(server, tmp_path, monkeypatch
     printed = capsys.readouterr().out
     assert "precision 1.000 (1/1 answered)" in printed
     assert "absent articles abstained 1/1" in printed
+    # the stub's sources are the article asked, named as the pack names it
+    assert "article asked among the sources 1/1" in printed
+
+
+def test_the_summary_reads_an_ungraded_file_and_names_the_code_as_the_pack_does(tmp_path,
+                                                                             capsys):
+    mod = _load("rag_enterprise_eval")
+    assert mod.CODE_NAMES == _load("build_legal_pack").CODE_NAMES
+    p = tmp_path / "answers-x.jsonl"
+    p.write_text(json.dumps({
+        "id": "norm-contenuto-codice_civile-2875", "question": "Che cosa prevede l'art. 2875 c.c.?",
+        "metadata": {"tipo": "contenuto", "code": "codice_civile", "articolo": "2875"},
+        "answer": "L'art. 2875 del codice civile non è presente nei dati forniti.",
+        "sources": ["Codice civile, art. 2475 - Amministrazione della societa'.txt",
+                    "Codice penale, art. 2875.txt"],
+        "abstained": False, "sources_ok": False}) + "\n")
+    assert mod.main(["summary", str(p)]) == 0
+    out = capsys.readouterr().out
+    assert "precision n/a (not graded; 0 answered)" in out
+    assert "citing outside the sources 0" in out and "abstained 1" in out
+    assert "article asked among the sources 0/1" in out
 
 
 def test_the_password_never_comes_from_the_command_line(monkeypatch, tmp_path):
