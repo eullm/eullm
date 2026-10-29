@@ -307,3 +307,34 @@ def test_a_decision_models_gguf_carries_its_fitted_temperature(tmp_path, stand_i
     # A run with no dev split fitted none: the GGUF carries none.
     (run / REPORT).write_text(json.dumps({"base_model": "Qwen/Qwen3-1.7B"}))
     assert KEY not in read_fields(export_decision_model(str(run), out))
+
+
+def test_the_export_tools_output_is_decoded_as_utf8(tmp_path, stand_in_llama_cpp,
+                                                    monkeypatch):
+    """The converter's and quantizer's stderr goes into the RuntimeError shown
+    to the user: both runs ask for UTF-8, so a file named in non-ASCII text
+    arrives as written whatever the host's default encoding is."""
+    import eullm_forge.export as export_mod
+    from eullm_forge.export import ExportConfig, export_gguf
+
+    class Result:
+        stdout = ""
+        stderr = "errore: modello non trovato a citt\u00e0\n"
+        returncode = 1
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        result = Result()
+        result.returncode = 0 if len(seen) == 1 else 1  # convert, then quantize fails
+        return result
+
+    monkeypatch.setattr(export_mod.subprocess, "run", run)
+    model = tmp_path / "merged"
+    model.mkdir()
+    with pytest.raises(RuntimeError, match="citt"):
+        export_gguf(ExportConfig(model_path=str(model),
+                                 output_path=str(tmp_path / "m.gguf"),
+                                 quantization="q8_0"))
+    assert len(seen) == 2 and all(kw.get("encoding") == "utf-8" for kw in seen)
