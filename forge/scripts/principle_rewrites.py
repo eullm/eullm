@@ -52,9 +52,13 @@ def done_reqs(*paths: Path) -> set[str]:
         if p.is_file():
             with p.open(encoding="utf-8") as f:
                 for line in f:
-                    if line.strip():
+                    if not line.strip():
+                        continue
+                    try:
                         row = json.loads(line)
-                        if row.get("pv", 1) >= PROMPT_VERSION and row.get("req"):
+                    except json.JSONDecodeError:    # a sibling chain's line half written
+                        continue
+                    if row.get("pv", 1) >= PROMPT_VERSION and row.get("req"):
                             out.add(row["req"])
     return out
 
@@ -76,6 +80,7 @@ def load_cards(paths: list[Path], courts: set[str]) -> tuple[list[dict], Counter
                         or not row.get("principi")):
                     continue
                 seen.add(row["id"])
+                row["court"] = court     # the first Consiglio di Stato cards do not say it
                 why = why_not(row, court)
                 if why:
                     skipped[why] += 1
