@@ -195,3 +195,14 @@ from heading 0-5%, heading from number 2-8%, terms 0-18%, penalties 0-17%;
 not exist" said to real and made-up alike: r2q recognises 0% of the real
 articles), not knowledge. The models read; they do not know. That is the
 gap E1 and E2 measure against.
+
+**Memory corpus, first pass, 2026-10-29.** The nine codes on Leonardo:
+14,119 rows by program, 28,071 teacher rewrites kept and 1,264 refused
+(4.3%: another article 365, a number 311, a deadline or penalty 305, a
+repeal 148, cut short 90), in 92 minutes on two three-GPU jobs. Read
+against their articles: the paraphrase (art. 2729 c.c.) and the questions
+(art. 2365 c.c.) say what the article says; the case (art. 1429 c.c.)
+qualifies a painting's false attribution as an error on the *nature* of the
+object, n. 1, where it is the textbook error on a *quality*, n. 2. The
+checks cannot see a wrong legal qualification, so the cases stay out of
+training until a sample of them has been read; the other styles go in.
