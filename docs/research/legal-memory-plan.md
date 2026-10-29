@@ -222,3 +222,13 @@ forbids placing an article in an institute its text does not name, and
 every rewrite records its request's version (`pv`, 2 from here): the
 paraphrases, questions and elements go into training, the explanations of
 version 2 once three of them have been read.
+
+**Case law in the memory corpus, from 2026-10-29.** `principle_rewrites.py`
+asks the teacher to write every principle of every card again, in other
+words and as a lawyer's question with its answer, refused by program if it
+adds an article, a number over ten or a trace of the case. Only the cards
+`export_clean_cards.py` would let leave are asked: the Consiglio di Stato's
+and the civil Cassazione's, without the special categories. The criminal
+cards and the rulings' real numbers wait for a decision; the number is never
+in a rewrite, so either choice is made by program when the corpus is put
+together.
