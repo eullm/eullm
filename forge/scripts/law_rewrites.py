@@ -7,7 +7,7 @@
         --gpus 0,1,2 --out $WORK/eullm_runs/memory/rewrites.jsonl
 
 Each article in force is rewritten in the styles of
-`eullm_forge.datasets.law_corpus.STYLES` (``--samples`` times each), all
+`eullm_forge.datasets.law_corpus.DEFAULT_STYLES` (``--samples`` times each), all
 articles in one style before the next, so a run cut short still covers every
 article. A rewrite is kept only if `check_rewrite` passes it: it names the
 article and adds no other article, number, deadline or penalty. Refusals go
@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eullm_forge.datasets.law_corpus import (  # noqa: E402
     CHECKS_VERSION,
+    DEFAULT_STYLES,
     STYLES,
     by_code,
     check_rewrite,
@@ -113,7 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--norms", nargs="+", type=Path, required=True)
     ap.add_argument("--exclude", nargs="*", type=Path, default=[])
     ap.add_argument("--out", type=Path, required=True)
-    ap.add_argument("--styles", default=",".join(STYLES))
+    ap.add_argument("--styles", default=",".join(DEFAULT_STYLES),
+                    help=f"comma-separated, of {', '.join(STYLES)}")
     ap.add_argument("--samples", type=int, default=1, help="rewrites per article and style")
     ap.add_argument("--codes", default="", help="comma-separated codes (default: all)")
     ap.add_argument("--reverse", action="store_true", help="take the list from the other end")
