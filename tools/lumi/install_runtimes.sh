@@ -114,7 +114,7 @@ sys.path.insert(0, os.environ["EULLM_REPO"] + "/bench/campaign")
 from spec import expand
 names = set()
 for path in sys.argv[1:]:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         names |= {p["model"] for p in expand(json.load(f)) if p.get("runtime") == "ollama"}
 print("\n".join(sorted(names)))
 EOF
