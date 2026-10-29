@@ -963,7 +963,7 @@ def run_finetune(p: dict, ctx: Context, workdir: str) -> tuple:
             raise Interrupted("stopped during finetune")
     end = time.time()
     try:
-        with open(log_path, errors="replace") as f:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
             tail = "".join(f.readlines()[-30:])
     except OSError:
         tail = ""
@@ -974,7 +974,7 @@ def run_finetune(p: dict, ctx: Context, workdir: str) -> tuple:
             if any(m in tail for m in FT_NOT_RUNNABLE):
                 raise ModelMissing(tail.strip().splitlines()[-1][:300])
             raise PointError(f"eullm finetune exited {proc.returncode}:\n{tail}")
-        with open(report) as f:
+        with open(report, encoding="utf-8") as f:
             measured = json.load(f)
     finally:
         if not p.get("keep_output") and os.path.exists(output):
