@@ -70,6 +70,10 @@ def test_the_script_asks_the_cards_that_may_leave_and_resumes(tmp_path, monkeypa
     cards = tmp_path / "schede-civ.jsonl"
     sensitive = dict(CARD, id="snciv/2023000002", materia="separazione dei coniugi")
     cards.write_text("".join(json.dumps(c) + "\n" for c in (CARD, sensitive)))
+    # the first Consiglio di Stato cards carry no court
+    cds = tmp_path / "schede.jsonl"
+    cds.write_text(json.dumps({k: v for k, v in CARD.items() if k != "court"}
+                              | {"id": "cds/2020000001", "oggetto": "appalti pubblici"}) + "\n")
     (tmp_path / "schede-civ.rejects.jsonl").write_text(json.dumps({"id": "x", "reason": "r"}))
     mod = load("principle_rewrites")
     asked = []
@@ -81,14 +85,19 @@ def test_the_script_asks_the_cards_that_may_leave_and_resumes(tmp_path, monkeypa
 
     monkeypatch.setattr(mod, "ask", fake_ask)
     out = tmp_path / "memory" / "principi.jsonl"
-    args = ["--cards", str(cards), str(tmp_path / "schede-civ.rejects.jsonl"),
+    args = ["--cards", str(cards), str(tmp_path / "schede-civ.rejects.jsonl"), str(cds),
+            "--courts", "cds,snciv",
             "--out", str(out), "--url", "http://x", "--parallel", "1"]
     assert mod.main(args) == 0
     rows = [json.loads(line) for line in out.open()]
-    assert len(asked) == 1 and len(rows) == 4                # the family case is not asked
-    assert {r["card"] for r in rows} == {"snciv/2023000001"} and rows[0]["pv"] == 1
+    assert len(asked) == 2 and len(rows) == 8                # the family case is not asked
+    assert {r["card"] for r in rows} == {"snciv/2023000001", "cds/2020000001"}
+    assert {r["court"] for r in rows} == {"snciv", "cds"} and rows[0]["pv"] == 1
+    assert any("dal Consiglio di Stato" in a for a in asked)
+    with out.open("a") as f:
+        f.write('{"id": "half writ')                         # a sibling's line half written
     capsys.readouterr()
     mod.main(args)
     printed = capsys.readouterr().out
-    assert "1 done already" in printed and len(asked) == 1
+    assert "2 done already" in printed and len(asked) == 2
     assert "sensitive" in printed and "inadempimento" not in printed

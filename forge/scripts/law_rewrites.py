@@ -89,7 +89,10 @@ def done_ids(*paths: Path) -> set[str]:
                 for line in f:
                     if not line.strip():
                         continue
-                    row = json.loads(line)
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:    # a sibling chain's line half written
+                        continue
                     if "reason" in row and row.get("v", 1) < CHECKS_VERSION:
                         continue
                     out.add(row["id"])
