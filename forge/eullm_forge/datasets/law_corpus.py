@@ -60,6 +60,12 @@ STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 DEFAULT_STYLES = ("parafrasi", "spiegazione", "domande", "elementi")
 # Raised whenever check_rewrite changes: refusals of an older check are asked again.
 CHECKS_VERSION = 1
+# Raised whenever a request changes, and written in every rewrite ("pv"), so the
+# rewrites of an older request can be told apart. 2 (2026-10-29): the
+# explanation may not place the article in an institute the text does not
+# name; one of three read had art. 2553 c.c., of the associazione in
+# partecipazione, about the partners of a company.
+PROMPT_VERSION = 2
 INDEX_SPAN = 15             # articles per table-of-contents block
 MAX_ARTICLE_CHARS = 6000    # longer articles are written by program only
 
@@ -243,7 +249,8 @@ TASKS = {
                  "l'articolo («L'art. {n} {of} ...»).",
     "spiegazione": "Spiega a uno studente di giurisprudenza, in due o tre paragrafi, che cosa "
                    "stabilisce l'articolo, a che cosa serve e quali sono i suoi elementi. "
-                   "Nomina l'art. {n} {of} nella prima frase.",
+                   "Nomina l'art. {n} {of} nella prima frase. Non collocare l'articolo in un "
+                   "istituto, un contratto o un tipo di società che il testo non nomina.",
     "caso": "Scrivi un breve esempio pratico, di cinque-otto frasi, in cui si applica "
             "l'articolo, con le persone indicate solo come Tizio, Caio e Sempronio e senza "
             "date, luoghi o importi; poi spiega come l'art. {n} {of} lo risolve.",

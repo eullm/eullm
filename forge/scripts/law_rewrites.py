@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from eullm_forge.datasets.law_corpus import (  # noqa: E402
     CHECKS_VERSION,
     DEFAULT_STYLES,
+    PROMPT_VERSION,
     STYLES,
     by_code,
     check_rewrite,
@@ -211,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
                 stats["kept"] += 1
                 out.write(json.dumps({"id": key, "code": a.code, "articolo": a.number,
                                       "forma": style, "sample": k, "source": "teacher",
+                                      "pv": PROMPT_VERSION,
                                       "teacher": teacher, "text": text},
                                      ensure_ascii=False) + "\n")
                 out.flush()
