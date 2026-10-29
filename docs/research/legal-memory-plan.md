@@ -213,3 +213,12 @@ lawyer appointed by a ministry, art. 84 c.p.c.), two wrong in law (art.
 rules of art. 50-bis c.p.c. mixed). Three wrong of six: the case style is no
 longer asked by default (`law_corpus.DEFAULT_STYLES`), and the cases written
 stay out of training.
+Then three explanations and two lists of elements: the lists (art. 386
+c.c., art. 654 c.p.) and two explanations (art. 2362, art. 1740 c.c.)
+right; the third explanation states the rule of art. 2553 c.c. correctly
+but about "the partners of a company", where the article is of the
+associazione in partecipazione, a contract. The explanation's request now
+forbids placing an article in an institute its text does not name, and
+every rewrite records its request's version (`pv`, 2 from here): the
+paraphrases, questions and elements go into training, the explanations of
+version 2 once three of them have been read.
