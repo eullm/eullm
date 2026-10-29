@@ -347,7 +347,7 @@ class Server:
 
     def log_tail(self, lines=40) -> str:
         try:
-            with open(self.log_path, errors="replace") as f:
+            with open(self.log_path, encoding="utf-8", errors="replace") as f:
                 return "".join(f.readlines()[-lines:])
         except OSError:
             return "(no server log)"
