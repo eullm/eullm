@@ -51,6 +51,13 @@ from .premise_gen import (
 FORMS = ("testo", "indice", "rubrica", "termine", "pena", "procedibilita", "abrogato",
          "inesistente")
 STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
+# What is asked unless a run names its styles. Not the case: applying a rule
+# to facts is where the teacher errs, and no check by program sees it. Of six
+# cases read on 2026-10-29 three were wrong in law (a false attribution called
+# an error on the nature of the object, art. 1429 c.c.; art. 540-bis c.p.c.,
+# on movable property, applied to land; two rules of art. 50-bis c.p.c.
+# mixed), while the paraphrases and the questions read were right.
+DEFAULT_STYLES = ("parafrasi", "spiegazione", "domande", "elementi")
 # Raised whenever check_rewrite changes: refusals of an older check are asked again.
 CHECKS_VERSION = 1
 INDEX_SPAN = 15             # articles per table-of-contents block

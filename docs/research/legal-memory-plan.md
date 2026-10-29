@@ -206,3 +206,10 @@ qualifies a painting's false attribution as an error on the *nature* of the
 object, n. 1, where it is the textbook error on a *quality*, n. 2. The
 checks cannot see a wrong legal qualification, so the cases stay out of
 training until a sample of them has been read; the other styles go in.
+Five more cases read the same day: two right (art. 138 c.p.p., art. 202
+c.p.c.), one with a misreading ("col ministero del difensore" taken as a
+lawyer appointed by a ministry, art. 84 c.p.c.), two wrong in law (art.
+540-bis c.p.c., a rule of the seizure of movables, applied to land; the two
+rules of art. 50-bis c.p.c. mixed). Three wrong of six: the case style is no
+longer asked by default (`law_corpus.DEFAULT_STYLES`), and the cases written
+stay out of training.
