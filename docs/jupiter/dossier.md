@@ -161,6 +161,26 @@ JUPITER, named by its Slurm job id.
   exam, and g4-r3, at 202, is the best model on it of any size. The 4B
   is level with the 9B within 6 questions on the practical exam and 1 on
   the trap tests.
+* The citation reward (`--citation-weight 0.3`, c3 rounds from r2 with
+  r3's seed, so that only the reward differs):
+
+  | | LexIA | held-out | practical | trap test | rewritten | only-off citations |
+  |---|---:|---:|---:|---:|---:|---:|
+  | g9r-r3 | 16 | 199 | 75 + 20 | 383 | 968 | 15 |
+  | g9r-c3 | 15 | 201 | 79 + 18 | 383 | 968 | 14 |
+  | g4-r3 | 10 | 202 | 75 + 16 | 387 | 966 | 20 |
+  | g4-c3 | 12 | 200 | 74 + 17 | 386 | 947 | 18 |
+
+  It changed next to nothing: the answers citing only articles outside
+  the question's fell by one or two, and every difference is within what
+  the judge moves alone, except the 4B's rewritten trap test, 19 lower.
+  About 90% of the answers already cite the question's article, so the
+  reward had little left to pay for. The wrong citations are a choice
+  among the retrieved texts, which this reward does not see. Dropped.
+  Since third rounds of the same recipe gave the 9B nothing either, GRPO
+  on these prompts is done for the 9B. The candidates stay g9r-r2 (9B)
+  and g4-r3 (4B), with g4-r4 running (2603577-2603582) and g4-r3's
+  vertical (2603583-2603584).
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
