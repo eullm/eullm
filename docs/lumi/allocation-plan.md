@@ -598,6 +598,21 @@ size 64, 65,520 MiB), Qwen3-8B (4.68 GiB) loaded whole on it by `--fit`,
 5.9 GB of HBM in use after the request (llama.cpp's breakdown: 4,455 MiB of
 model, 576 of context, 108 of compute).
 
+29-30 October 2026, no way in: the EuroHPC SSH certificate service
+(`sshca.my-eurohpc.eu`, MyAccessID through eIDAS) stopped issuing
+certificates to the PI's Italian identity. Italy was missing from the eIDAS
+country list on the evening of the 29th; on the 30th it was back, but SPID
+with PosteID answered "Impossibile stabilire l'autenticità della richiesta di
+autenticazione", and CIE has always answered that the message does not meet
+its security requirements. A SPID identity with another provider (Aruba)
+logs in through eIDAS but is a new person to MyAccessID: the Italian eIDAS
+identifier differs from one SPID provider to the next. Asked of the EFP
+helpdesk: to link it to the existing account rather than open a second
+one. The jobs went on without anyone logged in (the `c14` test, the job
+releasing `r-v0794`'s chains, then the chains). Once back in, a second
+identity is linked to the MyAccessID profile so that one provider failing
+does not lock the project out.
+
 `tools/lumi/log_checks.py`, in every job summary from now on, reads the
 server logs for the cache's windows and totals, the pool's flushes
 ("pool[...] freeing"), HSA errors, out of memory and NaN.
