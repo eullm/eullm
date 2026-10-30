@@ -427,3 +427,20 @@ and the hash of two answers (they must match across configurations). The expert
 cache is 16,000 MiB, about a sixth of the experts, as on the reference machine.
 `mmap` is plain llama-server with the page cache; `pinned` is the cache with the
 experts in pinned memory; `prefetch` is the prefetch on top.
+
+## Closing the allocation (ends 2026-11-02)
+
+At the end date the project expires: no job can be submitted, `$WORK` is
+kept six months with no backup, the fast scratch is purged, and logging in
+afterwards is not documented. What only we produced is pulled to the
+workstation before then (2026-10-30), with rsync from the workstation:
+the memory corpus (`eullm_runs/memory`), the ruling cards (`eullm_runs/cds`,
+`eullm_runs/cass`), the private evaluation sets (`eval`, to a directory
+only the user can read), the logs, the GGUF and adapter of the best
+models (r2l, r2q, jpn17, jpn14 under `eullm_runs/grpo/<round>/{gguf,adapter}`)
+and the merged r2l and jpn17 from the scratch (`grpo-merged/`), the
+backbones of the legal-memory plan on JUPITER. Base models are not copied:
+they can be downloaded again. The anonymised rulings
+(`datasets/legal_it*`) are copied only if the workstation has lost its
+own. Running jobs keep writing the memory corpus, so the same rsync is run
+again once they end; it copies only what changed.
