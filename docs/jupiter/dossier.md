@@ -143,6 +143,28 @@ JUPITER, named by its Slurm job id.
   `env -u EULLM_REPO`. `tools/jupiter/sbatch_mtp_compare.slurm` is ready
   for the MTP part.
 
+**29/30-10-2026**
+* Third rounds, the same recipe again (seed 2). Judge's grades, correct
+  (+ partial where it matters):
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | g4-r1 | 9 | 197 | 68 + 22 | 385 | 970 |
+  | g4-r2 | 12 | 199 | 74 + 20 | 387 | 965 |
+  | g4-r3 | 10 | **202** | 75 + 16 | 387 | 966 |
+  | g9r-r2 | 14 | 200 | **81** + 16 | 384 | **973** |
+  | g9r-r3 | **16** | 199 | 75 + 20 | 383 | 968 |
+
+  The 9B has stopped gaining on these prompts. Its third round wins two
+  LexIA traps and loses six practical questions, both within what the
+  judge moves on its own. The 4B still gains a little on the held-out
+  exam, and g4-r3, at 202, is the best model on it of any size. The 4B
+  is level with the 9B within 6 questions on the practical exam and 1 on
+  the trap tests.
+* 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
+  jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
+  end of the third rounds to the next submission.
+
 **23-10-2026**
 * The second node idle overnight: the submission script refused the
   distillation checkpoints given as "base+adapter" as missing models, which
