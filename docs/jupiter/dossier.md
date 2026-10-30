@@ -181,6 +181,12 @@ JUPITER, named by its Slurm job id.
   on these prompts is done for the 9B. The candidates stay g9r-r2 (9B)
   and g4-r3 (4B), with g4-r4 running (2603577-2603582) and g4-r3's
   vertical (2603583-2603584).
+* Release 0.8.5 (llama.cpp b11925, the bump the reference PC measured on
+  28-10) built for sm_90 (label v0.8.5, 78b0093) and queued against the
+  engine the jobs use (0.7.90, label sites): c07's 22 points in round
+  r-v085 for each (2603819, then 2603821), then Qwen3.5-9B-MTP Q4_K_M with
+  and without --mtp 2 on both, one server a GPU
+  (`tools/jupiter/sbatch_mtp_compare.slurm`, 2603822).
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
