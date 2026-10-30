@@ -232,3 +232,14 @@ and the civil Cassazione's, without the special categories. The criminal
 cards and the rulings' real numbers wait for a decision; the number is never
 in a rewrite, so either choice is made by program when the corpus is put
 together.
+
+**Reading of 2026-10-30.** Three principle rewrites (two civil
+reformulations, one question) say what the principle says, close to word
+for word: right, though with little variety. Three explanations of request
+version 2: art. 350-bis c.p.c. right; art. 538 c.p. made mandatory where the
+article says "può essere aggiunta"; art. 77 c.p. given as accessory
+penalties things that are not (the duty to pay damages). With version 1's
+reading, three right of six, as the cases: the explanation is no longer
+asked by default either, and no explanation goes into training. What stays
+in: the text and the program's statements, paraphrases, questions and
+answers, lists of elements, and the principles in both forms.

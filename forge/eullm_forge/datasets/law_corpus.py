@@ -57,7 +57,12 @@ STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 # an error on the nature of the object, art. 1429 c.c.; art. 540-bis c.p.c.,
 # on movable property, applied to land; two rules of art. 50-bis c.p.c.
 # mixed), while the paraphrases and the questions read were right.
-DEFAULT_STYLES = ("parafrasi", "spiegazione", "domande", "elementi")
+# The explanation went the same way (2026-10-30): with the request of version
+# 2, two of three read added what the article does not say (art. 538 c.p.
+# made mandatory where it says "può"; art. 77 c.p. given accessory penalties
+# that are not, the duty to pay damages among them). What stays close to the
+# text is right; what elaborates brings the teacher's mistakes.
+DEFAULT_STYLES = ("parafrasi", "domande", "elementi")
 # Raised whenever check_rewrite changes: refusals of an older check are asked again.
 CHECKS_VERSION = 1
 # Raised whenever a request changes, and written in every rewrite ("pv"), so the
