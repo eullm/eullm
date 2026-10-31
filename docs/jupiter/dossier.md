@@ -222,6 +222,18 @@ JUPITER, named by its Slurm job id.
   for the same llama.cpp (50% and 81%). On GH200 0.8.5 writes 6% faster
   without MTP. With --mtp 2 it writes 20% faster on prose and 54% faster
   on code, and reads a long prompt 12% slower.
+* Queued for the night: the a1 rounds, g9r-a1 from g9r-r2 (2614847-2614859)
+  and g4-a1 from g4-r3 (2614862-2614870), seed 5, six prompts a step,
+  400 steps. Leonardo's prompts plus 541 made here
+  (`make_grpo_prompts.py --absent-share 1.0`, BM25 retrieval, seed 5):
+  every by-topic deadline question is asked twice, once with its article
+  among the texts and once without, and the answer must tell the two apart.
+  Some of their ids were already among Leonardo's, which were kept, so 266
+  are new. In the 2,450 prompts the article-absent questions go from 46 to
+  140, the nonexistent ones from 172 to 224, the deadline questions from
+  222 to 342. Against r3 and r4, the questions are whether the wrong-article
+  answers on the practical exam fall, and whether the held-out exam keeps
+  its answers.
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
