@@ -187,6 +187,41 @@ JUPITER, named by its Slurm job id.
   r-v085 for each (2603819, then 2603821), then Qwen3.5-9B-MTP Q4_K_M with
   and without --mtp 2 on both, one server a GPU
   (`tools/jupiter/sbatch_mtp_compare.slurm`, 2603822).
+
+**31-10-2026**
+* The 4B has stopped gaining too:
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | g4-r3 | 10 | 202 + 3 | 75 + 16 | 387 | 966 |
+  | g4-r4 | 11 | 203 + 2 | 75 + 20 | 383 | 962 |
+  | g4-r5 | 12 | 201 + 2 | 74 + 19 | 384 | 964 |
+
+  The 4B candidate is g4-r3. Its vertical (2603583, judge 2603584), Q4_K_M
+  on the held-out exam open book: 201 + 2 through EULLM Engine and 197
+  through llama-server; 198 for both without the note. Quantisation costs
+  it 1 to 4 questions.
+* Release 0.8.5 against 0.7.90 on GH200, c07's points in round r-v085
+  (2603819 old, 2603821 new). Across 19 configurations the median ratio
+  new/old is 1.01 (0.96-1.08), and none is below 0.95. The lowest is a
+  llama-server point (0.96), the same binary in both jobs, so that spread
+  is the node's.
+* MTP, Qwen3.5-9B-MTP Q4_K_M, one request at a time (2603822, three runs
+  each):
+
+  | | writes, story | writes, code | drafts kept, story / code | reads 16K |
+  |---|---:|---:|---:|---:|
+  | 0.7.90 | 198 | 198 | - | 8,580 |
+  | 0.7.90, --mtp 2 | 197 | 197 | none reported | 8,560 |
+  | 0.8.5 | 209 | 208 | - | 8,530 |
+  | 0.8.5, --mtp 2 | 250 | 321 | 48% / 80% | 7,520 |
+
+  0.7.90 drafted nothing with this model: no drafts reported, and the same
+  speed as without the flag. So the kept share cannot be compared old
+  against new here. 0.8.5's 48% and 80% match the reference PC's figures
+  for the same llama.cpp (50% and 81%). On GH200 0.8.5 writes 6% faster
+  without MTP. With --mtp 2 it writes 20% faster on prose and 54% faster
+  on code, and reads a long prompt 12% slower.
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
