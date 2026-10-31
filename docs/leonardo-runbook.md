@@ -443,4 +443,6 @@ backbones of the legal-memory plan on JUPITER. Base models are not copied:
 they can be downloaded again. The anonymised rulings
 (`datasets/legal_it*`) are copied only if the workstation has lost its
 own. Running jobs keep writing the memory corpus, so the same rsync is run
-again once they end; it copies only what changed.
+again once they end; it copies only what changed. Pulled on 2026-10-31 to
+the workstation's data disk, reached as `~/eullm-archive` (a link), with a
+`LEGGIMI.txt` inside saying what each directory holds.
