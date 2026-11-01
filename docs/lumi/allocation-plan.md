@@ -598,6 +598,37 @@ size 64, 65,520 MiB), Qwen3-8B (4.68 GiB) loaded whole on it by `--fit`,
 5.9 GB of HBM in use after the request (llama.cpp's breakdown: 4,455 MiB of
 model, 576 of context, 108 of compute).
 
+The two `c14` jobs, 28-10-2026 20:12 to 01:38, 5 h 24 each, read on
+31-10 (0.7.95 `v0795` job 23253735, 0.8.0 `v080` job 23253737):
+
+| check | 0.7.95 | 0.8.0 |
+|---|---|---|
+| 235B, cache, 8 requests: tokens/s, decode | 33.8, 4.3 | 33.7, 4.3 |
+| the same: experts in VRAM (windows), hits at exit, steps of up to 8 | 92.6%, 91.94% | 92.3%, 91.83% |
+| 235B, cache, 32 requests: tokens/s, decode | 24.5, 0.8 | 23.8, 0.8 |
+| the same: hits at exit, steps over 8; copied | 56.99%; 10.1 TB | 56.15%; 10.4 TB |
+| Qwen3.5-9B Q4: none / `--mtp 2` tokens/s, kept | 98.3 / 146, 87.8% | 99.2 / 149, 87.4% |
+| Qwen3.5-9B Q8_0 | 80.5 / 129, 87.9% | 81.8 / 128, 87.9% |
+| Qwen3.6-27B Q4 | 38.1 / 62.1, 89.4% | 38.3 / 63.8, 89.8% |
+| Qwen3.6-27B Q8_0 | 29.1 / 53.3, 90.5% | 29.8 / 54.3, 90.5% |
+| Qwen3.6-35B-A3B UD-Q4 | 92.1 / 150, 88.7% | 94.1 / 151, 88.2% |
+| Qwen3.6-35B-A3B Q8_0 | 96.0 / 149, 88.2% | 97.0 / 152, 89.2% |
+| soak 5 h, Qwen3-30B-A3B Q8_0: tokens/s, requests, died | 229, 73,939, 0 | 233, 74,251, 0 |
+| Qwen3-32B f16 | 177, 49,853, 0 | 173, 49,519, 0 |
+| Qwen3-32B Q8_0 | 141, 39,727, 0 | 141, 39,764, 0 |
+| Qwen3.6-35B-A3B | 315, 20,679, 0 | 314, 20,596, 0 |
+| server logs: pool flushes, HSA errors, out of memory, NaN | 0, 0, 0, 0 (18 logs) | 0, 0, 0, 0 (18 logs) |
+
+b11925 is level on the MI250X: the expert cache finds the same share with
+0008 in place of llama.cpp's SLRU (56% of hits where a 32-request step
+overflows it, where the SLRU's simulation found 0%); MTP keeps the same
+share of drafts to a point (87.4-90.5%) and writes 0-3% faster, where the
+reference PC lost 5 points and 2-3.5% (gsm8k at temperature 0 here, a story
+and code there); the soaks hold, VRAM flat, no error. Accuracy within one
+or two questions of 100. One thing not exercised: the pool never had to
+give memory back (no "pool[...] freeing" line), the soaks' VRAM staying at
+25-51 GiB of 64, so 0011's halved flush has not run here yet.
+
 29-30 October 2026, no way in: the EuroHPC SSH certificate service
 (`sshca.my-eurohpc.eu`, MyAccessID through eIDAS) stopped issuing
 certificates to the PI's Italian identity. Italy was missing from the eIDAS
