@@ -670,6 +670,15 @@ the estimates), 833 of them timed from an earlier run of the same
 configuration; two chains of 13 jobs of 8 hours (heads 23395490 and
 23395503), at most 208 node-hours, a chain's later jobs ending at once
 when the work runs short of the estimate, as `r-v0794`'s did.
+Changed within the hour: jobs of 4 hours, not 8. Each job of a chain looks
+for a gap of its own when the one before it ends, at this project's low
+priority, and an 8-hour job needs a gap twice as long as a 4-hour one while
+no point of the round is estimated at more than an hour (5 hours started
+within minutes on 26-10 where 9 waited 29 hours). `submit_campaign.sh` asks
+for 4 hours by default (`MAX_JOB_HOURS`), and `AFTER` names jobs for the
+chains to continue: the waiting jobs of `r-v085` were cancelled, none of
+them had started a point, and the chains submitted again with the running
+ones in `AFTER`, so that no chain stops when its running job ends.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,

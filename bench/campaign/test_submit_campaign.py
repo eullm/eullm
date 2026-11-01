@@ -90,3 +90,38 @@ def test_chains_are_sized_when_asked_auto(lumi):
     out, calls = lumi("2", "auto")
     assert "time per job: 2:00:00, jobs per chain: 1" in out
     assert len(calls) == 2 and all("--time=2:00:00" in c.split() for c in calls)
+
+
+def test_chains_continue_the_jobs_named_in_after(lumi):
+    # Two chains of two jobs: each chain's first job waits for its running
+    # job, the second for the first (the stand-in sbatch answers 4242).
+    _, calls = lumi("2", "2", AFTER="111 222")
+    assert len(calls) == 4
+    assert "--dependency=afterany:111" in calls[0].split()
+    assert "--dependency=afterany:4242" in calls[1].split()
+    assert "--dependency=afterany:222" in calls[2].split()
+    assert "--dependency=afterany:4242" in calls[3].split()
+
+
+def test_a_chain_beyond_after_starts_on_its_own(lumi):
+    _, calls = lumi("2", "1", AFTER="111")
+    assert "--dependency=afterany:111" in calls[0].split()
+    assert not any(a.startswith("--dependency") for a in calls[1].split())
+
+
+def test_jobs_are_four_hours_at_most_by_default(lumi, tmp_path):
+    # Twenty hour-long points on the whole node, twenty node-hours: more than
+    # one job's worth, so the chain is cut into jobs of 4 hours, not 8.
+    spec = tmp_path / "c-long.json"
+    spec.write_text(json.dumps({
+        "campaign": "c-long", "defaults": {"gcds": 8},
+        "groups": [{"name": "long", "priority": 90, "est_s": 3600,
+                    "set": {"kind": "workload", "sets": ["gsm8k"], "limit": 100},
+                    "axes": {"model": [f"m{i}" for i in range(20)]}}]}))
+    subprocess.run([sys.executable, str(CAMPAIGN), "plan", "--queue",
+                    str(tmp_path / "campaign"), "--engine-label", "long",
+                    "--engine", str(FAKE), str(spec)], check=True, capture_output=True)
+    out, calls = lumi("1", "auto", EULLM_ENGINE_LABEL="long")
+    assert "time per job: 4:00:00" in out
+    assert calls and all("--time=4:00:00" in c.split() for c in calls)
+    assert len(calls) > 5
