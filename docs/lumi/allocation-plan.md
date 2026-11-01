@@ -664,6 +664,12 @@ worktree and a target directory of their own (`eullm-v085`,
 `eullm-target/v085`); the same campaigns as `r-v0794` (`c01`-`c03`,
 `c06`-`c11`, `c13`), two chains on `standard-g` of jobs of at most 8 hours,
 each asking for the time its share took in the earlier rounds.
+Submitted the same day: `build exit: 0`, `eullm 0.8.5 (ROCm) [a3bbe56fc2b6]`,
+device code `amdhsa--gfx90a`; 835 points planned (up to 404 node-hours by
+the estimates), 833 of them timed from an earlier run of the same
+configuration; two chains of 13 jobs of 8 hours (heads 23395490 and
+23395503), at most 208 node-hours, a chain's later jobs ending at once
+when the work runs short of the estimate, as `r-v0794`'s did.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
