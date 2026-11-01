@@ -648,6 +648,23 @@ does not lock the project out.
 server logs for the cache's windows and totals, the pool's flushes
 ("pool[...] freeing"), HSA errors, out of memory and NaN.
 
+01-11-2026, the next round on the release 0.8.5 (`r-v085`, label `v085`)
+rather than on 0.8.0: `main` reached 0.8.5 on 29-10. From 4cf28c5, the
+binary `c14` measured, to the tag `EuLLM-v0.8.5` (a3bbe56f) the engine
+changed around inference, not in it: the chat UI's Monitor page
+(`GET /api/monitor`), the chat itself, and `eullm serve` opening the chat UI
+on port 11435 as `run` does. A round sees two of these. Every streamed
+answer passes through one more channel and task (`monitor::watch`: a lock
+and a search of the requests running, at each token), which `c07`'s 32
+requests measure against `v0794`. On a node with several servers the first
+takes port 11435 for its chat UI and the others log that it is taken and go
+on: the API stays on 18000 and up, as before, and the UI listens on
+`0.0.0.0` like the API, so nothing more is reachable. Built from the tag in a
+worktree and a target directory of their own (`eullm-v085`,
+`eullm-target/v085`); the same campaigns as `r-v0794` (`c01`-`c03`,
+`c06`-`c11`, `c13`), two chains on `standard-g` of jobs of at most 8 hours,
+each asking for the time its share took in the earlier rounds.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were

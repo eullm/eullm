@@ -137,8 +137,8 @@ running job's binary changes, and runs it beside the current engine:
 - **LUMI-G**: `bash tools/lumi/build_engine.sh` from a checkout of this branch,
   with `CARGO_TARGET_DIR` set to a new directory; then the smoke job and one
   round of the usual campaign. ROCm is where `0011` came from: a long run should
-  show the pool staying under the VRAM (`GGML_CUDA_POOL_KEEP_FREE_MB` lines in
-  the log) and no NaN.
+  show the pool staying under the VRAM (its `pool[N]: ... freeing` lines in the
+  log, below `GGML_CUDA_POOL_KEEP_FREE_MB` free) and no NaN.
 - **JUPITER**: `bash tools/jupiter/build_engine.sh llama-b11925` (the label
   names the build directory); `sbatch_compare.slurm` against the current build.
 - **Leonardo**: the jobs use the released binary; this branch is built from
@@ -146,3 +146,53 @@ running job's binary changes, and runs it beside the current engine:
 
 The branch reaches each site's own branch through `main`, once the PC and the
 sites agree.
+
+### LUMI-G, measured 28-31 October (MI250X, gfx90a, ROCm 6.3)
+
+This branch did not build here: `ggml-hip` stopped on `topk-moe.cu`, which
+is how `0013` was found. The test ran on `feat/model-libraries` at 4cf28c5
+(0.8.0: the same b11925, `0013`, the model libraries), built in a worktree
+and a target directory of their own so that no running job's binary
+changed: `eullm 0.8.0 (ROCm) [4cf28c5d2989]`, device code `amdhsa--gfx90a`,
+linked to `libamdhip64.so.6` and `librccl.so.1`. Against it, 0.7.95
+(be0cf9e) built the same way. The smoke job found one GCD (gfx90a, wave size
+64, 65,520 MiB) and loaded Qwen3-8B whole on it with `--fit`.
+
+Then the same models and flags on each binary (`tools/lumi/campaigns/c14-llama-bump.json`),
+one `standard-g` node for 5 h 24 each: the 235B's expert cache on the whole
+node, the six Qwen3.5/3.6 MTP models on 100 gsm8k questions at temperature 0,
+and five-hour soaks at 32 requests on one GCD with llama.cpp's log on. Tokens
+per second; for MTP, without `--mtp` / with `--mtp 2`, and drafts kept.
+
+| Check | 0.7.95 | b11925 (0.8.0) |
+|---|---|---|
+| Qwen3-235B-A22B, `--moe-cache auto`, 8 requests | 33.8 | 33.7 |
+| the same: experts in VRAM at decode; hits at exit, steps of up to 8 | 92.6%; 91.94% | 92.3%; 91.83% |
+| the same, 32 requests | 24.5 | 23.8 |
+| the same: hits at exit, steps over 8; copied | 56.99%; 10.1 TB | 56.15%; 10.4 TB |
+| Qwen3.5-9B Q4_K_M | 98.3 / 146, 87.8% | 99.2 / 149, 87.4% |
+| Qwen3.5-9B Q8_0 | 80.5 / 129, 87.9% | 81.8 / 128, 87.9% |
+| Qwen3.6-27B Q4_K_M | 38.1 / 62.1, 89.4% | 38.3 / 63.8, 89.8% |
+| Qwen3.6-27B Q8_0 | 29.1 / 53.3, 90.5% | 29.8 / 54.3, 90.5% |
+| Qwen3.6-35B-A3B UD-Q4 | 92.1 / 150, 88.7% | 94.1 / 151, 88.2% |
+| Qwen3.6-35B-A3B Q8_0 | 96.0 / 149, 88.2% | 97.0 / 152, 89.2% |
+| soak, Qwen3-30B-A3B Q8_0: tokens/s, requests, servers died | 229, 73,939, 0 | 233, 74,251, 0 |
+| soak, Qwen3-32B f16 | 177, 49,853, 0 | 173, 49,519, 0 |
+| soak, Qwen3-32B Q8_0 | 141, 39,727, 0 | 141, 39,764, 0 |
+| soak, Qwen3.6-35B-A3B | 315, 20,679, 0 | 314, 20,596, 0 |
+| 18 server logs: pool flushes, HSA errors, out of memory, NaN | 0, 0, 0, 0 | 0, 0, 0, 0 |
+
+- **Level.** The expert cache finds the same share with `0008` (56% of hits
+  where a 32-request step overflows the cache, where the replay of upstream's
+  SLRU found 0%); the soaks hold with VRAM flat; gsm8k is within one or two
+  questions of 100 on both.
+- **MTP loses nothing here**: the same share of drafts within a point
+  (87.4-90.5%) and 0-3% faster, where the reference PC lost about 5 points and
+  2-3.5%. The texts differ (gsm8k here, a story and code on the PC), so the
+  PC's loss is not general: it depends on the text, or on the CUDA kernels.
+- **Not exercised**: the pool never had to give VRAM back (no `pool[N]: ...
+  freeing` line; the soaks stayed at 25-51 GiB of 64), so `0011`'s halved
+  flush has not run on ROCm yet.
+
+The full record, with job ids, is in `docs/lumi/allocation-plan.md`. The
+next LUMI round runs on 0.8.5, built from its tag the same way.
