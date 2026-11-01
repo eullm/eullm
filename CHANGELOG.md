@@ -18,6 +18,9 @@ something changed, less so for understanding what it means.
 ### Added
 - **An About page in the chat UI** (the ⓘ icon): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
 
+### Changed
+- **llama.cpp moves to b12032**, 107 commits newer. A MoE model held whole in VRAM reads prompts faster on NVIDIA GPUs, as the gate and up expert products and the step between them now run as one kernel: DeepSeek-Coder-V2-Lite reads 3% faster on an RTX 5070 Ti. A MoE whose experts do not all fit (the expert cache) waits on the bus rather than on that kernel and gains nothing: Qwen3.6-35B-A3B and Qwen3-Next-80B read and write as fast as on 0.8.5, to the same answers. Gemma 3n and Gemma 4 on the CPU take less memory (216 MiB less for gemma-4-E2B), loading reuses one buffer instead of one per weight, and three more architectures load: LiquidAI's LFM3 family (text, vision, audio), Limite and Mistral Large 4. FP8 (E4M3) GGUF files load too.
+
 ## 0.8.5 — 2026-10-29
 
 ### Added
