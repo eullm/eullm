@@ -101,10 +101,15 @@ b12032) built with `--features cuda`, one server at a time,
 | Qwen3.5-9B MTP Q4_K_M, `--mtp 2` | 174.2 / 5,477, 50% of drafts kept | 173.9 / 5,464, 50% | same (1083b386) |
 
 - **Level everywhere**, within 1.2%, and every answer the same bit for bit
-  on both binaries. #31188's fused MoE kernel gains nothing measurable on
-  these two MoE models: with the expert cache on, the experts' products do
-  not take the path it fuses, which the identical answers also suggest. A
-  MoE held whole in VRAM is where it would show; none was at hand.
+  on both binaries. #31188 measured its fused MoE kernel with the whole
+  model in VRAM: Qwen3.6-35B-A3B Q4_K_M reading a 16K prompt, +5.7% on an
+  RTX 5090 (15,000 to 15,852 tok/s) and +9.9% on a DGX Spark, with output
+  bit-identical to the unfused kernel (so the same answers here say nothing
+  about whether it ran). On the 16 GB card both MoE models keep experts in
+  RAM (39% of Qwen3.6-35B-A3B's, most of Qwen3-Next-80B's), and reading a
+  prompt waits on those experts crossing PCIe, not on the kernel the fusion
+  shortens. DeepSeek-Coder-V2-Lite (10 GB, held whole) is the test that can
+  show it on this card.
 - **MTP**: as many drafts kept as on 0.8.5, the same answer, and no rollback
   error in the server's log: #31368 does not reach `--mtp 2`.
 - **The prefetch costs on Qwen3-Next-80B**, on both binaries alike: its four
