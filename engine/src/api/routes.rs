@@ -193,14 +193,17 @@ pub fn api_routes() -> Router<S> {
         .route("/pull", post(pull_model))
         .route("/version", get(version))
         .route("/unload", post(unload_model))
+        .route("/delete", axum::routing::delete(delete_model))
         .route("/route", post(route_request))
         .route("/embed", post(embed))
         .route("/hf/search", get(hf_search))
         .route("/hf/repo", get(hf_repo))
 }
 
-/// `GET /api/hf/search?q=<text>&limit=<n>` — search the HuggingFace Hub for
-/// repos containing GGUF files.
+/// `GET /api/hf/search?q=<text>&limit=<n>&sort=<order>` — search the
+/// HuggingFace Hub for repos containing GGUF files, most downloaded first or
+/// in `sort` order (`downloads`, `likes`, `trending`, `newest`). With a
+/// `sort` and no `q`, every GGUF repo in that order.
 ///
 /// The engine makes the call, not the browser. That keeps the viewer's
 /// address away from the Hub, leaves `EULLM_WEB_ALLOWED_DOMAINS` as the one
@@ -210,14 +213,17 @@ pub fn api_routes() -> Router<S> {
 /// compute nodes are offline.
 async fn hf_search(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
     let q = params.get("q").map(String::as_str).unwrap_or("").trim();
-    if q.is_empty() {
+    // Without a query, the GGUF repos in this order: `downloads` (the
+    // default), `likes`, `trending` or `newest`.
+    let sort = crate::registry::HfSort::parse(params.get("sort").map(String::as_str).unwrap_or(""));
+    if q.is_empty() && !params.contains_key("sort") {
         return (StatusCode::OK, Json(json!({ "models": [] })));
     }
     let limit = params
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(25);
-    match crate::registry::search_hf_models(q, limit).await {
+    match crate::registry::search_hf_models(q, limit, sort).await {
         Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -1456,6 +1462,55 @@ async fn version(State(state): State<S>) -> Json<Value> {
     }))
 }
 
+/// `DELETE /api/delete` — Ollama's endpoint of the name: remove a model's
+/// files from the models folder, as `eullm rm` does. The body names it in
+/// `model` (Ollama's current field) or `name` (its older one).
+///
+/// 404 when no model of that name is in the folder; 403 for a model in a
+/// library (`EULLM_MODEL_LIBRARIES`), whose files EuLLM only reads; 409 for
+/// a model in memory, which is unloaded first (`/api/unload`) so that no
+/// request it is answering loses its weights.
+async fn delete_model(State(state): State<S>, Json(body): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let refuse = |status: StatusCode, msg: String| (status, Json(json!({ "error": msg })));
+    let name = body
+        .get("model")
+        .or_else(|| body.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "name the model to delete in `model`".to_string()))?
+        .to_string();
+    let in_store = state.store.get(&name).ok().flatten();
+    if in_store.is_none() {
+        if state.store.library_model(&name).is_some() {
+            return Err(refuse(
+                StatusCode::FORBIDDEN,
+                format!("'{name}' is in a model library, which EuLLM only reads: delete the file yourself"),
+            ));
+        }
+        return Err(refuse(StatusCode::NOT_FOUND, format!("model '{name}' not found")));
+    }
+    let loaded = state
+        .models
+        .read()
+        .await
+        .by_recent_use()
+        .iter()
+        .any(|m| crate::api::model_names_match(&m.name, &name));
+    if loaded {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            format!("'{name}' is in memory: unload it first (POST /api/unload)"),
+        ));
+    }
+    let removed = state
+        .store
+        .delete(&name)
+        .map_err(|e| refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("could not delete '{name}': {e}")))?;
+    tracing::info!("Deleted model {} from the models folder", crate::audit::sanitize_for_log(&name));
+    Ok(Json(json!({ "deleted": name, "freed_bytes": removed.map(|r| r.freed) })))
+}
+
 /// Unload generation models, freeing their VRAM, without loading a
 /// replacement. EULLM extension (not part of the Ollama API) — the primary
 /// use case is handing GPU memory to a co-resident process (e.g. an
@@ -1940,6 +1995,9 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         if m.id.is_empty() || already.contains(&m.id) {
             continue;
         }
+        // EuLLM extension: where the files are. A library's are read only
+        // (`EULLM_MODEL_LIBRARIES`), so a client offers no delete for them.
+        let source = if m.status == "library" { "library" } else { "store" };
         models.push(json!({
             "name": m.id,
             "size": m.size_bytes,
@@ -1951,6 +2009,7 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
                 "parameter_size": "",
                 "quantization_level": "",
                 "display_name": m.name,
+                "source": source,
             }
         }));
     }
