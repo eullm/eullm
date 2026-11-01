@@ -98,6 +98,7 @@ b12032) built with `--features cuda`, one server at a time,
 | Qwen3.6-35B-A3B Q4 (22 GB, expert cache 9 GiB, 39% of experts in RAM) | 143.7 / 5,624 | 145.4 / 5,634 | same (831d8d6c) |
 | Qwen3-Next-80B-A3B Q4_K_M (48.5 GB), `prefetch_check` 33K, prefetch off | 107.7 / 1,704 | 106.8 / 1,692 | same (9e584b3b) |
 | the same, prefetch 4 | 99.7 / 1,470 | 99.5 / 1,465 | same |
+| DeepSeek-Coder-V2-Lite Q4_K_M (10 GB, held whole in VRAM), 8K prompt, three runs each | 264.7 / 5,537-5,548 | 265.1 / 5,712-5,719 | same (f79e468f) |
 | Qwen3.5-9B MTP Q4_K_M, `--mtp 2` | 174.2 / 5,477, 50% of drafts kept | 173.9 / 5,464, 50% | same (1083b386) |
 
 - **Level everywhere**, within 1.2%, and every answer the same bit for bit
@@ -108,8 +109,11 @@ b12032) built with `--features cuda`, one server at a time,
   about whether it ran). On the 16 GB card both MoE models keep experts in
   RAM (39% of Qwen3.6-35B-A3B's, most of Qwen3-Next-80B's), and reading a
   prompt waits on those experts crossing PCIe, not on the kernel the fusion
-  shortens. DeepSeek-Coder-V2-Lite (10 GB, held whole) is the test that can
-  show it on this card.
+  shortens. **Held whole in VRAM, the gain is there**: DeepSeek-Coder-V2-Lite
+  (16B, 64 experts with separate gate and up) reads an 8K prompt 3.1% faster
+  (5,542 to 5,715 tok/s, three runs each, every b12032 run above every 0.8.5
+  one, each set within 0.2%), less than the 5090's 5.7% on a smaller card.
+  Writing is level, as the fusion is for prompts.
 - **MTP**: as many drafts kept as on 0.8.5, the same answer, and no rollback
   error in the server's log: #31368 does not reach `--mtp 2`.
 - **The prefetch costs on Qwen3-Next-80B**, on both binaries alike: its four
