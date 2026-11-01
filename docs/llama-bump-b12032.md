@@ -72,7 +72,21 @@ follows is the rest, by what it changes for EuLLM.
 
 `cargo test --test llama_patches`: 11 of 11.
 
-## 3. To check before it lands
+## 3. Checked here (cloud container, 4 cores, no GPU)
+
+- CPU build with no warning; `cargo test`: 764 unit tests and the 11
+  `llama_patches` tests pass; `cargo clippy --all-targets`: nothing new.
+- The real-model tests (`--ignored real_model`, release build, CPU): 35 of
+  35, with the models of b11925's round. The MTP test (Qwen3.5-0.8B-MTP,
+  drafts do not change the answer) and the hybrid-state test (Qwen3.5-0.8B)
+  pass, so #31368's stricter rollbacks do not reach `--mtp 2`. The two
+  decision tests ran as their comments ask, on stories260K F32 and in a
+  process of their own; three API tests failed first on a full disk and
+  passed once it had room.
+
+Not checked here: any GPU run, the CUDA, ROCm, Vulkan and Metal builds.
+
+## 4. To check before it lands
 
 On the reference PC (RTX 5070 Ti), the 0.8.5 release binary against this
 branch built with `--features cuda`, one server at a time, as in
