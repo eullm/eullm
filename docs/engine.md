@@ -1605,7 +1605,7 @@ another.
 
 #### `GET /api/tags`
 
-List available models. Returns the loaded models first, the most recently used first, each with `"loaded": true` (what admin dashboards check for health), followed by catalog entries and the other models in the store. `GET /api/ps` lists only what is loaded, with what each model holds. With `--auto-model`, `auto` comes last, with `details.family: "eullm-router"` and `details.candidates`.
+List available models. Returns the loaded models first, the most recently used first, each with `"loaded": true` (what admin dashboards check for health), followed by catalog entries and the other models in the store. A model on disk has `details.source`: `store` for the models folder, `library` for a file used where it is (a model library, or a `.gguf` put in the models folder by hand), which EuLLM never deletes. `GET /api/ps` lists only what is loaded, with what each model holds. With `--auto-model`, `auto` comes last, with `details.family: "eullm-router"` and `details.candidates`.
 
 ```bash
 curl http://localhost:11434/api/tags
@@ -1797,7 +1797,7 @@ curl http://localhost:11434/api/ps
 
 #### `GET /api/about`
 
-What the chat UI's About page (the ⓘ icon) shows: this build, the machine,
+What the chat UI's About page (in its sidebar) shows: this build, the machine,
 the devices llama.cpp can use, where models and the audit trail are kept, and
 who may use the server. Read once per call; behind the same perimeter as the
 rest of `/api`.
@@ -1961,6 +1961,40 @@ Get model metadata.
 curl -X POST http://localhost:11434/api/show \
   -H "Content-Type: application/json" \
   -d '{"name": "eullm/legal-it-4b"}'
+```
+
+#### `DELETE /api/delete`
+
+Remove a model's files from the models folder, as `eullm rm` does; Ollama's
+endpoint of the name. The model is named in `model` (or `name`, Ollama's
+older field).
+
+```bash
+curl -X DELETE http://localhost:11434/api/delete \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3-8b"}'
+```
+
+```json
+{ "deleted": "qwen3-8b", "freed_bytes": 5027783936 }
+```
+
+- 404 when no model of that name is in the models folder.
+- 403 for a file EuLLM uses where it is (`details.source: "library"` in
+  `/api/tags`): delete the file yourself.
+- 409 for a model in memory: unload it first (`POST /api/unload`), so that no
+  request it is answering loses its weights.
+
+#### `GET /api/hf/search`
+
+Search Hugging Face for GGUF repos, through the engine (the browser of the
+chat UI contacts nothing else). `q` is the text to look for, `limit` how many
+(25 by default, at most 100), `sort` the order: `downloads` (the default),
+`likes`, `trending` or `newest`. With a `sort` and no `q`, every GGUF repo in
+that order, which is what the Model hub's Discover tab opens with.
+
+```bash
+curl "http://localhost:11434/api/hf/search?q=qwen3&sort=newest&limit=5"
 ```
 
 #### `POST /api/pull`

@@ -1323,12 +1323,20 @@ pub struct HfModelSummary {
 pub async fn search_hf_models(
     query: &str,
     limit: usize,
+    sort: HfSort,
 ) -> Result<Vec<HfModelSummary>, Box<dyn std::error::Error + Send + Sync>> {
     let limit = limit.clamp(1, 100);
+    // An empty query lists every GGUF repo in that order: what the chat UI's
+    // Model hub opens with.
+    let search = if query.is_empty() {
+        String::new()
+    } else {
+        format!("search={}&", urlencode(query))
+    };
     let url = format!(
-        "https://huggingface.co/api/models?search={}&filter=gguf&sort=downloads&direction=-1&limit={limit}\
+        "https://huggingface.co/api/models?{search}filter=gguf&sort={}&direction=-1&limit={limit}\
          &expand%5B%5D=lastModified&expand%5B%5D=downloads&expand%5B%5D=likes&expand%5B%5D=gated",
-        urlencode(query),
+        sort.as_hub_str(),
     );
     let body = fetch_hf_json(&url, Duration::from_secs(15), |status| {
         format!("HuggingFace search returned HTTP {status}")
@@ -1361,6 +1369,38 @@ pub async fn search_hf_models(
             })
         })
         .collect())
+}
+
+/// The orders a Hub search is offered in, by the Hub's own names. A closed
+/// list: the value goes into the URL the engine fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HfSort {
+    #[default]
+    Downloads,
+    Likes,
+    Trending,
+    Newest,
+}
+
+impl HfSort {
+    /// The order a client asked for; anything else is the default.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "likes" => Self::Likes,
+            "trending" => Self::Trending,
+            "newest" => Self::Newest,
+            _ => Self::Downloads,
+        }
+    }
+
+    fn as_hub_str(self) -> &'static str {
+        match self {
+            Self::Downloads => "downloads",
+            Self::Likes => "likes",
+            Self::Trending => "trendingScore",
+            Self::Newest => "createdAt",
+        }
+    }
 }
 
 /// `owner/repo`, each part a path segment we would be willing to put in a URL.
@@ -1624,6 +1664,18 @@ fn longest_common_prefix(items: &[String]) -> String {
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
+
+    /// The order a client names reaches the Hub by the Hub's own name, and
+    /// anything else is the default, so nothing a client sends is put in the
+    /// URL as it came.
+    #[test]
+    fn a_search_order_is_one_of_the_hub_s_own() {
+        assert_eq!(HfSort::parse("newest").as_hub_str(), "createdAt");
+        assert_eq!(HfSort::parse("trending").as_hub_str(), "trendingScore");
+        assert_eq!(HfSort::parse("likes").as_hub_str(), "likes");
+        assert_eq!(HfSort::parse("downloads&x=1").as_hub_str(), "downloads");
+        assert_eq!(HfSort::parse("").as_hub_str(), "downloads");
+    }
 
     fn sizes(files: &[(&str, u64)]) -> (Vec<String>, impl Fn(&str) -> u64 + use<>) {
         let owned: Vec<(String, u64)> = files
