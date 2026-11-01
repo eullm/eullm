@@ -93,6 +93,11 @@ Qwen3.5" = Qwen3.5-9B/4B-Base; i punteggi sono risposte corrette.
 | On-policy distillation a contesto privilegiato (reverse KL) | ✅ | Qwen3.5-4B/9B da Qwen3.8-27B; Ministral da se stesso | domande sulle sentenze CdS, il teacher vede la sentenza | devbig 9B 403 (sotto il pubblicato 437); giurisprudenza 0,348-0,362 per tutti, limitata dal retrieval (0,382) | EXP §3 |
 | Confronto con teacher alternativi | ✅ | teacher candidati | Qwen3.6-27B, Mistral Small 4, Gemma 4 31B, Ministral Reasoning | trappole 16 / 10-12 / 13 / 4; pratico 76 / 55-60 / 74; nessuno sopra Qwen3.6-27B | EXP §8-§9; DOS §5.10 |
 | Distillazione vs SFT a parità di dati e GPU-ore | 🟡 | Qwen3 4B/8B, Qwen3.5 | distillato vs Base sotto la stessa ricetta open-book; GPU-ore non pareggiate | 8B +9 senza nota; 9B Qwen3.5 +6/+8 | DOS §5.8 |
+| Suite a libro chiuso (E0 del piano memoria) | ✅ | 8B pubblicato, r2l, r2q, jpn14, jpn17 | 716 domande dalla legislazione, valutate da programma | giuste 3-31%, 360-489 risposte sbagliate e sicure; il 30% di r2l è un riflesso ("non esiste") | EXP §13; MEM "Results" |
+| CPT aumentato (molte forme per fatto) | 🟡 dati pronti, nessun training | backbone previsto r2l (e jpn17) | corpus memoria: 14.119 righe di programma, ~118k riscritture degli articoli in 5 varianti, ~1,85M righe di massime (civile e CdS); casi e spiegazioni esclusi dopo la lettura | — | MEM "Memory corpus"; `law_corpus.py`, `principle_rewrites.py` |
+| Modulo di memoria n-gram hashed / product-key (stile Engram, Qwen3.8-Flash-Next) | ❌ | | | | MEM "Architecture" (solo progetto) |
+| Memoria aggiornabile da sola (riforma simulata) | ❌ | | | | MEM H3 / E3 |
+| Lookup della legge appreso con GRPO (tool) | ❌ | | | | MEM H4 / E5 |
 
 **Verifica dei risultati riportati (KL 139M token):**
 
@@ -343,7 +348,9 @@ esami e giudice 10-20 GPU-h a giro); nessuna stima di guadagno.
 | C9 | Regression test sulle capacità generali | protegge, non migliora | basso | bassa | nessuno | dentro ogni round |
 | C10 | LoRA rank, full FT, lr, curriculum, temperatura KD | basso: nessun segnale che il limite sia l'ottimizzazione | medio | bassa | basso | 8 |
 | C11 | PRM / process supervision | alto in teoria, ma richiede passaggi annotati che non esistono | alto | alta | alto | dopo C1-C3 |
-| C12 | Conoscenza a libro chiuso (corpus memoria, E1) | non è ragionamento con fonti date, ma copre la legge fuori dai testi (LexIA: art. 2 c.p., sospensione feriale) | 120-600 GPU-h su JUPITER | media (corpus pronto) | medio (può disfare il GRPO: LoRA con replay) | binario separato |
+| C12 | Piano memoria E1: CPT aumentato su r2l, LoRA con replay del post-training | conoscenza senza testi (libro chiuso) e la legge fuori dall'indice (LexIA: conseguenza dell'art. 2 c.p., sospensione feriale) | 120 GPU-h a 2B token, 600 a 10B | media (corpus pronto) | medio (un training lungo disfa il GRPO: replay ed esami a libro aperto dopo) | **deciso**, sezione E |
+| C13 | Piano memoria E2: modulo n-gram hashed in RAM, backbone congelato, tre taglie | conoscenza a parametri attivi uguali; backbone intatto per costruzione | 3 × 600 GPU-h | alta (modulo nuovo in Forge, operatore nel motore per E4) | medio-alto: i guadagni noti sono su modelli addestrati da zero | **deciso**, dopo E1 |
+| C14 | Piano memoria E3-E5: memoria aggiornata da sola, operatore nel motore, lookup appreso | aggiornare la legge senza riaddestrare; consultare quando incerto | < 50 + ore di banco + 200-400 GPU-h | alta | medio | dopo E2 |
 
 ## D. Raccomandazione finale: tre esperimenti
 
@@ -379,6 +386,51 @@ il vincolo 6 il primo passo non è un training.
    casi che r2l sbaglia. Va letto in entrambe le direzioni prima di fidarsi, e
    misurato su C1.
 
-Fuori da questi tre: il corpus memoria (E1) resta il binario per la conoscenza
-a libro chiuso e non sostituisce C1-C3. Distillare dai teacher disponibili non
-è prioritario, perché nessuno supera r2l sul pratico.
+Questi tre riguardano il ragionamento **con le fonti nel contesto**, la
+domanda di questo audit. Il piano memoria (sezione E), deciso come prossimo
+lavoro, riguarda la **conoscenza senza fonti**: è un binario parallelo e non
+alternativo, con un proprio benchmark già costruito (il libro chiuso). C1 serve
+anche a lui: un modello che sa di più deve ancora applicare bene quello che sa.
+Distillare dai teacher disponibili non è prioritario, perché nessuno supera
+r2l sul pratico.
+
+## E. Il piano memoria (deciso il 26-10, `docs/research/legal-memory-plan.md`)
+
+Obiettivo: un modello piccolo che **sa** la legge, non solo la legge, dato che
+oggi la legge la legge soltanto. In concreto:
+- corregge una premessa a libro chiuso;
+- quando non è sicuro consulta la legge da sé;
+- si aggiorna quando la legge cambia, senza riaddestrare il modello.
+
+L'idea è quella delle tabelle n-gram hashed di Qwen3.8-Flash-Next e di
+DeepSeek Engram: una tabella da 1-6 miliardi di parametri, letta a uno strato,
+in RAM e precaricata, salvata in un file versionato (`lex-memory-YYYY-MM`).
+
+| Esperimento | Ipotesi | Stato | Benchmark che lo misura | Costo (GPU-h) |
+|---|---|---|---|---|
+| E0 | punto di partenza | ✅ suite a libro chiuso (716) e misura dei modelli attuali; corpus memoria generato su Leonardo (sopra, A.2) | libro chiuso | < 20 (speso) |
+| E1 | H1: il CPT aumentato fa ricordare la legge | ❌, dati pronti | libro chiuso (sì se ≥ +25 punti su r2l), senza perdite su devbig, pratico, trappole | 120 (2B token), 600 (10B) |
+| E2 | H2: il modulo n-gram aggiunge ricordo a parametri attivi uguali | ❌ | E1 con e senza modulo, stessi dati e token (sì se ≥ +10 punti) | 3 × 600 |
+| E3 | H3: la memoria si aggiorna da sola | ❌ | riforma simulata di 50 articoli (sì se ≥ 80% del nuovo testo, vecchio ricordo entro 2 punti) | < 50 |
+| E4 | il lookup come operatore nel motore | ❌ | velocità su GPU e CPU (LUMI) | ore di banco |
+| E5 | H4: il modello impara quando consultare la legge | ❌ | trappole su 33 ed esame pratico sopra il miglior modello a libro aperto | 200-400 |
+| E6 | scala del vincitore | ❌ | tutti i precedenti | 2.000+ |
+
+Cosa dice l'audit sul piano:
+- **E1 è il primo go/no-go.** Se a 2 miliardi di token il CPT aumentato non muove
+  il libro chiuso, il problema non è il modulo e il piano cambia prima di
+  spendere su E2.
+- **Il rischio maggiore è noto.** I guadagni dei moduli di memoria sono mostrati
+  su modelli addestrati da zero; innestati su un modello già addestrato possono
+  dare meno, ed E2 misura proprio questo. L'altro rischio è già misurato due
+  volte: un training lungo disfa il GRPO (EXP §8; DOS 26-10, dqr). Per questo E1
+  usa LoRA con replay e gli esami a libro aperto dopo, ed E2 tiene il backbone
+  congelato.
+- **Cosa resta da decidere prima di E1:** le massime penali (135k schede,
+  escluse dal filtro attuale) e i numeri veri delle sentenze accanto ai
+  principi.
+- **Privacy:** il test di estrazione e i canary del piano valgono per ogni
+  modello addestrato su testi derivati da sentenze, prima di un rilascio.
+- **Il rapporto con C1-C3:** E1/E2 danno al modello la legge che non ha davanti,
+  e C1-C3 gli insegnano ad applicare quella che ha davanti. Il prodotto ha
+  bisogno di tutti e due; il libro chiuso misura il primo, C1 il secondo.
