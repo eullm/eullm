@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.8.6 — 2026-11-01
 
 ### Added
 - **The chat UI has a sidebar and a Model hub.** The sidebar holds New chat, the pages (Chat, Model hub, Monitor, About) and the recent chats. **Chats are kept in this browser** and reopen as they were, with each answer's figures; attachments are not kept, and the model is told so. The **Model hub** lists the models on this machine (in memory, in the models folder, used where they are, and the EuLLM catalog not yet downloaded) with what each is, and buttons to chat with it, unload it, delete it from the models folder or download it; its **Discover** tab browses Hugging Face's GGUF repos by downloads, trend, date or likes, or by search, with each repo's quantizations, their size and whether they fit this machine. The download window it replaces is gone. On a phone the sidebar slides in from a menu button.
