@@ -1485,7 +1485,10 @@ async fn delete_model(State(state): State<S>, Json(body): Json<Value>) -> Result
         if state.store.library_model(&name).is_some() {
             return Err(refuse(
                 StatusCode::FORBIDDEN,
-                format!("'{name}' is in a model library, which EuLLM only reads: delete the file yourself"),
+                format!(
+                    "'{name}' is a file EuLLM uses where it is (in a model library, or put in the models \
+                     folder by hand) and never deletes: delete the file yourself"
+                ),
             ));
         }
         return Err(refuse(StatusCode::NOT_FOUND, format!("model '{name}' not found")));
@@ -1905,19 +1908,25 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         .collect();
 
     // The loaded models first (this is what dashboards check).
+    // What the store or a library knows of it; a model loaded from a path
+    // has neither. Its quantization is not guessed: this said Q4_K_M for
+    // every such model, whatever it was.
     let mut models: Vec<Value> = loaded
         .iter()
         .map(|name| {
+            let known = state.store.get_any(name).ok().flatten();
             json!({
                 "name": name,
-                "size": 0,
-                "digest": "",
+                "size": known.as_ref().map_or(0, |m| m.size_bytes),
+                "digest": known.as_ref().map_or_else(String::new, |m| m.digest.clone()),
                 "loaded": true,
+                "downloaded": true,
                 "details": {
                     "format": "gguf",
-                    "family": "",
+                    "family": known.as_ref().map_or_else(String::new, |m| m.base.clone()),
                     "parameter_size": "",
-                    "quantization_level": "Q4_K_M",
+                    "quantization_level": "",
+                    "source": known.as_ref().map(|m| if m.status == "library" { "library" } else { "store" }),
                 }
             })
         })

@@ -8,7 +8,6 @@
 
   const $ = (id) => document.getElementById(id);
   const els = {
-    btn: $("monitor-btn"),
     view: $("monitor"),
     live: $("mon-live"),
     models: $("mon-models"),
@@ -20,10 +19,8 @@
     gpus: $("mon-gpus"),
     requests: $("mon-requests"),
     reqCount: $("mon-req-count"),
-    messages: $("messages"),
-    form: $("chat-form"),
   };
-  if (!els.btn || !els.view) return;
+  if (!els.view) return;
 
   // The key app.js keeps for this tab (see its API key comment).
   const auth = () => {
@@ -296,31 +293,14 @@
     timer = psTimer = null;
   }
 
-  function show(on) {
-    if (on) document.dispatchEvent(new CustomEvent("eullm:view", { detail: "monitor" }));
-    els.view.hidden = !on;
-    els.messages.hidden = on;
-    els.form.hidden = on;
-    els.btn.setAttribute("aria-pressed", String(on));
-    els.btn.classList.toggle("active", on);
-    if (on) start(); else stop();
-  }
-
-  // Another page (About) opened: step aside without bringing the chat back.
+  // The page shell (app.js) shows and hides the views; this one polls only
+  // while it is the one shown.
   document.addEventListener("eullm:view", (e) => {
-    if (e.detail === "monitor" || els.view.hidden) return;
-    els.view.hidden = true;
-    els.btn.setAttribute("aria-pressed", "false");
-    els.btn.classList.remove("active");
-    stop();
+    if (e.detail === "monitor") start(); else stop();
   });
 
-  els.btn.addEventListener("click", () => show(els.view.hidden));
   document.addEventListener("visibilitychange", () => {
     if (els.view.hidden) return;
     if (document.hidden) stop(); else start();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !els.view.hidden && !document.querySelector("dialog[open]")) show(false);
   });
 })();

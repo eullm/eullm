@@ -16,7 +16,12 @@ something changed, less so for understanding what it means.
 ## Unreleased
 
 ### Added
-- **An About page in the chat UI** (the ⓘ icon): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
+- **The chat UI has a sidebar and a Model hub.** The sidebar holds New chat, the pages (Chat, Model hub, Monitor, About) and the recent chats. **Chats are kept in this browser** and reopen as they were, with each answer's figures; attachments are not kept, and the model is told so. The **Model hub** lists the models on this machine (in memory, in the models folder, used where they are, and the EuLLM catalog not yet downloaded) with what each is, and buttons to chat with it, unload it, delete it from the models folder or download it; its **Discover** tab browses Hugging Face's GGUF repos by downloads, trend, date or likes, or by search, with each repo's quantizations, their size and whether they fit this machine. The download window it replaces is gone. On a phone the sidebar slides in from a menu button.
+- **`DELETE /api/delete`**, Ollama's endpoint: removes a model from the models folder; refuses a model in memory or a file used where it is. `/api/tags` says which models are which (`details.source`), and `/api/hf/search` takes a `sort`.
+- **An About page in the chat UI** (About, in the sidebar): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
+
+### Fixed
+- `/api/tags` said `Q4_K_M` for every model loaded from a file, whatever its quantization, and size 0; it now gives what the models folder or library knows of it, and no quantization rather than a wrong one.
 
 ## 0.8.5 — 2026-10-29
 
