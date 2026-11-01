@@ -21,7 +21,8 @@ follows is the rest, by what it changes for EuLLM.
   `MUL_MAT_ID`, as they already did for dense models. It applies where MMQ
   runs, so to reading prompts and to large batches, not to writing one token
   at a time (MMVQ). Qwen3.6-35B-A3B, Qwen3.8-Flash-Next and every MoE with
-  separate gate and up experts are concerned. Not measured yet: section 3.
+  separate gate and up experts are concerned. On the reference PC, with the
+  expert cache on, it gained nothing measurable (section 4).
 - **The top-k MoE fusion covers 384 experts** (#31288): Kimi-sized routers
   now take the fused path on CUDA.
 - **KV rotation constants stay on the GPU** (#31073): no upload per step for
@@ -86,18 +87,31 @@ follows is the rest, by what it changes for EuLLM.
 
 Not checked here: any GPU run, the CUDA, ROCm, Vulkan and Metal builds.
 
-## 4. To check before it lands
+## 4. On the reference PC (RTX 5070 Ti), 1 November
 
-On the reference PC (RTX 5070 Ti), the 0.8.5 release binary against this
-branch built with `--features cuda`, one server at a time, as in
-`docs/llama-bump-b11925.md` section 3:
+The 0.8.5 release binary (a3bbe56, b11925) against this branch (09c7975,
+b12032) built with `--features cuda`, one server at a time,
+`bench/speed_check.py` at temperature 0, 16K-token prompt. Tokens per second.
 
-1. `python3 bench/speed_check.py` with Qwen3.6-35B-A3B Q4 and a 16K prompt:
-   the reading speed is where #31188 shows, with and without `--moe-cache`.
-2. `bench/prefetch_check.sh` on Flash-Next (`SETTINGS="0 4"`): the expert
-   cache with the fused kernel, the same answer hash on both binaries.
-3. Qwen3.5-9B MTP with `--mtp 2`: drafts kept and speed, for #31368.
-4. A Gemma 4 model with an image, and one reasoning model with a tool call.
+| Model, setting | 0.8.5 writes / reads | b12032 writes / reads | Answer |
+|---|---:|---:|---|
+| Qwen3.6-35B-A3B Q4 (22 GB, expert cache 9 GiB, 39% of experts in RAM) | 143.7 / 5,624 | 145.4 / 5,634 | same (831d8d6c) |
+| Qwen3-Next-80B-A3B Q4_K_M (48.5 GB), `prefetch_check` 33K, prefetch off | 107.7 / 1,704 | 106.8 / 1,692 | same (9e584b3b) |
+| the same, prefetch 4 | 99.7 / 1,470 | 99.5 / 1,465 | same |
+| Qwen3.5-9B MTP Q4_K_M, `--mtp 2` | 174.2 / 5,477, 50% of drafts kept | 173.9 / 5,464, 50% | same (1083b386) |
 
-LUMI-G: the smoke job and one MTP round, for `0013` beside upstream's
-ballot and for the sparse attention now enabled on CDNA.
+- **Level everywhere**, within 1.2%, and every answer the same bit for bit
+  on both binaries. #31188's fused MoE kernel gains nothing measurable on
+  these two MoE models: with the expert cache on, the experts' products do
+  not take the path it fuses, which the identical answers also suggest. A
+  MoE held whole in VRAM is where it would show; none was at hand.
+- **MTP**: as many drafts kept as on 0.8.5, the same answer, and no rollback
+  error in the server's log: #31368 does not reach `--mtp 2`.
+- **The prefetch costs on Qwen3-Next-80B**, on both binaries alike: its four
+  420 MiB slots take 1.75 GiB from the expert cache (10.25 GiB to 8.50), and
+  reading falls 14%, writing 7%. Not the bump's; on this model
+  `--moe-prefetch 0` is the faster setting.
+
+Nothing here holds the merge back. Still to run: LUMI-G's smoke job and an
+MTP round, for `0013` beside upstream's ballot and the sparse attention now
+enabled on CDNA.

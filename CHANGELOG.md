@@ -19,7 +19,7 @@ something changed, less so for understanding what it means.
 - **An About page in the chat UI** (the ⓘ icon): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
 
 ### Changed
-- **llama.cpp moves to b12032**, 107 commits newer. MoE models read their prompts faster on NVIDIA GPUs: the gate and up expert products and the step between them now run as one kernel, as they already did for dense models. Gemma 3n and Gemma 4 on the CPU take less memory (216 MiB less for gemma-4-E2B), loading reuses one buffer instead of one per weight, and three more architectures load: LiquidAI's LFM3 family (text, vision, audio), Limite and Mistral Large 4. FP8 (E4M3) GGUF files load too.
+- **llama.cpp moves to b12032**, 107 commits newer. On an RTX 5070 Ti, Qwen3.6-35B-A3B, Qwen3-Next-80B and Qwen3.5-9B with `--mtp 2` read and write as fast as on 0.8.5, to the same answers. Gemma 3n and Gemma 4 on the CPU take less memory (216 MiB less for gemma-4-E2B), loading reuses one buffer instead of one per weight, and three more architectures load: LiquidAI's LFM3 family (text, vision, audio), Limite and Mistral Large 4. FP8 (E4M3) GGUF files load too.
 
 ## 0.8.5 — 2026-10-29
 
