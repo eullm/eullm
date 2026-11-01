@@ -53,10 +53,13 @@ body {
   font-family: var(--font);
   font-size: 15px;
   line-height: 1.55;
+  /* The sidebar beside the page shell; the shell stacks its header, the
+     page shown and, on the chat, the composer. */
   display: grid;
-  grid-template-rows: auto 1fr auto;
-  min-height: 100vh;
-  max-height: 100vh;
+  grid-template-columns: 252px minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 /* ── Topbar ───────────────────────────────────────────────────────────── */
@@ -764,19 +767,7 @@ body {
 
 /* ── Model catalog ──────────────────────────────────────────────────────── */
 
-dialog#catalog-modal {
-  width: min(860px, 94vw);
-  max-height: 88vh;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0;
-  background: var(--bg-elev);
-  color: var(--text);
-  box-shadow: var(--shadow);
-}
-dialog#catalog-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
 
-.catalog { display: flex; flex-direction: column; gap: 0.75rem; padding: 1.25rem; overflow: hidden; }
 .catalog-head { display: flex; align-items: center; justify-content: space-between; }
 .catalog-head h2 { margin: 0; font-size: 1.1rem; }
 .catalog-note { margin: 0; font-size: 0.8rem; color: var(--text-dim); line-height: 1.4; }
@@ -791,7 +782,7 @@ dialog#catalog-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
   font: inherit;
 }
 
-.catalog-results, .catalog-detail { overflow-y: auto; max-height: 46vh; }
+
 
 .catalog-row {
   display: flex;
@@ -871,7 +862,7 @@ dialog#catalog-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
 .catalog-detail { overflow: hidden; display: flex; flex-direction: column; gap: 0.5rem; }
 .catalog-detail-head { display: flex; flex-direction: column; gap: 0.35rem; }
 .catalog-detail-head h3 { margin: 0; font-size: 0.95rem; }
-.quant-list { overflow-y: auto; max-height: 42vh; }
+.quant-list { display: flex; flex-direction: column; }
 
 /* ── Monitor ─────────────────────────────────────────────────────────── */
 /* An instrument panel: the engine's state first, then its speed beside the
@@ -1114,4 +1105,192 @@ dialog#catalog-modal::backdrop { background: rgba(0, 0, 0, 0.6); }
   .about-hero img { height: 44px; }
   .about { padding: 18px 12px 32px; }
   .kv > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
+
+/* ── Shell: sidebar and pages ────────────────────────────────────────── */
+
+.shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.messages[hidden], .composer[hidden], .hub[hidden] { display: none; }
+
+.topbar { padding: 10px 20px; }
+.view-title { margin: 0; font-size: 16px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.menu-btn { display: none; }
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 12px 12px;
+  background: var(--bg-elev);
+  border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow: hidden;
+}
+.side-brand { display: flex; align-items: center; gap: 10px; padding: 2px 6px 4px; }
+.side-brand .brand-logo { height: 36px; }
+.side-new {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border); background: var(--bg-input); color: var(--text);
+  font: inherit; font-weight: 600; cursor: pointer;
+}
+.side-new:hover { border-color: var(--accent); color: var(--accent); }
+.side-nav { display: flex; flex-direction: column; gap: 2px; }
+.side-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  border: 0; background: none; color: var(--text-dim);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.side-item:hover { background: var(--bg-input); color: var(--text); }
+.side-item.active { background: var(--user-bg); color: var(--accent); font-weight: 600; }
+.side-item:focus-visible, .side-new:focus-visible, .chat-open:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.side-recents { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 12px; }
+.side-recents h2 { margin: 0 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.chat-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; display: flex; flex-direction: column; gap: 1px; scrollbar-width: thin; }
+.chat-item { display: flex; align-items: center; border-radius: var(--radius-sm); }
+.chat-item:hover, .chat-item.active { background: var(--bg-input); }
+.chat-open {
+  flex: 1; min-width: 0; text-align: left; padding: 7px 12px;
+  border: 0; background: none; color: var(--text-dim); font: inherit; font-size: 13px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; border-radius: var(--radius-sm);
+}
+.chat-item.active .chat-open { color: var(--text); font-weight: 500; }
+.chat-del {
+  flex-shrink: 0; width: 26px; height: 26px; margin-right: 4px;
+  border: 0; border-radius: 4px; background: none; color: var(--text-faint);
+  font-size: 16px; line-height: 1; cursor: pointer; opacity: 0;
+}
+.chat-item:hover .chat-del, .chat-del:focus-visible { opacity: 1; }
+.chat-del:hover { color: var(--danger); background: var(--bg-elev); }
+.chat-empty { padding: 6px 12px; font-size: 13px; color: var(--text-faint); }
+.side-foot { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px 0; border-top: 1px solid var(--border); font-size: 11px; color: var(--text-faint); }
+.side-version { color: var(--text-dim); font-weight: 600; }
+.msg-missing { display: inline-block; font-size: 12px; color: var(--text-faint); border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 4px 10px; margin-bottom: 6px; }
+
+.scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.45); z-index: 29; }
+.scrim[hidden] { display: none; }
+
+@media (max-width: 880px) {
+  body { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 30;
+    width: min(290px, 86vw);
+    transform: translateX(-102%);
+    transition: transform 0.2s ease;
+    box-shadow: var(--shadow);
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+  }
+  body.side-open .sidebar { transform: none; }
+  .menu-btn { display: inline-flex; }
+  .topbar { padding: 8px 12px; gap: 8px; }
+  .view-title { flex: 0 1 auto; }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+/* ── Model hub ───────────────────────────────────────────────────────── */
+/* Two columns, the list and what was picked in it, as a file browser has:
+   the list never moves while a model is read about beside it. */
+
+.hub {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px 20px;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+  max-width: 1440px;
+  margin: 0 auto;
+}
+.hub-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.hub-intro h2 { margin: 0; font-size: 24px; letter-spacing: -0.01em; }
+.hub-intro p { margin: 4px 0 0; color: var(--text-dim); font-size: 14px; max-width: 64ch; }
+.hub-stats { display: flex; flex-wrap: wrap; gap: 6px; }
+.hub-stat {
+  font-size: 12px; color: var(--text-dim); padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--bg-elev); white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.hub-stat b { color: var(--text); font-weight: 600; }
+
+.hub-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.hub-tabs { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--bg-elev); border: 1px solid var(--border); }
+.hub-tabs button {
+  border: 0; background: none; color: var(--text-dim); font: inherit; font-size: 13px; font-weight: 500;
+  padding: 6px 16px; border-radius: 999px; cursor: pointer;
+}
+.hub-tabs button[aria-selected="true"] { background: var(--bg-input); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15); }
+.hub-tabs button:focus-visible { outline: 2px solid var(--accent); }
+.hub-bar input[type="search"], .hub-bar select, .catalog-direct input {
+  background: var(--bg-elev); border: 1px solid var(--border); color: var(--text);
+  font: inherit; font-size: 13px; padding: 7px 12px; border-radius: var(--radius-sm);
+}
+.hub-bar input[type="search"] { flex: 1; min-width: 180px; }
+.hub-bar input:focus, .hub-bar select:focus, .catalog-direct input:focus { outline: none; border-color: var(--accent); }
+.hub-bar [hidden] { display: none; }
+
+.hub-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 16px; }
+.hub-list-col, .hub-detail {
+  min-height: 0; overflow-y: auto; scrollbar-width: thin;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.hub-list-col { padding: 8px; }
+.hub-list { display: flex; flex-direction: column; gap: 2px; }
+.hub-list[hidden] { display: none; }
+.hub-group { margin: 10px 8px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
+.hub-group:first-child { margin-top: 4px; }
+.hub-empty { margin: 0; padding: 16px; color: var(--text-faint); font-size: 14px; }
+
+.hub-row {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px;
+  width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.hub-row:hover { background: var(--bg-input); }
+.hub-row.selected { background: var(--user-bg); border-color: var(--accent); }
+.hub-row:focus-visible { outline: 2px solid var(--accent); }
+.hub-avatar {
+  width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center;
+  background: var(--bg-input); border: 1px solid var(--border); color: var(--accent); font-weight: 700; font-size: 14px;
+}
+.hub-avatar.big { width: 48px; height: 48px; font-size: 20px; border-radius: 12px; }
+.hub-row-main { display: flex; flex-direction: column; min-width: 0; }
+.hub-row-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hub-row-sub { font-size: 12px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: 0; }
+.hub-row-meta { display: flex; gap: 10px; font-size: 12px; color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.hub-badge { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); }
+.hub-badge.live { color: var(--ok); border-color: currentColor; }
+.hub-badge.dim { color: var(--text-faint); }
+
+.hub-detail { padding: 18px 20px; }
+.device-detail, .catalog-detail { display: flex; flex-direction: column; gap: 12px; }
+.device-detail[hidden], .catalog-detail[hidden] { display: none; }
+.hub-detail-head { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.hub-detail-head h3 { margin: 0; font-size: 18px; overflow-wrap: anywhere; }
+.hub-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hub-actions progress { flex-basis: 100%; height: 6px; }
+.hub-action-state { margin: 0; font-size: 13px; color: var(--text-dim); min-height: 1.2em; }
+.btn-danger { border: 1px solid var(--danger); background: none; color: var(--danger); font: inherit; font-weight: 600; padding: 8px 14px; border-radius: var(--radius-sm); cursor: pointer; }
+.btn-danger:hover { background: var(--danger); color: var(--bg); }
+.digest { font-size: 11px; overflow-wrap: anywhere; }
+.catalog-direct { margin: 4px 4px 8px; }
+.catalog-detail-head h3 { font-size: 17px; overflow-wrap: anywhere; }
+.catalog-back { display: none; align-self: flex-start; }
+.quant-row { border-radius: var(--radius-sm); }
+
+@media (max-width: 880px) {
+  .hub { padding: 14px 12px; }
+  .hub-body { grid-template-columns: minmax(0, 1fr); }
+  .hub-body .hub-detail { display: none; }
+  .hub-body.detail-open .hub-list-col { display: none; }
+  .hub-body.detail-open .hub-detail { display: block; }
+  .catalog-back { display: inline-block; }
+  .hub-head { align-items: flex-start; }
 }

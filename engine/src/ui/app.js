@@ -59,7 +59,16 @@
     attachmentAudio: $("attachment-audio"),
     attachmentName: $("attachment-name"),
     attachmentRemove: $("attachment-remove"),
+    sidebar: $("sidebar"),
+    scrim: $("scrim"),
+    menuBtn: $("menu-btn"),
+    viewTitle: $("view-title"),
+    newChat: $("new-chat"),
+    chatList: $("chat-list"),
+    sideVersion: $("side-version"),
   };
+  // The welcome block as the page ships it, put back by a new chat.
+  const WELCOME_HTML = els.messages.innerHTML;
 
   // Pending media (image OR audio) attached to the next outgoing user
   // message. `dataUrl` drives the in-page preview; `base64` (no `data:`
@@ -155,6 +164,9 @@
   // an attachment (see toApiMessages for how it is re-sent).
   const history = [];
   let currentModel = "";
+  // What /api/tags said last: the model picker and the Model hub's list.
+  let modelsData = [];
+  const loadedModelEntry = () => modelsData.find((m) => m.loaded);
   let abortController = null;
 
   // ── Presentation layer: Markdown-lite + Math-lite ──────────────────────
@@ -669,6 +681,12 @@
       img.src = media.dataUrl;
       img.alt = "Attached image";
       contentEl.appendChild(img);
+    } else if (media && media.kind === "missing") {
+      // A reopened chat: the attachment was not kept in this browser.
+      const gone = document.createElement("span");
+      gone.className = "msg-missing";
+      gone.textContent = `${media.label === "audio" ? "Audio" : "Image"} not kept in this browser`;
+      contentEl.appendChild(gone);
     } else if (media && media.kind === "audio") {
       const audio = document.createElement("audio");
       audio.className = "msg-audio";
@@ -727,6 +745,7 @@
 
   // ── API calls ─────────────────────────────────────────────────────────
   async function loadModels() {
+    const keepModel = currentModel;
     try {
       const r = await fetch("/api/tags", withAuth());
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -743,6 +762,7 @@
       // disabled, and the UI said "No model loaded" while that model was
       // loaded and answering.
       const all = data.models || [];
+      modelsData = all;
       const reallyLoaded = all.filter((m) => m.loaded);
       const onDisk = all.filter((m) => !m.loaded && m.downloaded);
       const catalog = all.filter((m) => !m.loaded && !m.downloaded);
@@ -769,8 +789,12 @@
       // Prefer what is already loaded; otherwise pre-select something that can
       // actually answer, so the first message does not need a manual pick.
       currentModel = reallyLoaded[0]?.name || onDisk[0]?.name || "";
+      // A model already picked stays picked when it is still offered.
+      const keep = keepModel && all.some((m) => m.name === keepModel && (m.loaded || m.downloaded));
+      currentModel = keep ? keepModel : currentModel;
       if (currentModel) els.modelSelect.value = currentModel;
       updateStatus(reallyLoaded[0]);
+      document.dispatchEvent(new CustomEvent("eullm:models"));
     } catch (err) {
       console.error("Could not load /api/tags:", err);
       const opt = document.createElement("option");
@@ -892,6 +916,7 @@
     if (media) userEntry.media = { base64: media.base64, kind: media.kind };
     history.push(userEntry);
     appendMessage("user", userText, media);
+    saveChat();
 
     // An attachment whose own turn failed is not re-sent. When the failure
     // was the attachment's — a file the engine cannot decode, an image past
@@ -1077,13 +1102,14 @@
       // earlier assistant turns are not its own words (see modelSwitchNotice).
       const reply = withThinking(thinkingText, assistantText);
       const answer = stripThink(reply) || reply;
-      history.push({ role: "assistant", content: answer, model: currentModel });
-      renderMeta(metaEl, {
+      const meta = {
         final, finishReason, chunks,
         total: (performance.now() - t0) / 1000,
         firstToken: firstChunkAt == null ? null : (firstChunkAt - t0) / 1000,
-        answer,
-      });
+      };
+      history.push({ role: "assistant", content: answer, model: currentModel, meta });
+      renderMeta(metaEl, { ...meta, answer });
+      saveChat();
     } catch (err) {
       if (err.name === "AbortError") {
         metaEl.innerHTML = `<span class="meta-warn">Stopped</span>`;
@@ -1355,12 +1381,8 @@
 
   els.clearBtn.addEventListener("click", () => {
     if (!history.length) return;
-    if (!confirm("Clear conversation?")) return;
-    history.length = 0;
-    clearAttachment();
-    els.messages.innerHTML = "";
-    loadModels(); // re-render the welcome block via re-init
-    init(true);
+    if (!confirm("Delete this chat? It is removed from this browser.")) return;
+    deleteChat(currentChatId);
   });
 
   els.modelSelect.addEventListener("change", (e) => {
@@ -1405,6 +1427,7 @@
     note.textContent = `— model changed: ${from} → ${currentModel} —`;
     els.messages.appendChild(note);
     els.messages.scrollTop = els.messages.scrollHeight;
+    saveChat();
   });
 
   // ── Parameters panel ─────────────────────────────────────────────────
@@ -1479,6 +1502,195 @@
     }
   });
 
+  // ── Pages ────────────────────────────────────────────────────────────
+  // One page at a time beside the sidebar: the chat, the Model hub, the
+  // Monitor or About. Monitor and About listen for `eullm:view` to start and
+  // stop their own reading.
+  const VIEWS = {
+    chat: { title: "Chat", nodes: () => [els.messages, els.form] },
+    hub: { title: "Model hub", nodes: () => [$("hub")] },
+    monitor: { title: "Monitor", nodes: () => [$("monitor")] },
+    about: { title: "About", nodes: () => [$("about")] },
+  };
+  let currentView = "chat";
+
+  function showView(name) {
+    if (!VIEWS[name]) name = "chat";
+    currentView = name;
+    for (const [key, view] of Object.entries(VIEWS)) {
+      for (const node of view.nodes()) if (node) node.hidden = key !== name;
+    }
+    document.querySelectorAll(".side-item").forEach((b) => {
+      const on = b.dataset.view === name;
+      b.classList.toggle("active", on);
+      if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+    });
+    els.viewTitle.textContent = VIEWS[name].title;
+    document.dispatchEvent(new CustomEvent("eullm:view", { detail: name }));
+    if (name === "hub") openHub();
+    if (name === "chat") els.input.focus({ preventScroll: true });
+    toggleSidebar(false);
+  }
+
+  document.querySelectorAll(".side-item").forEach((b) =>
+    b.addEventListener("click", () => showView(b.dataset.view)));
+
+  // On a narrow screen the sidebar slides in over the page.
+  function toggleSidebar(open) {
+    document.body.classList.toggle("side-open", open);
+    els.scrim.hidden = !open;
+    els.menuBtn.setAttribute("aria-expanded", String(open));
+  }
+  els.menuBtn.addEventListener("click", () => toggleSidebar(!document.body.classList.contains("side-open")));
+  els.scrim.addEventListener("click", () => toggleSidebar(false));
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || document.querySelector("dialog[open]") || !els.params.hidden) return;
+    if (document.body.classList.contains("side-open")) toggleSidebar(false);
+    else if (currentView !== "chat") showView("chat");
+  });
+
+  // ── Chats kept in this browser ───────────────────────────────────────
+  // The only thing besides the Parameters that the page keeps: each chat's
+  // turns in localStorage, on this browser alone, never sent anywhere. An
+  // attachment is not kept (it would fill the storage): a chat reopened
+  // tells the model the attachment is gone, as a long chat already does.
+  const CHATS_STORAGE = "eullm.chats";
+  const MAX_CHATS = 50;
+  let chats = [];
+  let currentChatId = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(CHATS_STORAGE) || "[]");
+    if (Array.isArray(saved)) chats = saved.filter((c) => c && c.id && Array.isArray(c.turns));
+  } catch {}
+
+  function storeChats() {
+    // A full storage drops the oldest chats until the rest fit.
+    for (;;) {
+      try {
+        localStorage.setItem(CHATS_STORAGE, JSON.stringify(chats));
+        return;
+      } catch {
+        if (chats.length <= 1) return;
+        chats.pop();
+      }
+    }
+  }
+
+  function chatTitle(turns) {
+    const first = turns.find((t) => t.role === "user" && t.content.trim());
+    if (!first) return "New chat";
+    const line = first.content.trim().split("\n")[0];
+    return line.length > 60 ? `${line.slice(0, 57)}…` : line;
+  }
+
+  function saveChat() {
+    if (!history.length) return;
+    if (!currentChatId) currentChatId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const turns = history.map((t) => {
+      const kept = { role: t.role, content: t.content };
+      if (t.model) kept.model = t.model;
+      if (t.meta) kept.meta = t.meta;
+      if (t.switchFrom) kept.switchFrom = t.switchFrom;
+      if (t.media) kept.media = { kind: t.media.kind, failed: true };
+      return kept;
+    });
+    const chat = { id: currentChatId, title: chatTitle(turns), model: currentModel, updated: Date.now(), turns };
+    chats = [chat, ...chats.filter((c) => c.id !== currentChatId)].slice(0, MAX_CHATS);
+    storeChats();
+    renderChatList();
+  }
+
+  function renderChatList() {
+    els.chatList.innerHTML = "";
+    if (!chats.length) {
+      const li = document.createElement("li");
+      li.className = "chat-empty";
+      li.textContent = "No chats yet";
+      els.chatList.appendChild(li);
+      return;
+    }
+    for (const c of chats) {
+      const li = document.createElement("li");
+      li.className = "chat-item" + (c.id === currentChatId ? " active" : "");
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "chat-open";
+      open.textContent = c.title;
+      open.title = `${c.title}\n${c.model || ""} · ${new Date(c.updated).toLocaleString()}`;
+      if (c.id === currentChatId) open.setAttribute("aria-current", "true");
+      open.addEventListener("click", () => openChat(c.id));
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "chat-del";
+      del.setAttribute("aria-label", `Delete chat: ${c.title}`);
+      del.title = "Delete this chat";
+      del.textContent = "×";
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete "${c.title}"? It is removed from this browser.`)) deleteChat(c.id);
+      });
+      li.append(open, del);
+      els.chatList.appendChild(li);
+    }
+  }
+
+  function resetChat() {
+    abortController?.abort();
+    history.length = 0;
+    currentChatId = null;
+    clearAttachment();
+    els.messages.innerHTML = WELCOME_HTML;
+    updateStatus(loadedModelEntry());
+  }
+
+  function newChat() {
+    resetChat();
+    renderChatList();
+    showView("chat");
+  }
+
+  function deleteChat(id) {
+    chats = chats.filter((c) => c.id !== id);
+    storeChats();
+    if (id === currentChatId) resetChat();
+    renderChatList();
+  }
+
+  function openChat(id) {
+    const chat = chats.find((c) => c.id === id);
+    if (!chat) return;
+    resetChat();
+    currentChatId = id;
+    dismissWelcome();
+    for (const t of chat.turns) {
+      const turn = { ...t };
+      history.push(turn);
+      if (t.switchFrom) {
+        const note = document.createElement("div");
+        note.className = "model-switch-note";
+        const to = t.content.match(/from here on the assistant is (.+?)\. /)?.[1] || "another model";
+        note.textContent = `— model changed: ${t.switchFrom} → ${to} —`;
+        els.messages.appendChild(note);
+        continue;
+      }
+      if (t.role === "system") continue;
+      const { metaEl } = appendMessage(t.role, t.content, t.media ? { kind: "missing", label: t.media.kind } : null);
+      if (t.role === "assistant" && t.meta) renderMeta(metaEl, { ...t.meta, answer: t.content });
+      else if (t.role === "assistant" && t.model) metaEl.innerHTML = `<span>${escapeHtml(t.model)}</span>`;
+    }
+    // The chat goes on with the model it was on, when that model is offered.
+    if (chat.model && [...els.modelSelect.options].some((o) => o.value === chat.model && !o.disabled)) {
+      currentModel = chat.model;
+      els.modelSelect.value = chat.model;
+    }
+    renderChatList();
+    showView("chat");
+    scrollToBottom(true);
+  }
+
+  els.newChat.addEventListener("click", newChat);
+
   // Welcome-screen suggestion buttons
   document.addEventListener("click", (e) => {
     if (e.target.classList?.contains("suggest")) {
@@ -1497,9 +1709,8 @@
   // has a route out and the browser does not.
 
   const catalogEls = {
-    modal: $("catalog-modal"),
-    open: $("catalog-btn"),
-    close: $("catalog-close"),
+    body: $("hub-body"),
+    sort: $("catalog-sort"),
     search: $("catalog-search"),
     results: $("catalog-results"),
     detail: $("catalog-detail"),
@@ -1546,47 +1757,68 @@
     return m ? `${m[1]}/${m[2]}` : null;
   }
 
+  // A search, or with nothing typed the GGUF repos in the chosen order.
+  let searchSeq = 0;
   async function searchCatalog(q) {
-    catalogEls.detail.hidden = true;
-    catalogEls.results.hidden = false;
-    if (!q.trim()) {
-      catalogEls.results.innerHTML = "";
-      return;
-    }
-    catalogEls.results.textContent = "Searching…";
+    const seq = ++searchSeq;
+    const sort = catalogEls.sort.value;
+    catalogEls.results.innerHTML = `<p class="hub-empty">${q.trim() ? "Searching…" : "Reading Hugging Face…"}</p>`;
     try {
-      const r = await fetch(`/api/hf/search?q=${encodeURIComponent(q)}&limit=30`, withAuth());
+      const r = await fetch(
+        `/api/hf/search?q=${encodeURIComponent(q.trim())}&sort=${encodeURIComponent(sort)}&limit=40`,
+        withAuth(),
+      );
       const data = await r.json();
+      if (seq !== searchSeq) return; // a newer search is on its way
       if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
       catalogEls.results.innerHTML = "";
       if (!data.models.length) {
-        catalogEls.results.textContent = "Nothing found.";
+        catalogEls.results.innerHTML = `<p class="hub-empty">Nothing found.</p>`;
         return;
       }
       for (const m of data.models) {
         const row = document.createElement("button");
         row.type = "button";
-        row.className = "catalog-row";
-        const name = document.createElement("span");
-        name.className = "repo";
-        name.textContent = m.id;
-        const meta = document.createElement("span");
-        meta.className = "meta";
-        meta.textContent =
-          `${humanCount(m.downloads)} downloads · ${humanCount(m.likes)} likes` +
-          (m.gated ? " · gated" : "");
-        row.append(name, meta);
+        row.className = "hub-row";
+        row.dataset.id = m.id;
+        const [owner, repo] = m.id.split("/");
+        const age = m.updated ? relativeDate(m.updated) : "";
+        row.innerHTML =
+          `<span class="hub-avatar" aria-hidden="true">${escapeHtml((owner || "?")[0].toUpperCase())}</span>` +
+          `<span class="hub-row-main"><span class="hub-row-name">${escapeHtml(repo || m.id)}</span>` +
+          `<span class="hub-row-sub">${escapeHtml(owner || "")}${m.gated ? " · gated" : ""}</span></span>` +
+          `<span class="hub-row-meta"><span title="Downloads">↓ ${humanCount(m.downloads)}</span>` +
+          `<span title="Likes">♥ ${humanCount(m.likes)}</span>${age ? `<span>${escapeHtml(age)}</span>` : ""}</span>`;
         row.addEventListener("click", () => showRepo(m.id));
         catalogEls.results.appendChild(row);
       }
     } catch (err) {
-      catalogError(catalogEls.results, `Search failed: ${err.message}`);
+      if (seq === searchSeq) catalogError(catalogEls.results, `Search failed: ${err.message}`);
     }
   }
 
+  function relativeDate(iso) {
+    const d = (Date.now() - new Date(iso).getTime()) / 86400000;
+    if (!(d >= 0)) return "";
+    if (d < 1) return "today";
+    if (d < 30) return `${Math.floor(d)} d ago`;
+    if (d < 365) return `${Math.floor(d / 30)} mo ago`;
+    return `${Math.floor(d / 365)} y ago`;
+  }
+
+  // The detail column beside the list; on a narrow screen it replaces it.
+  function showDetail(which) {
+    $("device-detail").hidden = which !== "device";
+    catalogEls.detail.hidden = which !== "catalog";
+    catalogEls.body.classList.toggle("detail-open", !!which);
+  }
+  function markSelected(list, attr, value) {
+    list.querySelectorAll(".hub-row").forEach((r) => r.classList.toggle("selected", r.dataset[attr] === value));
+  }
+
   async function showRepo(id) {
-    catalogEls.results.hidden = true;
-    catalogEls.detail.hidden = false;
+    showDetail("catalog");
+    markSelected(catalogEls.results, "id", id);
     catalogEls.detail.textContent = `Reading ${id}…`;
     let data;
     try {
@@ -1611,11 +1843,8 @@
     const back = document.createElement("button");
     back.type = "button";
     back.className = "catalog-back";
-    back.textContent = "← back to results";
-    back.addEventListener("click", () => {
-      catalogEls.detail.hidden = true;
-      catalogEls.results.hidden = false;
-    });
+    back.textContent = "← Back to the list";
+    back.addEventListener("click", () => showDetail(null));
     const title = document.createElement("h3");
     title.textContent = id;
     head.append(back, title);
@@ -1801,22 +2030,17 @@
   }
 
   let searchTimer = null;
-  catalogEls.search?.addEventListener("input", (e) => {
+  catalogEls.search.addEventListener("input", (e) => {
     clearTimeout(searchTimer);
     const q = e.target.value;
     // Debounced: every keystroke is a request the engine forwards to the Hub.
-    searchTimer = setTimeout(() => searchCatalog(q), 300);
+    searchTimer = setTimeout(() => searchCatalog(q), 350);
   });
-  catalogEls.open?.addEventListener("click", () => {
-    catalogEls.modal.showModal();
-    catalogEls.search.focus();
-  });
-  catalogEls.direct?.addEventListener("submit", (e) => {
+  catalogEls.sort.addEventListener("change", () => searchCatalog(catalogEls.search.value));
+  catalogEls.direct.addEventListener("submit", (e) => {
     e.preventDefault();
     const id = repoIdFromInput(catalogEls.directInput.value);
     if (!id) {
-      catalogEls.results.hidden = false;
-      catalogEls.detail.hidden = true;
       catalogError(
         catalogEls.results,
         "Expected owner/repo, optionally prefixed with hf.co/ — for example hf.co/unsloth/Qwen3-8B-GGUF.",
@@ -1825,17 +2049,246 @@
     }
     showRepo(id);
   });
-  catalogEls.close?.addEventListener("click", () => catalogEls.modal.close());
+
+  // ── Model hub: the models on this machine ────────────────────────────
+  const hubEls = {
+    tabDevice: $("tab-device"),
+    tabDiscover: $("tab-discover"),
+    device: $("hub-device"),
+    discover: $("hub-discover"),
+    filter: $("hub-filter"),
+    detail: $("device-detail"),
+    stats: $("hub-stats"),
+  };
+  let hubTab = "device";
+  let discoverLoaded = false;
+  let selectedModel = null;
+
+  function setHubTab(tab) {
+    hubTab = tab;
+    const device = tab === "device";
+    hubEls.tabDevice.setAttribute("aria-selected", String(device));
+    hubEls.tabDiscover.setAttribute("aria-selected", String(!device));
+    hubEls.device.hidden = !device;
+    hubEls.discover.hidden = device;
+    hubEls.filter.hidden = !device;
+    catalogEls.search.hidden = device;
+    catalogEls.sort.hidden = device;
+    showDetail(null);
+    if (device) {
+      if (selectedModel) showDeviceModel(selectedModel);
+      else hubEls.detail.innerHTML = `<p class="hub-empty">Pick a model to see what it is and what you can do with it.</p>`;
+      $("device-detail").hidden = false;
+      catalogEls.body.classList.remove("detail-open");
+    } else {
+      catalogEls.detail.hidden = false;
+      if (!catalogEls.detail.childElementCount) {
+        catalogEls.detail.innerHTML = `<p class="hub-empty">Pick a repo to see its quantizations, how large each is and whether it fits this machine.</p>`;
+      }
+      if (!discoverLoaded) {
+        discoverLoaded = true;
+        searchCatalog("");
+      }
+      catalogEls.search.focus({ preventScroll: true });
+    }
+  }
+  hubEls.tabDevice.addEventListener("click", () => setHubTab("device"));
+  hubEls.tabDiscover.addEventListener("click", () => setHubTab("discover"));
+  hubEls.filter.addEventListener("input", renderDevice);
+  document.addEventListener("eullm:models", () => {
+    renderDevice();
+    if (selectedModel && hubTab === "device") showDeviceModel(selectedModel);
+  });
+
+  function openHub() {
+    setHubTab(hubTab);
+    renderDevice();
+    loadHubStats();
+    loadModels();
+  }
+
+  // What the downloads are judged against: this machine's memory.
+  async function loadHubStats() {
+    try {
+      const r = await fetch("/api/about", withAuth());
+      if (!r.ok) return;
+      const a = await r.json();
+      const m = a.machine || {};
+      const gpus = (m.devices || []).filter((d) => d.kind !== "cpu" && d.memory_total);
+      const vram = gpus.reduce((n, d) => n + d.memory_total, 0);
+      const onDisk = modelsData.filter((x) => x.downloaded || x.loaded).length;
+      const chip = (label, value, title = "") =>
+        `<span class="hub-stat" title="${escapeHtml(title)}"><b>${escapeHtml(value)}</b> ${escapeHtml(label)}</span>`;
+      hubEls.stats.innerHTML = [
+        gpus.length ? chip("VRAM", humanBytes(vram), gpus.map((d) => d.description).join(", ")) : chip("GPU", "No", "This binary or this machine has no GPU llama.cpp can use"),
+        chip("RAM", humanBytes(m.ram_total)),
+        chip("CPU threads", String(m.cores || "–"), m.cpu || ""),
+        chip("models here", String(onDisk)),
+      ].join("");
+    } catch {}
+  }
+
+  function renderDevice() {
+    const f = hubEls.filter.value.trim().toLowerCase();
+    const match = (m) => !f || `${m.name} ${m.details?.display_name || ""} ${m.details?.family || ""}`.toLowerCase().includes(f);
+    const usable = modelsData.filter((m) => m.name !== "auto" || m.details?.family !== "eullm-router");
+    const groups = [
+      ["In memory", usable.filter((m) => m.loaded)],
+      ["On this machine", usable.filter((m) => !m.loaded && m.downloaded && m.details?.source !== "library")],
+      ["Used where they are (read only)", usable.filter((m) => !m.loaded && m.details?.source === "library")],
+      ["EuLLM catalog, not downloaded", usable.filter((m) => !m.loaded && !m.downloaded)],
+    ];
+    hubEls.device.innerHTML = "";
+    let shown = 0;
+    for (const [label, items] of groups) {
+      const visible = items.filter(match);
+      if (!visible.length) continue;
+      const h = document.createElement("h3");
+      h.className = "hub-group";
+      h.textContent = `${label} · ${visible.length}`;
+      hubEls.device.appendChild(h);
+      for (const m of visible) {
+        shown++;
+        const d = m.details || {};
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "hub-row" + (m.name === selectedModel ? " selected" : "");
+        row.dataset.name = m.name;
+        const sub = [d.parameter_size, d.quantization_level, m.size ? humanBytes(m.size) : ""].filter(Boolean).join(" · ");
+        const badge = m.loaded
+          ? `<span class="hub-badge live">In memory</span>`
+          : d.source === "library" ? `<span class="hub-badge">Library</span>`
+          : !m.downloaded ? `<span class="hub-badge dim">Not downloaded</span>` : "";
+        row.innerHTML =
+          `<span class="hub-avatar" aria-hidden="true">${escapeHtml((d.family || m.name)[0]?.toUpperCase() || "?")}</span>` +
+          `<span class="hub-row-main"><span class="hub-row-name">${escapeHtml(d.display_name && d.display_name !== m.name ? d.display_name : m.name)}</span>` +
+          `<span class="hub-row-sub">${escapeHtml(sub || m.name)}</span></span>` +
+          `<span class="hub-row-meta">${badge}</span>`;
+        row.addEventListener("click", () => showDeviceModel(m.name));
+        hubEls.device.appendChild(row);
+      }
+    }
+    if (!shown) {
+      hubEls.device.innerHTML = f
+        ? `<p class="hub-empty">No model matches “${escapeHtml(f)}”.</p>`
+        : `<p class="hub-empty">No model on this machine yet. Find one in Discover.</p>`;
+    }
+  }
+
+  function showDeviceModel(name) {
+    const m = modelsData.find((x) => x.name === name);
+    selectedModel = name;
+    markSelected(hubEls.device, "name", name);
+    if (!m) {
+      hubEls.detail.innerHTML = `<p class="hub-empty">${escapeHtml(name)} is no longer here.</p>`;
+      return;
+    }
+    showDetail("device");
+    const d = m.details || {};
+    const facts = [
+      ["Name to use", `<code>${escapeHtml(m.name)}</code>`],
+      d.family ? ["Family", escapeHtml(d.family)] : null,
+      d.parameter_size ? ["Parameters", escapeHtml(d.parameter_size)] : null,
+      d.quantization_level ? ["Quantization", escapeHtml(d.quantization_level)] : null,
+      m.size ? ["Size", humanBytes(m.size)] : null,
+      d.domain ? ["Domain", escapeHtml(d.domain)] : null,
+      d.source_model ? ["Made from", escapeHtml(d.source_model)] : null,
+      ["Where", m.loaded ? "in memory" : d.source === "library" ? "used where it is: a model library, or a file put in the models folder by hand" : m.downloaded ? "in the models folder" : "not downloaded"],
+      m.digest ? ["Digest", `<code class="digest">${escapeHtml(m.digest)}</code>`] : null,
+    ].filter(Boolean);
+    hubEls.detail.innerHTML = `
+      <button type="button" class="catalog-back">← Back to the list</button>
+      <div class="hub-detail-head">
+        <span class="hub-avatar big" aria-hidden="true">${escapeHtml((d.family || m.name)[0]?.toUpperCase() || "?")}</span>
+        <div><h3>${escapeHtml(d.display_name || m.name)}</h3><p class="hub-row-sub">${escapeHtml(m.name)}</p></div>
+      </div>
+      <div class="hub-actions"></div>
+      <p class="hub-action-state" role="status"></p>
+      <dl class="kv">${facts.map(([k, v]) => `<div><dt>${escapeHtml(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>`;
+    hubEls.detail.querySelector(".catalog-back").addEventListener("click", () => showDetail(null));
+    const actions = hubEls.detail.querySelector(".hub-actions");
+    const state = hubEls.detail.querySelector(".hub-action-state");
+    const button = (label, cls, fn) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = cls;
+      b.textContent = label;
+      b.addEventListener("click", () => fn(b));
+      actions.appendChild(b);
+      return b;
+    };
+    if (m.loaded || m.downloaded) {
+      button("Chat with it", "btn-primary", () => {
+        els.modelSelect.value = m.name;
+        els.modelSelect.dispatchEvent(new Event("change"));
+        showView("chat");
+      });
+    }
+    if (m.loaded) {
+      button("Unload", "btn-secondary", async (b) => {
+        b.disabled = true;
+        state.textContent = "Unloading…";
+        try {
+          const r = await fetch("/api/unload", withAuth({
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m.name }),
+          }));
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
+          state.textContent = "Unloaded: its memory is free again.";
+          await loadModels();
+        } catch (e) {
+          state.textContent = `Could not unload: ${e.message}`;
+          b.disabled = false;
+        }
+      });
+    }
+    if (m.downloaded && !m.loaded && d.source !== "library") {
+      // Two clicks: the first says what goes, the second deletes.
+      button("Delete", "btn-danger", async (b) => {
+        if (!b.dataset.armed) {
+          b.dataset.armed = "1";
+          b.textContent = `Delete ${m.size ? humanBytes(m.size) : "the files"}?`;
+          state.textContent = "Click again to remove its files from the models folder.";
+          return;
+        }
+        b.disabled = true;
+        state.textContent = "Deleting…";
+        try {
+          const r = await fetch("/api/delete", withAuth({
+            method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m.name }),
+          }));
+          const body = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+          selectedModel = null;
+          await loadModels();
+          hubEls.detail.innerHTML = `<p class="hub-empty">${escapeHtml(m.name)} deleted${body.freed_bytes ? `: ${humanBytes(body.freed_bytes)} freed` : ""}.</p>`;
+        } catch (e) {
+          state.textContent = `Could not delete: ${e.message}`;
+          b.disabled = false;
+        }
+      });
+    }
+    if (!m.downloaded && !m.loaded) {
+      const bar = document.createElement("progress");
+      bar.max = 1;
+      bar.value = 0;
+      bar.hidden = true;
+      const b = button(`Download${m.size ? ` · ${humanBytes(m.size)}` : ""}`, "btn-primary", (btn) =>
+        pullModel({ pull: m.name }, btn, state, bar));
+      b.after(bar);
+    }
+    if (d.source === "library") {
+      state.textContent = "EuLLM reads this file where it is and never moves or deletes it.";
+    }
+  }
 
   // ── Boot ──────────────────────────────────────────────────────────────
-  async function init(skipWelcomeReinject) {
+  async function init() {
     const v = await loadVersion();
     if (v?.version) window.__eullm_version = `v${v.version}`;
     if (v?.api_port) window.__eullm_api_port = v.api_port;
+    if (v?.version && els.sideVersion) els.sideVersion.textContent = `EuLLM Engine ${v.version}`;
     await loadModels();
-    if (!skipWelcomeReinject && !els.messages.querySelector(".welcome") && history.length === 0) {
-      location.reload(); // simplest way to restore welcome after clear
-    }
+    renderChatList();
   }
 
   init();

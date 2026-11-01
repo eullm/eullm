@@ -4019,6 +4019,52 @@ mod http_tests {
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
+    /// `DELETE /api/delete` removes a model from the models folder, says 404
+    /// for one that is not there, and refuses one in a library, whose files
+    /// are the user's; `/api/tags` says which is which.
+    #[tokio::test]
+    async fn a_model_is_deleted_from_the_folder_and_never_from_a_library() {
+        let tmp = std::env::temp_dir().join(format!("eullm-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let library = tmp.join("library");
+        std::fs::create_dir_all(&library).expect("library dir");
+        std::fs::write(library.join("shelf-model.gguf"), b"not a real gguf").expect("library file");
+        let store = store_with_one_model(&tmp.join("store"), "a-pulled-model").with_libraries(vec![library.clone()]);
+        let base = spawn(store).await;
+
+        let (_, tags) = get_json(&format!("{base}/api/tags")).await;
+        let source = |name: &str| {
+            tags["models"]
+                .as_array()
+                .expect("models")
+                .iter()
+                .find(|m| m["name"] == name)
+                .map(|m| m["details"]["source"].clone())
+        };
+        assert_eq!(source("a-pulled-model"), Some(serde_json::json!("store")));
+        assert_eq!(source("shelf-model"), Some(serde_json::json!("library")));
+
+        let delete = |model: &str| {
+            let url = format!("{base}/api/delete");
+            let body = serde_json::json!({ "model": model });
+            async move {
+                reqwest::Client::new()
+                    .delete(url)
+                    .json(&body)
+                    .send()
+                    .await
+                    .expect("request")
+                    .status()
+            }
+        };
+        assert_eq!(delete("shelf-model").await, 403);
+        assert!(library.join("shelf-model.gguf").exists(), "a library file is never deleted");
+        assert_eq!(delete("a-pulled-model").await, 200);
+        assert!(!tmp.join("store/a-pulled-model").exists());
+        assert_eq!(delete("a-pulled-model").await, 404);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
     /// Every resident is listed as loaded, the most recently used first —
     /// the one the chat UI preselects — and a catalog model keeps its
     /// catalog metadata while marked so.
