@@ -55,6 +55,12 @@ echo "  out     $OUT"
 echo "  args    ${GRPO_ARGS:-}"
 fail=0
 [ -f "$MODEL/config.json" ] || { echo "[!!] no merged model at '$MODEL'"; fail=1; }
+# Prompts a job wrote after the round was submitted (submit_grpo_round.sh
+# with GRPO_AFTER): filtered here, once, by the command it left.
+if [ ! -s "$PROMPTS" ] && [ -s "$(dirname "$PROMPTS")/filter.sh" ]; then
+    echo "  filtering the prompts: $(dirname "$PROMPTS")/filter.sh"
+    bash "$(dirname "$PROMPTS")/filter.sh"
+fi
 [ -s "$PROMPTS" ] || { echo "[!!] no prompts at '$PROMPTS'"; fail=1; }
 [ -n "$OUT" ] || { echo "[!!] GRPO_OUT is required"; fail=1; }
 [ "$fail" = 0 ] || exit 1

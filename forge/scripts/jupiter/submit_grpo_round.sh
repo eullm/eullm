@@ -40,7 +40,10 @@
 #   GRPO_AFTER       a job id: the round waits for it to end (afterany), and
 #                    START may not exist yet, the merged model of a round
 #                    still running (give the id of its last GRPO link). No
-#                    smoke test, and START is not asked: its own round asks it
+#                    smoke test, and START is not asked: its own round asks it.
+#                    Prompts files that job writes (sbatch_grpo_prompts.slurm)
+#                    may not exist yet either: the first GRPO link filters
+#                    them then, with the command left in NAME/filter.sh
 #
 # Idempotent: a round with jobs in the queue, or merged already, is not
 # submitted again; the prompts once written are kept.
@@ -69,7 +72,12 @@ case "$LINKS$STEPS" in *[!0-9]*) echo "[!!] LINKS and MAX_STEPS are numbers"; ba
 [ -n "${GRPO_AFTER:-}" ] || [ -f "$START/config.json" ] || { echo "[!!] no start model at $START"; bad=1; }
 case "${GRPO_AFTER:-0}" in *[!0-9]*) echo "[!!] GRPO_AFTER is a job id"; bad=1 ;; esac
 [ "${#PROMPTS[@]}" -gt 0 ] || { echo "[!!] no prompts in $D/grpo/leonardo: copy Leonardo's there"; bad=1; }
-for f in "${PROMPTS[@]}"; do [ -s "$f" ] || { echo "[!!] missing $f"; bad=1; }; done
+DEFER=0
+for f in "${PROMPTS[@]}"; do
+    [ -s "$f" ] && continue
+    if [ -n "${GRPO_AFTER:-}" ]; then DEFER=1; echo "[..] $f not written yet: filtered by the first link"
+    else echo "[!!] missing $f"; bad=1; fi
+done
 for s in $SETS; do [ -s "${s#*=}" ] || { echo "[!!] missing ${s#*=}"; bad=1; }; done
 [ -d "$FORGE_HOME/libs-grpo" ] || { echo "[!!] no $FORGE_HOME/libs-grpo: setup_grpo_libs.sh"; bad=1; }
 [ -d "$LIBS" ] || { echo "[!!] no $LIBS: setup_qwen35_libs.sh"; bad=1; }
@@ -88,8 +96,14 @@ if [ ! -s "$OUT/prompts.jsonl" ]; then
     EXCL=()
     for s in $SETS; do EXCL+=("${s#*=}"); done
     for f in "$D"/eval/norm-exam*.jsonl; do [ -s "$f" ] && EXCL+=("$f"); done
-    python "$REPO/forge/scripts/filter_grpo_prompts.py" "${PROMPTS[@]}" \
-        --exclude-exam "${EXCL[@]}" --out "$OUT/prompts.jsonl" || { echo "[!!] nothing submitted"; exit 1; }
+    FILTER=(python "$REPO/forge/scripts/filter_grpo_prompts.py" "${PROMPTS[@]}"
+            --exclude-exam "${EXCL[@]}" --out "$OUT/prompts.jsonl")
+    if [ "$DEFER" = 1 ]; then
+        printf '%q ' "${FILTER[@]}" >"$OUT/filter.sh" && echo >>"$OUT/filter.sh"
+        echo "[ok] prompts to be filtered by the first link: $OUT/filter.sh"
+    else
+        "${FILTER[@]}" || { echo "[!!] nothing submitted"; exit 1; }
+    fi
 fi
 printf '%s\n' "$START" >"$OUT/start"
 
