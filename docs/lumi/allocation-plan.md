@@ -679,6 +679,10 @@ for 4 hours by default (`MAX_JOB_HOURS`), and `AFTER` names jobs for the
 chains to continue: the waiting jobs of `r-v085` were cancelled, none of
 them had started a point, and the chains submitted again with the running
 ones in `AFTER`, so that no chain stops when its running job ends.
+Done: both heads were running (23395490 on nid005188, 23395503 on
+nid005266), their 24 waiting jobs cancelled; 408 points left, 406 timed from
+an earlier run; two chains of 16 jobs of 4 hours, 23401980 after 23395490
+and 23401998 after 23395503.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
