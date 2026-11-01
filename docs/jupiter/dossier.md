@@ -234,6 +234,26 @@ JUPITER, named by its Slurm job id.
   222 to 342. Against r3 and r4, the questions are whether the wrong-article
   answers on the practical exam fall, and whether the held-out exam keeps
   its answers.
+
+**01-11-2026**
+* JSC's monthly report: 75,060 of 360,000 core-hours spent (1,042
+  GPU-hours, 20.8%) with 34% of the period gone, about 160 node-hours under
+  the straight line. Storage: 2.0 TiB of the project's 20 TiB quota, the
+  fast scratch (40 TiB) unused.
+* Leonardo's allocation ends on 02-11: the legal-it work moves here, along
+  the roadmap `docs/research/legal-it-roadmap.md` (phase 0 first: what may
+  come to JUPITER, r2l against g9r-r2, a wider index, a regression set; then
+  the C1 benchmark, E1-mini, E2-mini). GRPO on the existing prompts is
+  closed for both sizes.
+* Queued: g9r-r2, g4-r3 and dqp-d-q9b as the product runs them, GGUF Q4_K_M
+  through EULLM Engine 0.8.5, hybrid retrieval, no note, on the five sets
+  (`sbatch_product_eval.slurm`, 2637245; judge 2637247; roadmap 0.2 without
+  r2l, which joins when copied). The memory corpus of the EU acts in Italian,
+  paraphrases and lists of elements by Qwen3-30B-A3B-Instruct-2507 Q8_0,
+  two chains from both ends of the list, four 6-hour links each
+  (`sbatch_law_rewrites.slurm`, 2637980-2637983 and 2637984-2637987). The
+  question-and-answer style and the program part wait for the closed-book
+  suite, so that no article it asks about is trained on as questions.
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
