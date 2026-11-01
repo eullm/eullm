@@ -6,8 +6,10 @@ commits), the latest tag on the `eullm/llama.cpp` mirror that day. `llama-cpp-rs
 stays at 0.1.159: 0.1.160 only adds WebGPU, Emscripten, PowerPC and Android
 build changes, none of which EuLLM builds.
 
-Nothing here is merged until the reference PC and the three sites have run it
-(sections 3 and 4).
+Merged into `main` and released as 0.8.0 on 28 October, after the reference
+PC (section 3) and without waiting for the sites, at the maintainer's call.
+LUMI-G's round came after (section 4) and found no obstacle; JUPITER and
+Leonardo are still to report.
 
 ## 1. What changed
 
@@ -123,8 +125,9 @@ temperature 0. Tokens per second.
   llama.cpp's MTP drafting is unchanged between the two pins (only the batch
   call that carries the hidden state was renamed), and so is Qwen3.5's graph
   once EuLLM's old `0007` is counted; the target's numerics moved, and the MTP
-  head drafts against them. To be measured on the six Qwen3.5/3.6 MTP models
-  of the LUMI round before it is called general.
+  head drafts against them. Not general: LUMI-G's round on the six
+  Qwen3.5/3.6 MTP models (section 4) keeps as many drafts on b11925 as on
+  0.7.95, so the loss belongs to this card's CUDA kernels, not to the bump.
 - **Tools and reasoning**: Qwen3.6-35B-A3B answered a `tools` request with an
   empty `content`, the reasoning in `reasoning_content` and
   `meteo({"citta": "Roma"})` in `tool_calls` on both binaries.
@@ -146,3 +149,24 @@ running job's binary changes, and runs it beside the current engine:
 
 The branch reaches each site's own branch through `main`, once the PC and the
 sites agree.
+
+### LUMI-G, measured 29-31 October
+
+`feat/model-libraries` at 4cf28c5 (0.8.0, b11925) against 0.7.95 (be0cf9e),
+MI250X (gfx90a) with ROCm 6.3, one 5.5-hour job per binary. Build and smoke
+job pass (with `0013`; without it ggml-hip did not compile here).
+
+- **MTP**: `--mtp 2` on the six Qwen3.5/3.6 MTP models, gsm8k at temperature
+  0. The share of drafts kept is the same on both binaries within one point
+  (87.4-90.5%), and writing is level to 3% faster on b11925. The 5-point loss
+  of the reference PC does not show here.
+- **The expert cache** on Qwen3-235B: the same share of experts in VRAM on
+  both binaries, 92% at 8 requests and 56% at 32 requests. `0008` holds where
+  upstream's SLRU would find none (section 1).
+- **Long runs**: four 5-hour soaks at 32 requests. No server died, VRAM stayed
+  flat, and the logs hold no HSA error, no out-of-memory and no NaN.
+- **Not seen**: `0011`'s pool flush never fired, as the VRAM never came near
+  full, so it is still unchecked on b11925. A run that fills the VRAM (a
+  larger context or more requests) is what shows it.
+
+No obstacle from LUMI-G to the merge.
