@@ -445,4 +445,10 @@ they can be downloaded again. The anonymised rulings
 own. Running jobs keep writing the memory corpus, so the same rsync is run
 again once they end; it copies only what changed. Pulled on 2026-10-31 to
 the workstation's data disk, reached as `~/eullm-archive` (a link), with a
-`LEGGIMI.txt` inside saying what each directory holds.
+`LEGGIMI.txt` inside saying what each directory holds. A second pull the
+next day took all of `eullm_runs` without the heavy weights (`checkpoint-*`,
+`merged*`, `*.gguf`, `model*.safetensors`, `*.bin`, `*.pt`; 29 GB on the
+cluster): the training data, prompts, exam answers and grades, configurations
+and adapters of every round. Not kept: intermediate checkpoints, the merged
+weights and GGUFs of the rounds not chosen, and the September distillation's
+checkpoints. Both pulls checked with an rsync dry run (88 GB in all).
