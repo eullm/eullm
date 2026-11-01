@@ -452,3 +452,10 @@ cluster): the training data, prompts, exam answers and grades, configurations
 and adapters of every round. Not kept: intermediate checkpoints, the merged
 weights and GGUFs of the rounds not chosen, and the September distillation's
 checkpoints. Both pulls checked with an rsync dry run (88 GB in all).
+The same evening, server to server at ~100 MB/s, a copy on an I3K server
+(`~/eullm-archive`, checked by a dry run): all of `eullm_runs` without
+checkpoints and merged weights but with every round's GGUF Q4_K_M (~316 GB),
+the evaluation sets, the anonymised rulings, the logs, and the published
+8B merged. The merged weights of the scratch (`grpo-merged`, 247 GB, every
+round still there) went to a temporary EU VPS, to be moved or deleted once
+the next allocation is known.
