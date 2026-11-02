@@ -254,6 +254,28 @@ JUPITER, named by its Slurm job id.
   (`sbatch_law_rewrites.slurm`, 2637980-2637983 and 2637984-2637987). The
   question-and-answer style and the program part wait for the closed-book
   suite, so that no article it asks about is trained on as questions.
+
+**02-11-2026**
+* The night's jobs did no work, for two faults.
+  - **The EU rewrites:** all eight links ended in two minutes. The memory
+    corpus knew only the nine codes' labels and dropped every
+    `eurlex_<CELEX>` act. EU acts are now named from their CELEX number
+    ("del regolamento (UE) 2016/679", "della direttiva 2011/83/UE").
+  - **The product evaluation:** the two 9B models answered only the trap
+    test. From 0.8.5 `eullm serve` also opens the chat UI on port 11435, so
+    the second engine on a node stopped. Evaluation engines now start with
+    `--no-ui` where the binary has it (`1090f8b`).
+  - **What was measured:** g4-r3 completed its five sets as the product
+    runs it: held-out exam 198 + 1, practical exam 76 + 18, LexIA 10, trap
+    test 386, rewritten 958. The trap test alone came out for g9r-r2 (383)
+    and dqp-d-q9b (380).
+* Queued again: the EU rewrites, two chains of four 6-hour links
+  (2653435-2653438, 2653439-2653442); the evaluation of the sets still
+  missing (2653443, judge 2653444).
+* The Fast Lane on Leonardo, EHPC-AIF-2026FL01-1400, was accepted with
+  30,000 GPU-hours for three months. Following the roadmap, the scaling
+  runs (E1 at 2-10 B tokens, E2 in three sizes) go there, and JUPITER keeps
+  phases 0-4.
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
