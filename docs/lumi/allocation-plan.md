@@ -740,9 +740,16 @@ carries the fix.
      so that `0011`'s flush runs at last (with the default 512 MiB the
      soaks never came near full VRAM); its speed is not a result.
   The `v085` half runs in `r-v085`'s chains, ahead of that round's points
-  (priorities 104-110); `v087` has a chain of its own. Not covered: the
-  sparse attention now built for CDNA (#31259), which needs a GLM-5 or
-  DeepSeek 4 model, none of them in the store.
+  (priorities 104-110); `v087` has a chain of its own.
+  7. `b12-dsa`, `b12-dsa-graded`: the sparse attention b12032 runs on CDNA
+     (#31259: the sparse flash-attention kernel, made for 64-wide
+     wavefronts; 0.8.5 reads these models with the dense kernel and its
+     mask), on DeepSeek-V4-Flash (284B, 13B active, architecture
+     `deepseek4`, MIT), unsloth's UD-Q4_K_XL, 155 GB, pulled for it, on
+     four GCDs: reading and writing at 0, 16,000 and 30,000 tokens of
+     prompt, and 100 gsm8k questions at temperature 0. GLM-5 (`glm-dsa`)
+     is 220-240 GB at two bits and waits.
+  25 points per binary.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,

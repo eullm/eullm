@@ -135,6 +135,9 @@ four GCDs (`0012`); the six Qwen3.5/3.6 MTP models without `--mtp` and with
 `--mtp 2` (`0013` beside upstream's ballot, #31368's rollbacks); four soaks
 of two hours and more at 32 requests; and one soak with the pool's
 threshold raised so that `0011`'s flush runs, which the b11925 round never
-saw. The sparse attention enabled on CDNA (#31259) needs a GLM-5 or
-DeepSeek 4 model, which LUMI's store does not have. Results here when the
-jobs have run; the record with job ids is `docs/lumi/allocation-plan.md`.
+saw. And the sparse attention enabled on CDNA (#31259), on
+DeepSeek-V4-Flash (unsloth's UD-Q4_K_XL, 155 GB, four GCDs), which 0.8.5
+reads with the dense kernel: reading and writing at 0, 16,000 and 30,000
+tokens of prompt, and 100 gsm8k questions for the same answers. Results
+here when the jobs have run; the record with job ids is
+`docs/lumi/allocation-plan.md`.

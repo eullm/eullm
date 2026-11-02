@@ -17,7 +17,12 @@
     "b12-pool-flush: the same soak with GGML_CUDA_POOL_KEEP_FREE_MB=40000, so that the pool",
     "flushes (0011): with the defaults the soaks never came near full VRAM and the flush has",
     "never run on ROCm. Its speed is not a result: a stress of the flush, 'pool[...] freeing'",
-    "lines expected, and nothing else in the log."
+    "lines expected, and nothing else in the log.",
+    "b12-dsa, b12-dsa-graded: DeepSeek-V4-Flash (284B, 13B active, architecture deepseek4, MIT),",
+    "unsloth's UD-Q4_K_XL (155 GB) on four GCDs. Its sparse attention runs on CDNA from b12032",
+    "(#31259: the sparse flash-attention kernel, made for 64-wide wavefronts); 0.8.5 reads it",
+    "with the dense kernel and its mask. Reading and writing at 0, 16,000 and 30,000 tokens of",
+    "prompt, and 100 gsm8k questions at temperature 0 for the same answers on both binaries."
   ],
   "text_only": [
     "qwen3.5-9b-mtp-gguf-q4_k_m",
@@ -36,7 +41,8 @@
     "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:Q8_0",
     "hf.co/Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M",
     "hf.co/Qwen/Qwen3-32B-GGUF:Q8_0",
-    "hf.co/Qwen/Qwen3-30B-A3B-GGUF:Q8_0"
+    "hf.co/Qwen/Qwen3-30B-A3B-GGUF:Q8_0",
+    "hf.co/unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q4_K_XL"
   ],
   "defaults": {
     "gcds": 1
@@ -91,6 +97,51 @@
         "batch": [
           1,
           16
+        ]
+      }
+    },
+    {
+      "name": "b12-dsa",
+      "priority": 107,
+      "est_s": 1800,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "model": "deepseek-v4-flash-0731-gguf-ud-q4_k_xl",
+        "gcds": 4,
+        "batch": 1,
+        "slot_ctx": 32768,
+        "extra_args": [
+          "--fit-strict"
+        ]
+      },
+      "axes": {
+        "prompt_tokens": [
+          0,
+          16000,
+          30000
+        ]
+      }
+    },
+    {
+      "name": "b12-dsa-graded",
+      "priority": 107,
+      "est_s": 2400,
+      "set": {
+        "kind": "workload",
+        "model": "deepseek-v4-flash-0731-gguf-ud-q4_k_xl",
+        "gcds": 4,
+        "batch": 1,
+        "slot_ctx": 8192,
+        "sets": [
+          "gsm8k"
+        ],
+        "limit": 100,
+        "concurrency": 1,
+        "max_tokens": 768,
+        "think": false,
+        "extra_args": [
+          "--fit-strict"
         ]
       }
     },
