@@ -706,6 +706,44 @@ already in use"`; `ram-480b`'s timeouts are not among them. 0.8.6 moves
 llama.cpp to b12032: the round after this one is on the release that
 carries the fix.
 
+02-11-2026, evening: the night's queue and the b12032 test.
+
+- 0.8.7 released the same evening (`EuLLM-v0.8.7`, tagged by the PI): 0.8.6
+  (llama.cpp b12032, 107 commits after b11925, `docs/llama-bump-b12032.md`)
+  with the chat UI port fix of `serve`. The release notes' "This release"
+  still described 0.8.0 on the 0.8.5 and 0.8.6 pages; rewritten for 0.8.7.
+- `r-v085` goes on in its two chains of 4-hour jobs (23401982 and 23401999
+  at their head, 28 behind), the runner on `--no-ui`, the 226 points back
+  in the queue. Its 7 soaks that need more than a 4-hour job (`soak-node`,
+  `moe-soak`, `moe-235b-soak-x2`, 4 to 6 hours at least) stay in the queue
+  and are skipped by these jobs, which end as soon as nothing else fits:
+  to run on 0.8.7 in the next round rather than on 0.8.5, about 56
+  node-hours saved.
+- llama.cpp b12032 on the MI250X, before that round, as the bump's notes
+  ask of LUMI-G (a smoke job and MTP, for `0013` beside upstream's new
+  `__ballot` on ROCm 6): `c15-llama-b12032`, round `r-b12032`, old 0.8.5
+  (`v085`, b11925) against new 0.8.7 (`v087`, built from the tag in
+  `eullm-v087`, `eullm-target/v087`), 21 points per binary, sized for jobs
+  of 4 hours:
+  1. `sbatch_smoke.slurm` with the new binary.
+  2. `b12-moe`, the whole node: the 235B's expert cache at 8 and 32
+     requests with `LLAMA_MOE_CACHE_STATS=64`.
+  3. `b12-tensor`: Qwen3-32B with `--split-mode tensor` on four GCDs, at
+     1 and 16 requests: `0012` was regenerated on upstream's new loader.
+     Beside the other points, not alone, to keep the test to one job.
+  4. `b12-mtp`: the six MTP twins without `--mtp` and with `--mtp 2`, 100
+     gsm8k questions at temperature 0; no rollback error from upstream's
+     stricter recurrent memory (#31368).
+  5. `b12-soak-*`: four soaks of two to two and a half hours at 32
+     requests on one GCD (the c14 ones, shorter), llama.cpp's log on.
+  6. `b12-pool-flush`: one of them with `GGML_CUDA_POOL_KEEP_FREE_MB=40000`,
+     so that `0011`'s flush runs at last (with the default 512 MiB the
+     soaks never came near full VRAM); its speed is not a result.
+  The `v085` half runs in `r-v085`'s chains, ahead of that round's points
+  (priorities 104-110); `v087` has a chain of its own. Not covered: the
+  sparse attention now built for CDNA (#31259), which needs a GLM-5 or
+  DeepSeek 4 model, none of them in the store.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
