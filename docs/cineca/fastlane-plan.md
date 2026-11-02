@@ -36,12 +36,12 @@ punti. Ogni ora spesa deve lasciare un numero in una di queste righe.
 
 | # | Impegno (dalla proposta) | Dove si misura |
 |---|---|---|
-| P1 | costo misurato di un ciclo completo di verticalizzazione: teacher, CPT, distillazione, dati sintetici, instruction tuning, valutazione, GGUF | WP6, più le ore per fase di tutti i WP |
-| P2 | confronto sistematico di taglie di teacher e di student e di configurazioni di distillazione | WP3 |
-| P3 | generazione e filtraggio di dati sintetici | WP2 |
-| P4 | fino a 16 A100 in parallelo: quanto il flusso regge passando da un esperimento a una campagna su più nodi | il registro di coda (`queue_stats.py`) e l'occupazione |
-| P5 | ogni modello valutato su dati esclusi dal training e confrontato con la base; regressioni bloccate | WP1 |
-| P6 | configurazioni riusabili per altri domini | WP6, secondo dominio |
+| P1 | costo misurato di un ciclo completo di verticalizzazione: teacher, CPT, distillazione, dati sintetici, instruction tuning, valutazione, GGUF | C5, più le ore per fase di tutte le linee |
+| P2 | confronto sistematico di taglie di teacher e di student e di configurazioni di distillazione | C3; A per il MoE contro il denso |
+| P3 | generazione e filtraggio di dati sintetici | C2 |
+| P4 | fino a 16 A100 in parallelo: quanto il flusso regge passando da un esperimento a una campagna su più nodi | B (scalabilità su 1-4 nodi), più il registro di coda (`queue_stats.py`) e l'occupazione |
+| P5 | ogni modello valutato su dati esclusi dal training e confrontato con la base; regressioni bloccate | C1 |
+| P6 | configurazioni riusabili per altri domini | C5, secondo dominio |
 | P7 | la base numerica per la Large Scale: ore GPU osservate, non stimate | tutto il registro |
 
 ## Il numero che governa tutto
@@ -67,7 +67,7 @@ Le leve, misurate sulla 1147 (`allocation-recovery.md`):
    delle ore, cioè **~6.000 GPU-ore** dell'assegnazione se non cambia niente.
    Si recuperano in due modi:
    * la cache offline dei logit del teacher (ADR-001: conviene quando il
-     teacher è fisso e gli student variano, cioè esattamente WP3): gli anelli
+     teacher è fisso e gli student variano, cioè esattamente C3): gli anelli
      degli student non caricano più il teacher;
    * anelli più lunghi, se il sondaggio del primo giorno dice che il nuovo
      progetto li fa partire.
@@ -167,37 +167,119 @@ e non di meno: è quello che `saldo -b` mostra come quota mensile.
    superc@cineca.it per portarlo ai 4 TB assegnati, prima di copiare i dati
    della 1147. Sulla 1147 un solo TB era arrivato al 96% (10 ottobre).
 
-## Il lavoro, in pacchetti
+## Le priorità (decise il 2 novembre 2026)
 
-| WP | Cosa | GPU-ore | Cancello | Impegni |
+1. **Un MoE con il modulo n-gram "mini" sul legal-it** (linea A).
+2. **La validazione di Forge su più nodi** (linea B).
+3. Tutto il resto, cioè gli impegni della proposta che riempiono la coda (linea C).
+
+L'ordine è di importanza, non di ore. La linea A nella fase mini costa poco
+(circa 1.000 GPU-ore) ma decide dove vanno le 7.000 della sua fase di scala.
+La linea C è quella che tiene le GPU occupate mentre A e B leggono i loro
+risultati.
+
+### Linea A — MoE con memoria n-gram sul legal-it
+
+**Perché un MoE.** Il modulo n-gram (`../research/legal-memory-plan.md`,
+"Architecture") è una memoria condizionale: si consulta per hash, senza
+calcolo. Il MoE fa la stessa cosa con il calcolo: tanti parametri, pochi
+attivi per token. I lavori da cui viene l'idea (DeepSeek Engram, gli embedding
+n-gram di Qwen3.8-Flash-Next) mettono la memoria proprio sopra un MoE.
+
+In locale un 30B-A3B in Q4 occupa ~18 GB e gira con 3B parametri attivi:
+sta su una GPU da 24 GB, oppure su CPU e RAM a velocità usabile. La tabella
+sta in RAM.
+
+**Il backbone.** Candidato: **Qwen3-30B-A3B-Instruct-2507** (Apache 2.0). Su
+Leonardo lo conosciamo già: giudice e teacher, e la fase 1 di settembre ci ha
+insegnato come addestrarlo sopra un modello congelato
+(`continued_pt_qwen3_30b_a3b_leonardo.yaml`):
+* pesi quantizzati a 8 bit e replicati su ogni GPU;
+* parallelismo sui dati;
+* **mai ZeRO-3**, che su un MoE muove 625M parametri per strato e ha dato tre OOM.
+
+Un MoE più piccolo o più recente si valuta in A0, con la licenza verificata
+sull'Hub (regole in `forge/CLAUDE.md`).
+
+| Passo | Cosa | GPU-ore | Esito |
+|---|---|---:|---|
+| A0 | il backbone sugli esami attuali: libro chiuso 716, devbig con e senza nota, pratico 145, trappole 33, regressione | 50 | la base di confronto |
+| A1 | **legal-it-moe**: LoRA open-book sul MoE con la ricetta che ha dato 80,9 → 84,6 sull'8B (coppie v06, solo norme) | 250 | un MoE che legge e cita come i nostri, prima di dargli memoria |
+| A2 | **E2-mini sul MoE**: A1 congelato più una tabella n-gram di 0,3-0,5 miliardi di parametri (2- e 3-gram hashed, lettura a uno strato basso, gate inizializzato a zero, ottimizzatore sparso). Dati: il corpus memoria degli articoli (righe di programma più riscritture, ~0,2 miliardi di token, 3 epoche). **Controllo**: una LoRA con gli stessi parametri addestrabili e gli stessi token. **Riferimento**: r2l denso sullo stesso libro chiuso | 700 | **cancello**: il modulo batte il controllo di ≥ 5 punti sul libro chiuso, contati senza il riflesso "non esiste", e nessuna perdita a libro aperto (McNemar) |
+| A3 | se A2 passa: tabelle da 1 e 3 miliardi; strato e ordini degli n-gram; i dati di tutti gli atti in vigore e degli atti UE (C2); E3, la riforma simulata (si riaddestra solo la memoria); dopo il DPA, i principi di diritto | 7.000 | la tabella vincente, con la curva taglia/beneficio |
+| A4 | il modello in locale: tabella come tensori GGUF e l'operatore di lookup nel motore (E4 del piano memoria, sul lato LUMI) | — | misurato sul portatile, non solo sui benchmark |
+
+**Se A2 non passa** si scrive il risultato, si ferma la linea, e le 7.000 ore
+di A3 vanno a C3 e C5 (o a E1, il pretraining continuato del denso con
+replay, se il libro chiuso dice che manca la conoscenza e non la
+struttura).
+
+**Codice da scrivere prima che il conto sia attivo**, così le GPU non aspettano lo sviluppo:
+* il modulo in Forge: tabella, hash, gate, iniezione nello strato, ottimizzatore
+  sparso, salvataggio come file separato e versionato;
+* i test su CPU con un modello minuscolo:
+  - a gate zero il modello è identico all'originale;
+  - i gradienti arrivano solo alla tabella;
+  - il file della memoria si ricarica identico;
+* il controllo LoRA con parametri pareggiati.
+
+### Linea B — Forge su più nodi
+
+Oggi ogni training di Forge sta in un nodo. Più nodi servono per due motivi:
+* la proposta promette fino a 16 A100 insieme (P4);
+* la domanda Large Scale chiederà la scalabilità misurata, non dichiarata.
+
+| Passo | Cosa | GPU-ore | Esito |
+|---|---|---:|---|
+| B0 | lanciatore multinodo: `srun` più `torchrun` con rendezvous sul primo nodo, variabili NCCL per l'InfiniBand di Leonardo; benchmark di all-reduce in PyTorch su 1, 2, 4 e 8 nodi | 50 | banda reale fra nodi |
+| B1 | **scalabilità sul carico vero**: il training di A2 su 1, 2 e 4 nodi a batch globale fisso; token al secondo per GPU, efficienza, tempo di checkpoint. La domanda tecnica: la tabella n-gram con gradienti sparsi in DDP, oppure divisa fra i nodi | 400 | la curva di scalabilità per il report e per la Large Scale |
+| B2 | **robustezza**: ripresa dopo un anello interrotto su più nodi, dati compresi (la regola 5 di `allocation-recovery.md`), checkpoint condivisi | 100 | i training lunghi di A3 e C3 possono girare multinodo |
+| B3 | gli stessi passi per un training con pesi addestrati (SFT completo del 4B, C3), dove la comunicazione pesa davvero | 450 | quando conviene il multinodo e quando no |
+
+**B dipende dal test del primo giorno.** I job multinodo chiedono nodi interi.
+Se il test dice che i nodi interi non partono, B1-B3 si fanno solo con una
+prenotazione dei nodi, che va chiesta a CINECA per finestre di poche ore
+indicando che è la misura promessa nella proposta. Lo script multinodo va
+anche aggiunto, con la sua ragione, all'elenco `WHOLE_NODE` di
+`test_leonardo_job_shape.py`.
+
+### Linea C — gli impegni che riempiono la coda
+
+| | Cosa | GPU-ore | Cancello | Impegni |
 |---|---|---:|---|---|
-| WP0 | messa in opera, sondaggi, registro | 50 | — | P4 |
-| WP1 | **valutazione**: test di regressione (roadmap 0.4), confronto r2l / g9r-r2 sugli stessi esami (0.2), indice esteso (0.3), benchmark C1, valutazione di ogni checkpoint, giudice | 2.500 | — | P5 |
-| WP2 | **output del teacher**: (a) riscritture di tutti gli atti in vigore e degli atti UE in italiano (i dati di E1 oltre il corpus attuale di ~0,2 miliardi di token); (b) cache offline dei logit del 30B-A3B su norms-v2, e sulle sentenze dopo il DPA; (c) generazione dei casi C1 e dei distrattori C2 | 6.000 | (b) sentenze: DPA | P3, P1 |
-| WP3 | **matrice degli student**, il cuore della proposta: Qwen3.5-4B e 9B e Ministral 8B, con distillazione sui logit, KD a livello di sequenza e solo SFT a parità di GPU-ore; rank 32 contro 128; LoRA contro fine-tuning completo sul 4B; temperatura della KL | 8.000 | — | P2, P1 |
-| WP4 | **memoria**: E1-mini, poi E1 a 2 e a 10 miliardi di token; E2-mini, poi E2 in tre taglie; E3, la riforma simulata | 5.000 | E1-mini +15 a libro chiuso; E2-mini +5 sul controllo | P2 |
-| WP5 | **ragionamento**: C2 oppure C3, secondo la diagnosi di C1 | 2.000 | C1 costruito e validato dal giurista | P5 |
-| WP6 | **ciclo completo cronometrato**: legal-it in due taglie, dal corpus al GGUF alla valutazione, senza intervento; poi un secondo dominio con la stessa configurazione | 3.000 | secondo dominio: scelta dell'utente | P1, P6 |
-| — | riserva: riprese, rifacimenti, errori | 3.450 | — | |
-| | **Totale** | **30.000** | | |
+| C0 | messa in opera, test del primo giorno, registro | 50 | — | P4 |
+| C1 | **valutazione**: test di regressione (roadmap 0.4), confronto r2l / g9r-r2 (0.2), indice esteso (0.3), benchmark C1, ogni checkpoint di A, B e C | 2.500 | — | P5 |
+| C2 | **output del teacher**: riscritture di tutti gli atti in vigore e degli atti UE (i dati di A3); cache dei logit; casi C1 e distrattori; sulle sentenze solo dopo il DPA | 5.000 | sentenze: DPA | P3 |
+| C3 | **matrice degli student**: 4B, 9B e 8B × KD sui logit, KD di sequenza, solo SFT, a parità di GPU-ore; rank; LoRA contro completo | 5.000 | — | P2 |
+| C4 | **ragionamento**: C2 oppure C3 della roadmap, secondo la diagnosi del benchmark C1 | 2.000 | C1 validato dal giurista | P5 |
+| C5 | **ciclo completo cronometrato**: legal-it dal corpus al GGUF, senza intervento; poi un secondo dominio | 3.000 | secondo dominio: scelta dell'utente | P1, P6 |
 
-**WP0-WP3 e la parte legal-it di WP6 non hanno cancelli** (~19.500 GPU-ore):
-sono il lavoro che assorbe la coda dalla prima settimana, mentre WP4 e WP5
-aspettano le loro letture.
+### Il budget
 
-I cancelli restano quelli della roadmap. La Fast Lane non è un motivo per
-scalare un esperimento che non li ha passati: le ore di un cancello fallito
-passano a WP3 e WP6, che le usano comunque per gli impegni P1 e P2.
+| | GPU-ore |
+|---|---:|
+| A0-A2 (MoE n-gram mini) | 1.000 |
+| A3 (scala, solo se A2 passa) | 7.000 |
+| B (multinodo) | 1.000 |
+| C0-C5 | 17.550 |
+| riserva | 3.450 |
+| **Totale** | **30.000** |
+
+Senza cancelli ci sono ~17.500 GPU-ore (A0-A2, B, C0-C3, C5): bastano a
+riempire la coda fino a dicembre inoltrato, quando A2 e C1 hanno già dato
+il loro esito.
 
 ## Calendario
 
-| Settimane | Lavoro |
-|---|---|
-| 1 (2-8 nov) | WP0; copia interna dei dati; WP1: 0.2, 0.3 e 0.4 con job da una GPU; WP2a in catena appena l'indice degli atti in vigore è pronto (`prepare_legislation.py --all-acts`, lavoro CPU sulla seriale) |
-| 2-4 (9-29 nov) | WP2a e WP2b; prime braccia di WP3 sulla cache dei logit; E1-mini (WP4); costruzione di C1, più il tempo del giurista |
-| 5-8 (30 nov-27 dic) | WP3 a regime; E1 a 2 miliardi di token se E1-mini è passato; E2-mini; C1 su backbone e teacher, poi la diagnosi; primo round C2 o C3 |
-| 9-11 (28 dic-17 gen) | si scalano i vincitori (E1 a 10 miliardi, E2 in tre taglie, altri round C); WP6 legal-it cronometrato; secondo dominio |
-| 12-13 (18 gen-1 feb) | valutazioni finali, GGUF, misure per il report. **Dopo il 25 gennaio non parte niente che non finisca entro il 1° febbraio.** Copia dei risultati fuori da Leonardo |
+| Settimane | A — MoE n-gram | B — multinodo | C — coda |
+|---|---|---|---|
+| 0 (fino all'attivazione) | codice del modulo e test su CPU; scelta del backbone | lanciatore e benchmark di all-reduce scritti | — |
+| 1 | A0 | B0 se i nodi interi partono | C0, test del primo giorno, copia dei dati; C1 (0.2-0.4); C2 in catena |
+| 2-3 | A1, poi la prova del modulo su un nodo | B1 sul carico di A2 | C2, C3 |
+| 4-5 (fino al 6 dic) | **A2 e lettura del cancello** | B2 | C2, C3; costruzione di C1 con il giurista |
+| 6-9 (fino al 3 gen) | A3 se il cancello è passato, multinodo | B3 | C3, C4, C5 legal-it |
+| 10-11 (fino al 17 gen) | A3: la taglia vincente sui dati completi | — | C5, secondo dominio |
+| 12-13 (18 gen-1 feb) | GGUF, A4 su LUMI, misure per il report | numeri per la Large Scale | valutazioni finali; **dopo il 25 gennaio non parte niente che non finisca entro il 1° febbraio**; copia dei risultati fuori da Leonardo |
 
 ## Leonardo e JUPITER
 
@@ -247,6 +329,7 @@ Si raccoglie dal primo giorno, non alla fine:
 * GPU-ore per fase, da `sacct`, con un prefisso di nome per WP;
 * il registro di coda con le attese datate;
 * le tabelle dei risultati con la base di confronto;
-* il costo di un ciclo completo (WP6).
+* il costo di un ciclo completo (C5);
+* la curva di scalabilità su più nodi (B1).
 
 Il modello va scaricato dal sito EuroHPC JU prima di gennaio.
