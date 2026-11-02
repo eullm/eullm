@@ -107,10 +107,33 @@ non "si recupera dopo": il 2 febbraio non si sposta.
    sacctmgr -P show assoc user=$USER format=account,partition,qos,grptres,maxtres,maxjobs,maxsubmit
    sacctmgr -P show qos format=name,priority,maxwall,grptres,maxtrespu,maxjobspu
    ```
-2. **Il sondaggio di collocazione** (`sbatch_backfill_probe.slurm`), con lo
-   stesso metodo del 22 settembre:
-   * 3 GPU / 24 core / 340 GB a 2, 4, 8 e 24 ore;
-   * il nodo intero a 2 e a 8 ore.
+2. **Il sondaggio di collocazione**: un comando solo, dal nodo di login.
+   ```bash
+   module load python/3.11.7
+   bash forge/scripts/leonardo/fastlane_probe.sh
+   ```
+   * Scrive subito `limits.txt`: QOS del progetto, priorità, wall time
+     massimo, limiti di GPU e di job.
+   * Mette in coda un job di prova per ogni forma:
+     - 1 e 3 GPU;
+     - nodo intero;
+     - 2, 4 e 8 nodi;
+     - da 2 a 24 ore;
+     - con ogni QOS del progetto.
+
+     I job escono appena partono e costano secondi.
+   * Mette in coda anche due job da 16 GPU che restano su 15 minuti ciascuno,
+     per vedere se 16 + 16 girano insieme (circa 8 GPU-ore).
+   * Il report (`report.md`) lo scrivono job sulla partizione seriale a +1, +6
+     e +24 ore; l'ultimo cancella le prove ancora in coda. In tutto costa circa
+     10 GPU-ore.
+
+   | Se il report dice | Allora |
+   |---|---|
+   | nodi interi da 8-24 ore partono in poche ore | catene di nodi interi lunghe: rendimento ~99% invece di ~80%, bastano 3-4 nodi sempre occupati |
+   | partono solo 3 GPU per 2 ore, come sulla 1147 | 6-8 catene concorrenti, cache dei logit, e **subito** una richiesta a CINECA di una reservation o di una QOS adatta, citando le 16 GPU della proposta |
+   | 16 + 16 girano insieme | il tetto sale a 768 GPU-ore al giorno: basta un'occupazione del 42% invece dell'85% |
+   | un motivo di limite (`QOS…Limit`, `Assoc…`) | quella forma non è permessa: non si aspetta, si chiede a CINECA |
 
    La lunghezza degli anelli si decide su questo, non sull'abitudine. Finché
    il sondaggio non ha risposto valgono le regole di `forge/CLAUDE.md` e
