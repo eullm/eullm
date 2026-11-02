@@ -684,6 +684,28 @@ nid005266), their 24 waiting jobs cancelled; 408 points left, 406 timed from
 an earlier run; two chains of 16 jobs of 4 hours, 23401980 after 23395490
 and 23401998 after 23395503.
 
+02-11-2026, LUMI down for maintenance during the day; read at 19:30. The
+chains ran: the heads to 00:12, the first 4-hour jobs from a minute later
+to 03:52, the second ones (23401982, 23401999) from 13:24 until the
+maintenance stopped them at 16:12, requeued by Slurm under the same ids.
+ROCm is still 6.3.4 and the `v085` binary loads. But 226 of the round's
+points failed, `server on port ... exited (1)`, nearly all of the points
+that shared a node with another (`c08`'s decisions, `c07`'s runtimes,
+`c06`, `c01`'s one-GCD and long-context points): since 0.8.5 `eullm serve`
+opens the chat UI on port 11435 too, and its start-up check exits when that
+port answers ("port 11435 is already in use by another service", the
+answer `{"api_port":18000,...,"version":"0.8.5"}`, the node's first
+server), where the 0.8.5 changelog says a UI port taken leaves the API
+served. JUPITER met the same in Forge's evaluation servers (1090f8b0).
+Fixed twice: the runner starts `eullm serve` with `--no-ui` where the
+binary has it (asked of `serve --help` once per binary, e44f7936), so the
+round goes on on 0.8.5 as it is, and the engine (a479d506, on 0.8.6, for
+the next release) checks only the API port at start in `serve`. The 226
+go back with `campaign.py retry --engine-label v085 --note "11435 is
+already in use"`; `ram-480b`'s timeouts are not among them. 0.8.6 moves
+llama.cpp to b12032: the round after this one is on the release that
+carries the fix.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were

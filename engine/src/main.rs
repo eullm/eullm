@@ -2607,7 +2607,10 @@ async fn ensure_port_available(port: u16, flag: &str, replace: bool) {
             eprintln!();
             eprintln!("Options:");
             eprintln!("  1. Stop the existing service on port {port}");
-            eprintln!("  2. Use a different port:  {flag} {}", port.saturating_add(1));
+            eprintln!(
+                "  2. Use a different port:  {flag} {}",
+                port.saturating_add(1)
+            );
             std::process::exit(1);
         }
     }
