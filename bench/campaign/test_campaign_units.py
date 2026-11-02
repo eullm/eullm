@@ -595,6 +595,44 @@ def test_failed_points_can_be_retried_by_group(tmp_path):
     assert q.ids("failed") == ["rt-1"]
 
 
+def test_failed_points_can_be_retried_by_label_and_cause(tmp_path):
+    """After a cause is fixed, the points it failed go back, not the others
+    of the same label nor those of another label (r-v085, 02-11-2026)."""
+    q = Queue(str(tmp_path))
+    taken = "server on port 18020 exited (1):\nError: port 11435 is already in use by another"
+    for pid, label, note in (("a-1", "v085", taken), ("a-2", "v085", "every request timed out"),
+                             ("a-3", "v0794", taken)):
+        q.add({"id": pid, "kind": "throughput", "engine_label": label})
+        q.claim(pid, {"job": "j"})
+        q.finish(pid, "failed", note, retry=False)
+    assert q.retry("", "v085", "11435 is already in use") == ["a-1"]
+    assert sorted(q.ids("failed")) == ["a-2", "a-3"]
+    assert q.retry("", "v085") == ["a-2"]
+    assert q.ids("failed") == ["a-3"]
+
+
+def test_an_eullm_server_is_started_without_the_chat_ui_where_it_can_be(monkeypatch):
+    """0.8.5's `serve` opens the chat UI on 11435 and exits when that port is
+    taken, so each server of a node after the first died at start: the runner
+    turns the UI off where the engine has `--no-ui`, and asks nothing of an
+    engine from before it, which would reject the flag."""
+    import point
+
+    fake = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_eullm.py")
+    monkeypatch.setattr(point, "_NO_UI", {})
+    cmd = point.Server(fake, 18020, ["--batch-size", "1"], {}, "log").command()
+    assert cmd[:5] == [fake, "serve", "--port", "18020", "--no-ui"]
+    assert cmd[-2:] == ["--batch-size", "1"]
+    monkeypatch.setattr(point, "_NO_UI", {})
+    monkeypatch.setenv("FAKE_EULLM_NO_UI", "0")
+    assert "--no-ui" not in point.Server(fake, 18020, [], {}, "log").command()
+    monkeypatch.setattr(point, "_NO_UI", {})
+    assert point.no_ui_args("/nonexistent/eullm") == []
+    # Asked once per binary.
+    monkeypatch.setattr(point, "_NO_UI", {fake: True})
+    assert point.no_ui_args(fake) == ["--no-ui"]
+
+
 def test_status_gives_one_line_per_group_and_cause_not_the_server_logs():
     from campaign import stopped_lines
 

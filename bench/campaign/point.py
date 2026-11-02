@@ -257,6 +257,28 @@ def runtime_command(p: dict, engine: str):
     return binary, extra, env
 
 
+_NO_UI: dict = {}
+_NO_UI_LOCK = threading.Lock()
+
+
+def no_ui_args(engine: str) -> list:
+    """`--no-ui` for an `eullm serve` that has it, nothing for one that does
+    not. Since 0.8.5 `serve` opens the chat UI on port 11435 by default and,
+    with that port taken, exits with 1 instead of serving the API without it:
+    on a node of several points every server after the first died at start
+    (226 points of `r-v085`, 01/02-11-2026). An engine before 0.8.5 rejects
+    the flag, so `serve --help` is asked once per binary."""
+    with _NO_UI_LOCK:
+        if engine not in _NO_UI:
+            try:
+                out = subprocess.run([engine, "serve", "--help"], capture_output=True,
+                                     text=True, timeout=60).stdout
+            except (OSError, subprocess.SubprocessError):
+                out = ""
+            _NO_UI[engine] = "--no-ui" in out
+        return ["--no-ui"] if _NO_UI[engine] else []
+
+
 class Server:
     def __init__(self, engine, port, args, env, log_path, cores=None, runtime="eullm"):
         self.engine, self.port, self.args = engine, port, args
@@ -279,7 +301,8 @@ class Server:
             return prefix + [self.engine] + host + self.args
         if self.runtime == "ollama":
             return prefix + [self.engine, "serve"] + self.args
-        return prefix + [self.engine, "serve", "--port", str(self.port)] + self.args
+        return (prefix + [self.engine, "serve", "--port", str(self.port)]
+                + no_ui_args(self.engine) + self.args)
 
     def start(self) -> None:
         log = open(self.log_path, "ab")
