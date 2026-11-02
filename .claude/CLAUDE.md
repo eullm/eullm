@@ -78,7 +78,10 @@ parts, a summary in its log), so the user only reads the result.
   `docs/jupiter/allocation-plan.md`,
   `tools/jupiter/`, `forge/scripts/jupiter/`. Every result, fix and job
   goes into `docs/jupiter/dossier.md` too, the record that is sent out.
-- **Leonardo** (CINECA, `AIFAC_P02_1147`): Forge distillation on A100 64GB.
+- **Leonardo** (CINECA): Forge on A100 64GB. The Playground `AIFAC_P02_1147`
+  ended 2026-11-02; the **Fast Lane EHPC-AIF-2026FL01-1400** (30,000
+  GPU-hours, 2026-11-02 → 2027-02-02, no extension) carries on, and its pace,
+  work packages and commitments are in `docs/cineca/fastlane-plan.md`.
   Jobs of two hours at most and never a whole node: a job asking for part
   of a node starts far sooner. `docs/cineca/leonardo.md`,
   `docs/leonardo-runbook.md`, `forge/scripts/leonardo/`, and the job-shape
