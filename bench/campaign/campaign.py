@@ -998,7 +998,7 @@ def stopped_lines(state: str, points: list, each: bool = False) -> list:
 
 
 def cmd_retry(args):
-    moved = Queue(args.queue).retry(args.group or "")
+    moved = Queue(args.queue).retry(args.group or "", args.engine_label, args.note)
     print(f"{len(moved)} failed points back in todo")
     return 0
 
@@ -1399,6 +1399,9 @@ def main(argv=None):
     with_queue(sub.add_parser("unblock"))
     p = with_queue(sub.add_parser("retry"))
     p.add_argument("--group", help="only points whose id starts with this, e.g. moe-671b")
+    p.add_argument("--engine-label", help="only the points of this engine label, e.g. v085")
+    p.add_argument("--note", help="only points whose last note holds this text, "
+                   "e.g. 'is already in use'")
 
     p = with_queue(sub.add_parser("report"))
     p.add_argument("--results")
