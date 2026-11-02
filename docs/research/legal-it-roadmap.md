@@ -211,8 +211,10 @@ giuste, e solo sui requisiti in cui il giudice regge (≥80%, fase 1).
 | Altri round C2/C3 | miglioramento su C1 senza regressioni |
 | E5, lookup appreso | E1 o E2 utili, C1 stabile |
 
-Se la Fast Lane su Leonardo (EHPC-AIF-2026FL01-1400, 30.000 GPU-ore) viene
-concessa, lo scaling va lì. JUPITER resta per le fasi 0-4.
+La Fast Lane su Leonardo (EHPC-AIF-2026FL01-1400, 30.000 GPU-ore fino al 2
+febbraio 2027) è stata concessa il 2 novembre 2026: lo scaling va lì, e anche
+le fasi 0-4 possono girarci. Divisione del lavoro con JUPITER, ritmo e
+traguardi sono in `docs/cineca/fastlane-plan.md`.
 
 ## Regole trasversali
 
