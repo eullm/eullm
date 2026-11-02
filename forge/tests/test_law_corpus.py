@@ -169,3 +169,26 @@ def test_a_chain_started_halfway_asks_the_middle_of_the_list(tmp_path, monkeypat
     # four articles in force, 99 624 624-bis 625: halfway is the third
     assert asked == ["Art. 99 del codice penale (Recidiva)",
                      "Art. 624-bis del codice penale (Furto in abitazione)"]
+
+
+def test_eu_acts_are_named_from_their_celex_number_and_rewritten():
+    from eullm_forge.datasets.law_corpus import by_code, labels
+
+    assert labels("eurlex_32016R0679") == ("del regolamento (UE) 2016/679",
+                                           "nel regolamento (UE) 2016/679")
+    assert labels("eurlex_32012R1215")[0] == "del regolamento (UE) n. 1215/2012"
+    assert labels("eurlex_32003R0001")[0] == "del regolamento (CE) n. 1/2003"
+    assert labels("eurlex_32011L0083")[0] == "della direttiva 2011/83/UE"
+    assert labels("eurlex_32019L1937")[0] == "della direttiva (UE) 2019/1937"
+    assert labels("eurlex_52020PC0825") is None          # a proposal: left out
+    assert labels("codice_penale")[0] == "del codice penale"
+    # A chunk as prepare_eurlex.py writes it: the act's title, then the article.
+    title = "REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO EUROPEO E DEL CONSIGLIO"
+    body = ("Articolo 5\nPrincipi applicabili al trattamento di dati personali\n"
+            "1. I dati personali sono trattati in modo lecito, corretto e trasparente nei "
+            "confronti dell'interessato." + PAD)
+    arts = articles_from_records([{"code": "eurlex_32016R0679", "chunk_index": 0,
+                                   "article_num": "5", "text": f"{title}\n{body}"}])
+    assert [a.number for a in by_code(arts)["eurlex_32016R0679"]] == ["5"]
+    msgs = rewrite_messages(arts[("eurlex_32016R0679", "5")], "parafrasi")
+    assert "del regolamento (UE) 2016/679" in json.dumps(msgs, ensure_ascii=False)

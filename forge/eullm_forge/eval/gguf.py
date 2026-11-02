@@ -41,6 +41,16 @@ def default_server_binary() -> str:
     return str(Path(lcpp).expanduser() / "build-cuda" / "bin" / "llama-server")
 
 
+def _has_flag(binary: str, command: str, flag: str) -> bool:
+    """Whether ``binary command --help`` lists ``flag``."""
+    try:
+        out = subprocess.run([binary, command, "--help"], capture_output=True, text=True,
+                             timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return flag in out.stdout + out.stderr
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -218,9 +228,15 @@ class EullmServer:
     __exit__ = LlamaServer.__exit__
 
     def command(self) -> list[str]:
-        return [self.binary, "serve", "--port", str(self.port),
-                "--default-model", str(self.gguf), "--batch-size", str(self.parallel),
-                "--ctx-size", str(self.parallel * self.ctx_per_slot)]
+        cmd = [self.binary, "serve", "--port", str(self.port),
+               "--default-model", str(self.gguf), "--batch-size", str(self.parallel),
+               "--ctx-size", str(self.parallel * self.ctx_per_slot)]
+        # From 0.8.5 `serve` opens the chat UI too, always on port 11435: the
+        # second server on a node stopped there (job 2637245, 01-11-2026). An
+        # evaluation needs no UI; older engines have no such flag and no UI.
+        if _has_flag(self.binary, "serve", "--no-ui"):
+            cmd.append("--no-ui")
+        return cmd
 
     def __enter__(self) -> EullmServer:
         if not os.access(self.binary, os.X_OK):
