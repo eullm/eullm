@@ -2570,8 +2570,32 @@ async fn detect_port_service(port: u16) -> Option<String> {
     Some("unknown service".into())
 }
 
-/// Ensure the port is available, or exit with a helpful message.
-async fn ensure_port_available(port: u16, replace: bool) {
+/// The ports a command will not start without, each with the flag that
+/// moves it, checked before anything is loaded.
+///
+/// `eullm run` is the chat: with its UI port answered by another service the
+/// browser would open someone else's page, so both ports must be free.
+/// `eullm serve` is the API: since 0.8.5 it opens the chat UI too, but a UI
+/// port already taken must not stop it, as the 0.8.5 changelog says;
+/// `api::serve` logs that the UI could not be bound and serves the API. 0.8.5
+/// refused it, and on a LUMI node, where every benchmark server has its own
+/// API port, each server after the first exited at start (226 points of the
+/// `r-v085` round, 01/02-11-2026).
+fn ports_required(
+    api_port: u16,
+    ui_port: Option<u16>,
+    ui_required: bool,
+) -> Vec<(u16, &'static str)> {
+    let mut ports = vec![(api_port, "--port")];
+    if ui_required && let Some(p) = ui_port {
+        ports.push((p, "--ui-port"));
+    }
+    ports
+}
+
+/// Ensure the port is available, or exit with a helpful message naming
+/// `flag`, the option that moves it.
+async fn ensure_port_available(port: u16, flag: &str, replace: bool) {
     if let Some(service) = detect_port_service(port).await {
         if replace {
             eprintln!("Port {port} is in use by {service}.");
@@ -2583,10 +2607,7 @@ async fn ensure_port_available(port: u16, replace: bool) {
             eprintln!();
             eprintln!("Options:");
             eprintln!("  1. Stop the existing service on port {port}");
-            eprintln!(
-                "  2. Use a different port:  eullm serve --port {}",
-                port + 1
-            );
+            eprintln!("  2. Use a different port:  {flag} {}", port.saturating_add(1));
             std::process::exit(1);
         }
     }
@@ -2739,6 +2760,28 @@ mod launch_batch_size_tests {
     }
 }
 
+#[cfg(test)]
+mod ports_required_tests {
+    use super::ports_required;
+
+    #[test]
+    fn serve_needs_its_api_port_only_and_run_its_chat_port_too() {
+        // `serve` with the chat UI on: another server holding 11435 is no
+        // reason to refuse the API (a node of several benchmark servers).
+        assert_eq!(
+            ports_required(18020, Some(11435), false),
+            vec![(18020, "--port")]
+        );
+        // `run` is the chat: its UI port taken stops it, naming the flag.
+        assert_eq!(
+            ports_required(11434, Some(11435), true),
+            vec![(11434, "--port"), (11435, "--ui-port")]
+        );
+        // `--no-ui`: nothing but the API port, either way.
+        assert_eq!(ports_required(11434, None, true), vec![(11434, "--port")]);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_run(
     store: &ModelStore,
@@ -2835,9 +2878,8 @@ async fn cmd_run(
     let flag_n_cpu_moe = n_cpu_moe;
 
     if !multimodal_oneshot {
-        ensure_port_available(port, replace).await;
-        if let Some(p) = ui_port {
-            ensure_port_available(p, replace).await;
+        for (p, flag) in ports_required(port, ui_port, true) {
+            ensure_port_available(p, flag, replace).await;
         }
     }
 
@@ -3845,9 +3887,8 @@ async fn cmd_serve(
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
-    ensure_port_available(port, replace).await;
-    if let Some(p) = ui_port {
-        ensure_port_available(p, replace).await;
+    for (p, flag) in ports_required(port, ui_port, false) {
+        ensure_port_available(p, flag, replace).await;
     }
 
     let threads = threads.unwrap_or_else(inference::default_thread_count);
