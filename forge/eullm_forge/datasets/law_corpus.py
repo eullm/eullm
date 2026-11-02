@@ -86,9 +86,42 @@ RUBRICA_BACK = [
 ]
 
 
+_CELEX = re.compile(r"^eurlex_3(\d{4})([RLD])0*(\d+)")
+_EU_KIND = {"R": ("del regolamento", "nel regolamento", "regolamento"),
+            "L": ("della direttiva", "nella direttiva", "direttiva"),
+            "D": ("della decisione", "nella decisione", "decisione")}
+
+
+def labels(code: str) -> tuple[str, str] | None:
+    """("del codice penale", "nel codice penale"): how a text names the code, or None.
+
+    The nine codes are `CODE_LABELS`'. An EU act (prepare_eurlex.py, code
+    ``eurlex_<CELEX>``) is named from its CELEX number as the Official
+    Journal cites it: a regulation of 2016 "(UE) 2016/679", one of 2012
+    "(UE) n. 1215/2012", one of 2003 "(CE) n. 1/2003"; a directive of 2011
+    "2011/83/UE", of 2019 "(UE) 2019/1937". Other kinds of act get None and
+    are left out, as before.
+    """
+    if code in CODE_LABELS:
+        return CODE_LABELS[code]
+    m = _CELEX.match(code)
+    if not m or m.group(2) not in _EU_KIND:
+        return None
+    year, kind, num = int(m.group(1)), m.group(2), int(m.group(3))
+    of, in_, _ = _EU_KIND[kind]
+    org = "UE" if year >= 2010 else "CE"
+    if year >= 2015:
+        ref = f"(UE) {year}/{num}"
+    elif kind == "R":
+        ref = f"({org}) n. {num}/{year}"
+    else:
+        ref = f"{year}/{num}/{org}"
+    return f"{of} {ref}", f"{in_} {ref}"
+
+
 def code_name(code: str) -> str:
     """"Codice penale", "Costituzione", "Legge n. 241/1990": the code as a title."""
-    of = CODE_LABELS[code][0]
+    of = labels(code)[0]
     name = re.sub(r"^(?:del|della|dello|dell['’])\s*", "", of)
     return name[:1].upper() + name[1:]
 
@@ -115,7 +148,7 @@ def by_code(articles: dict[tuple[str, str], Article]) -> dict[str, list[Article]
     """The articles of each code we have a label for, in the code's order."""
     out: dict[str, list[Article]] = defaultdict(list)
     for a in articles.values():
-        if a.code in CODE_LABELS:
+        if labels(a.code):
             out[a.code].append(a)
     return {c: sorted(v, key=lambda a: number_key(a.number)) for c, v in sorted(out.items())}
 
@@ -156,7 +189,7 @@ def program_rows(articles: dict[tuple[str, str], Article], *,
                      "forma": form, "source": "program", "text": text})
 
     for code, arts in by_code(articles).items():
-        of, in_ = CODE_LABELS[code]
+        of, in_ = labels(code)
         name = code_name(code)
         In = in_[:1].upper() + in_[1:]
         taken = {a.number for a in arts}
@@ -277,7 +310,7 @@ def rewritable(article: Article) -> bool:
 
 def rewrite_messages(article: Article, style: str) -> list[dict]:
     """The teacher request for one rewrite of one article."""
-    of = CODE_LABELS[article.code][0]
+    of = labels(article.code)[0]
     h = article.heading.strip(" .")
     head = f"Art. {article.number} {of}" + (f" ({h})" if h else "")
     task = TASKS[style].format(n=article.number, of=of)
