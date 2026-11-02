@@ -21,7 +21,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License" />
   <img src="https://img.shields.io/badge/EU%20AI%20Act-Designed%20for%20compliance-gold" alt="EU AI Act" />
-  <img src="https://img.shields.io/badge/Engine-v0.8.5-2ea44f" alt="Engine status" />
+  <img src="https://img.shields.io/badge/Engine-v0.8.6-2ea44f" alt="Engine status" />
   <img src="https://img.shields.io/badge/Forge%20%2B%20Hub-Early%20development-orange" alt="Forge/Hub status" />
   <a href="https://github.com/eullm/eullm/actions/workflows/ci.yml"><img src="https://github.com/eullm/eullm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://doi.org/10.5281/zenodo.20412979"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.20412979.svg" alt="DOI" /></a>
@@ -50,7 +50,7 @@
 | 👥 **A long prompt never freezes the others** | With two slots, an 8,000-token prompt is read in 1.5 s while another answer keeps streaming; its longest pause is 108 ms. |
 | 📈 **Sixteen users, one GPU** | Continuous batching: Qwen3-8B writes 1,065 tokens/s across 16 concurrent requests on one desktop RTX 5070 Ti, 8× one request alone, and 1,434 on one GH200 (EuroHPC JUPITER). |
 | 🧠 **Several models, one server** | Chat models, an embedder and a decision model stay loaded side by side, each sized to the VRAM the others leave. |
-| 🖥️ **A chat and a live monitor, built in** | Open `http://localhost:11435/`: a chat that shows each answer's speed and the model's reasoning, every sampling setting, and a Monitor with every request, GPU load, VRAM, temperature and power as they happen. Nothing to install, nothing sent anywhere. |
+| 🖥️ **A chat and a live monitor, built in** | Open `http://localhost:11435/`: a chat with its history kept in your browser, each answer's speed and the model's reasoning, every sampling setting, a **Model hub** to find, download and manage models, and a Monitor with every request, GPU load, VRAM, temperature and power as they happen. Nothing to install, nothing sent anywhere. |
 | 📂 **Your model folders, used as they are** | Point `EULLM_MODEL_LIBRARIES` at LM Studio's folder or a Hugging Face cache: every GGUF in it, at any depth, runs by name, and nothing in it is moved or changed. |
 | 🔌 **A drop-in for Ollama and OpenAI** | The same API on port 11434: Open WebUI, LangChain, n8n and any OpenAI client work unchanged. |
 | 🔒 **Nothing leaves your machine** | No telemetry, no external API. Every answer and every decision goes to a local audit trail: model, tokens, timing, never the text. |
@@ -137,7 +137,10 @@ curl http://localhost:11434/v1/chat/completions \
 ```
 
 A chat UI opens on `http://localhost:11435/`, with `eullm run` and with
-`eullm serve` alike (`--no-ui` turns it off). Beside the chat: the
+`eullm serve` alike (`--no-ui` turns it off). Its sidebar keeps your recent
+chats (in the browser only) and opens the **Model hub** (the models on this
+machine, and Hugging Face's GGUF models to download, each judged against your
+VRAM and RAM). Beside the chat: the
 **Parameters** panel (system prompt, reasoning, temperature, top P/K, min P,
 repeat penalty, seed), the **Monitor** (requests, speed, CPU, memory, and each
 GPU's load, VRAM, temperature, power and PCIe traffic over the last two
@@ -192,8 +195,9 @@ and [the roadmap](docs/roadmap.md) says what is ready and what is next. **Want o
 
 | | Status |
 |---|---|
-| **Engine**: inference, Ollama and OpenAI APIs, continuous batching, quantized KV cache, audit trail, chat UI; llama.cpp b11925 | ✅ Ready, v0.8.5 |
-| **Chat UI**: Monitor (requests, GPU, CPU, memory), Parameters panel, About; on `eullm serve` too | ✅ New in v0.8.5 |
+| **Engine**: inference, Ollama and OpenAI APIs, continuous batching, quantized KV cache, audit trail, chat UI; llama.cpp b12032 | ✅ Ready, v0.8.6 |
+| **Chat UI**: Monitor (requests, GPU, CPU, memory), Parameters panel; on `eullm serve` too | ✅ Since v0.8.5 |
+| **Chat UI**: sidebar with the chats kept in the browser, Model hub (models on this machine, Hugging Face downloads), About | ✅ New in v0.8.6 |
 | **Model libraries** (`EULLM_MODEL_LIBRARIES`): other programs' model folders, read only | ✅ Since v0.8.0 |
 | **Decisions** (`/v1/systemone`) | ✅ Since v0.7.20 |
 | **Large MoE models on small GPUs** (`--moe-cache`), **MTP drafts** (`--mtp`), **several models at once**, **`model: "auto"`** | ✅ New in v0.7.30; the expert cache is experimental and needs one CUDA GPU |

@@ -13,10 +13,18 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.8.6 — 2026-11-01
 
 ### Added
-- **An About page in the chat UI** (the ⓘ icon): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
+- **The chat UI has a sidebar and a Model hub.** The sidebar holds New chat, the pages (Chat, Model hub, Monitor, About) and the recent chats. **Chats are kept in this browser** and reopen as they were, with each answer's figures; attachments are not kept, and the model is told so. The **Model hub** lists the models on this machine (in memory, in the models folder, used where they are, and the EuLLM catalog not yet downloaded) with what each is, and buttons to chat with it, unload it, delete it from the models folder or download it; its **Discover** tab browses Hugging Face's GGUF repos by downloads, trend, date or likes, or by search, with each repo's quantizations, their size and whether they fit this machine. The download window it replaces is gone. On a phone the sidebar slides in from a menu button.
+- **`DELETE /api/delete`**, Ollama's endpoint: removes a model from the models folder; refuses a model in memory or a file used where it is. `/api/tags` says which models are which (`details.source`), and `/api/hf/search` takes a `sort`.
+- **An About page in the chat UI** (About, in the sidebar): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
+
+### Fixed
+- `/api/tags` said `Q4_K_M` for every model loaded from a file, whatever its quantization, and size 0; it now gives what the models folder or library knows of it, and no quantization rather than a wrong one.
+
+### Changed
+- **llama.cpp moves to b12032**, 107 commits newer. A MoE model held whole in VRAM reads prompts faster on NVIDIA GPUs, as the gate and up expert products and the step between them now run as one kernel: DeepSeek-Coder-V2-Lite reads 3% faster on an RTX 5070 Ti. A MoE whose experts do not all fit (the expert cache) waits on the bus rather than on that kernel and gains nothing: Qwen3.6-35B-A3B and Qwen3-Next-80B read and write as fast as on 0.8.5, to the same answers. Gemma 3n and Gemma 4 on the CPU take less memory (216 MiB less for gemma-4-E2B), loading reuses one buffer instead of one per weight, and three more architectures load: LiquidAI's LFM3 family (text, vision, audio), Limite and Mistral Large 4. FP8 (E4M3) GGUF files load too.
 
 ## 0.8.5 — 2026-10-29
 

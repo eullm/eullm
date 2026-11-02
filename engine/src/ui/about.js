@@ -7,7 +7,6 @@
 
   const $ = (id) => document.getElementById(id);
   const els = {
-    btn: $("about-btn"),
     view: $("about"),
     version: $("about-version"),
     chips: $("about-chips"),
@@ -17,10 +16,8 @@
     devices: $("about-devices"),
     paths: $("about-paths"),
     protection: $("about-protection"),
-    messages: $("messages"),
-    form: $("chat-form"),
   };
-  if (!els.btn || !els.view) return;
+  if (!els.view) return;
 
   const auth = () => {
     let key = "";
@@ -131,24 +128,9 @@
     setTimeout(() => (els.copy.textContent = "Copy details"), 1500);
   });
 
-  function show(on) {
-    if (on) document.dispatchEvent(new CustomEvent("eullm:view", { detail: "about" }));
-    els.view.hidden = !on;
-    els.messages.hidden = on;
-    els.form.hidden = on;
-    els.btn.setAttribute("aria-pressed", String(on));
-    els.btn.classList.toggle("active", on);
-    if (on) load();
-  }
-
-  els.btn.addEventListener("click", () => show(els.view.hidden));
+  // The page shell (app.js) shows and hides the views; this one reads the
+  // engine each time it is shown.
   document.addEventListener("eullm:view", (e) => {
-    if (e.detail === "about" || els.view.hidden) return;
-    els.view.hidden = true;
-    els.btn.setAttribute("aria-pressed", "false");
-    els.btn.classList.remove("active");
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !els.view.hidden && !document.querySelector("dialog[open]")) show(false);
+    if (e.detail === "about") load();
   });
 })();
