@@ -2559,11 +2559,11 @@ jobs:
 
             LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: llama.cpp b11925, and other programs' model folders used as they are
+            ### This release: `eullm serve` starts when the chat UI's port is taken
 
-            **llama.cpp moves to b11925**, 443 commits newer. On an RTX 5070 Ti, reading a prompt is 5-16% faster and writing level or up to 4% faster, on Qwen3.6-35B-A3B, Qwen3.8-Flash-Next and Qwen3.5-9B; the expert cache finds as many experts in VRAM as before. Eight more architectures load. With `--mtp`, Qwen3.5-9B keeps about 5 points fewer of its drafts and writes 2-3.5% slower.
+            **`eullm serve` starts when port 11435 is taken.** Since 0.8.5 `serve` opens the chat UI too, on port 11435, and 0.8.5 and 0.8.6 exited when another program held that port ("port 11435 is already in use"), so on a machine running more than one server only the first one started. 0.8.7 leaves the chat UI off for that server, says so in the log, and serves the API; `--ui-port` gives its chat another port and `--no-ui` turns the chat off. `eullm run` still stops when its chat port is taken, and now names `--ui-port`, not `--port`.
 
-            **Model libraries.** `EULLM_MODEL_LIBRARIES` (in the environment or `.env`, folders separated by `;`) names other programs' model folders, such as LM Studio's or a Hugging Face cache: every `.gguf` in them, through every subfolder, is listed and runs by name, and nothing there is moved, renamed or deleted. Projectors go with their model instead of being listed as models. `eullm import` no longer moves files.
+            Everything else is 0.8.6: llama.cpp b12032, and the chat's sidebar, Model hub and About page.
 
             ### Quick install
 

@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.8.7 — 2026-11-02
 
 ### Fixed
 - **`eullm serve` starts when the chat UI's port is taken**, as 0.8.5 said it would: the UI is left off, the log says so, and the API is served. 0.8.5 and 0.8.6 exited instead ("port 11435 is already in use"), so on a machine running more than one server only the first started; `--no-ui` avoided it. `eullm run` still stops when its chat port is taken, and now names the option that moves it (`--ui-port`, not `--port`).
