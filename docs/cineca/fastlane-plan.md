@@ -21,8 +21,10 @@
 | | |
 |---|---|
 | Ore | 30.000 GPU-ore = 7.500 ore nodo = 240.000 ore locali di `saldo` (8 core per GPU) |
-| Calendario | 92 giorni; **nessuna proroga** ("extensions … are not granted") |
-| Inizio | l'uso deve cominciare entro il primo mese; CINECA può applicare un profilo di consumo prestabilito |
+| Calendario | 92 giorni; **nessuna proroga** ("extensions … are not granted"). CINECA (2 novembre): il progetto parte alla data ufficiale o quando la registrazione è completa, e **finisce comunque il 2 febbraio** |
+| Ritmo | la *budget linearization policy* di CINECA: quota mensile = totale / 3 = **80.000 ore locali = 10.000 GPU-ore al mese**. Sotto la quota la priorità è più alta, sopra scende; quello che avanza a fine mese resta, ma con priorità più bassa |
+| Spazio | `$WORK` parte da **1 TB**: per arrivare ai 4 TB della proposta va chiesto a superc@cineca.it a progetto avviato |
+| Collaboratori | li aggiunge il PI da UserDB ("My Projects" → progetto → "edit" → "collaborators"), dopo che si sono registrati loro stessi |
 | Dichiarato nella proposta | fino a 16 GPU contemporanee, 4 TB di spazio, 2 TB di trasferimenti, nessun membro del team oltre al PI |
 | Dati personali | "we will complete the required agreement before such processing takes place": **nessuna sentenza né dato derivato su questo progetto prima del DPA con CINECA** |
 | Report finale | obbligatorio, sul modello del sito EuroHPC JU |
@@ -93,6 +95,13 @@ lunedì si confronta `budget.sh` con questa tabella. **Più del 10% sotto il
 traguardo vuol dire due catene in più dalla lista, quella settimana stessa**,
 non "si recupera dopo": il 2 febbraio non si sposta.
 
+**Perché la linea conta due volte.** Con la *linearization policy* le ore
+non spese in un mese passano al mese dopo con priorità più bassa: chi resta
+indietro a novembre aspetta di più in coda proprio a dicembre, quando deve
+recuperare. Superare la quota del mese abbassa la priorità allo stesso modo.
+Il traguardo di ogni mese è quindi la sua quota, 10.000 GPU-ore, non di più
+e non di meno: è quello che `saldo -b` mostra come quota mensile.
+
 ## Il primo giorno, prima di qualsiasi training
 
 1. **Il progetto.** Leggere `saldo -b` per il nome del conto, poi in `~/.bashrc`:
@@ -154,6 +163,9 @@ non "si recupera dopo": il 2 febbraio non si sposta.
 6. **Il registro:** `sbatch_queue_stats.slurm` in catena da subito. `sacct`
    perde la storia dopo qualche settimana, e il report deve citare intervalli
    datati.
+7. **Lo spazio:** `$WORK` nasce da 1 TB. Lo stesso giorno si scrive a
+   superc@cineca.it per portarlo ai 4 TB assegnati, prima di copiare i dati
+   della 1147. Sulla 1147 un solo TB era arrivato al 96% (10 ottobre).
 
 ## Il lavoro, in pacchetti
 
@@ -212,15 +224,22 @@ JUPITER (1434) resta attivo fino al 31 dicembre. La divisione:
 * **Il 2 febbraio è fisso:** il piano di uscita dei dati si scrive a gennaio,
   non l'ultimo giorno come per la 1147.
 
-## Domande aperte per CINECA (primo messaggio)
+## Domande per CINECA
+
+Inviate il 2 novembre 2026 in due mail.
 
 1. Collegare o lasciare leggibile `$WORK` di AIFAC_P02_1147 fino alla copia
-   interna; sorte di `$SCRATCH`.
-2. Profilo di consumo prestabilito, QOS del progetto, limite di GPU
-   contemporanee, priorità dei job.
-3. Procedura per il DPA (dati giudiziari pseudonimizzati).
-4. Procedura per aggiungere un membro del team.
-5. Consumo energetico per job, per il report.
+   interna; sorte di `$SCRATCH`. *Aperta.*
+2. Profilo di consumo, QOS del progetto, limite di GPU contemporanee,
+   priorità dei job. *In parte risposta*: la quota mensile e la priorità
+   vengono dalla linearization policy. QOS e limiti si leggono con
+   `fastlane_probe.sh`.
+3. Procedura per il DPA (dati giudiziari pseudonimizzati). *Aperta.*
+4. Procedura per aggiungere un membro del team. *Risposta*: da UserDB, la fa il PI.
+5. Consumo energetico per job, per il report. *Aperta.*
+6. Data di fine allineata all'inizio effettivo. *Risposta: no*, finisce il 2
+   febbraio comunque.
+7. Aumento di `$WORK` a 4 TB. *Da chiedere a progetto avviato.*
 
 ## Report finale
 
