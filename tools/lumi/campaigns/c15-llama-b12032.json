@@ -1,0 +1,317 @@
+{
+  "campaign": "c15-llama-b12032",
+  "notes": [
+    "llama.cpp b11925 -> b12032 (release 0.8.6, and 0.8.7 with the chat UI port fix), as",
+    "docs/llama-bump-b12032.md asks of LUMI-G: the same points on 0.8.5 (a3bbe56, b11925, label",
+    "v085) and on 0.8.7 (label v087), round r-b12032, sized for jobs of 4 hours. The v085 half",
+    "runs in r-v085's chains, ahead of that round's points; v087 has a chain of its own.",
+    "b12-moe first, the whole node: the 235B's expert cache at 8 and 32 requests with",
+    "LLAMA_MOE_CACHE_STATS=64 (0002 and 0008 apply as they were).",
+    "b12-tensor: Qwen3-32B with --split-mode tensor on four GCDs, beside the other points (not",
+    "alone, to keep the test to one job): 0012 was regenerated on upstream's new loader.",
+    "b12-mtp: the six Qwen3.5/3.6 MTP twins without --mtp and with --mtp 2, 100 gsm8k questions",
+    "at temperature 0: 0013 beside upstream's ballot on ROCm 6 (#31259), and #31368's stricter",
+    "rollbacks of recurrent memory, which --mtp 2 should not meet (no error in the log).",
+    "b12-soak-*: two to two and a half hours at 32 requests on one GCD, llama.cpp's log on: no",
+    "server death, no HSA error, no out of memory, no NaN (tools/lumi/log_checks.py).",
+    "b12-pool-flush: the same soak with GGML_CUDA_POOL_KEEP_FREE_MB=40000, so that the pool",
+    "flushes (0011): with the defaults the soaks never came near full VRAM and the flush has",
+    "never run on ROCm. Its speed is not a result: a stress of the flush, 'pool[...] freeing'",
+    "lines expected, and nothing else in the log.",
+    "b12-dsa, b12-dsa-graded: DeepSeek-V4-Flash (284B, 13B active, architecture deepseek4, MIT),",
+    "unsloth's UD-Q4_K_XL (155 GB) on four GCDs. Its sparse attention runs on CDNA from b12032",
+    "(#31259: the sparse flash-attention kernel, made for 64-wide wavefronts); 0.8.5 reads it",
+    "with the dense kernel and its mask. Reading and writing at 0, 16,000 and 30,000 tokens of",
+    "prompt, and 100 gsm8k questions at temperature 0 for the same answers on both binaries."
+  ],
+  "text_only": [
+    "qwen3.5-9b-mtp-gguf-q4_k_m",
+    "qwen3.5-9b-mtp-gguf-q8_0",
+    "qwen3.6-27b-mtp-gguf-q4_k_m",
+    "qwen3.6-27b-mtp-gguf-q8_0",
+    "qwen3.6-35b-a3b-mtp-gguf-ud-q4_k_m",
+    "qwen3.6-35b-a3b-mtp-gguf-q8_0"
+  ],
+  "pull": [
+    "hf.co/unsloth/Qwen3.5-9B-MTP-GGUF:Q4_K_M",
+    "hf.co/unsloth/Qwen3.5-9B-MTP-GGUF:Q8_0",
+    "hf.co/unsloth/Qwen3.6-27B-MTP-GGUF:Q4_K_M",
+    "hf.co/unsloth/Qwen3.6-27B-MTP-GGUF:Q8_0",
+    "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_M",
+    "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:Q8_0",
+    "hf.co/Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M",
+    "hf.co/Qwen/Qwen3-32B-GGUF:Q8_0",
+    "hf.co/Qwen/Qwen3-30B-A3B-GGUF:Q8_0",
+    "hf.co/unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q4_K_XL"
+  ],
+  "defaults": {
+    "gcds": 1
+  },
+  "groups": [
+    {
+      "name": "b12-moe",
+      "priority": 110,
+      "est_s": 3000,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "exclusive": true,
+        "cores": "reserved",
+        "slot_ctx": 4096,
+        "extra_args": [
+          "--moe-cache",
+          "auto"
+        ],
+        "env": {
+          "LLAMA_MOE_CACHE_STATS": "64",
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      },
+      "axes": {
+        "model": [
+          "qwen3-235b-a22b-gguf-q4_k_m"
+        ],
+        "batch": [
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "b12-tensor",
+      "priority": 108,
+      "est_s": 1500,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "slot_ctx": 4096,
+        "model": "qwen3-32b",
+        "gcds": 4,
+        "extra_args": [
+          "--fit-strict",
+          "--split-mode",
+          "tensor"
+        ]
+      },
+      "axes": {
+        "batch": [
+          1,
+          16
+        ]
+      }
+    },
+    {
+      "name": "b12-dsa",
+      "priority": 107,
+      "est_s": 1800,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "model": "deepseek-v4-flash-0731-gguf-ud-q4_k_xl",
+        "gcds": 4,
+        "batch": 1,
+        "slot_ctx": 32768,
+        "extra_args": [
+          "--fit-strict"
+        ]
+      },
+      "axes": {
+        "prompt_tokens": [
+          0,
+          16000,
+          30000
+        ]
+      }
+    },
+    {
+      "name": "b12-dsa-graded",
+      "priority": 107,
+      "est_s": 2400,
+      "set": {
+        "kind": "workload",
+        "model": "deepseek-v4-flash-0731-gguf-ud-q4_k_xl",
+        "gcds": 4,
+        "batch": 1,
+        "slot_ctx": 8192,
+        "sets": [
+          "gsm8k"
+        ],
+        "limit": 100,
+        "concurrency": 1,
+        "max_tokens": 768,
+        "think": false,
+        "extra_args": [
+          "--fit-strict"
+        ]
+      }
+    },
+    {
+      "name": "b12-mtp",
+      "priority": 106,
+      "est_s": 1500,
+      "set": {
+        "kind": "workload",
+        "batch": 1,
+        "slot_ctx": 8192,
+        "sets": [
+          "gsm8k"
+        ],
+        "limit": 100,
+        "concurrency": 1,
+        "max_tokens": 768,
+        "think": false
+      },
+      "axes": {
+        "model": [
+          "qwen3.5-9b-mtp-gguf-q4_k_m-text",
+          "qwen3.5-9b-mtp-gguf-q8_0-text",
+          "qwen3.6-27b-mtp-gguf-q4_k_m-text",
+          "qwen3.6-27b-mtp-gguf-q8_0-text",
+          "qwen3.6-35b-a3b-mtp-gguf-ud-q4_k_m-text",
+          "qwen3.6-35b-a3b-mtp-gguf-q8_0-text"
+        ],
+        "extra_args": [
+          [
+            "--fit-strict"
+          ],
+          [
+            "--fit-strict",
+            "--mtp",
+            "2"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "b12-soak-32b",
+      "priority": 104,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3-32b",
+        "kv": "f16/f16"
+      }
+    },
+    {
+      "name": "b12-soak-32b-q8",
+      "priority": 104,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3-32b-gguf-q8_0",
+        "kv": "q8_0/q8_0"
+      }
+    },
+    {
+      "name": "b12-soak-30b-a3b",
+      "priority": 104,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3-30b-a3b-gguf-q8_0",
+        "kv": "f16/f16"
+      }
+    },
+    {
+      "name": "b12-soak-35b-a3b",
+      "priority": 104,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3.6-35b-a3b",
+        "kv": "f16/f16"
+      }
+    },
+    {
+      "name": "b12-pool-flush",
+      "priority": 104,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info",
+          "GGML_CUDA_POOL_KEEP_FREE_MB": "40000"
+        },
+        "model": "qwen3-30b-a3b-gguf-q8_0",
+        "kv": "f16/f16"
+      }
+    }
+  ]
+}

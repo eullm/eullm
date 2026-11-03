@@ -124,3 +124,20 @@ b12032) built with `--features cuda`, one server at a time,
 Nothing here holds the merge back. Still to run: LUMI-G's smoke job and an
 MTP round, for `0013` beside upstream's ballot and the sparse attention now
 enabled on CDNA.
+
+## 5. On LUMI-G (MI250X, gfx90a, ROCm 6.3)
+
+Queued on 2 November, on release 0.8.7 (this llama.cpp, and the chat UI
+port fix of `eullm serve`) against 0.8.5, each built from its tag:
+`tools/lumi/campaigns/c15-llama-b12032.json`. The smoke job; the 235B's
+expert cache at 8 and 32 requests; Qwen3-32B with `--split-mode tensor` on
+four GCDs (`0012`); the six Qwen3.5/3.6 MTP models without `--mtp` and with
+`--mtp 2` (`0013` beside upstream's ballot, #31368's rollbacks); four soaks
+of two hours and more at 32 requests; and one soak with the pool's
+threshold raised so that `0011`'s flush runs, which the b11925 round never
+saw. And the sparse attention enabled on CDNA (#31259), on
+DeepSeek-V4-Flash (unsloth's UD-Q4_K_XL, 155 GB, four GCDs), which 0.8.5
+reads with the dense kernel: reading and writing at 0, 16,000 and 30,000
+tokens of prompt, and 100 gsm8k questions for the same answers. Results
+here when the jobs have run; the record with job ids is
+`docs/lumi/allocation-plan.md`.
