@@ -123,19 +123,33 @@ user an `sbatch`, a chain or an `scontrol update`, check it against all of
 them, and look for what the scripts' headers already measured before
 proposing a new request shape.
 
-1. **Two hours, chained.** `--time=02:00:00`, as a chain of links
-   (`submit_chain.sh <script> N` or `--dependency=afterany`). A 2 h request is
-   backfilled into gaps; a 24 h one waits for a node to stay free for a day.
-   Every training script resumes from its checkpoint and exits at once when
-   its output is complete, so a link costs minutes. (Forgotten for GRPO on
-   2026-10-01: five 24 h jobs waited all afternoon.)
-2. **Three GPUs, 24 cores, 340 GB — all three numbers.** Never 4 GPUs, never
-   32 cores, never more than ~340 GB. Four GPUs or 32 cores make the job
-   exclusive, and an entirely idle node is rare: on 2026-09-23 two probes
-   differing only in `--gres` started in 87 s (3 GPUs) and not at all (4);
-   see sbatch_phase2_split.slurm. Forgotten for GRPO on 2026-10-01 (3253 of
-   3264 nodes busy, the whole-node chains never started). One-GPU jobs:
-   8 cores, 120 GB.
+**What the Fast Lane's queue does (AIFAC_F02_1400, `fastlane_probe.sh`, 3-11-2026):**
+the shapes of rules 1-2 were Playground measurements of September, and on the
+Fast Lane's first day they no longer held. 3-GPU jobs started in 13-20 s at
+**every** wall time up to 24 h, `boost_qos_lprod` too; a whole node for 2 h in
+7 min; 4 nodes for 2 h in 29 min; two 4-node jobs ran side by side (32 GPUs)
+98 s after submission; whole nodes for 8-24 h, 2, 4 and 8 nodes all started
+after 105-114 min. No limit of our own on GPUs, jobs or wall time; the
+partition caps a job at 24 h and 64 nodes. One day's reading, so the rules
+below are the starting point and the probe is run again when the queue
+seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
+
+1. **Long links for 3-GPU work, short only where they pay.** A 3-GPU job of
+   up to 24 h starts at once: chain 24 h links (`submit_chain.sh ... -t
+   24:00:00`, the script's own stop time raised to match, e.g.
+   `law_rewrites.py --stop-after 85500`) instead of 2 h ones, which lose
+   ~14 min of start-up (20 %) each. Whole nodes and multi-node jobs wait
+   ~2 h for any length: worth it for work that needs the shape (the sharded
+   30B MoE, the multi-node study), not as a habit. The script headers still
+   say 2 h and `tests/test_leonardo_job_shape.py` still holds them to it, so
+   the longer time goes on the command line; the test is revised with the
+   first script that needs a whole node by design. On the Playground (from
+   2026-09-21) 24 h and whole-node jobs waited for days; if the probe ever
+   reads like that again, rules 1-2 go back to 2 h and 3 GPUs.
+2. **Three GPUs, 24 cores, 340 GB — all three numbers — for a part of a
+   node.** Four GPUs or 32 cores make the job exclusive: ask for that only
+   when the whole node is meant (rule 1), never by accident through the
+   cores or the memory. One-GPU jobs: 8 cores, 120 GB.
 3. **Changing a queued job:** `scontrol update` takes memory in MB
    (`MinMemoryNode=348160`, not `340G`), and one invalid field fails the
    whole update silently for the others. Read the result back with
