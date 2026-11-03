@@ -292,6 +292,18 @@ def test_a_round_can_plan_some_groups_of_a_campaign(tmp_path, capsys):
                           "--group", "load-togther-*"]) == 2
     assert "no group matches load-togther-*" in capsys.readouterr().err
     assert Queue(q).counts()["todo"] == 3
+    # Two specs, a group of each: each pattern names a group of one spec, not
+    # of both (c01's soak-node and c02's moe-soak, 03-11-2026).
+    other = tmp_path / "t.json"
+    other.write_text(json.dumps({"campaign": "c-t", "groups": [
+        {"name": "moe-soak", "set": {"model": "d"}}, {"name": "dense", "set": {"model": "e"}}]}))
+    assert campaign.main(["plan", str(path), str(other), "--queue", q, "--round", "r4",
+                          "--group", "load-q8", "--group", "moe-soak"]) == 0
+    out = capsys.readouterr().out
+    assert "s.json (round r4): 1 points, 1 new" in out and "t.json (round r4): 1 points" in out
+    assert campaign.main(["plan", str(path), str(other), "--queue", q, "--round", "r5",
+                          "--group", "moe-sok"]) == 2
+    assert Queue(q).counts()["todo"] == 5
 
 
 def test_when_free_follows_alignment_and_overruns(tmp_path, engine):
