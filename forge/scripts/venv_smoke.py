@@ -61,12 +61,16 @@ def gpu() -> str:
                           "--format=csv,noheader"], capture_output=True, text=True).stdout.strip()
     assert torch.cuda.is_available(), "torch.cuda.is_available() is False"
     a = torch.randn(8192, 8192, device="cuda", dtype=torch.bfloat16)
-    torch.cuda.synchronize()
-    t0 = time.time()
-    for _ in range(10):
+    # Warm up first: the first products pay cuBLAS's start-up, and timed
+    # with them an A100 read 4 TFLOP/s (job 63409258) against its ~300.
+    for _ in range(3):
         a @ a
     torch.cuda.synchronize()
-    tflops = 10 * 2 * 8192**3 / (time.time() - t0) / 1e12
+    t0 = time.time()
+    for _ in range(20):
+        a @ a
+    torch.cuda.synchronize()
+    tflops = 20 * 2 * 8192**3 / (time.time() - t0) / 1e12
     q = torch.randn(4, 16, 1024, 128, device="cuda", dtype=torch.bfloat16)
     torch.nn.functional.scaled_dot_product_attention(q, q, q, is_causal=True)
     return (f"driver/gpu: {smi}; torch {torch.__version__} (CUDA {torch.version.cuda}); "
@@ -169,8 +173,14 @@ def qwen35(path: str) -> str:
     with torch.no_grad():
         out = model(**batch)
     torch.cuda.synchronize()
+    first = time.time() - t0
+    t0 = time.time()
+    with torch.no_grad():
+        out = model(**batch)
+    torch.cuda.synchronize()
     assert torch.isfinite(out.logits).all(), "non-finite logits"
-    return f"{kernels}; forward {time.time() - t0:.2f} s"
+    # The first forward compiles the Triton kernels; the second is the speed.
+    return f"{kernels}; first forward {first:.2f} s, second {time.time() - t0:.2f} s"
 
 
 @check("moe")
@@ -183,7 +193,19 @@ def moe(path: str) -> str:
         path, quantization_config=BitsAndBytesConfig(load_in_8bit=True), device_map="cuda")
     loaded = time.time() - t0
     mem = torch.cuda.max_memory_allocated() / 2**30
-    return f"loaded in {loaded:.0f} s, {mem:.1f} GiB on the GPU; {_generate(model, tok)}"
+    # What 8 bits actually reached. bitsandbytes quantizes nn.Linear layers;
+    # experts stored as fused 3-D tensors stay in bf16, and then the "8-bit"
+    # 30B needs ~57 GiB (job 63409258) instead of the ~31 of September.
+    by_dtype: dict[str, int] = {}
+    for prm in model.parameters():
+        key = str(prm.dtype).replace("torch.", "")
+        by_dtype[key] = by_dtype.get(key, 0) + prm.numel() * prm.element_size()
+    for buf in model.buffers():
+        key = str(buf.dtype).replace("torch.", "")
+        by_dtype[key] = by_dtype.get(key, 0) + buf.numel() * buf.element_size()
+    split = ", ".join(f"{k} {v / 2**30:.1f} GiB" for k, v in sorted(by_dtype.items()))
+    return (f"loaded in {loaded:.0f} s, peak {mem:.1f} GiB on the GPU; weights by dtype: "
+            f"{split}; {_generate(model, tok)}")
 
 
 def main(argv=None) -> int:

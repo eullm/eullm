@@ -472,6 +472,10 @@ ran on login nodes and were killed by their 10-minute CPU-time limit:
   From a login node they take host-based authentication, so a copy between
   two projects' areas needs no job and no queue:
   `ssh -xt <user>@data.leonardo.cineca.it rsync -a /leonardo_work/<OLD>/<dir> /leonardo_work/<NEW>/`.
+  Tried on 2026-11-03 for `hf_home/datasets` (34 GB, Playground to Fast
+  Lane): the first connection asks to accept the host key (131.175.44.53,
+  CINECA's network), then rsync prints nothing and returns; check the copy
+  with `du -sh` at the destination.
   To or from an outside server (the workstation, an I3K server, JUPITER),
   rsync against the datamover instead of a login node.
 * **GridFTP**, the tool CINECA recommends for large transfers:
