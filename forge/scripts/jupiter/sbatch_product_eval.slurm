@@ -15,6 +15,13 @@
 # merged directory gives the tokenizer. Answers go to the teacher eval's
 # directory as answers-<set>-<label>-q4e.jsonl, readable by the user alone
 # (the sets are private), totals only in the log.
+#
+# PE_SETS: "name=<file> ..." in place of the five sets (e.g. the sets copied
+# from Leonardo on 03-11: norm-exam-devbig, practical-heldout, lexia-live).
+# PE_CLOSED=1 asks CLOSED BOOK, no texts and no retrieval, as a plain chat
+# does (roadmap phase 0, E0): answers-<set>-<label>-q4c.jsonl, and the
+# closed-book suite (a set named closed-book) is scored at the end by
+# score_closed_book.py, which needs no judge. Counts only.
 
 #SBATCH --job-name=forge-product-eval
 #SBATCH --partition=booster
@@ -31,7 +38,9 @@ EULLM_BIN="${EULLM_BIN:-$PROJECT/$USER/eullm-target/v0.8.5/release/eullm}"
 R="$FORGE_RUN_DIR" D="$FORGE_DATA_DIR" P="${FORGE_PRIVATE_EVAL:-$FORGE_HOME/private-eval}"
 G="$R/gguf"
 read -r -a MODELS <<<"${PE_MODELS:-g9r-r2=$R/grpo/g9r-r2/merged=$G/g9r-r2/g9r-r2-q4_k_m.gguf g4-r3=$R/grpo/g4-r3/merged=$G/g4-r3/g4-r3-q4_k_m.gguf dqp-d-q9b=$R/sft-dqp/d-q9b/merged=$G/d-q9b/d-q9b-q4_k_m.gguf}"
-SETS="trap-test=$D/eval/trap-test.jsonl trap-test-para=$D/eval/trap-test-para.jsonl lexia-trappole=$P/lexia-trappole.jsonl practical-dev=$P/practical-dev.jsonl norm-exam=$D/eval/norm-exam.jsonl"
+SETS="${PE_SETS:-trap-test=$D/eval/trap-test.jsonl trap-test-para=$D/eval/trap-test-para.jsonl lexia-trappole=$P/lexia-trappole.jsonl practical-dev=$P/practical-dev.jsonl norm-exam=$D/eval/norm-exam.jsonl}"
+CLOSED="${PE_CLOSED:-0}"
+TAG=$([ "$CLOSED" = 1 ] && echo q4c || echo q4e)
 NORMS="$(ls "$D"/norms-src/legislazione_*.chunks.jsonl | grep -v eurlex | tr '\n' ' ')"
 OUT="$R/teacher-eval"
 JOB="${SLURM_JOB_ID:-local}"
@@ -40,6 +49,7 @@ umask 077
 chmod 700 "$OUT"
 
 echo "=== the candidates as the product runs them: job $JOB on $(hostname), $(date -Is) ==="
+echo "  $([ "$CLOSED" = 1 ] && echo "closed book, no texts" || echo "open book, hybrid retrieval, no note")"
 echo "  engine $("$EULLM_BIN" --version 2>&1 | head -1) ($EULLM_BIN)"
 bad=0
 [ "${#MODELS[@]}" -le 4 ] || { echo "[!!] four models a node"; bad=1; }
@@ -57,16 +67,18 @@ nvidia-smi --query-gpu=timestamp,index,power.draw,utilization.gpu,memory.used \
 SAMPLER=$!
 
 ask() {   # ask <gpu> <label> <merged> <gguf>: every set, one after the other
-    local g=$1 label=$2 merged=$3 gguf=$4 s set items ans t0
+    local g=$1 label=$2 merged=$3 gguf=$4 s set items ans t0 book
+    book=(--norms $NORMS --embedder Qwen/Qwen3-Embedding-0.6B --reranker Qwen/Qwen3-Reranker-0.6B
+          --retrieval-cache "$R/retrieval-cache" --no-note)
+    [ "$CLOSED" = 1 ] && book=()
     for s in $SETS; do
-        set="${s%%=*}" items="${s#*=}" ans="$OUT/answers-$set-$label-q4e.jsonl"
+        set="${s%%=*}" items="${s#*=}" ans="$OUT/answers-$set-$label-$TAG.jsonl"
         [ -s "$ans" ] && { echo "  $label on $set: answered already"; continue; }
         t0=$(date +%s)
         # shellcheck disable=SC2086
         CUDA_VISIBLE_DEVICES=$g taskset -c "$((72 * g))-$((72 * g + 71))" \
-            python "$EULLM_REPO/forge/scripts/legal_eval.py" "$merged" --label "$set-$label-q4e" \
-            --items "$items" --norms $NORMS --embedder Qwen/Qwen3-Embedding-0.6B \
-            --reranker Qwen/Qwen3-Reranker-0.6B --retrieval-cache "$R/retrieval-cache" --no-note \
+            python "$EULLM_REPO/forge/scripts/legal_eval.py" "$merged" --label "$set-$label-$TAG" \
+            --items "$items" "${book[@]}" \
             --gguf "$gguf" --runtime eullm --eullm "$EULLM_BIN" \
             --server-parallel 16 --server-ctx 8192 --max-new-tokens 400 \
             --answers "$ans" --csv "$OUT/product-eval.csv" --quiet \
@@ -86,5 +98,10 @@ for p in "${PIDS[@]}"; do wait "$p"; done
 
 kill "$SAMPLER" 2>/dev/null
 wait "$SAMPLER" 2>/dev/null
+for s in $SETS; do
+    [ "$CLOSED" = 1 ] && [ "${s%%=*}" = closed-book ] || continue
+    python "$EULLM_REPO/forge/scripts/score_closed_book.py" "${s#*=}" \
+        "$OUT"/answers-closed-book-*-q4c.jsonl | tee "$OUT/closed-book-$JOB.txt"
+done
 python "$EULLM_REPO/forge/scripts/jupiter/energy.py" "$POWER" --interval 5
 echo "=== done $(date -Is) ==="
