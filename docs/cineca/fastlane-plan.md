@@ -26,7 +26,7 @@
 | Spazio | `$WORK` parte da **1 TB**: per arrivare ai 4 TB della proposta va chiesto a superc@cineca.it a progetto avviato |
 | Collaboratori | li aggiunge il PI da UserDB ("My Projects" → progetto → "edit" → "collaborators"), dopo che si sono registrati loro stessi |
 | Dichiarato nella proposta | fino a 16 GPU contemporanee, 4 TB di spazio, 2 TB di trasferimenti, nessun membro del team oltre al PI |
-| Dati personali | Il modulo: "they will need to make a data processing agreement with the production site". La nostra risposta: "a data processing agreement … **may be required** before personal data are uploaded or processed on the system, and we will complete the required agreement before such processing takes place". **L'impegno è condizionato**: l'accordo si firma se il sito lo chiede. CINECA ci ha attivati sapendo dei dati personali e senza chiederlo (JSC invece ha atteso l'accordo). Le sentenze sono su Leonardo dalla 1147. Se serva lo chiediamo a CINECA |
+| Dati personali | Il modulo: "they will need to make a data processing agreement with the production site". La nostra risposta: "a data processing agreement … **may be required** before personal data are uploaded or processed on the system, and we will complete the required agreement before such processing takes place". **L'impegno è condizionato**: l'accordo si firma se il sito lo chiede. CINECA ci ha attivati sapendo dei dati personali e senza chiederlo (JSC invece ha atteso l'accordo). Le sentenze sono su Leonardo dalla 1147. Decisione del PI (3 novembre 2026): si lavora; se CINECA chiederà un accordo, lo si fa allora |
 | Report finale | obbligatorio, sul modello del sito EuroHPC JU |
 
 ## Cosa abbiamo promesso
@@ -315,10 +315,8 @@ JUPITER (1434) resta attivo fino al 31 dicembre. La divisione:
 
 * **Sentenze:** solo pseudonimizzate. Gli impegni della proposta sono gli
   stessi di JUPITER (`../jupiter/allocation-plan.md`, "Lines not to cross").
-  L'accordo con CINECA si firma se CINECA lo chiede (domanda 3 qui sotto). Le
-  prime settimane lavorano comunque su norme e articoli: le sentenze entrano
-  con la fase di scala di A e con i principi in C2. A quel punto, se CINECA
-  non avrà risposto, decide il PI, che è il titolare del trattamento.
+  Un accordo con CINECA si firma se CINECA lo chiede; non lo si chiede noi
+  (decisione del PI, 3 novembre 2026).
 * **Contaminazione:** come nella roadmap ("Regole trasversali").
 * **Solo il PI sull'account**, finché CINECA non aggiunge un membro.
 * **Nessuna ora senza un risultato** legato a una riga di "Cosa abbiamo promesso".
@@ -327,8 +325,8 @@ JUPITER (1434) resta attivo fino al 31 dicembre. La divisione:
 
 ## Domande per CINECA
 
-La prima mail è partita il 2 novembre 2026 (domande 1-2). Le domande 3, 5 e 7
-vanno in una seconda mail, ancora da inviare il 3 novembre.
+La prima mail è partita il 2 novembre 2026 (domande 1-2), la seconda il 3
+novembre (domande 5 e 7).
 
 1. Collegare o lasciare leggibile `$WORK` di AIFAC_P02_1147 fino alla copia
    interna; sorte di `$SCRATCH`. *Aperta.*
@@ -336,12 +334,12 @@ vanno in una seconda mail, ancora da inviare il 3 novembre.
    priorità dei job. *In parte risposta*: la quota mensile e la priorità
    vengono dalla linearization policy. QOS e limiti si leggono con
    `fastlane_probe.sh`.
-3. Se serve un accordo sul trattamento dei dati (sentenze pseudonimizzate) e con quale procedura. *Da inviare.*
+3. Accordo sul trattamento dei dati: *non chiesto*, per decisione del PI; se ne parla se lo chiede CINECA.
 4. Procedura per aggiungere un membro del team. *Risposta*: da UserDB, la fa il PI.
-5. Consumo energetico per job, per il report. *Da inviare.*
+5. Consumo energetico per job, per il report. *Inviata il 3 novembre.*
 6. Data di fine allineata all'inizio effettivo. *Risposta: no*, finisce il 2
    febbraio comunque.
-7. Aumento di `$WORK` a 4 TB, come la mail di avvio di CINECA indica (a superc@cineca.it, a progetto avviato). *Da inviare.*
+7. Aumento di `$WORK` a 4 TB (su EFP la richiesta risulta: storageRequest 4096 GB). *Inviata il 3 novembre.*
 
 ## Report finale
 
