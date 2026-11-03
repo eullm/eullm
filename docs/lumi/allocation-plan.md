@@ -807,6 +807,11 @@ jobs of 4 hours from 23439595 (after 23401984), chain 2 from 23439609
 (after 23402001), their last jobs 23439608 and 23439622; the long chain,
 10 jobs of 8 hours from 23439623, after both (`afterany:23439608:23439622`).
 At most 112 + 80 node-hours; the jobs a chain does not need end at once.
+`squeue` gave the long chain's waiting jobs the reason `(Resources)`, not
+`(Dependency)`, as it had given `c15`'s `ReqNodeNotAvail`: on LUMI the reason
+shown is not the dependency. `squeue -o "%i %E"` is: `afterany:23439608
+(unfulfilled),afterany:23439622(unfulfilled)` for 23439623, and each later
+job after the one before it.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
