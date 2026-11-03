@@ -157,6 +157,19 @@ e non di meno: è quello che `saldo -b` mostra come quota mensile.
    * la macchina: 2.872 nodi pieni, 327 occupati in parte, 30 tenuti per job
      pianificati, **nessuno libero**. È lo stesso quadro di settembre.
 
+   **Le prime prove (3 novembre 2026, inviate alle 11:04, lette alle 11:47):**
+   * **partite:** 1 GPU 2 h; 3 GPU a 2, 4, 8 e **24 h**, anche con
+     `boost_qos_lprod`; nodo intero 2 h; **4 nodi 2 h**;
+   * **16 + 16 confermato**: par-a e par-b (4 nodi ciascuno) partiti tutti e
+     due alle 11:05:38, 98 secondi dopo l'invio, e finiti insieme alle
+     11:20:38, quindi 32 GPU contemporanee;
+   * **in coda (Priority):** nodo intero 8 e 24 h, 2 nodi 8 h, 4 nodi 8 e
+     24 h, 8 nodi 2 h, e le due forme `lprod` a nodo intero.
+
+   Rispetto a settembre, i job da 3 GPU partono a qualunque durata fino a 24
+   ore. Le regole di `forge/CLAUDE.md` (2 ore, mai il nodo intero) si
+   cambiano dopo il report finale delle prove, non su una lettura delle 11.
+
    La lunghezza degli anelli si decide su questo, non sull'abitudine. Finché
    il sondaggio non ha risposto valgono le regole di `forge/CLAUDE.md` e
    `test_leonardo_job_shape.py`.
