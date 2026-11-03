@@ -60,3 +60,20 @@ def test_items_are_graded_by_number_and_letter(tmp_path):
         assert mod.ask_all("http://127.0.0.1:9", "m.gguf", g.items, 2, 64, 5) == [False, False]
     finally:
         srv.shutdown()
+
+
+def test_answers_are_kept_beside_the_grades(tmp_path):
+    mod = _mod()
+    gsm = tmp_path / "gsm8k.jsonl"
+    gsm.write_text(json.dumps({"id": "a", "answer": "42", "grader": "number",
+                               "messages": [{"role": "user", "content": "How much is 6 x 7?"}]})
+                   + "\n")
+    srv = HTTPServer(("127.0.0.1", 0), _Engine)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        texts: list = []
+        right = mod.ask_all(f"http://127.0.0.1:{srv.server_port}", "m.gguf",
+                            mod.ab_data.from_jsonl(gsm).items, 1, 64, 30, texts)
+    finally:
+        srv.shutdown()
+    assert right == [True] and texts == ["The answer is 42."]
