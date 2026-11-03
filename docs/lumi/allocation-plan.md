@@ -751,6 +751,19 @@ carries the fix.
      is 220-240 GB at two bits and waits.
   25 points per binary.
 
+03-11-2026, morning. The build of the tag finished in the night: `eullm 0.8.7
+(ROCm) [03a7b55858f7]`, the tag's commit, device code `amdhsa--gfx90a`.
+DeepSeek-V4-Flash is in the store (145 GiB). The smoke job 23420290 (`dev-g`,
+07:43, 19 s) found the GCD (MI250X, 65,520 MiB) and loaded Qwen3-8B whole on
+it, 4,455 MiB of model, 576 of context, 108 of compute, as 0.8.0 did. The
+block had been started before the DeepSeek groups were added, so `c15` was
+planned with 21 points per binary, without `b12-dsa`: planned apart. No
+campaign job ran in the night: `r-v085`'s second jobs (23401982, 23401999)
+waited on priority until 10:24 and 10:34, and from then ran the `v085` half
+of `c15` first, all 21 points done by 12:50, none failed. The `v087` chain
+(head 23420293) waits on a maintenance reservation (`ReqNodeNotAvail,
+Reserved for maintenance`).
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
