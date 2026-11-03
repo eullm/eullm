@@ -16,13 +16,17 @@ model answers the same ones.
 
 The model is served as it ships: its GGUF through EULLM Engine
 (`eval.gguf.EullmServer`), each item a `/api/chat` request with thinking
-off, greedy. One CSV row a set: label, set, items, right, share.
+off, greedy. One CSV row a set: label, set, items, right, share. With
+``--answers-dir`` every answer is kept too (``<label>-<set>.jsonl``: id, key,
+right, text), so that a loss can be read before it is believed: the sets are
+public, the answers may be read and quoted.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -40,17 +44,23 @@ from eullm_forge.eval.gguf import EullmServer  # noqa: E402
 
 
 def ask_all(url: str, model: str, items, parallel: int, max_tokens: int,
-            timeout: float) -> list[bool]:
-    """Whether each item was answered right, in order; a failed request is wrong."""
-    def one(item) -> bool:
+            timeout: float, texts: list | None = None) -> list[bool]:
+    """Whether each item was answered right, in order; a failed request is wrong.
+
+    ``texts``, when given, receives each answer's text in the same order
+    (None for a failed request)."""
+    def one(item) -> tuple[bool, str | None]:
         try:
             ans = ab_methods.generate(url, item, model, None, timeout, think=False,
                                       max_tokens=max_tokens)
         except Exception:      # noqa: BLE001 - one lost answer costs one item, not the run
-            return False
-        return bool(ab_grade.correct(item, ans.text))
+            return False, None
+        return bool(ab_grade.correct(item, ans.text)), ans.text
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
-        return list(pool.map(one, items))
+        done = list(pool.map(one, items))
+    if texts is not None:
+        texts.extend(t for _, t in done)
+    return [r for r, _ in done]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,6 +77,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-tokens", type=int, default=768)
     ap.add_argument("--timeout", type=float, default=600.0)
     ap.add_argument("--csv", type=Path, required=True)
+    ap.add_argument("--answers-dir", type=Path, help="keep every answer here")
     args = ap.parse_args(argv)
 
     sets = [ab_data.from_jsonl(p, args.limit, args.seed) for p in args.sets]
@@ -75,8 +86,16 @@ def main(argv: list[str] | None = None) -> int:
                      ctx_per_slot=4096,
                      log_path=args.csv.with_name(f"regression-{args.label}.server.log")) as srv:
         for ds in sets:
+            texts: list = []
             right = ask_all(srv.url, str(args.gguf.resolve()), ds.items, args.parallel,
-                            args.max_tokens, args.timeout)
+                            args.max_tokens, args.timeout, texts)
+            if args.answers_dir:
+                args.answers_dir.mkdir(parents=True, exist_ok=True)
+                with (args.answers_dir / f"{args.label}-{ds.name}.jsonl").open(
+                        "w", encoding="utf-8") as f:
+                    for item, ok, text in zip(ds.items, right, texts):
+                        f.write(json.dumps({"id": item.id, "key": item.answer, "right": ok,
+                                            "text": text}, ensure_ascii=False) + "\n")
             share = sum(right) / len(right) if right else 0.0
             rows.append([args.label, ds.name, len(right), sum(right), f"{share:.3f}"])
             print(f"[regression] {args.label} {ds.name}: {sum(right)}/{len(right)} "

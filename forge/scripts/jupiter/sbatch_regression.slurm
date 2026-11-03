@@ -11,7 +11,8 @@
 #         forge/scripts/jupiter/sbatch_regression.slurm
 #
 # RG_MODELS: "label=<gguf> ..." (default the candidates and their start);
-# RG_LIMIT: items a set (default 400).
+# RG_LIMIT: items a set (default 400). Every answer is kept in
+# $FORGE_RUN_DIR/regression/answers/<label>-<set>.jsonl (public sets).
 
 #SBATCH --job-name=forge-regression
 #SBATCH --partition=booster
@@ -45,7 +46,7 @@ for m in "${MODELS[@]}"; do
     CUDA_VISIBLE_DEVICES=$g taskset -c "$((72 * g))-$((72 * g + 71))" \
         python "$EULLM_REPO/forge/scripts/regression_check.py" --gguf "${m#*=}" --label "${m%%=*}" \
         --sets "${SETS[@]}" --limit "${RG_LIMIT:-400}" --eullm "$EULLM_BIN" \
-        --csv "$OUT/regression-$JOB-${m%%=*}.csv" >"$OUT/regression-$JOB-${m%%=*}.log" 2>&1 &
+        --csv "$OUT/regression-$JOB-${m%%=*}.csv" --answers-dir "$OUT/answers" >"$OUT/regression-$JOB-${m%%=*}.log" 2>&1 &
     PIDS+=($!)
     g=$((g + 1))
 done
