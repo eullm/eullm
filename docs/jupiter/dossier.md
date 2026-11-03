@@ -276,6 +276,31 @@ JUPITER, named by its Slurm job id.
   30,000 GPU-hours for three months. Following the roadmap, the scaling
   runs (E1 at 2-10 B tokens, E2 in three sizes) go there, and JUPITER keeps
   phases 0-4.
+
+**03-11-2026**
+* The candidates as the product runs them: GGUF Q4_K_M through EULLM
+  Engine 0.8.5, hybrid retrieval, no note (2637245 and 2653443; judges
+  2637247 and 2653444).
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | dqp-d-q9b | 11 | 187 + 6 | 60 + 23 | 380 | 971 |
+  | g9r-r2 | 12 | 197 + 4 | 76 + 19 | 383 | 975 |
+  | g4-r3 | 10 | 198 + 1 | 76 + 18 | 386 | 958 |
+
+  Quantised and served as shipped, the 4B is level with the 9B: the same
+  practical score, one question more on the held-out exam, three more
+  traps; the 9B leads on the rewritten traps (+17) and LexIA (+2). Against
+  their bf16 answers, the Q4 costs g9r-r2 5 practical questions and 3
+  held-out ones, and g4-r3 4 held-out ones. GRPO's gain over dqp-d-q9b
+  holds in the shipped form: +16 on the practical exam, +10 on the held-out.
+* The EU rewrites (2653435, 2653439): 205,654 asked, 4,155 kept. 195,268
+  were refused as "number": the request names the act ("del regolamento
+  (UE) 2016/679"), the rewrite repeats it, and the check allowed only the
+  article's own numbers. The act's numbers are now allowed (checks version
+  2, whose refusals of version 1 are asked again). Of the rest, 4,824 were
+  truncated, 1,527 refused for length, 184 for another article, and 225
+  for deadlines. 15 node-hours went to the refused part.
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.

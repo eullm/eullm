@@ -64,7 +64,7 @@ STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 # text is right; what elaborates brings the teacher's mistakes.
 DEFAULT_STYLES = ("parafrasi", "domande", "elementi")
 # Raised whenever check_rewrite changes: refusals of an older check are asked again.
-CHECKS_VERSION = 1
+CHECKS_VERSION = 2
 # Raised whenever a request changes, and written in every rewrite ("pv"), so the
 # rewrites of an older request can be told apart. 2 (2026-10-29): the
 # explanation may not place the article in an institute the text does not
@@ -343,6 +343,10 @@ def check_rewrite(article: Article, style: str, text: str) -> str | None:
     source = _plain(article.text)
     allowed = {d.replace(".", "").replace(",", "") for d in _DIGITS.findall(source)}
     allowed |= set(re.findall(r"\d+", own))
+    # The act's own name as the request gives it ("del regolamento (UE)
+    # 2016/679"): its numbers are not in the article's text, and every EU
+    # rewrite was refused for them (03-11-2026, 195,268 of 205,654).
+    allowed |= set(re.findall(r"\d+", (labels(article.code) or ("",))[0]))
     for d in _DIGITS.findall(text):
         d = d.replace(".", "").replace(",", "")
         if int(d) > 10 and d not in allowed:
