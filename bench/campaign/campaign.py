@@ -813,15 +813,22 @@ def cmd_plan(args):
     q = Queue(args.queue)
     os.makedirs(os.path.join(args.queue, "specs"), exist_ok=True)
     specs = load_specs(args.specs)
-    for path, spec in specs:
-        points = expand(spec, args.round, args.engine_label)
+    expanded = [(path, spec, expand(spec, args.round, args.engine_label))
+                for path, spec in specs]
+    if args.group:
+        # A pattern has to name a group of one of the specs, not of each: with
+        # c01 and c02, `soak-node` is c01's and `moe-soak` c02's, and asking
+        # for both planned nothing at all (03-11-2026). A pattern no spec has
+        # is still a typo, and stops before anything is queued.
+        names = {p["group"] for _, _, points in expanded for p in points}
+        unmatched = [g for g in args.group if not fnmatch.filter(names, g)]
+        if unmatched:
+            print(f"no group matches {', '.join(unmatched)} in "
+                  f"{', '.join(path for path, _, _ in expanded)} "
+                  f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
+            return 2
+    for path, spec, points in expanded:
         if args.group:
-            names = {p["group"] for p in points}
-            unmatched = [g for g in args.group if not fnmatch.filter(names, g)]
-            if unmatched:
-                print(f"{path}: no group matches {', '.join(unmatched)} "
-                      f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
-                return 2
             points = [p for p in points
                       if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
         added = [p for p in points if q.add(p)]
