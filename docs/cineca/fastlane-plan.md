@@ -26,7 +26,7 @@
 | Spazio | `$WORK` parte da **1 TB**: per arrivare ai 4 TB della proposta va chiesto a superc@cineca.it a progetto avviato |
 | Collaboratori | li aggiunge il PI da UserDB ("My Projects" → progetto → "edit" → "collaborators"), dopo che si sono registrati loro stessi |
 | Dichiarato nella proposta | fino a 16 GPU contemporanee, 4 TB di spazio, 2 TB di trasferimenti, nessun membro del team oltre al PI |
-| Dati personali | "we will complete the required agreement before such processing takes place": **nessuna sentenza né dato derivato su questo progetto prima del DPA con CINECA** |
+| Dati personali | Il modulo: "they will need to make a data processing agreement with the production site". La nostra risposta: "a data processing agreement … **may be required** before personal data are uploaded or processed on the system, and we will complete the required agreement before such processing takes place". **L'impegno è condizionato**: l'accordo si firma se il sito lo chiede. CINECA ci ha attivati sapendo dei dati personali e senza chiederlo (JSC invece ha atteso l'accordo). Le sentenze sono su Leonardo dalla 1147. Decisione del PI (3 novembre 2026): si lavora; se CINECA chiederà un accordo, lo si fa allora |
 | Report finale | obbligatorio, sul modello del sito EuroHPC JU |
 
 ## Cosa abbiamo promesso
@@ -144,6 +144,19 @@ e non di meno: è quello che `saldo -b` mostra come quota mensile.
    | 16 + 16 girano insieme | il tetto sale a 768 GPU-ore al giorno: basta un'occupazione del 42% invece dell'85% |
    | un motivo di limite (`QOS…Limit`, `Assoc…`) | quella forma non è permessa: non si aspetta, si chiede a CINECA |
 
+   **Il primo `limits.txt` (3 novembre 2026, 11:04):**
+   * il conto `aifac_f02_1400` non ha limiti propri: nessun tetto di GPU, di
+     job o di wall time. Le 16 GPU sono solo la nostra dichiarazione;
+   * le QOS sono le stesse della 1147, senza priorità per la AI Factory:
+     - `normal`: priorità 40; la partizione permette fino a 24 ore e 64 nodi per job;
+     - `boost_qos_lprod`: priorità 40, fino a **4 giorni**, al massimo 8 nodi
+       e 32 GPU per utente;
+     - `boost_qos_dbg`: priorità 80, 30 minuti, 2 job;
+     - `boost_qos_bprod`: solo da 65 nodi in su (le tre prove sono state
+       rifiutate con `QOSMinCpuNotSatisfied`);
+   * la macchina: 2.872 nodi pieni, 327 occupati in parte, 30 tenuti per job
+     pianificati, **nessuno libero**. È lo stesso quadro di settembre.
+
    La lunghezza degli anelli si decide su questo, non sull'abitudine. Finché
    il sondaggio non ha risposto valgono le regole di `forge/CLAUDE.md` e
    `test_leonardo_job_shape.py`.
@@ -154,6 +167,11 @@ e non di meno: è quello che `saldo -b` mostra come quota mensile.
    le norme. I modelli base vanno sulla nuova scratch veloce. Si controlla anche
    se `grpo-merged` è ancora sulla scratch; se non c'è, l'unica copia è sul VPS
    temporaneo.
+   La copia la fa un job sulla partizione seriale, che prima misura
+   (`COPY_DRY=1`) e alla fine verifica se stesso ("TUTTO COPIATO"):
+   `forge/scripts/leonardo/sbatch_copy_project.slurm`. Sul login rsync lunghi
+   sono stati uccisi dal limite di CPU (ottobre). L'area della 1147 resta
+   comunque per sei mesi (UserDB, "ExpirationDelay: 6").
 4. **Il venv si ricrea, non si copia:** cambia il percorso e gli script del
    venv lo hanno scritto dentro. Si usa
    `pip install -r eullm_venv-known-good-2026-10-01.txt`, mai versioni a memoria.
@@ -206,7 +224,7 @@ sull'Hub (regole in `forge/CLAUDE.md`).
 | A0 | il backbone sugli esami attuali: libro chiuso 716, devbig con e senza nota, pratico 145, trappole 33, regressione | 50 | la base di confronto |
 | A1 | **legal-it-moe**: LoRA open-book sul MoE con la ricetta che ha dato 80,9 → 84,6 sull'8B (coppie v06, solo norme) | 250 | un MoE che legge e cita come i nostri, prima di dargli memoria |
 | A2 | **E2-mini sul MoE**: A1 congelato più una tabella n-gram di 0,3-0,5 miliardi di parametri (2- e 3-gram hashed, lettura a uno strato basso, gate inizializzato a zero, ottimizzatore sparso). Dati: il corpus memoria degli articoli (righe di programma più riscritture, ~0,2 miliardi di token, 3 epoche). **Controllo**: una LoRA con gli stessi parametri addestrabili e gli stessi token. **Riferimento**: r2l denso sullo stesso libro chiuso | 700 | **cancello**: il modulo batte il controllo di ≥ 5 punti sul libro chiuso, contati senza il riflesso "non esiste", e nessuna perdita a libro aperto (McNemar) |
-| A3 | se A2 passa: tabelle da 1 e 3 miliardi; strato e ordini degli n-gram; i dati di tutti gli atti in vigore e degli atti UE (C2); E3, la riforma simulata (si riaddestra solo la memoria); dopo il DPA, i principi di diritto | 7.000 | la tabella vincente, con la curva taglia/beneficio |
+| A3 | se A2 passa: tabelle da 1 e 3 miliardi; strato e ordini degli n-gram; i dati di tutti gli atti in vigore e degli atti UE (C2); E3, la riforma simulata (si riaddestra solo la memoria); i principi di diritto | 7.000 | la tabella vincente, con la curva taglia/beneficio |
 | A4 | il modello in locale: tabella come tensori GGUF e l'operatore di lookup nel motore (E4 del piano memoria, sul lato LUMI) | — | misurato sul portatile, non solo sui benchmark |
 
 **Se A2 non passa** si scrive il risultato, si ferma la linea, e le 7.000 ore
@@ -249,7 +267,7 @@ anche aggiunto, con la sua ragione, all'elenco `WHOLE_NODE` di
 |---|---|---:|---|---|
 | C0 | messa in opera, test del primo giorno, registro | 50 | — | P4 |
 | C1 | **valutazione**: test di regressione (roadmap 0.4), confronto r2l / g9r-r2 (0.2), indice esteso (0.3), benchmark C1, ogni checkpoint di A, B e C | 2.500 | — | P5 |
-| C2 | **output del teacher**: riscritture di tutti gli atti in vigore e degli atti UE (i dati di A3); cache dei logit; casi C1 e distrattori; sulle sentenze solo dopo il DPA | 5.000 | sentenze: DPA | P3 |
+| C2 | **output del teacher**: riscritture di tutti gli atti in vigore e degli atti UE (i dati di A3); cache dei logit; casi C1 e distrattori; principi delle sentenze | 5.000 | — | P3 |
 | C3 | **matrice degli student**: 4B, 9B e 8B × KD sui logit, KD di sequenza, solo SFT, a parità di GPU-ore; rank; LoRA contro completo | 5.000 | — | P2 |
 | C4 | **ragionamento**: C2 oppure C3 della roadmap, secondo la diagnosi del benchmark C1 | 2.000 | C1 validato dal giurista | P5 |
 | C5 | **ciclo completo cronometrato**: legal-it dal corpus al GGUF, senza intervento; poi un secondo dominio | 3.000 | secondo dominio: scelta dell'utente | P1, P6 |
@@ -287,19 +305,18 @@ JUPITER (1434) resta attivo fino al 31 dicembre. La divisione:
 
 * **JUPITER:** quello che la roadmap gli dà, sui dati ammessi lì, e i suoi impegni GH200
   (`../jupiter/allocation-plan.md`).
-* **Leonardo:** la scala, la matrice degli student e, dopo il DPA, tutto
-  quello che deriva dalle sentenze.
+* **Leonardo:** la scala, la matrice degli student e tutto quello che
+  deriva dalle sentenze, che su JUPITER resta fuori fino all'addendum di JSC.
 * **Mai lo stesso esperimento su tutti e due**, salvo come confronto di
   piattaforma voluto. Ogni esperimento ha una sola casa, scritta qui o nel
   dossier di JUPITER.
 
 ## Linee da non oltrepassare
 
-* **Sentenze e dati derivati solo dopo il DPA con CINECA**, come scritto nella
-  proposta. Fino ad allora: norme, corpus memoria degli articoli, r2l/r2q,
-  libro chiuso, devbig, pratico, trappole. Gli impegni sulla
-  pseudonimizzazione sono gli stessi di JUPITER (`../jupiter/allocation-plan.md`,
-  "Lines not to cross").
+* **Sentenze:** solo pseudonimizzate. Gli impegni della proposta sono gli
+  stessi di JUPITER (`../jupiter/allocation-plan.md`, "Lines not to cross").
+  Un accordo con CINECA si firma se CINECA lo chiede; non lo si chiede noi
+  (decisione del PI, 3 novembre 2026).
 * **Contaminazione:** come nella roadmap ("Regole trasversali").
 * **Solo il PI sull'account**, finché CINECA non aggiunge un membro.
 * **Nessuna ora senza un risultato** legato a una riga di "Cosa abbiamo promesso".
@@ -308,7 +325,8 @@ JUPITER (1434) resta attivo fino al 31 dicembre. La divisione:
 
 ## Domande per CINECA
 
-Inviate il 2 novembre 2026 in due mail.
+La prima mail è partita il 2 novembre 2026 (domande 1-2), la seconda il 3
+novembre (domande 5 e 7).
 
 1. Collegare o lasciare leggibile `$WORK` di AIFAC_P02_1147 fino alla copia
    interna; sorte di `$SCRATCH`. *Aperta.*
@@ -316,12 +334,12 @@ Inviate il 2 novembre 2026 in due mail.
    priorità dei job. *In parte risposta*: la quota mensile e la priorità
    vengono dalla linearization policy. QOS e limiti si leggono con
    `fastlane_probe.sh`.
-3. Procedura per il DPA (dati giudiziari pseudonimizzati). *Aperta.*
+3. Accordo sul trattamento dei dati: *non chiesto*, per decisione del PI; se ne parla se lo chiede CINECA.
 4. Procedura per aggiungere un membro del team. *Risposta*: da UserDB, la fa il PI.
-5. Consumo energetico per job, per il report. *Aperta.*
+5. Consumo energetico per job, per il report. *Inviata il 3 novembre.*
 6. Data di fine allineata all'inizio effettivo. *Risposta: no*, finisce il 2
    febbraio comunque.
-7. Aumento di `$WORK` a 4 TB. *Da chiedere a progetto avviato.*
+7. Aumento di `$WORK` a 4 TB (su EFP la richiesta risulta: storageRequest 4096 GB). *Inviata il 3 novembre.*
 
 ## Report finale
 
