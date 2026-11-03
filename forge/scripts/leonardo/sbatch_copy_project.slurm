@@ -14,6 +14,8 @@
 #   COPY_DRY=1  measure only: what would be copied and how much, per directory
 #   COPY_HEAVY=1  also copy the heavy weights (checkpoints, merged models,
 #               safetensors, .bin, .pt); by default they are left behind
+#   COPY_EXCLUDE  more rsync patterns to leave behind, space-separated, e.g.
+#               "*.gguf cds/ cass/" (a trailing slash: directories of that name)
 #
 # Measure first, then copy, then the log says TUTTO COPIATO or what is still
 # different:
@@ -45,6 +47,11 @@ if [ "${COPY_HEAVY:-0}" != 1 ]; then
     EXCLUDES=(--exclude='checkpoint-*' --exclude='merged*' --exclude='model*.safetensors'
               --exclude='pytorch_model*.bin' --exclude='*.pt' --exclude='.remerge-*')
 fi
+set -f  # the patterns are for rsync, not for the shell
+for pattern in ${COPY_EXCLUDE:-}; do
+    EXCLUDES+=(--exclude="$pattern")
+done
+set +f
 
 command -v rsync >/dev/null || { echo "[copy] FATAL: no rsync on this node" >&2; exit 1; }
 [ -d "$FROM" ] || { echo "[copy] FATAL: $FROM does not exist or is not readable" >&2; exit 1; }
@@ -57,6 +64,7 @@ echo "[copy] from $FROM"
 echo "[copy] to   $TO"
 echo "[copy] dirs $COPY_DIRS"
 echo "[copy] heavy weights $([ "${COPY_HEAVY:-0}" = 1 ] && echo included || echo left behind)"
+echo "[copy] also left behind: ${COPY_EXCLUDE:-nothing}"
 df -h "$TO" | tail -1 | awk '{print "[copy] space at the destination: " $4 " free of " $2}'
 echo
 
