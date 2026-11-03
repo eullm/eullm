@@ -185,5 +185,32 @@ class Queue:
             moved.append(pid)
         return moved
 
+    def set_aside(self, dest: str, label=None, prefixes=(), round_=None) -> list:
+        """Waiting points moved out of the queue into `dest` (a directory of
+        their own, beside the states), not deleted: those of engine label
+        `label`, of round `round_`, whose id starts with one of `prefixes`,
+        each filter only when given. A point a job claims meanwhile stays
+        with the job. For a round an engine has made pointless, or points
+        no job of the round's length can run (26-10-2026, 03-11-2026)."""
+        moved = []
+        for pid in self.ids("todo"):
+            if prefixes and not any(pid.startswith(p) for p in prefixes):
+                continue
+            try:
+                point = self.load("todo", pid)
+            except (OSError, ValueError):
+                continue
+            if label is not None and (point.get("engine_label") or "") != label:
+                continue
+            if round_ is not None and point.get("round") != round_:
+                continue
+            os.makedirs(dest, exist_ok=True)
+            try:
+                os.replace(self._path("todo", pid), os.path.join(dest, f"{pid}.json"))
+            except FileNotFoundError:
+                continue  # claimed by a job in between
+            moved.append(pid)
+        return moved
+
     def counts(self) -> dict:
         return {state: len(self.ids(state)) for state in STATES}

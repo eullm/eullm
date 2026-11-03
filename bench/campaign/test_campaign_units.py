@@ -633,6 +633,23 @@ def test_an_eullm_server_is_started_without_the_chat_ui_where_it_can_be(monkeypa
     assert point.no_ui_args(fake) == ["--no-ui"]
 
 
+def test_waiting_points_are_set_aside_by_label_round_and_group(tmp_path):
+    """A round an engine has made pointless leaves the queue whole, its points
+    kept beside it (r-v085 for r-v087, 03-11-2026); a point already claimed
+    stays with its job."""
+    q = Queue(str(tmp_path / "q"))
+    for pid, label, round_ in (("soak-node-1", "v087", "r-v087"), ("dense-1", "v085", "r-v085"),
+                               ("dense-2", "v085", "r-v085"), ("dense-3", "v087", "r-v087"),
+                               ("dense-4", "v085", "r-b12032")):
+        q.add({"id": pid, "kind": "throughput", "engine_label": label, "round": round_})
+    q.claim("dense-2", {"job": "j"})
+    dest = str(tmp_path / "q" / "dropped" / "2026-11-03")
+    assert q.set_aside(dest, label="v085", round_="r-v085") == ["dense-1"]
+    assert q.set_aside(dest, label="v087", prefixes=("soak-node", "moe-soak")) == ["soak-node-1"]
+    assert sorted(os.listdir(dest)) == ["dense-1.json", "soak-node-1.json"]
+    assert q.ids("todo") == ["dense-3", "dense-4"] and q.ids("running") == ["dense-2"]
+
+
 def test_status_gives_one_line_per_group_and_cause_not_the_server_logs():
     from campaign import stopped_lines
 

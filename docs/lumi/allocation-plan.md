@@ -778,6 +778,27 @@ tokens, and loads slower on 0.8.7 in five of six points, inside a spread of
 15 times on one binary, to check in the next round's `c09`. The 0.8.7 soaks
 and the pool flush are running.
 
+03-11-2026, evening: `c15` read whole (`docs/llama-bump-b12032.md` section
+5). b12032 is level with b11925 on the MI250X: the soaks the same within 1%
+with no death and no error in 0.8.7's logs, `0011`'s flush run at last
+(five times in each binary's soak with `GGML_CUDA_POOL_KEEP_FREE_MB=40000`,
+at the same speed), DeepSeek-V4-Flash at 30,000 tokens 338 against 330
+tokens/s reading. One `HSA_STATUS_ERROR` line in 0.8.5's tensor-split point
+(job 23401999), measured all the same.
+
+The night's queue: `r-v085` is set aside where it stood (its waiting points
+moved to `$CAMPAIGN_DIR/dropped/2026-11-03/` with `campaign.py set-aside`,
+not deleted): `c15` measured b11925 against b12032 directly and found them
+level, and the round on 0.8.7 measures every one of those points again, so
+finishing it would pay twice for the same configurations. Its chains'
+waiting jobs are cancelled; the running ones finish their points. `r-v087`
+on 0.8.7 (label `v087`, the same ten campaigns), in two chains of 4-hour
+jobs following the running ones, and its seven soaks that a 4-hour job
+cannot hold (`soak-node`, `moe-soak`, `moe-235b-soak-x2`, 4 to 6 hours at
+least, 7 whole-node points) under a label of their own, `v087-long`, in one
+chain of 8-hour jobs that starts when both chains have ended: two nodes at
+a time, never three.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were

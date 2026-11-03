@@ -125,3 +125,11 @@ def test_jobs_are_four_hours_at_most_by_default(lumi, tmp_path):
     assert "time per job: 4:00:00" in out
     assert calls and all("--time=4:00:00" in c.split() for c in calls)
     assert len(calls) > 5
+
+
+def test_the_last_job_of_each_chain_is_printed_for_a_chain_to_follow(lumi):
+    out, _ = lumi("2", "2")
+    assert out.strip().splitlines()[-2] == "last of each chain: 4242 4242"
+    # A chain that starts when both end, as the long soaks of r-v087 did.
+    _, calls = lumi("1", "1", AFTER="111:222")
+    assert "--dependency=afterany:111:222" in calls[-1].split()

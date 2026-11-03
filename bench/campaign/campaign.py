@@ -1003,6 +1003,14 @@ def cmd_retry(args):
     return 0
 
 
+def cmd_set_aside(args):
+    dest = args.to or os.path.join(args.queue, "dropped", dt.date.today().isoformat())
+    moved = Queue(args.queue).set_aside(dest, args.engine_label, tuple(args.group or ()),
+                                        args.round)
+    print(f"{len(moved)} waiting points set aside in {dest}")
+    return 0
+
+
 def cmd_unblock(args):
     moved = Queue(args.queue).unblock()
     print(f"{len(moved)} points back in todo")
@@ -1398,6 +1406,12 @@ def main(argv=None):
     p.add_argument("--each", action="store_true",
                    help="one line per failed or blocked point instead of one per group and cause")
     with_queue(sub.add_parser("unblock"))
+    p = with_queue(sub.add_parser("set-aside", help="move waiting points out of the queue"))
+    p.add_argument("--engine-label", help="only the points of this engine label")
+    p.add_argument("--round", help="only the points of this round")
+    p.add_argument("--group", action="append",
+                   help="only points whose id starts with this (repeatable)")
+    p.add_argument("--to", help="where they go (default: QUEUE/dropped/<today>)")
     p = with_queue(sub.add_parser("retry"))
     p.add_argument("--group", help="only points whose id starts with this, e.g. moe-671b")
     p.add_argument("--engine-label", help="only the points of this engine label, e.g. v085")
@@ -1446,6 +1460,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     commands = {"plan": cmd_plan, "pulls": cmd_pulls, "f32s": cmd_f32s, "prefetch": cmd_prefetch,
                 "run": cmd_run, "status": cmd_status, "unblock": cmd_unblock, "retry": cmd_retry,
+                "set-aside": cmd_set_aside,
                 "collect": cmd_collect, "report": cmd_report, "compare": cmd_compare,
                 "walltime": cmd_walltime,
                 "budget": cmd_budget}
