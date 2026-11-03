@@ -328,6 +328,23 @@ JUPITER, named by its Slurm job id.
   No gain: one LexIA trap more for each, the practical exam down (8 complete
   answers for the 9B, 3 for the 4B), the rest level. The candidates stay
   g9r-r2 and g4-r3; GRPO on these prompts is closed for both sizes.
+* General abilities, GGUF Q4_K_M through EULLM Engine, 400 items a set,
+  greedy, no thinking (2662858, roadmap 0.4):
+
+  | | GSM8K | ARC-Easy | ARC-Challenge |
+  |---|---:|---:|---:|
+  | dqp-d-q9b | 351 | 378 | 348 |
+  | g9r-r2 | 350 | 363 | 324 |
+  | g4-r3 | 335 | 361 | 345 |
+
+  GRPO left the 9B's arithmetic as it was and cost it 15 ARC-Easy and 24
+  ARC-Challenge questions (87.0% to 81.0%). Not yet a conclusion: the
+  answers are not saved, so whether it lost the knowledge or the answer
+  format (a letter at the end) is not known; and the 4B's start was not
+  measured.
+* The EU rewrites under checks version 2 (smoke test 2662824): 384 of 400
+  kept, 16 refused (3 number, 3 truncated, 2 deadline, 2 other article,
+  6 length), 601 a minute on a node.
 * Queued for the night: the three candidates as the product runs them on
   the sets copied from Leonardo (devbig, practical held-out, live LexIA;
   2667839), closed book on the closed-book suite (2667840), two judge links
