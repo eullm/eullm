@@ -301,6 +301,22 @@ JUPITER, named by its Slurm job id.
   2, whose refusals of version 1 are asked again). Of the rest, 4,824 were
   truncated, 1,527 refused for length, 184 for another article, and 225
   for deadlines. 15 node-hours went to the refused part.
+* JUPITER reserved for JSC's large-scale tests from 10:30 to about 17:30:
+  no job of ours could start. Queued behind it: a smoke test of the EU
+  rewrites under checks version 2 (2662824), then the two chains
+  (2662825-2662827, 2662828-2662830); the general-abilities regression
+  (GSM8K, ARC-Easy, ARC-Challenge, 400 items each) of the three GGUFs
+  through EULLM Engine (`regression_check.py`, 2662858; roadmap 0.4).
+* From Leonardo, rsync from a Leonardo login node to a JUPITER login node
+  (a JuDoor key limited to CINECA's addresses; Leonardo's data movers allow
+  no onward connection): the program part and three of the four rewrite
+  files of the nine codes' memory corpus, the closed-book suite, the devbig
+  exam, the practical held-out exam and the live LexIA traps. The fourth
+  rewrite file read at 30-40 kB/s on two JUPITER login nodes while the
+  others went at 17-52 MB/s, and was left for later; r2l's GGUF and merged
+  weights were not at the expected path. No court decision was copied.
+* The product evaluation can now ask closed book (`PE_CLOSED=1`, no texts,
+  roadmap E0) and any sets (`PE_SETS`).
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
