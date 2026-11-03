@@ -121,9 +121,9 @@ b12032) built with `--features cuda`, one server at a time,
   reading falls 14%, writing 7%. Not the bump's; on this model
   `--moe-prefetch 0` is the faster setting.
 
-Nothing here holds the merge back. Still to run: LUMI-G's smoke job and an
-MTP round, for `0013` beside upstream's ballot and the sparse attention now
-enabled on CDNA.
+Nothing here holds the merge back. LUMI-G's smoke job and MTP round, for
+`0013` beside upstream's ballot and the sparse attention now enabled on CDNA:
+section 5, level.
 
 ## 5. On LUMI-G (MI250X, gfx90a, ROCm 6.3)
 
@@ -165,6 +165,13 @@ second; MTP without `--mtp` / with `--mtp 2`, drafts kept, gsm8k accuracy.
 | DeepSeek-V4-Flash UD-Q4_K_XL, four GCDs, no prompt: writing, reading | 25.9, 115 | 25.8, 118 |
 | the same, a 16,000-token prompt | 18.7, 505 | 18.9, 505 |
 | the same, 100 gsm8k questions: accuracy, tokens/s | 0.96, 23.3 | 0.96, 22.9 |
+| the same, a 30,000-token prompt (49,152-token slot): writing, reading, first token | 15.3, 330, 104.2 s | 15.2, 338, 101.7 s |
+| soak 2.5 h, 32 requests, Qwen3-30B-A3B Q8_0: tokens/s, requests, servers died | 233, 36,731, 0 | 233, 36,381, 0 |
+| soak, Qwen3-32B | 172, 24,736, 0 | 173, 24,771, 0 |
+| soak, Qwen3-32B Q8_0 | 139, 19,798, 0 | 139, 19,813, 0 |
+| soak, Qwen3.6-35B-A3B | 314, 10,316, 0 | 316, 10,376, 0 |
+| soak with `GGML_CUDA_POOL_KEEP_FREE_MB=40000`: tokens/s, requests; pool flushes | 233, 36,587; 5 | 233, 36,240; 5 |
+| server logs: HSA errors, out of memory, NaN | 1, 0, 0 (325 logs) | 0, 0, 0 (26 logs) |
 | load time, s: 235B (8, 32 requests); 32B tensor (1, 16); DeepSeek (no prompt, 16K) | 236, 161; 40.8, 12.5; 16.5, 245 | 318, 325; 132, 132; 52.6, 224 |
 
 - **The expert cache and MTP are level.** The same share of experts in VRAM
@@ -176,18 +183,24 @@ second; MTP without `--mtp` / with `--mtp 2`, drafts kept, gsm8k accuracy.
   spread (cv 0.7% against 2.2%). Measured beside other points rather than
   alone, and below the 52.7 tokens/s c03 measured alone on 16 October, so a
   direction rather than a figure.
-- **The sparse attention gains nothing here yet.** DeepSeek-V4-Flash loads,
-  answers as well on both binaries, and reads a 16,000-token prompt at the
-  same 505 tokens/s, so either #31259's kernel is not the one this model
-  takes, or the attention is not where its time goes at that length. The
-  30,000-token point did not fit the 32,768-token slot (34,375 tokens with
-  DeepSeek's tokenizer) and runs again with a 49,152-token slot.
+- **The sparse attention gains nothing measurable.** DeepSeek-V4-Flash loads
+  and answers as well on both binaries, and reads a 16,000-token prompt at
+  the same 505 tokens/s and a 30,000-token one at 330 and 338 (+2%), writing
+  level: either #31259's kernel is not the one this model takes on CDNA, or
+  the attention is not where its time goes at these lengths. (The first
+  30,000-token point did not fit its 32,768-token slot: 34,375 tokens with
+  DeepSeek's tokenizer.)
 - **Loading took longer on 0.8.7** in five of six points, but it varies by a
   factor of 15 on the same binary (DeepSeek on 0.8.5: 16.5 and 245 s), and
   0.8.7 ran just after a maintenance, with Lustre busy. EuLLM does not ask
   for upstream's direct IO (`use_mmap(false)` is `LLAMA_LOAD_MODE_NONE`).
   To check in the next round's `c09`, which times loads against earlier ones.
-- The soaks on 0.8.5: Qwen3-30B-A3B Q8_0 233 tokens/s and 36,731 requests,
-  Qwen3-32B 172 and 24,736, its Q8_0 139 and 19,798, Qwen3.6-35B-A3B 314 and
-  10,316, no server died; the pool-flush soak 233 and 36,587. On 0.8.7 they
-  are running.
+- **The soaks hold**: two and a half hours at 32 requests, the same speed
+  and requests within 1%, VRAM flat, no server died, and 0.8.7's logs hold
+  no HSA error, no out-of-memory and no NaN. 0.8.5's logs hold one
+  `HSA_STATUS_ERROR` line, in its tensor-split point, which was measured
+  all the same.
+- **`0011`'s flush runs on ROCm**, for the first time: with the pool told to
+  keep 40,000 MiB free, it gave cached buffers back five times in each
+  binary's soak, at the same speed as the soak without it and with no error.
+  With the default 512 MiB no soak here or in b11925's round came near it.
