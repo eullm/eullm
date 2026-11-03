@@ -753,6 +753,25 @@ def test_the_report_tells_points_apart_by_their_environment():
     assert not any("STATS" in line for line in lines)
 
 
+def test_the_report_keeps_two_engines_of_one_round_apart():
+    """An old and a new binary measured in the same round (c15: 0.8.5 against
+    0.8.7, r-b12032) are two rows, not one average of both."""
+    import campaign
+    import report
+
+    def result(label, tok_s):
+        return campaign.row_of({"campaign": "c15", "group": "b12-moe", "kind": "throughput",
+                                "outcome": "measured",
+                                "params": {"model": "m", "batch": 8, "round": "r-b12032",
+                                           "engine_label": label},
+                                "throughput": {"aggregate_tok_s_mean": tok_s}})
+
+    lines = report.report([result("v085", 33.7), result("v087", 34.9)], {}, {"c15"}).splitlines()
+    assert lines[1].split()[0] == "engine_label"
+    assert any(line.split()[:2] == ["v085", "33.7"] for line in lines)
+    assert any(line.split()[:2] == ["v087", "34.9"] for line in lines)
+
+
 def test_leftover_servers_are_those_of_this_job_outside_every_running_point():
     import campaign
 

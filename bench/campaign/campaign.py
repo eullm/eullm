@@ -1021,6 +1021,7 @@ COLUMNS = (
     "dec_client_ms_p99", "dec_wait_ms_p50", "dec_decode_ms_p50", "dec_consistency",
     "extra_args", "trial", "vram_start_mib_max", "dec_together", "dec_same_choices",
     "dec_largest_shift", "dec_flipped", "env", "died", "stop_exit", "ended", "draft_accept_pct",
+    "engine_label",
 )
 
 
