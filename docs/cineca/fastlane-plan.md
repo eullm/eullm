@@ -154,6 +154,11 @@ e non di meno: è quello che `saldo -b` mostra come quota mensile.
    le norme. I modelli base vanno sulla nuova scratch veloce. Si controlla anche
    se `grpo-merged` è ancora sulla scratch; se non c'è, l'unica copia è sul VPS
    temporaneo.
+   La copia la fa un job sulla partizione seriale, che prima misura
+   (`COPY_DRY=1`) e alla fine verifica se stesso ("TUTTO COPIATO"):
+   `forge/scripts/leonardo/sbatch_copy_project.slurm`. Sul login rsync lunghi
+   sono stati uccisi dal limite di CPU (ottobre). L'area della 1147 resta
+   comunque per sei mesi (UserDB, "ExpirationDelay: 6").
 4. **Il venv si ricrea, non si copia:** cambia il percorso e gli script del
    venv lo hanno scritto dentro. Si usa
    `pip install -r eullm_venv-known-good-2026-10-01.txt`, mai versioni a memoria.
