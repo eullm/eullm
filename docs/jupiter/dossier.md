@@ -315,6 +315,24 @@ JUPITER, named by its Slurm job id.
   rewrite file read at 30-40 kB/s on two JUPITER login nodes while the
   others went at 17-52 MB/s, and was left for later; r2l's GGUF and merged
   weights were not at the expected path. No court decision was copied.
+* The a1 rounds (GRPO on the prompts with the article left out of the
+  texts, from g9r-r2 and g4-r3; bf16, judge), against their start:
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | g9r-r2 | 14 | 200 + 3 | 81 + 16 | 384 | 973 |
+  | g9r-a1 | 15 | 198 + 2 | 73 + 19 | 384 | 973 |
+  | g4-r3 | 10 | 202 + 3 | 75 + 16 | 387 | 966 |
+  | g4-a1 | 11 | 203 + 2 | 72 + 18 | 386 | 956 |
+
+  No gain: one LexIA trap more for each, the practical exam down (8 complete
+  answers for the 9B, 3 for the 4B), the rest level. The candidates stay
+  g9r-r2 and g4-r3; GRPO on these prompts is closed for both sizes.
+* Queued for the night: the three candidates as the product runs them on
+  the sets copied from Leonardo (devbig, practical held-out, live LexIA;
+  2667839), closed book on the closed-book suite (2667840), two judge links
+  behind both (2667842, 2667843); the two EU rewrite chains running since
+  19:28 (2662825, 2662828).
 * The product evaluation can now ask closed book (`PE_CLOSED=1`, no texts,
   roadmap E0) and any sets (`PE_SETS`).
 * 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
