@@ -764,6 +764,20 @@ of `c15` first, all 21 points done by 12:50, none failed. The `v087` chain
 (head 23420293) waits on a maintenance reservation (`ReqNodeNotAvail,
 Reserved for maintenance`).
 
+03-11-2026, afternoon: the maintenance ended at 16:01 and 23420293 ran from
+17:06 (nid005779); `r-v085`'s chains went on (23401983, 23402000). The
+DeepSeek points were planned on their own (`GROUP='b12-dsa*'`); the
+30,000-token one failed on both binaries, its prompt 34,375 tokens to that
+tokenizer in a 32,768-token slot, and goes again as `b12-dsa-long` with a
+49,152-token slot. The report showed the two binaries of one round as one
+average; `engine_label` is now a report column (8bfa6734). Read so far, the
+table in `docs/llama-bump-b12032.md` section 5: the expert cache and MTP
+level (the same drafts kept to 0.1 point), tensor split 26% and 9% faster,
+DeepSeek-V4-Flash level with no gain from the sparse attention at 16,000
+tokens, and loads slower on 0.8.7 in five of six points, inside a spread of
+15 times on one binary, to check in the next round's `c09`. The 0.8.7 soaks
+and the pool flush are running.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were

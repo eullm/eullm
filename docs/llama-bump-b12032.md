@@ -141,3 +141,53 @@ reads with the dense kernel: reading and writing at 0, 16,000 and 30,000
 tokens of prompt, and 100 gsm8k questions for the same answers. Results
 here when the jobs have run; the record with job ids is
 `docs/lumi/allocation-plan.md`.
+
+Measured on 3 November (round `r-b12032`, `tools/lumi/campaigns/c15-llama-b12032.json`):
+0.8.5 in jobs 23401982 and 23401999 from 10:24, 0.8.7 in 23420293 from 17:06,
+each binary built from its tag on this site's ROCm 6.3. The smoke job on 0.8.7
+(23420290) found the GCD and loaded Qwen3-8B whole on it, as before. Tokens per
+second; MTP without `--mtp` / with `--mtp 2`, drafts kept, gsm8k accuracy.
+
+| Check | 0.8.5 (b11925) | 0.8.7 (b12032) |
+|---|---|---|
+| Qwen3-235B-A22B, `--moe-cache auto`, 8 requests | 31.3 | 30.9 |
+| the same: experts in VRAM at decode; hits at exit, steps of up to 8 | 91.5%; 90.77% | 91.4%; 90.81% |
+| the same, 32 requests | 24.2 | 23.5 |
+| the same: experts in VRAM; hits at exit, steps over 8; copied | 64.2%; 56.66%; 10.2 TB | 63.3%; 55.76%; 10.6 TB |
+| Qwen3-32B, `--split-mode tensor`, four GCDs, 1 request | 36.0 | 45.3 |
+| the same, 16 requests | 373 | 407 |
+| Qwen3.5-9B Q4_K_M | 99.6 / 149, 87.4%, 0.99 | 100 / 153, 87.5%, 0.99 |
+| Qwen3.5-9B Q8_0 | 81.5 / 131, 87.9%, 0.97-0.98 | 82.5 / 128, 87.9%, 0.97-0.98 |
+| Qwen3.6-27B Q4_K_M | 38.0 / 63.7, 89.8%, 0.93 | 38.2 / 65.0, 89.8%, 0.93 |
+| Qwen3.6-27B Q8_0 | 29.7 / 54.6, 90.5%, 0.97 | 29.7 / 54.7, 90.5%, 0.97 |
+| Qwen3.6-35B-A3B Q8_0 | 97.3 / 151, 89.2%, 0.94-0.93 | 95.7 / 153, 89.2%, 0.94-0.93 |
+| Qwen3.6-35B-A3B UD-Q4_K_XL | 92.5 / 150, 88.2%, 0.96-0.95 | 92.9 / 146, 88.2%, 0.96-0.95 |
+| DeepSeek-V4-Flash UD-Q4_K_XL, four GCDs, no prompt: writing, reading | 25.9, 115 | 25.8, 118 |
+| the same, a 16,000-token prompt | 18.7, 505 | 18.9, 505 |
+| the same, 100 gsm8k questions: accuracy, tokens/s | 0.96, 23.3 | 0.96, 22.9 |
+| load time, s: 235B (8, 32 requests); 32B tensor (1, 16); DeepSeek (no prompt, 16K) | 236, 161; 40.8, 12.5; 16.5, 245 | 318, 325; 132, 132; 52.6, 224 |
+
+- **The expert cache and MTP are level.** The same share of experts in VRAM
+  and the same hits, at 8 and 32 requests (`0002` and `0008` as they were);
+  MTP keeps exactly the same share of drafts on all six models, writes within
+  3%, and no `--mtp 2` point failed, so #31368's stricter rollbacks do not
+  reach it on ROCm either. `0013` and upstream's `__ballot` build and run.
+- **Tensor split is faster**: 26% at one request, 9% at 16, with a lower
+  spread (cv 0.7% against 2.2%). Measured beside other points rather than
+  alone, and below the 52.7 tokens/s c03 measured alone on 16 October, so a
+  direction rather than a figure.
+- **The sparse attention gains nothing here yet.** DeepSeek-V4-Flash loads,
+  answers as well on both binaries, and reads a 16,000-token prompt at the
+  same 505 tokens/s, so either #31259's kernel is not the one this model
+  takes, or the attention is not where its time goes at that length. The
+  30,000-token point did not fit the 32,768-token slot (34,375 tokens with
+  DeepSeek's tokenizer) and runs again with a 49,152-token slot.
+- **Loading took longer on 0.8.7** in five of six points, but it varies by a
+  factor of 15 on the same binary (DeepSeek on 0.8.5: 16.5 and 245 s), and
+  0.8.7 ran just after a maintenance, with Lustre busy. EuLLM does not ask
+  for upstream's direct IO (`use_mmap(false)` is `LLAMA_LOAD_MODE_NONE`).
+  To check in the next round's `c09`, which times loads against earlier ones.
+- The soaks on 0.8.5: Qwen3-30B-A3B Q8_0 233 tokens/s and 36,731 requests,
+  Qwen3-32B 172 and 24,736, its Q8_0 139 and 19,798, Qwen3.6-35B-A3B 314 and
+  10,316, no server died; the pool-flush soak 233 and 36,587. On 0.8.7 they
+  are running.
