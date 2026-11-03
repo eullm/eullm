@@ -192,3 +192,20 @@ def test_eu_acts_are_named_from_their_celex_number_and_rewritten():
     assert [a.number for a in by_code(arts)["eurlex_32016R0679"]] == ["5"]
     msgs = rewrite_messages(arts[("eurlex_32016R0679", "5")], "parafrasi")
     assert "del regolamento (UE) 2016/679" in json.dumps(msgs, ensure_ascii=False)
+
+
+def test_an_eu_rewrite_may_name_its_act_by_number():
+    title = "REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO EUROPEO E DEL CONSIGLIO"
+    body = ("Articolo 5\nPrincipi applicabili al trattamento di dati personali\n"
+            "1. I dati personali sono trattati in modo lecito, corretto e trasparente nei "
+            "confronti dell'interessato." + PAD)
+    a = articles_from_records([{"code": "eurlex_32016R0679", "chunk_index": 0,
+                                "article_num": "5", "text": f"{title}\n{body}"}])[
+        ("eurlex_32016R0679", "5")]
+    ok = ("L'art. 5 del regolamento (UE) 2016/679 stabilisce che i dati personali devono "
+          "essere trattati in modo lecito, corretto e trasparente nei confronti "
+          "dell'interessato.")
+    assert check_rewrite(a, "parafrasi", ok) is None
+    # A number that is neither in the article nor in the act's name is still refused.
+    assert check_rewrite(a, "parafrasi", ok + " Il termine è di 30 giorni.") in (
+        "number", "deadline")
