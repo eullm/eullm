@@ -240,6 +240,22 @@ sull'Hub (regole in `forge/CLAUDE.md`).
 | A3 | se A2 passa: tabelle da 1 e 3 miliardi; strato e ordini degli n-gram; i dati di tutti gli atti in vigore e degli atti UE (C2); E3, la riforma simulata (si riaddestra solo la memoria); i principi di diritto | 7.000 | la tabella vincente, con la curva taglia/beneficio |
 | A4 | il modello in locale: tabella come tensori GGUF e l'operatore di lookup nel motore (E4 del piano memoria, sul lato LUMI) | — | misurato sul portatile, non solo sui benchmark |
 
+**Il MoE con transformers 5.22.1 (prova `venv_smoke.py`, job 63412010, 3
+novembre 2026).** I 128 esperti di ogni strato sono due tensori fusi
+(`gate_up_proj`, `down_proj` in `Qwen3MoeExperts`), non più strati lineari,
+e bitsandbytes quantizza solo gli strati lineari. Il "30B a 8 bit" pesa
+quindi 55,2 GiB in bf16 più 0,8 GiB in int8 (picco 56,8 GiB): riempie da
+solo un'A100 da 64 GB. La ricetta di settembre (8 bit replicati su ogni GPU)
+non vale più. In cambio, gli esperti passano per `grouped_mm`, una sola
+moltiplicazione per strato su A100 con torch ≥ 2.10, invece del ciclo per
+esperto di settembre.
+
+Per A1-A2 il MoE in bf16 si divide fra le GPU del nodo (FSDP, ~15 GB a GPU
+su 4): resta spazio per la tabella e le attivazioni, e lo stesso montaggio
+si estende a più nodi, quindi è anche il carico della linea B. Nella stessa
+prova la GPU fa 292 TFLOP/s in bf16, e Qwen3.5-4B fa il primo forward in
+8,65 s (compilazione Triton) e il secondo in 0,35 s.
+
 **Se A2 non passa** si scrive il risultato, si ferma la linea, e le 7.000 ore
 di A3 vanno a C3 e C5 (o a E1, il pretraining continuato del denso con
 replay, se il libro chiuso dice che manca la conoscenza e non la
