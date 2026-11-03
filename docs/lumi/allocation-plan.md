@@ -798,6 +798,15 @@ cannot hold (`soak-node`, `moe-soak`, `moe-235b-soak-x2`, 4 to 6 hours at
 least, 7 whole-node points) under a label of their own, `v087-long`, in one
 chain of 8-hour jobs that starts when both chains have ended: two nodes at
 a time, never three.
+Submitted the same evening, after a first try that planned nothing for
+`v087-long`: `plan --group` wanted each pattern to name a group of every
+spec given, and `moe-soak` is c02's only (fixed, 23efa68c). `r-v085`'s
+waiting points set aside; `r-v087`: 835 points, 7 of them moved to
+`v087-long`, 826 of the other 828 timed from earlier runs; chain 1 of 14
+jobs of 4 hours from 23439595 (after 23401984), chain 2 from 23439609
+(after 23402001), their last jobs 23439608 and 23439622; the long chain,
+10 jobs of 8 hours from 23439623, after both (`afterany:23439608:23439622`).
+At most 112 + 80 node-hours; the jobs a chain does not need end at once.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
