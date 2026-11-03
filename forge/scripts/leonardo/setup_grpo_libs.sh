@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-TRL_VERSION="${TRL_VERSION:-1.14.1}"
+TRL_VERSION="${TRL_VERSION:-1.17.1}"
 DATASETS_VERSION="${DATASETS_VERSION:-5.0.1}"
 
 # shellcheck disable=SC1091
