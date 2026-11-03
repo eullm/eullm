@@ -1,0 +1,49 @@
+# The Forge venv on Leonardo for the Fast Lane (AIFAC_F02_1400), on the latest
+# stable releases: each version below was the newest on PyPI on 03-11-2026.
+# setup_venv_latest.sh installs torch first, from the PyTorch index, and holds
+# it (and its triton) with a constraint, so nothing here can replace it.
+#
+# What is NOT here, on purpose:
+#   * LLaMA-Factory. Even its main branch caps transformers <= 5.8.0, peft
+#     <= 0.18.1, trl <= 0.24.0 and datasets <= 4.0.0, so it cannot live in a
+#     venv of current releases. Only the finished September phases used it
+#     (sbatch_phase1.slurm, sbatch_smoke.slurm); today's pipeline is Forge's
+#     own code (stage3_sft.py, distill.py, grpo_train.py, opd_train.py), which
+#     JUPITER runs without it on transformers 5.19.
+#   * TRL. It goes to its own directory with --no-deps, as before
+#     (setup_grpo_libs.sh with TRL_VERSION=1.17.1), and only the GRPO jobs put
+#     it on PYTHONPATH.
+#   * torchvision, torchaudio: nothing in Forge imports them.
+
+# numpy 2.5 needs Python 3.12; on Leonardo's python/3.11.7 the newest is 2.4.6.
+numpy==2.5.4; python_version >= "3.12"
+numpy==2.4.6; python_version < "3.12"
+transformers==5.22.1
+peft==0.21.2
+accelerate==1.15.0
+datasets==5.1.0
+safetensors==0.8.0
+huggingface-hub==2.4.0
+tokenizers==0.23.3
+
+# The frozen 30B MoE of line A is held in 8 bits and replicated on every GPU
+# (continued_pt_qwen3_30b_a3b_leonardo.yaml, quantization_bit: 8).
+bitsandbytes==0.50.2
+
+# eullm_forge's own light dependencies (it is installed with --no-deps).
+click==8.5.0
+rich==15.0.0
+pyyaml==6.0.3
+requests==2.34.2
+beautifulsoup4==4.15.0
+
+# llama.cpp's convert_hf_to_gguf.py needs it for Ministral (JUPITER job
+# 2447162, 22-10-2026).
+sentencepiece==0.2.2
+
+# Qwen3.5's linear-attention kernels, pure Python on Triton: without them
+# Transformers takes the reference PyTorch path, more than an order of
+# magnitude slower (JUPITER teacher probe, job 2340254).
+fla-core==0.6.0
+flash-linear-attention==0.6.0
+einops==0.8.2
