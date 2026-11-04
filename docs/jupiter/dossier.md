@@ -386,6 +386,15 @@ JUPITER, named by its Slurm job id.
   post-training (open-book and false-premise pairs, prompt masked) and 20%
   general Italian (a sample of the Italian Wikipedia), packed in blocks of
   2,048 tokens, three epochs; a 30-step smoke test first gives the hours.
+* Qwen3.8-Flash-Next authorised by the user for research (Qwen Community
+  License 1.0, not Apache 2.0): ~180B stored, a 125B MoE with 6B active,
+  a 51B n-gram table at layer 2 and a 4B MTP head, 360 GB in BF16; in
+  transformers since 5.19 (`qwen4_exp`, the venv's version), which keeps
+  the table off the GPUs. It is the roadmap's phase 3 already built: the
+  question is whether the table alone, the backbone frozen, can learn the
+  law. A one-hour probe (`flashnext_probe.py`) loads it on one node, asks
+  three questions and trains the table a few steps. Not yet a product:
+  llama.cpp supports it only in a fork.
 * Every job of the night printed "module load PyTorch failed" and still
   worked, through the environment of the submitting shell. env.sh now
   retries after loading Stages/2026 and prints Lmod's message.
