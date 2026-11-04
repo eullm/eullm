@@ -147,7 +147,7 @@ def train(args) -> int:
         gradient_accumulation_steps=args.grad_accum,
         learning_rate=args.lr,
         lr_scheduler_type="cosine",
-        warmup_ratio=0.02,
+        warmup_steps=0.02,                  # a float below 1: a share of the steps
         bf16=cuda,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
