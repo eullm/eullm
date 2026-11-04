@@ -38,7 +38,11 @@
 #                model's path giving the tokenizer (legal_eval.py --gguf), so
 #                "grpo-v04-q4=<merged>" with "grpo-v04-q4=<its q4_k_m.gguf>"
 #                is the shipped file asked exactly like the bf16 "grpo-v04".
-#                Needs the CUDA llama-server (sbatch_build_llama_server.slurm)
+#                Needs the CUDA llama-server (sbatch_build_llama_server.slurm).
+#                The value may be the GGUF's directory: the model is its one
+#                file, or the first part of a split one (-00001-of-), never the
+#                vision projector (mmproj-*.gguf), which llama-server refuses
+#                as a model (the Flash-Next exam of 2026-11-04 died on it)
 #   EXAM_MEMORY  space-separated label=dir pairs: those labels of EXAM_MODELS
 #                answer with this n-gram memory grafted on (ngram_train.py,
 #                <out>/memory; legal_eval.py --ngram-memory), so
@@ -90,7 +94,17 @@ pair_of() {  # pair_of LIST LABEL: the value LIST gives this label, or nothing
     local p
     for p in $1; do [ "${p%%=*}" = "$2" ] && { echo "${p#*=}"; return; }; done
 }
-gguf_of() { pair_of "${EXAM_GGUF:-}" "$1"; }
+gguf_file() {  # the model file a GGUF path names: itself, or its directory's model
+    local d="$1" f
+    if [ -d "$d" ]; then
+        f="$(ls "$d"/*-00001-of-*.gguf 2>/dev/null | grep -v '/mmproj' | head -1)"
+        [ -n "$f" ] || f="$(ls "$d"/*.gguf 2>/dev/null | grep -v '/mmproj')"
+        [ "$(printf '%s\n' "$f" | grep -c .)" -eq 1 ] && echo "$f"
+        return 0
+    fi
+    echo "$d"
+}
+gguf_of() { local g; g="$(pair_of "${EXAM_GGUF:-}" "$1")"; [ -z "$g" ] || gguf_file "$g"; }
 for pair in ${EXAM_MEMORY:-}; do
     [ -f "${pair#*=}/config.json" ] || { echo "[exam] no n-gram memory at ${pair#*=} (${pair%%=*})" >&2; fail=1; }
 done
@@ -99,7 +113,14 @@ for pair in ${EXAM_ADAPTER:-}; do
 done
 SERVER="${LCPP_SERVER:-$LCPP_DIR/build-cuda/bin/llama-server}"
 for pair in ${EXAM_GGUF:-}; do
-    [ -f "${pair#*=}" ] || { echo "[exam] no GGUF at ${pair#*=} (${pair%%=*})" >&2; fail=1; }
+    g="$(gguf_file "${pair#*=}")"
+    if [ ! -f "$g" ]; then
+        echo "[exam] no GGUF model at ${pair#*=} (${pair%%=*})" >&2; fail=1
+    elif case "$(basename "$g")" in mmproj*) true ;; *) false ;; esac; then
+        echo "[exam] $g is the vision projector, not the model (${pair%%=*})" >&2; fail=1
+    else
+        echo "[exam] ${pair%%=*}: $g"
+    fi
     [ -x "$SERVER" ] || { echo "[exam] no llama-server at $SERVER -- sbatch_build_llama_server.slurm" >&2; fail=1; }
 done
 [ "$fail" -eq 0 ] || exit 1
