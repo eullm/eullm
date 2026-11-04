@@ -92,6 +92,17 @@ che finirebbe dopo le 8:00 del 23 parte nelle ore prima. Dal 10 al 14
 novembre manca un quinto dei nodi e la coda sarà più lenta. Il ritmo di
 novembre va tenuto più alto prima, non recuperato dopo.
 
+### Fermi non pianificati
+
+| Quando | Cosa | Effetto su di noi |
+|---|---|---|
+| 4/11/2026, pomeriggio → (in corso) | login e storage di Leonardo non rispondono (avviso HPC-News di CINECA "Leonardo: login and storage access disruption") | dai login si bloccano `git`, `ls`, `tail` su `$WORK`; una nuova sessione ssh non arriva al prompt nemmeno con `bash --norc`, perché si ferma sulla `$HOME`. Le prove di 30 minuti di A2-mini non sono partite |
+
+Alla ripresa: `sacct -X -S 2026-11-04 --format=JobID,JobName,State,Elapsed`
+per i job morti nel fermo (una catena riparte da sola dall'ultimo
+salvataggio; un job singolo va rilanciato), e un controllo che la copia in
+`archive-1147` sia rimasta intera.
+
 ### Traguardi cumulativi
 
 | Data | GPU-ore spese | Lineare |
