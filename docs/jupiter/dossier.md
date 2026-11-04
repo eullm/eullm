@@ -356,6 +356,40 @@ JUPITER, named by its Slurm job id.
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
 
+**04-11-2026**
+* Closed book (roadmap E0): the 716 questions of the closed-book suite, no
+  texts, GGUF Q4_K_M through EULLM Engine, scored by program (2667840):
+
+  | | right | real article recognised | number from heading / heading from number | deadline | penalty | made-up article denied | made-up ruling not confirmed |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | dqp-d-q9b | 176 | 0% | 3% / 10% | 14% | 8% | 100% | 8% |
+  | g9r-r2 | 206 | 0% | 3% / 5% | 13% | 12% | 100% | 90% |
+  | g4-r3 | 91 | 3% | 2% / 5% | 15% | 17% | 44% | 5% |
+
+  Without texts the models know almost nothing of the articles. The 9B
+  ones score by denying: every made-up article and half the real ones
+  called nonexistent ("denies-real" 50-51%), the reflex the roadmap counts
+  apart. What they know rather than deny is 2-17% a kind; E1-mini must add
+  15 points there.
+* The sets copied from Leonardo, open book as the product runs them
+  (2667839, judges 2667842-2667843): devbig (472) dqp-d-q9b 411 + 19,
+  g9r-r2 438 + 11, g4-r3 447 + 6; practical held-out (70) 41 + 8, 45 + 9,
+  40 + 10; live LexIA (5) 2 each. GRPO's gain holds on sets never used
+  in training or selection: +27 (9B) and +36 (4B) on devbig.
+* The EU rewrites with the question-and-answer style and a second sample
+  (four links from 22:15): 595,661 rewrites kept in all, 4-6% refused.
+* The nine codes' memory corpus completed here rather than copied: the
+  rewrites the stalled file held are asked again on the codes, skipping
+  those Leonardo wrote (2677072).
+* E1-mini written (`memory_cpt.py`, `sbatch_memory_cpt.slurm`): LoRA on
+  g9r-r2 over the nine codes' corpus, with 25% of the tokens a replay of the
+  post-training (open-book and false-premise pairs, prompt masked) and 20%
+  general Italian (a sample of the Italian Wikipedia), packed in blocks of
+  2,048 tokens, three epochs; a 30-step smoke test first gives the hours.
+* Every job of the night printed "module load PyTorch failed" and still
+  worked, through the environment of the submitting shell. env.sh now
+  retries after loading Stages/2026 and prints Lmod's message.
+
 **23-10-2026**
 * The second node idle overnight: the submission script refused the
   distillation checkpoints given as "base+adapter" as missing models, which
