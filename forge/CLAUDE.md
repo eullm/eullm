@@ -297,4 +297,22 @@ Only fully permissive licenses:
   needs transformers 5.5+ (the 12B 5.10+): check the venv can load it
   before planning a run on it, and never upgrade the shared venv for it.
 
+**One exception, decided by the PI on 2026-11-04: Qwen3.8-Flash-Next**
+(`Qwen/Qwen3.8-Flash-Next`, 180B, 10 of 512 experts active, native hashed
+3-gram tables), under the **Qwen Community License 1.0**, not Apache 2.0.
+The licence allows use, fine-tuning, derivative works, distribution and sale,
+and does not forbid training other models on it or on its outputs. Its
+conditions: the copyright and licence notice travels with every copy and
+derivative; a licensee that runs a *Model as a Service* (third parties
+reach the model through an API or a hosted endpoint) or an *AI Work
+Assistant* business (coding or office productivity) needs a separate licence
+from Qwen for commercial use, derivatives included; internal use is exempt
+as long as nothing of the model, its outputs or its capabilities reaches a
+third party. So: allowed for research, as a teacher, and as the base of
+models sold on-premises; **before any of its derivatives, or a student it
+taught, is offered through an API, the separate licence is obtained first.**
+Every model card of a derivative says so. Every other Qwen model used so far
+(Qwen3, 3.5, 3.6, 3.8-27B) is Apache 2.0; check each new one, the same family
+does not mean the same licence.
+
 Llama (Meta) is excluded from the default catalog due to "Built with Llama" branding requirement.
