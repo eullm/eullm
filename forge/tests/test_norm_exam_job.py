@@ -35,6 +35,8 @@ while [ $# -gt 0 ]; do
         --reranker) how="$how+rr"; shift ;;
         --gguf) how="$how+gguf:$(basename "$2")"; shift ;;
         --llama-server) shift ;;
+        --ngram-memory) how="$how+mem:$(basename "$(dirname "$2")")"; shift ;;
+        --adapter) how="$how+lora:$(basename "$(dirname "$2")")"; shift ;;
     esac
     shift
 done
@@ -132,3 +134,24 @@ def test_a_gguf_round_without_the_server_or_the_file_fails_before_asking(job, tm
     server.chmod(0o755)
     r, asked = run(EXAM_GGUF=f"a={tmp_path / 'nope.gguf'}", LCPP_SERVER=str(server))
     assert r.returncode == 1 and asked == [] and "no GGUF" in r.stderr
+
+
+def test_memory_and_adapter_labels_are_grafted_and_the_others_not(job, tmp_path):
+    run, _ = job
+    mem = tmp_path / "a2-ngram" / "memory"
+    mem.mkdir(parents=True)
+    (mem / "config.json").write_text("{}")
+    lora = tmp_path / "a2-lora" / "adapter"
+    lora.mkdir(parents=True)
+    (lora / "adapter_config.json").write_text("{}")
+    r, asked = run(EXAM_NORMS="", EXAM_MEMORY=f"a={mem}", EXAM_ADAPTER=f"b={lora}")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert asked == ["a+mem:a2-ngram", "b+lora:a2-lora"]
+
+
+def test_a_missing_memory_fails_before_asking(job, tmp_path):
+    run, _ = job
+    r, asked = run(EXAM_MEMORY=f"a={tmp_path / 'nope'}")
+    assert r.returncode == 1 and asked == [] and "no n-gram memory" in r.stderr
+    r, asked = run(EXAM_ADAPTER=f"b={tmp_path / 'nope'}")
+    assert r.returncode == 1 and asked == [] and "no LoRA adapter" in r.stderr
