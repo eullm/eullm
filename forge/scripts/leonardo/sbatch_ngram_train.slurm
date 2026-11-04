@@ -26,7 +26,8 @@
 #   NG_MODE   ngram (default) or lora
 #   NG_OUT    run directory (default $WORK/eullm_runs/lineA/a2-r2l-$NG_MODE)
 #   NG_ARGS   extra ngram_train.py options (default: 3 epochs, a 0.41B table:
-#             16 heads x 100,000 rows x 256)
+#             16 heads x 400,000 rows x 64 dims; --embed-dim is the 16 heads
+#             together, as ple_embed_dim in Qwen3.8-Flash-Next)
 #   NG_REPO   checkout to run (default: the one this file was submitted from)
 #
 #SBATCH --job-name=eullm-a2-ngram
@@ -59,7 +60,7 @@ OUT="${NG_OUT:-$WORK/eullm_runs/lineA/a2-r2l-$MODE}"
 MEMDIR="$WORK/eullm_runs/memory"
 # shellcheck disable=SC2206
 DATA=(${NG_DATA:-$MEMDIR/program.jsonl $MEMDIR/rewrites*.jsonl})
-ARGS="${NG_ARGS:---epochs 3 --rows-per-head 100000 --embed-dim 256}"
+ARGS="${NG_ARGS:---epochs 3 --rows-per-head 400000 --embed-dim 1024}"
 
 echo "[ng] repo  $REPO ($(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo '?'))"
 echo "[ng] mode  $MODE, model $MODEL"
