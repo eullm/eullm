@@ -134,6 +134,25 @@ def test_a_gguf_round_without_the_server_or_the_file_fails_before_asking(job, tm
     server.chmod(0o755)
     r, asked = run(EXAM_GGUF=f"a={tmp_path / 'nope.gguf'}", LCPP_SERVER=str(server))
     assert r.returncode == 1 and asked == [] and "no GGUF" in r.stderr
+    proj = tmp_path / "mmproj-F16.gguf"
+    proj.write_bytes(b"GGUF")
+    r, asked = run(EXAM_GGUF=f"a={proj}", LCPP_SERVER=str(server))
+    assert r.returncode == 1 and asked == [] and "vision projector" in r.stderr
+
+
+def test_a_gguf_directory_answers_with_its_model_not_the_projector(job, tmp_path):
+    run, _ = job
+    d = tmp_path / "flash-next-q4"
+    d.mkdir()
+    for name in ("mmproj-F16.gguf", "Flash-Q4-00001-of-00003.gguf",
+                 "Flash-Q4-00002-of-00003.gguf", "Flash-Q4-00003-of-00003.gguf"):
+        (d / name).write_bytes(b"GGUF")
+    server = tmp_path / "llama-server"
+    server.write_text("#!/bin/sh\n")
+    server.chmod(0o755)
+    r, asked = run(EXAM_OPEN_ONLY="1", EXAM_GGUF=f"a={d}", LCPP_SERVER=str(server))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert asked == ["a-open+gguf:Flash-Q4-00001-of-00003.gguf", "b-open"]
 
 
 def test_memory_and_adapter_labels_are_grafted_and_the_others_not(job, tmp_path):
