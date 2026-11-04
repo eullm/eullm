@@ -324,6 +324,12 @@ def main() -> int:
                     help="with --gguf: questions decoded together")
     ap.add_argument("--server-ctx", type=int, default=16384,
                     help="with --gguf: context tokens per question (prompt + answer)")
+    ap.add_argument("--ngram-memory", type=Path,
+                    help="graft this n-gram memory (forge/scripts/ngram_train.py, "
+                         "<out>/memory) onto the model before answering")
+    ap.add_argument("--adapter", type=Path,
+                    help="a PEFT LoRA adapter merged into the model before answering "
+                         "(the LoRA control of ngram_train.py, <out>/adapter)")
     ap.add_argument("--quiet", action="store_true",
                     help="print totals only, never a question or an answer: for the "
                          "held-out exam, whose questions nobody improving the models "
@@ -345,6 +351,8 @@ def main() -> int:
         ap.error("--retrieval-cache holds document embeddings: give --embedder")
     if args.gate and not args.norms:
         ap.error("--gate judges the retrieved texts: give --norms")
+    if (args.ngram_memory or args.adapter) and args.gguf:
+        ap.error("--ngram-memory and --adapter graft onto the HF model: not with --gguf")
 
     from transformers import AutoTokenizer
 
@@ -421,6 +429,18 @@ def main() -> int:
         cuda = torch.cuda.is_available()
         model = load_model(AutoModelForCausalLM, args.model, torch.cuda.device_count(),
                            fallback_cls=AutoModelForImageTextToText)
+        if args.adapter:
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
+            print(f"[eval] LoRA adapter {args.adapter} merged", flush=True)
+        if args.ngram_memory:
+            from eullm_forge.memory import NGramMemory, attach, decoder_layers
+            memory = NGramMemory.load(args.ngram_memory)
+            layer = decoder_layers(model)[memory.config.layer]
+            attach(model, memory.to(next(layer.parameters()).device).eval())
+            print(f"[eval] n-gram memory {args.ngram_memory}: after layer {memory.config.layer}, "
+                  f"{memory.n_params() / 1e6:.1f}M parameters, scale "
+                  f"{memory.scale.item():.3g}", flush=True)
         model.eval()
         batch = args.batch_size or (16 if cuda else 1)
         print(f"[eval] {len(items)} items on {'GPU' if cuda else 'CPU'}, batch {batch}",
