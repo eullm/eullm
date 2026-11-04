@@ -399,6 +399,9 @@ novembre (domande 5 e 7).
 Si raccoglie dal primo giorno, non alla fine:
 * GPU-ore per fase, da `sacct`, con un prefisso di nome per WP;
 * il registro di coda con le attese datate;
+* il diario dell'infrastruttura (`fastlane-infrastruttura.md`): fermi,
+  attese per forma di job, carico dei nodi di login, misurati giorno per
+  giorno;
 * le tabelle dei risultati con la base di confronto;
 * il costo di un ciclo completo (C5);
 * la curva di scalabilità su più nodi (B1).
