@@ -149,3 +149,10 @@ known, rather than carrying today's arithmetic forward as if it were fact.
 
 `forge/scripts/leonardo/budget.sh` reports settled, in-flight and committed
 node-hours; `saldo -b` alone lags by everything currently running.
+
+**Submitted on 04/11/2026** through the EuroHPC portal (Final Report
+upload), on the official template "AI Factories Playground Access Mode |
+Final Report" (`EuroHPC_AIF_Playground_Access-Final_Report.docx`, from the
+Playground access page of eurohpc-ju.europa.eu). The text as submitted, with
+the source of every figure, is
+[`cineca/final-report-1147.md`](cineca/final-report-1147.md).
