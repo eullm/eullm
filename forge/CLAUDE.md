@@ -146,6 +146,12 @@ seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
    (`squeue --me --start`, or `fastlane_probe.sh` with `FLP_HOLD=1`): planned
    starts for long jobs, or the long probes started within minutes. Whole
    nodes and multi-node jobs follow the same rule and wait longer.
+   The same afternoon a ladder of probes found the edge: **1-GPU jobs of
+   30 min, 1, 2 and 4 h started in 16-24 s, while 2- and 3-GPU jobs, even of
+   one hour, got no planned start.** On a day like that the work is cut into
+   1-GPU jobs (one teacher `llama-server` per job, 4B-9B models in bf16,
+   exams of small models), and the multi-GPU chains stay queued for the
+   holes that open later.
 2. **Three GPUs, 24 cores, 340 GB — all three numbers — for a part of a
    node.** Four GPUs or 32 cores make the job exclusive: ask for that only
    when the whole node is meant (rule 1), never by accident through the
