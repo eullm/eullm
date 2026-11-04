@@ -82,9 +82,10 @@ parts, a summary in its log), so the user only reads the result.
   ended 2026-11-02; the **Fast Lane EHPC-AIF-2026FL01-1400** (30,000
   GPU-hours, 2026-11-02 → 2027-02-02, no extension) carries on, and its pace,
   work packages and commitments are in `docs/cineca/fastlane-plan.md`.
-  The Fast Lane's queue is not the Playground's: on 3-11-2026 3-GPU jobs
-  started at once for up to 24 h, and whole nodes and 4-node jobs within
-  two hours (rules in `forge/CLAUDE.md`, "the shape of a job that starts"). `docs/cineca/leonardo.md`,
+  The queue changes from day to day: on 3-11-2026 3-GPU jobs of 24 h started
+  at once, on 4-11-2026 (7,025 jobs pending) they got no planned start, so
+  links are 2 h unless that day's queue says otherwise (rules in
+  `forge/CLAUDE.md`, "the shape of a job that starts"). `docs/cineca/leonardo.md`,
   `docs/leonardo-runbook.md`, `forge/scripts/leonardo/`, and the job-shape
   rules in `forge/CLAUDE.md`.
 
