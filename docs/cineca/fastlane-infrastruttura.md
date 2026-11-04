@@ -79,7 +79,10 @@ Alle 21:28, il carico di ogni nodo di login (`uptime`, dal nostro PC):
 | 31,5 | 71,4 | non risponde | 29,6 |
 
 Il nodo dove gira il server del gestore di flussi di lavoro ha più del
-doppio del carico degli altri due che rispondono. Per lavorare si sceglie
+doppio del carico degli altri due che rispondono. Alle 21:33 login07 aveva
+88 utenti, carico 20,8, CPU inattiva all'83% e attesa del disco allo 0,1%:
+lo storage a quell'ora rispondeva, e il 16-27% di `wa` di login02 era di
+quel nodo, non di tutta la macchina. Per lavorare si sceglie
 il login meno carico (`ssh <utente>@login07-ext.leonardo.cineca.it`)
 invece del nome generico, che assegna un nodo a caso.
 
