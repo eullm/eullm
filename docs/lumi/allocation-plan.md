@@ -847,6 +847,10 @@ on eight (Q8_0), the Coder-480B without mmap, Qwen3-32B split by tensor,
 Qwen3.8-27B Q8 on one GCD, two or three trials each. The `v087` half in
 `r-v087`'s chains, ahead of that round's points; a job each for the other
 two.
+Submitted the same day: `eullm 0.8.7 (ROCm) [bc5498dc2ec9]`, the branch with
+`0014`, device code `amdhsa--gfx90a`, built in 6 m 34 s; `c16` planned with
+16 points for each label; jobs 23459449 (`v085`) and 23459452 (`v087fo`),
+the `v087` half in `r-v087`'s 23439598 and 23439612.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
