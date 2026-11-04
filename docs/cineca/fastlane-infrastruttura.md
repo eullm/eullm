@@ -72,6 +72,17 @@ Sul nodo giravano anche lavori che di solito si fanno altrove:
 * sincronizzazioni di log di addestramento verso un servizio esterno;
 * il calcolo del checksum di un modello intero.
 
+Alle 21:28, il carico di ogni nodo di login (`uptime`, dal nostro PC):
+
+| login01 | login02 | login05 | login07 |
+|---:|---:|---:|---:|
+| 31,5 | 71,4 | non risponde | 29,6 |
+
+Il nodo dove gira il server del gestore di flussi di lavoro ha più del
+doppio del carico degli altri due che rispondono. Per lavorare si sceglie
+il login meno carico (`ssh <utente>@login07-ext.leonardo.cineca.it`)
+invece del nome generico, che assegna un nodo a caso.
+
 I thread di rete e di scarico verso Lustre (`kiblnd_*`,
 `flush-lhomefs`, `flush-larchive`) erano tra i primi per CPU. Per noi
 l'effetto è un login lento a ogni comando che tocca il disco. Il calcolo
