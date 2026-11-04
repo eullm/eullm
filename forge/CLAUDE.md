@@ -134,18 +134,18 @@ partition caps a job at 24 h and 64 nodes. One day's reading, so the rules
 below are the starting point and the probe is run again when the queue
 seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
 
-1. **Long links for 3-GPU work, short only where they pay.** A 3-GPU job of
-   up to 24 h starts at once: chain 24 h links (`submit_chain.sh ... -t
-   24:00:00`, the script's own stop time raised to match, e.g.
-   `law_rewrites.py --stop-after 85500`) instead of 2 h ones, which lose
-   ~14 min of start-up (20 %) each. Whole nodes and multi-node jobs wait
-   ~2 h for any length: worth it for work that needs the shape (the sharded
-   30B MoE, the multi-node study), not as a habit. The script headers still
-   say 2 h and `tests/test_leonardo_job_shape.py` still holds them to it, so
-   the longer time goes on the command line; the test is revised with the
-   first script that needs a whole node by design. On the Playground (from
-   2026-09-21) 24 h and whole-node jobs waited for days; if the probe ever
-   reads like that again, rules 1-2 go back to 2 h and 3 GPUs.
+1. **Two-hour links by default; longer only on a day the queue says so.**
+   On 4-11-2026, a day after the probe above, 7,025 jobs were pending in
+   `boost_usr_prod` (3,688 on 2026-09-22), no node was idle, and our 3-GPU
+   jobs of 24 h got no planned start at all, although our priority (144,400)
+   was above the 90th percentile of the queue (143,054): the same backfill
+   problem as in September, so priority is not the lever, the wall time is.
+   Chains of 2 h links (`submit_chain.sh ... -t 02:00:00`, `save_steps` well
+   inside a link, e.g. 50) start; a 24 h link starts only when the machine is
+   quiet. Before giving the user a longer link, check that day's queue
+   (`squeue --me --start`, or `fastlane_probe.sh` with `FLP_HOLD=1`): planned
+   starts for long jobs, or the long probes started within minutes. Whole
+   nodes and multi-node jobs follow the same rule and wait longer.
 2. **Three GPUs, 24 cores, 340 GB — all three numbers — for a part of a
    node.** Four GPUs or 32 cores make the job exclusive: ask for that only
    when the whole node is meant (rule 1), never by accident through the
