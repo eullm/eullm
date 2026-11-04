@@ -172,6 +172,22 @@ def runs_out(left_node_hours: float, rate_node_hours_per_day: float, now: dt.dat
     return {"date": when.date().isoformat(), "days_early": round(early, 1)}
 
 
+def margin(budget_node_hours: float, start: dt.date, end: dt.date, now: dt.datetime,
+           spent_node_hours: float) -> dict:
+    """How far the spend is ahead of the straight line from the start to the
+    end of `end` (negative: behind it), in node-hours and in days of that
+    line's rate: the days without a job (a maintenance, no way to log in)
+    the allocation can take before an hour of it goes unspent at the end.
+    The PI's rule since 04-11-2026: always ahead, never on the line."""
+    begin = dt.datetime.combine(start, dt.time())
+    span = (dt.datetime.combine(end + dt.timedelta(days=1), dt.time()) - begin).total_seconds()
+    done = min(max((now - begin).total_seconds() / span, 0.0), 1.0) if span > 0 else 1.0
+    ahead = spent_node_hours - budget_node_hours * done
+    rate = budget_node_hours / (span / 86400) if span > 0 else 0.0
+    return {"ahead_node_hours": round(ahead, 1), "line_node_hours_per_day": round(rate, 1),
+            "days": round(ahead / rate, 1) if rate else None}
+
+
 def read_sacct(start: str, account=None) -> list:
     cmd = ["sacct", "-X", "-n", "-P", "-S", start, "-E", "now", "-o", SACCT_FIELDS]
     if account:

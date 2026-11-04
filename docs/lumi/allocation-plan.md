@@ -852,6 +852,16 @@ Submitted the same day: `eullm 0.8.7 (ROCm) [bc5498dc2ec9]`, the branch with
 16 points for each label; jobs 23459449 (`v085`) and 23459452 (`v087fo`),
 the `v087` half in `r-v087`'s 23439598 and 23439612.
 
+04-11-2026, evening, the pace: 2,852 node-hours left (lumi-allocations,
+21:40), 22.8 a day to 09-03-2027; the last 7 days 23.6 a day, which spends
+them by 05-03. The PI's rule from today: always ahead of the straight line,
+never on it, so that days without a job (the maintenances of 02 and 03-11,
+the two days without a login of 29-30 October) leave no hour unspent at the
+end. `nodi.sh` now prints that margin: 1,648 node-hours spent against the
+line's 1,355 by now, 293 ahead, about 12 days of its 25.1 a day. After
+`r-v087` (about a day and a half on two nodes) and its long soaks (about
+two and a half on one), the next work goes in the queue before it empties.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
