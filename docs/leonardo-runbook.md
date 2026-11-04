@@ -475,7 +475,13 @@ ran on login nodes and were killed by their 10-minute CPU-time limit:
   Tried on 2026-11-03 for `hf_home/datasets` (34 GB, Playground to Fast
   Lane): the first connection asks to accept the host key (131.175.44.53,
   CINECA's network), then rsync prints nothing and returns; check the copy
-  with `du -sh` at the destination.
+  with `du -sh` at the destination. A dry run for checking (`rsync -an
+  --out-format=...`) is refused there ("You are not permitted to execute
+  this command"), and the refusal prints nothing on stdout, so a count of
+  differences built on it reads 0 whatever is missing. The check runs as
+  `sbatch_copy_project.slurm` on the serial partition instead
+  (`COPY_HEAVY=1 COPY_DIRS="."`), which copies what is missing and then
+  prints TUTTO COPIATO only when its own dry run finds nothing.
   To or from an outside server (the workstation, an I3K server, JUPITER),
   rsync against the datamover instead of a login node.
 * **GridFTP**, the tool CINECA recommends for large transfers:
