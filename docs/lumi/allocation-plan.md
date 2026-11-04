@@ -813,6 +813,41 @@ shown is not the dependency. `squeue -o "%i %E"` is: `afterany:23439608
 (unfulfilled),afterany:23439622(unfulfilled)` for 23439623, and each later
 job after the one before it.
 
+04-11-2026, morning: the night of `r-v087`. The 0.8.5 jobs ended at 01:15,
+the 0.8.7 chains started at 01:38 and handed over in 2 to 5 minutes; 198
+points done by 13:00, 633 waiting, 2 failed: `load-together-235b` with
+`--mmap` (the warm-up timed out) and `rt-graded` on Ollama ("timed out
+waiting for llama-server to start", Ollama's own runner, not EuLLM). No
+point failed on the chat UI's port. The first job of each chain ended in
+`TIMEOUT` at 4:00:16: 23439595 had started `load-together-120b` at 03:03
+UTC with 35 minutes left, planned at 25 by earlier runs, and it was still
+loading when the time ran out (released, back in the queue). A load that
+overruns, not the job's summary.
+
+The loads are slower on 0.8.7, now past the noise: `load-together-235b`
+(two Qwen3-235B Q4_K_M at once, cold, the node alone, `--load-threads 0`)
+160 s, where the four rounds before took 103-121 s (`next8` 121, `next21`
+104, `v0794` 107, `v085` 103); its `--mmap` variant, 17 minutes before, ran
+past the warm-up's limit; Qwen3-Coder-480B without mmap 175 and 202 s
+against 168 and 161; and in `c15` Qwen3-32B split by tensor, the 235B with
+the expert cache and DeepSeek. The cause in llama.cpp: #31321 (in b12032)
+reads the tensors of a model loaded without mmap biggest-first instead of in
+file order, for the one staging buffer it now reuses; on ROCm every such
+load takes the async upload, which b12032 left as it was but for that
+order. On Lustre, read cold, the jumps cost: llama.cpp's sequential read was
+what beat EuLLM's own readers on this file system in October. Patch `0014`
+reads them in file order again (sorted by file and offset), the staging
+buffer growing to the largest tensor, the peak upstream's had anyway.
+
+`c16-load-order` measures it before anything is merged: the same cold loads
+on 0.8.5 (`v085`), 0.8.7 as released (`v087`) and 0.8.7 with `0014`
+(`v087fo`, built from this branch in `eullm-v087fo`), round `r-load-order`,
+16 points per binary: two 235B together, the 235B on four GCDs (Q4_K_M) and
+on eight (Q8_0), the Coder-480B without mmap, Qwen3-32B split by tensor,
+Qwen3.8-27B Q8 on one GCD, two or three trials each. The `v087` half in
+`r-v087`'s chains, ahead of that round's points; a job each for the other
+two.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
