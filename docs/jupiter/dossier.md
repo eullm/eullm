@@ -395,6 +395,17 @@ JUPITER, named by its Slurm job id.
   law. A one-hour probe (`flashnext_probe.py`) loads it on one node, asks
   three questions and trains the table a few steps. Not yet a product:
   llama.cpp supports it only in a fork.
+* The nine codes' corpus completed (2677072): 5,855 rewrites kept, 206
+  refused. E1-mini's data, prepared by its smoke test (2677279): 78,576
+  texts of the nine codes (17.2 M tokens), 15,815 replay pairs, 40,000
+  Wikipedia articles (42.3 M tokens); three epochs of 31.4 M tokens each,
+  55% corpus, 25% replay, 20% general. The smoke test then stopped at
+  `warmup_ratio`, gone from TrainingArguments in transformers 5 (now
+  `warmup_steps` as a share); its three links, behind it with afterok, did
+  not run. The Flash-Next probe (2686808) stopped at the backward: its
+  linear attention refuses the module's Triton on Hopper, and the probe
+  had not put libs-qwen35's Triton 3.8 first. Both fixed and queued again.
+  Qwen3.8-Flash-Next downloaded in 1 min 36 s (336 GiB).
 * Every job of the night printed "module load PyTorch failed" and still
   worked, through the environment of the submitting shell. env.sh now
   retries after loading Stages/2026 and prints Lmod's message.
