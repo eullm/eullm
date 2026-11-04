@@ -64,7 +64,11 @@ parts, a summary in its log), so the user only reads the result.
   inference and benchmarks only, on MI250X (gfx90a). Spent on what the
   work really needs, not held to the straight line: a round on each engine
   that touches inference, on as many nodes as it takes; if the hours run
-  out early, more are asked for (PI, 21-10-2026). `docs/lumi/allocation-plan.md`,
+  out early, more are asked for (PI, 21-10-2026). Always ahead of the
+  straight line to 09-03-2027, never on it: days without a job (a
+  maintenance, no way to log in) must leave no hour unspent at the end, and
+  `tools/lumi/nodi.sh` prints the margin in days (PI, 04-11-2026).
+  `docs/lumi/allocation-plan.md`,
   `docs/lumi/lumi-g.md`, `tools/lumi/`.
 - **JUPITER Booster** (EuroHPC EHPC-AIF-2026PG01-1434, JSC budget
   `e-aif-2026pg01-1434`, 5,000 GPU-hours): Forge, with the engine as
