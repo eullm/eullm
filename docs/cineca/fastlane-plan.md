@@ -79,6 +79,19 @@ Le leve, misurate sulla 1147 (`allocation-recovery.md`):
    catena che finisce va sostituita nello stesso messaggio (regola 8 di
    `forge/CLAUDE.md`).
 
+### Manutenzioni già pianificate (`scontrol show reservation`, 4 novembre 2026)
+
+| Prenotazione | Quando | Nodi Booster |
+|---|---|---:|
+| `maint_4B1` | 10/11 07:00 → 12/11 07:00 | 540 |
+| `maint_4B2` | 12/11 07:00 → 14/11 07:00 | 180 |
+| `maint_23112026_booster` | **23/11 08:00 → 25/11 08:00** | **tutti (3.456)** |
+
+Il 23-25 novembre il Booster è fermo: sono due giorni su 92, e nessun job
+che finirebbe dopo le 8:00 del 23 parte nelle ore prima. Dal 10 al 14
+novembre manca un quinto dei nodi e la coda sarà più lenta. Il ritmo di
+novembre va tenuto più alto prima, non recuperato dopo.
+
 ### Traguardi cumulativi
 
 | Data | GPU-ore spese | Lineare |
