@@ -139,15 +139,22 @@ def load_model(auto_cls, path: str, n_gpus: int, fallback_cls=None):
     """
     import torch
 
-    kwargs = {"dtype": torch.bfloat16}
-    if n_gpus > 1:
-        kwargs["device_map"] = "auto"
+    from eullm_forge.eval.placement import device_map_for
+
+    def kwargs(cls) -> dict:
+        # A model with parameters kept off the GPUs (Flash-Next's n-gram table)
+        # gets its layers spread evenly: "auto" left its first GPU empty.
+        out = {"dtype": torch.bfloat16}
+        if n_gpus > 1:
+            out["device_map"] = device_map_for(path, n_gpus, cls)
+        return out
+
     try:
-        model = auto_cls.from_pretrained(path, **kwargs)
+        model = auto_cls.from_pretrained(path, **kwargs(auto_cls))
     except ValueError as exc:
         if fallback_cls is None or "Unrecognized configuration class" not in str(exc):
             raise
-        model = fallback_cls.from_pretrained(path, **kwargs)
+        model = fallback_cls.from_pretrained(path, **kwargs(fallback_cls))
     return model.to("cuda") if n_gpus == 1 else model
 
 

@@ -46,9 +46,8 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="Qwen/Qwen3.8-Flash-Next")
     ap.add_argument("--texts", type=Path, required=True, help="JSONL with a 'text' field")
-    ap.add_argument("--gpu-gib", type=int, default=80, help="weights a GPU at most")
     ap.add_argument("--max-new-tokens", type=int, default=200)
-    ap.add_argument("--batch", type=int, default=4)
+    ap.add_argument("--batch", type=int, default=1)
     ap.add_argument("--seq", type=int, default=1024)
     ap.add_argument("--steps", type=int, default=8)
     ap.add_argument("--lr", type=float, default=0.5)
@@ -60,9 +59,14 @@ def main(argv: list[str] | None = None) -> int:
     n_gpu = torch.cuda.device_count()
     t0 = time.monotonic()
     tok = AutoTokenizer.from_pretrained(args.model)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from eullm_forge.eval.placement import device_map_for
+
+    device_map = device_map_for(args.model, n_gpu, AutoModelForImageTextToText)
+    print(f"[probe] device map: {'auto' if device_map == 'auto' else 'layers spread evenly'}",
+          flush=True)
     model = AutoModelForImageTextToText.from_pretrained(
-        args.model, dtype=torch.bfloat16, device_map="auto",
-        max_memory={**{i: f"{args.gpu_gib}GiB" for i in range(n_gpu)}, "cpu": "400GiB"})
+        args.model, dtype=torch.bfloat16, device_map=device_map)
     model.eval()
     tables = [m for n, m in model.named_modules() if n.endswith("ple_embedding.ngram_embedding")]
     print(f"[probe] loaded in {time.monotonic() - t0:.0f} s on {n_gpu} GPUs", flush=True)
