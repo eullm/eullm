@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.8.8 — 2026-11-05
 
 ### Added
 - **`eullm --help` says how to start and what can be set.** Besides the commands it shows the ways to start a model (a catalog id, a Hugging Face repo, a file, `serve`), the options of `run` and `serve` used most with their defaults, and every setting read from the environment or `.env`. `eullm run --help` and `eullm serve --help` group their options (GPU and memory, MoE models, several GPUs, MTP, hybrid models, images and audio, more than one model, in the background), with one line each under `-h` and the whole explanation under `--help`, wrapped to the terminal's width, then examples and the same settings.

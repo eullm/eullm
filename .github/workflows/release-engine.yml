@@ -2559,11 +2559,15 @@ jobs:
 
             LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: `eullm serve` starts when the chat UI's port is taken
+            ### This release: a complete `eullm --help`, and `.env` settings that were ignored
 
-            **`eullm serve` starts when port 11435 is taken.** Since 0.8.5 `serve` opens the chat UI too, on port 11435, and 0.8.5 and 0.8.6 exited when another program held that port ("port 11435 is already in use"), so on a machine running more than one server only the first one started. 0.8.7 leaves the chat UI off for that server, says so in the log, and serves the API; `--ui-port` gives its chat another port and `--no-ui` turns the chat off. `eullm run` still stops when its chat port is taken, and now names `--ui-port`, not `--port`.
+            **`eullm --help` says how to start and what can be set**: the ways to start a model, the options of `run` and `serve` used most with their defaults, and every setting read from the environment or `.env`. `eullm run --help` and `eullm serve --help` group their options by subject, one line each under `-h`, the whole explanation under `--help`.
 
-            Everything else is 0.8.6: llama.cpp b12032, and the chat's sidebar, Model hub and About page.
+            **Settings written in `.env` are read.** `EULLM_WEB_ALLOWED_DOMAINS`, `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`, `EULLM_ALLOW_MODEL_PATHS`, `HF_TOKEN`, `EULLM_DOWNLOAD_CONNECTIONS`, `EULLM_IMAGE_MAX_TOKENS`, `EULLM_IMAGE_MIN_TOKENS` and `RUST_LOG` were read from the environment only, so a line for them in `.env` was ignored: a domain allowlist there left `--web` fetching from any public host. If you set any of them in `.env`, it now takes effect.
+
+            **`eullm import-ollama` is gone.** Models come from the catalog, Hugging Face (`hf.co/OWNER/REPO`), a URL, or any folder of GGUF files (`EULLM_MODEL_LIBRARIES`). Models imported with it before keep working.
+
+            Everything else is 0.8.7: llama.cpp b12032, and the chat's sidebar, Model hub and About page.
 
             ### Quick install
 
