@@ -13,6 +13,18 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **`eullm --help` says how to start and what can be set.** Besides the commands it shows the ways to start a model (a catalog id, a Hugging Face repo, a file, `serve`), the options of `run` and `serve` used most with their defaults, and every setting read from the environment or `.env`. `eullm run --help` and `eullm serve --help` group their options (GPU and memory, MoE models, several GPUs, MTP, hybrid models, images and audio, more than one model, in the background), with one line each under `-h` and the whole explanation under `--help`, wrapped to the terminal's width, then examples and the same settings.
+
+### Fixed
+- **Settings written in `.env` are read**, as `.env.example` and the quick start show them. `EULLM_WEB_ALLOWED_DOMAINS`, `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`, `EULLM_ALLOW_MODEL_PATHS`, `HF_TOKEN`, `EULLM_DOWNLOAD_CONNECTIONS`, `EULLM_IMAGE_MAX_TOKENS`, `EULLM_IMAGE_MIN_TOKENS` and `RUST_LOG` were read from the environment only, so a line for them in `.env` was ignored without a word: a domain allowlist there left `--web` fetching from any public host, and a token there left a gated download anonymous. The environment still wins over `.env`, and the startup log says where the web settings, the model-path switch and the token came from.
+- **The help and the guides say what the commands do.** `eullm pull` takes a Hugging Face repo or a URL as well as a catalog id (its help sent you to an `eullm catalog` command that does not exist); `--threads` defaults to one thread per physical core, not to every CPU; the KV cache takes `q4_1`, `q5_0`, `q5_1` and `f32` too; `--keep-alive` applies to the decision model as well. The examples in the help of `rm`, `unload`, `update`, `finetune` and `forge` come one per line instead of run together. `--replace`, which the guides gave for a port already in use, is not implemented (it stops with an error that says so), and is out of the help and the guides until it is.
+
+### Changed
+- **`eullm import-ollama` is gone.** Models come from the catalog, from Hugging Face (`hf.co/OWNER/REPO`), from a URL, or from any folder of GGUF files (`EULLM_MODEL_LIBRARIES`, which uses an LM Studio or Hugging Face folder where it is). Models imported with it before keep working.
+
 ## 0.8.7 — 2026-11-02
 
 ### Fixed

@@ -148,6 +148,11 @@ minutes) and **About** (the build, the hardware llama.cpp sees, where models
 and the audit trail are kept, who may use the server). No Python, no Docker,
 no account. Every download, for every platform: [platforms](docs/platforms.md).
 
+`eullm --help` shows the ways to start, the options used most with their
+defaults, and every setting read from the environment or `.env`; `eullm run
+--help` has every option, grouped. The [quick start](docs/quickstart.md) says
+which to use, with startup scripts to copy.
+
 ## Runs everywhere: from an ARM board to a supercomputer
 
 | Where | Measured |

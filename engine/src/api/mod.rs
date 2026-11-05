@@ -1962,10 +1962,12 @@ impl AppState {
         }
 
         Err(ModelError::NotFound(format!(
-            "Model '{name}' not found. Accepted formats:\n  \
-             - GGUF file path: /models/model.gguf\n  \
-             - Directory with GGUF: /models/mymodel/\n  \
-             - Registered name: eullm import-ollama {name}"
+            "Model '{name}' not found. A request can name:\n  \
+             - a model on this machine, by the name `eullm list` gives it (a catalog model is \
+             downloaded first: `eullm pull NAME`, or the chat UI's Model hub)\n  \
+             - NAME for /models/NAME.gguf or /data/models/NAME.gguf\n  \
+             - a GGUF file, or a directory holding one, by its path: only with \
+             EULLM_ALLOW_MODEL_PATHS=1 set where the server starts"
         )))
     }
 }
@@ -3016,14 +3018,10 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             )
         })?
         .map(Arc::new);
-    let web_policy = crate::tools::guard::WebPolicy::from_env();
-    let allow_model_paths = matches!(
-        std::env::var("EULLM_ALLOW_MODEL_PATHS")
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    );
+    let web_policy = crate::tools::guard::WebPolicy::load();
+    // From the environment or `.env`, as `.env.example` shows it: it used to
+    // be read from the environment only.
+    let allow_model_paths = crate::settings::flag("EULLM_ALLOW_MODEL_PATHS");
 
     if api_keys.is_enabled() {
         tracing::info!(
@@ -3062,15 +3060,21 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         decision_policy.source(),
     );
     if cfg.web_enabled {
-        tracing::info!("Web tool: enabled — fetchable: {}", web_policy.describe());
-    }
-    if allow_model_paths {
-        tracing::warn!(
-            "EULLM_ALLOW_MODEL_PATHS is set: a request's `model` field may name any \
-             GGUF path readable by this process. Intended for local use; do not \
-             combine it with an API reachable by untrusted callers."
+        tracing::info!(
+            "Web tool: enabled — fetchable: {}  [source: {}]",
+            web_policy.describe(),
+            web_policy.source()
         );
     }
+    if let Some(source) = allow_model_paths {
+        tracing::warn!(
+            "EULLM_ALLOW_MODEL_PATHS is set ({}): a request's `model` field may name any \
+             GGUF path readable by this process. Intended for local use; do not \
+             combine it with an API reachable by untrusted callers.",
+            source.label()
+        );
+    }
+    let allow_model_paths = allow_model_paths.is_some();
 
     // Fail loudly at startup if the audit destination is unusable, rather than
     // warning once per request after the fact. The trail exists to produce a
@@ -3465,7 +3469,7 @@ impl AppState {
             ip_allowlist: ip_allowlist::IpAllowlist::load(absent),
             api_keys: Arc::new(api_keys),
             allowed_origins: origin::AllowedOrigins::load(absent),
-            web_policy: crate::tools::guard::WebPolicy::from_env(),
+            web_policy: crate::tools::guard::WebPolicy::default(),
             allow_model_paths: false,
             launch_model: None,
             default_model: None,
