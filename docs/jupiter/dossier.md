@@ -425,6 +425,12 @@ JUPITER, named by its Slurm job id.
   "tensors on two devices": the parts outside the layers had been mapped
   tensor by tensor, which leaves accelerate no module to move inputs into.
   They are now mapped as whole modules, as "auto" maps them.
+* For 06-11, a day without anyone at the terminal: four more E1-mini runs
+  queued end to end by `submit_memory_round.sh` (training, GGUF, closed
+  book, seven open-book sets, regression), so that the verdict does not
+  rest on one recipe: five epochs on the 9B and on the 4B (e1-g9-e5,
+  e1-g4-e5), LoRA rank 256 (e1-g9-r256), learning rate 3e-4 (e1-g9-lr3);
+  one judge chain behind all of them.
 * Every job of the night printed "module load PyTorch failed" and still
   worked, through the environment of the submitting shell. env.sh now
   retries after loading Stages/2026 and prints Lmod's message.
