@@ -796,7 +796,18 @@ reflex.
 size alone explains part of it; the GGUF is 4-bit; and only 355 of its 716
 answers ended their turn within the 400 new tokens, so its score is a lower
 bound. The run with 1000 tokens (`EXAM_ARGS="--max-new-tokens 1000"`) is the
-one to quote.
+one to quote: **247/716 (34%)**, sure-wrong 407, denies-real 17%; the
+knowledge columns stay where they were (n<-rub 22%, rub<-n 21%, terms 23%,
+penalties 29%) and made-up rulings rise to 42%, which a cut answer had not
+reached.
+
+**As an open-book teacher it is not better than the one we have.** On
+devbig (`norm-exam-answers-v2`, 231 questions, judge), 1000 tokens:
+Flash-Next 167 right, Qwen3-30B-A3B-Instruct-2507 170; paired, 17 against
+14, p = 0.72, no difference; on the part graded without the judge 111/145
+against 105/145, p = 0.18. With the texts in hand the 30B reads them as
+well as the 180B, at a sixth of the memory. What Flash-Next has more is
+what it knows with no text, which is what line A is about.
 
 **Why it matters for line A.** Number and heading of an article are exactly
 the lexical, citation-shaped facts a hashed n-gram table can hold, and
