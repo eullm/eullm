@@ -31,9 +31,11 @@
 //!   part of a URL, so the errors and log lines that name one cannot carry
 //!   it, and it never reaches a manifest or the audit trail.
 //!
-//! It is read from the process environment only, under the name the Hugging
-//! Face tools and llama.cpp's `-hf` read. There is no flag for it on
-//! purpose: a secret on a command line is in `ps` for every local user.
+//! It is read from the process environment, else from the `.env` file in the
+//! folder eullm starts from (the rule of every setting, [`crate::settings`]),
+//! under the name the Hugging Face tools and llama.cpp's `-hf` read. There is
+//! no flag for it on purpose: a secret on a command line is in `ps` for every
+//! local user.
 
 use std::env::VarError;
 use std::sync::OnceLock;
@@ -100,23 +102,38 @@ fn unusable_token() -> String {
     )
 }
 
-/// The process's token, read from the environment once.
+/// The process's token, read once.
 ///
-/// Its presence — never its value — is logged the first time, so whether a
-/// download went out authenticated can be read from the log.
+/// Its presence and where it was set — never its value — are logged the
+/// first time, so whether a download went out authenticated can be read
+/// from the log.
 pub fn hf_token() -> Result<Option<&'static HfToken>, String> {
     static TOKEN: OnceLock<Result<Option<HfToken>, String>> = OnceLock::new();
     TOKEN
         .get_or_init(|| {
-            let token = HfToken::resolve(std::env::var(HF_TOKEN_VAR));
+            let (raw, source) = read_token();
+            let token = HfToken::resolve(raw);
             if let Ok(Some(_)) = token {
-                tracing::info!("{HF_TOKEN_VAR} is set: requests to {HF_HOST} carry it");
+                tracing::info!("{HF_TOKEN_VAR} is set ({source}): requests to {HF_HOST} carry it");
             }
             token
         })
         .as_ref()
         .map(Option::as_ref)
         .map_err(Clone::clone)
+}
+
+/// What reading `HF_TOKEN` returned, and where: the environment's value, else
+/// the `.env` file's. A value in the environment that is not Unicode stays
+/// the error it is rather than letting the file's take its place unseen.
+fn read_token() -> (Result<String, VarError>, &'static str) {
+    if let Err(VarError::NotUnicode(raw)) = std::env::var(HF_TOKEN_VAR) {
+        return (Err(VarError::NotUnicode(raw)), "environment");
+    }
+    match crate::settings::var_with_source(HF_TOKEN_VAR) {
+        Some((token, source)) => (Ok(token), source.label()),
+        None => (Err(VarError::NotPresent), "environment"),
+    }
 }
 
 /// Whether the token may be sent to `url`: `https`, the host exactly

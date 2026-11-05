@@ -42,7 +42,8 @@ pub struct ModelManifest {
     /// (`models::pull::reuse_stored_weights`).
     ///
     /// Absent for weights that did not come from HuggingFace (a plain URL,
-    /// an Ollama import) and in manifests written before the field existed.
+    /// or an Ollama import by a release that still had `eullm import-ollama`)
+    /// and in manifests written before the field existed.
     /// Those older manifests are still recognised, from what they did record:
     /// see `ModelManifest::holds`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1722,8 +1723,9 @@ mod hf_file_tests {
         )));
     }
 
-    // A plain URL and an Ollama import say nothing about which Hub file they
-    // are, so they must never be linked in as one.
+    // A plain URL and an Ollama import (made by a release that still had the
+    // command; its manifests stay on disk) say nothing about which Hub file
+    // they are, so they must never be linked in as one.
     #[test]
     fn a_url_pull_or_an_ollama_import_is_never_a_hub_file() {
         let wanted = HfFile::new("unsloth/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf");
