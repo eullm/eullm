@@ -149,7 +149,14 @@ The practical consequence is a two-track plan. Single-GCD work on `small-g` and
 never consume the allocation. `dev-g` is for debugging and quick tests only,
 one job at a time: LUMI reminded every user on 08-10-2026 that production runs
 there are terminated without warning and repeated misuse can suspend the
-account. Here that means the smoke test and checks of minutes; anything that
+account. Since 05-11-2026 it runs one `dev-g` job per user and one per project
+(a submission past that is rejected, not queued), and its debug and dev-g
+policy names what is production there: jobs with dependencies, jobs that
+start the next one, work a script or an AI agent submits unattended, jobs
+moved into `debug` with `scontrol`. So nothing of ours goes to `dev-g` or
+`debug` any more, the smoke test included (`small-g`, at the same price), and
+never again a helper job on `debug` waiting on others, as the one that
+released `r-v0794`'s held chains on 28-10 did. Before that, `dev-g` here meant the smoke test and checks of minutes; anything that
 measures, however small, goes to `small-g`. Full-node `standard-g` campaigns are what actually
 spends it, and they have to be queued deliberately rather than as an
 afterthought. The work packages, budget and month-by-month calendar are in
@@ -209,7 +216,7 @@ Either way, prove it against a real device before trusting it:
 
 ```bash
 eullm pull qwen3-8b                   # from a login node; compute nodes have no network
-sbatch tools/lumi/sbatch_smoke.slurm  # ~0.03 node-hours on dev-g
+sbatch tools/lumi/sbatch_smoke.slurm  # ~0.04 node-hours on small-g
 ```
 
 That job reads `rocm-smi` before and after one request, because the startup

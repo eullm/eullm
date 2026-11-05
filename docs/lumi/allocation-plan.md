@@ -862,6 +862,16 @@ line's 1,355 by now, 293 ahead, about 12 days of its 25.1 a day. After
 `r-v087` (about a day and a half on two nodes) and its long soaks (about
 two and a half on one), the next work goes in the queue before it empties.
 
+05-11-2026: LUMI limits `dev-g` to one running job per user and one per
+project, and its debug and dev-g policy (to all users the same day) counts as
+production any job with dependencies, a job that starts its successor, work
+submitted unattended by a script or an AI agent, and jobs moved into `debug`
+with `scontrol`. The campaigns run on `standard-g` and are untouched. Two
+things change: the smoke job moves to `small-g` (`sbatch_smoke.slurm`, the
+same 0.5 per GCD-hour, `--mem=60G` to bill one GCD), and no helper job goes to
+`debug` again, as 23253738 did on 28-10 to release `r-v0794`'s held chains
+after `c14`: chains follow each other by dependency (`AFTER`) instead.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
