@@ -97,6 +97,27 @@ parametri dice se la stessa capacità spesa altrove avrebbe reso di più.
 3. **XOR invece della somma**, solo se si vuole poter caricare le tabelle
    nel formato di Flash-Next; per le collisioni le due combinazioni si
    equivalgono.
+4. **La stessa tabella letta a due strati**, per esempio dopo il layer 1 e
+   più in alto. Le righe lette sono le stesse (l'hash dipende solo dai
+   token), ma key, gate e convoluzione di ogni lettura sono propri e il
+   gate confronta la memoria con uno stato del modello più elaborato: la
+   seconda lettura può prendere ciò che la prima ha scartato. Flash-Next
+   legge una volta sola. L'idea viene da LoOM (Yang et al., *Loop-Invariant
+   Memory for Causal Encoder-Decoder Language Models*, arXiv 2611.06835,
+   4 novembre 2026, sezione 5.4): lì ripetere uno strato che legge la
+   memoria globale con lo stato già raffinato le fa scegliere voci nuove (il
+   32% dell'attenzione della quarta visita cade su voci che la prima non
+   aveva scelto), e congelare le scelte della prima visita costa 0,011 nat.
+   Costo per noi: una seconda proiezione e un secondo gate, nessuna riga di
+   tabella in più. Da provare in A3 solo se A2 passa il cancello.
+
+Il resto di LoOM non riguarda la linea A: la sua memoria è la cache del
+contesto, non una tabella di parametri, e non aggiunge capacità di sapere;
+si addestra da zero con la sua architettura (204 milioni di parametri, 5
+miliardi di token, un seme), e il guadagno (0,020 nat, +0,79 punti) costa
+il doppio della latenza a 21 passaggi. L'idea di un solo modello con più
+budget di calcolo scelti all'uso interesserebbe l'engine, ma richiede
+un'architettura che llama.cpp oggi non ha.
 
 ## Cosa misurare su Flash-Next stesso (due nodi, bf16)
 
