@@ -104,6 +104,12 @@ l'effetto è un login lento a ogni comando che tocca il disco. Il calcolo
 non ne risente: la stessa sera le prove di A2-mini sui nodi GPU andavano
 alla velocità attesa (4.170 token/s su un'A100).
 
+## 5 novembre 2026
+
+* Verso le 17:30 un `sbatch` risponde `Socket timed out on send/recv
+  operation`, ma il job risulta in coda: con quell'errore si controlla con
+  `squeue` prima di inviare di nuovo, o si fa un doppione.
+
 ## Cosa ci è costato
 
 Da tenere aggiornato con `sacct` e con le serie sopra:
