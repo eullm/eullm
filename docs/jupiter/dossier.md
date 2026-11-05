@@ -406,6 +406,21 @@ JUPITER, named by its Slurm job id.
   linear attention refuses the module's Triton on Hopper, and the probe
   had not put libs-qwen35's Triton 3.8 first. Both fixed and queued again.
   Qwen3.8-Flash-Next downloaded in 1 min 36 s (336 GiB).
+* **05-11:** E1-mini trained and merged on both sizes in one link each:
+  the smoke test (2690536) at 4.0 s a step, loss 1.26; g9r-r2 in 1 h 43
+  min (2690537), g4-r3 in 1 h 47 min (2690540), three epochs of 31.4 M
+  tokens. The other links found the work done and ended in a minute, so
+  the nodes stood idle from about midnight: the smoke test's estimate of
+  the run (0.1 h) divided by the steps twice, fixed. Next: GGUF, closed
+  book, open book, regression.
+* Flash-Next loads on one node in 382 s (2690543), the n-gram table
+  (320,001,536 x 160, 95.4 GiB) on the CPU, and answers at 3-6 tokens a
+  second through transformers. Its first training step and its exam
+  (2690720) ran out of GPU memory: transformers kept room on the first GPU
+  for the largest layer, counting the table it then left on the CPU, so
+  the first GPU stayed empty and the other three held ~78 GiB each. The
+  layers are now spread over the four GPUs by our own map
+  (`eval/placement.py`), for the probe and for `legal_eval.py`.
 * Every job of the night printed "module load PyTorch failed" and still
   worked, through the environment of the submitting shell. env.sh now
   retries after loading Stages/2026 and prints Lmod's message.

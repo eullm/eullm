@@ -173,10 +173,10 @@ def train(args) -> int:
     if smoke:
         if trainer.is_world_process_zero():
             secs = result.metrics.get("train_runtime", 0.0)
-            seqs = args.max_steps * args.grad_accum * trainer.args.world_size
+            per_step = args.grad_accum * trainer.args.world_size     # examples a step
             print(f"[memory-cpt] smoke test: {args.max_steps} steps in {secs:.0f} s, "
                   f"{secs / args.max_steps:.1f} s a step, loss {result.training_loss:.3f}; "
-                  f"the whole run ~{secs / args.max_steps * len(data) / seqs / 3600:.1f} h",
+                  f"the whole run ~{secs / args.max_steps * len(data) / per_step / 3600:.1f} h",
                   flush=True)
         return 0
     if trainer.is_world_process_zero():
