@@ -35,6 +35,13 @@ def spread_device_map(tensor_names: Iterable[str], n_gpus: int,
     layers = [int(m.group(2)) for n in names if (m := _LAYER.match(n))]
     n_layers = max(layers) + 1 if layers else 1
     split = {m.group(1) for n in names if n.endswith(keep_off) and (m := _LAYER.match(n))}
+    # The modules that hold the layers ("model", "model.language_model", ...):
+    # everything else is mapped as the largest module outside them, as "auto"
+    # does, so accelerate moves each module's inputs to its GPU. Mapped tensor
+    # by tensor, the modules got no such hook: "tensors on two devices, cuda:3
+    # and cuda:0" (probe 2698993).
+    roots = {m.group(1) for n in names if (m := _LAYER.match(n))}
+    holders = {".".join(r.split(".")[:k]) for r in roots for k in range(1, r.count(".") + 1)}
     device_map: dict[str, int] = {}
     for name in names:
         if keep_off and name.endswith(keep_off):
@@ -43,10 +50,11 @@ def spread_device_map(tensor_names: Iterable[str], n_gpus: int,
         if m:
             gpu = min(n_gpus - 1, int(m.group(2)) * n_gpus // n_layers)
             device_map[name if m.group(1) in split else m.group(1)] = gpu
-        elif name.startswith("lm_head"):
-            device_map[name] = n_gpus - 1
-        else:
-            device_map[name] = 0
+            continue
+        parts = name.split(".")
+        key = next((".".join(parts[:k]) for k in range(1, len(parts) + 1)
+                    if ".".join(parts[:k]) not in holders), name)
+        device_map[key] = n_gpus - 1 if key.startswith("lm_head") else 0
     return device_map
 
 

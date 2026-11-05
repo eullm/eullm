@@ -25,7 +25,10 @@ def test_layers_are_spread_evenly_and_the_table_left_out():
     assert dm["model.language_model.layers.3"] == 1
     assert dm["model.language_model.layers.5"] == 2
     assert dm["model.language_model.layers.7"] == 3
-    assert dm["lm_head.weight"] == 3 and dm["model.language_model.embed_tokens.weight"] == 0
+    # Outside the layers, whole modules: accelerate moves their inputs to them.
+    assert dm["lm_head"] == 3 and dm["model.language_model.embed_tokens"] == 0
+    assert dm["model.visual"] == 0 and "model.visual.blocks.0.attn.weight" not in dm
+    assert "model" not in dm and "model.language_model" not in dm
     # The table's layer is mapped tensor by tensor, the table itself not at all.
     assert "model.language_model.layers.2" not in dm
     assert dm["model.language_model.layers.2.ple.ple_embedding.ngram_heads_offsets"] == 1
