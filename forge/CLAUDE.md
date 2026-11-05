@@ -152,6 +152,12 @@ seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
    1-GPU jobs (one teacher `llama-server` per job, 4B-9B models in bf16,
    exams of small models), and the multi-GPU chains stay queued for the
    holes that open later.
+   The evening after (probe of 4-11 20:37, after the storage outage): 3-GPU
+   jobs started in 10 min (2 h), 30 min (4-8 h) and **50 min (24 h)**; whole
+   nodes, from 1 to 8 and from 2 to 24 h, waited 9.5-10.3 h and all started
+   between 06:05 and 06:54. So multi-node work submitted in the evening runs
+   the next morning, and on a day like that 3-GPU links can be longer than
+   2 h; `docs/cineca/fastlane-infrastruttura.md` keeps the series.
 2. **Three GPUs, 24 cores, 340 GB — all three numbers — for a part of a
    node.** Four GPUs or 32 cores make the job exclusive: ask for that only
    when the whole node is meant (rule 1), never by accident through the
