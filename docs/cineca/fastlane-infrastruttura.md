@@ -45,11 +45,23 @@ di CINECA "Leonardo: login and storage access disruption"):
 * alle 18:01, alla ripartenza, tutte le nostre prove in attesa da 3 GPU
   (2-8 ore) partono insieme.
 
-**Sera, dopo il ritorno.** Una nuova prova di forma alle 20:37
-(`fastlane-probe/20261104_2037/`). Nei primi minuti partono solo i job da
-30 minuti, anche su 16 GPU (la coppia 16 + 16), e quelli da 1 GPU; i job da
-3 GPU o da nodi interi di 2 ore e oltre restano in attesa. Il rapporto a
-+1, +6 e +24 ore dirà quanto hanno aspettato.
+**Sera, dopo il ritorno.** Una nuova prova di forma, inviata alle 20:37
+(`fastlane-probe/20261104_2037/report.md`, `sacct`):
+
+| forma | QOS | partita dopo |
+|---|---|---|
+| 1 GPU, 2 h | normal | 21 s |
+| 3 GPU, 2 h | normal | 10 min |
+| 3 GPU, 4 h e 8 h | normal | 29-30 min |
+| 3 GPU, 24 h | normal e `lprod` | 50 min |
+| 4 nodi × 4 GPU, 30 min, due insieme (16 + 16) | normal | 2 e 5 min |
+| nodi interi: 1, 2, 4, 8 nodi; 2, 8, 24 h | normal e `lprod` | 9 h 28 min - 10 h 16 min |
+| `bprod` | — | rifiutato: vale solo da 65 nodi in su |
+
+Tutti i job da nodi interi sono partiti fra le 6:05 e le 6:54 del 5
+novembre, insieme, qualunque fosse il numero di nodi o la durata: la
+macchina si è liberata in quell'ora, non a poco a poco. Per il lavoro su
+più nodi vuol dire che un job inviato la sera gira la mattina dopo.
 
 **I nodi di login, 21:18-21:23** (`top` su due nodi di login di Leonardo,
 confrontati nello stesso momento con quelli di JUPITER e di LUMI):
