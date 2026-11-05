@@ -425,6 +425,9 @@ JUPITER, named by its Slurm job id.
   "tensors on two devices": the parts outside the layers had been mapped
   tensor by tensor, which leaves accelerate no module to move inputs into.
   They are now mapped as whole modules, as "auto" maps them.
+* 05-11: JUPITER in maintenance all day (5,196 Booster nodes "maint",
+  677 drained, 8 down at 17:30); only a one-hour job of ours ran. Slurm
+  expects the queue to move from 03:00 on 06-11.
 * For 06-11, a day without anyone at the terminal: four more E1-mini runs
   queued end to end by `submit_memory_round.sh` (training, GGUF, closed
   book, seven open-book sets, regression), so that the verdict does not
