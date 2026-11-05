@@ -37,6 +37,7 @@ while [ $# -gt 0 ]; do
         --llama-server) shift ;;
         --ngram-memory) how="$how+mem:$(basename "$(dirname "$2")")"; shift ;;
         --adapter) how="$how+lora:$(basename "$(dirname "$2")")"; shift ;;
+        --max-new-tokens) how="$how+max:$2"; shift ;;
     esac
     shift
 done
@@ -174,3 +175,10 @@ def test_a_missing_memory_fails_before_asking(job, tmp_path):
     assert r.returncode == 1 and asked == [] and "no n-gram memory" in r.stderr
     r, asked = run(EXAM_ADAPTER=f"b={tmp_path / 'nope'}")
     assert r.returncode == 1 and asked == [] and "no LoRA adapter" in r.stderr
+
+
+def test_exam_args_reach_every_run(job):
+    run, _ = job
+    r, asked = run(EXAM_ARGS="--max-new-tokens 1000")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert asked == ["a+max:1000", "a-open+max:1000", "b+max:1000", "b-open+max:1000"]

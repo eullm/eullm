@@ -33,6 +33,10 @@
 #                (each item's own article taken out of the texts); the
 #                closed-book run of the same job is its no-text half.
 #                abstain_summary.py counts both
+#   EXAM_ARGS    extra legal_eval.py options for every run of the job, e.g.
+#                "--max-new-tokens 1000" for a model that writes long answers
+#                (Flash-Next ended its turn in 355 of 716 closed-book answers
+#                at the default 400, 2026-11-05)
 #   EXAM_GGUF    space-separated label=file.gguf pairs: those labels of
 #                EXAM_MODELS answer with the GGUF through llama-server, the
 #                model's path giving the tokenizer (legal_eval.py --gguf), so
@@ -139,6 +143,8 @@ heartbeat_start
 
 EVAL=(python "$REPO/forge/scripts/legal_eval.py" --items "$ITEMS" --quiet
       --csv "$OUT/keywords.csv")
+# shellcheck disable=SC2206
+EVAL+=(${EXAM_ARGS:-})
 # An answers file with one line per item is a finished run: legal_eval.py
 # writes the file only after the last answer, so it is either whole or absent.
 # Skipping those makes the job a link of a chain (sbatch_exam_round.slurm,
