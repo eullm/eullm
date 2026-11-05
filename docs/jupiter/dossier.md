@@ -420,7 +420,11 @@ JUPITER, named by its Slurm job id.
   for the largest layer, counting the table it then left on the CPU, so
   the first GPU stayed empty and the other three held ~78 GiB each. The
   layers are now spread over the four GPUs by our own map
-  (`eval/placement.py`), for the probe and for `legal_eval.py`.
+  (`eval/placement.py`), for the probe and for `legal_eval.py`. With it the
+  model loaded in 349 s at 58-60 GiB a GPU (2698993), then stopped on
+  "tensors on two devices": the parts outside the layers had been mapped
+  tensor by tensor, which leaves accelerate no module to move inputs into.
+  They are now mapped as whole modules, as "auto" maps them.
 * Every job of the night printed "module load PyTorch failed" and still
   worked, through the environment of the submitting shell. env.sh now
   retries after loading Stages/2026 and prints Lmod's message.
