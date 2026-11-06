@@ -138,7 +138,8 @@ SMI = {
 def read_smi(backend: str) -> dict:
     cmd, parse = SMI[backend]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                             encoding="utf-8", errors="replace").stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}
     return parse(out)
