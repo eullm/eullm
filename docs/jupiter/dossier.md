@@ -453,6 +453,33 @@ JUPITER, named by its Slurm job id.
   replay held the post-training pairs but not GRPO's behaviour; (3)
   procedibility rises to 60-80% only by answering "querela", which 92% of
   the items want. The open-book sets and the regression decide the rest.
+* **E1-mini open book and regression** (judge; GGUF Q4_K_M through the
+  engine, hybrid retrieval, no note):
+
+  | | held-out (217) | devbig (472) | practical (145) | practical held-out (70) | traps (390) | rewritten traps (1050) | LexIA (36) | GSM8K | ARC-E | ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 383 | 975 | 12 | 353 | 361 | 326 |
+  | e1-g9 | 193 + 5 | 427 + 16 | 59 + 18 | 36 + 8 | 372 | 883 | 11 | 358 | 381 | 361 |
+  | e1-g9-e5 | 186 + 5 | 414 + 20 | 63 + 15 | 35 + 7 | 377 | 919 | 15 | 355 | 385 | 361 |
+  | e1-g9-lr3 | 191 + 7 | 421 + 22 | 64 + 15 | 38 + 8 | 385 | 938 | 12 | 346 | 369 | 352 |
+  | e1-g9-r256 | 186 + 2 | 420 + 16 | 68 + 12 | 44 + 7 | 379 | 890 | 16 | 353 | 383 | 375 |
+  | g4-r3 | 198 + 1 | 447 + 6 | 76 + 18 | 40 + 10 | 386 | 958 | 10 | 336 | 364 | 348 |
+  | e1-g4 | 192 + 5 | 435 + 14 | 54 + 20 | 41 + 8 | 384 | 936 | 12 | 334 | 384 | 362 |
+  | e1-g4-e5 | 199 + 3 | 434 + 16 | 64 + 15 | 37 + 12 | 382 | 896 | 13 | 339 | 310 | 290 |
+
+  Verdict on E1-mini as the roadmap set it: the closed book passes (+18
+  points with rank 256), the second condition does not. Open book every
+  9B variant loses (rank 256: held-out -11, devbig -18, practical -8) and
+  the rewritten traps fall by 37-92 of 1,050: the trap behaviour GRPO had
+  taught is what the continued pretraining wears away, as the made-up
+  rulings on the closed book showed. The general abilities, on the
+  contrary, come back: ARC-Challenge from 326 to 375 with rank 256, what
+  GRPO had cost the 9B and more (the Wikipedia share). e1-g4-e5's ARC fall
+  (to 310 and 290) is to be read in its answers. Flash-Next in bf16, open
+  book: held-out 195 + 6, practical 73 + 1, LexIA 14. Not stopped: GRPO
+  on top of e1-g9-r256 (g9e-r1, the round that taught the traps) is
+  queued, and so are rank 256 with lr 3e-4 together and, against the
+  reversal curse, four heading-first statements an article.
 * Flash-Next learns through its n-gram table alone (2705520): one batch of
   1,024 tokens of legislation, everything frozen but the table, plain SGD
   on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,
