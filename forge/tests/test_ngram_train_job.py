@@ -91,3 +91,12 @@ def test_missing_inputs_fail_before_the_trainer(job, tmp_path):
     assert r.returncode == 1 and asked == [] and "missing" in r.stderr
     r, asked = run(NG_MODE="full")
     assert r.returncode == 1 and asked == []
+
+
+def test_a_diverged_run_exits_without_python(job):
+    run, work = job
+    out = work / "eullm_runs" / "lineA" / "a2-r2l-ngram"
+    out.mkdir(parents=True)
+    (out / "DIVERGED").write_text('{"step": 9}')
+    r, asked = run()
+    assert r.returncode == 0 and asked == [] and "diverged" in r.stdout

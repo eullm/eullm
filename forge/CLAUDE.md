@@ -201,6 +201,18 @@ seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
    to spend the hours; running out early with better models is fine, burning
    them on runs that answer nothing is not. `status.sh` flags an empty GPU
    queue with `[!!]`.
+   **A day left to the queue is sized from when each chain ends, not from
+   how much there is.** On 2026-11-05 the user left for the day with "the
+   day covered": a rewrite pass estimated at hours had 8,900 items left and
+   ended in 26 minutes, the other chains ended by 08:40, nothing was queued
+   behind them, and the GPUs stood idle for eleven hours. Before saying a
+   day is covered: write down when each queued chain ends (steps left ×
+   seconds a step, or items left ÷ items an hour, from its own log), and
+   queue useful work behind the earliest ends until the last one is past
+   the next time the user is back. And a run that diverges stops: the
+   trainers skip a non-finite loss and stop for good after a few in a row
+   (`ngram_train.py --max-bad-steps`), since the LoRA control of that night
+   trained on NaN for its last twenty hours.
 
 Rules 1 and 2 are also enforced by the build: `tests/test_leonardo_job_shape.py`
 fails CI for any `boost_usr_prod` script over 2 h, over three GPUs, or over
