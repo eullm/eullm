@@ -802,7 +802,8 @@ penalties 29%) and made-up rulings rise to 42%, which a cut answer had not
 reached.
 
 **As an open-book teacher it is not better than the one we have.** On
-devbig (`norm-exam-answers-v2`, 231 questions, judge), 1000 tokens:
+the statute exam of the rounds (`norm-exam-v2`, 231 questions, judge, read
+by counts only), 1000 tokens:
 Flash-Next 167 right, Qwen3-30B-A3B-Instruct-2507 170; paired, 17 against
 14, p = 0.72, no difference; on the part graded without the judge 111/145
 against 105/145, p = 0.18. With the texts in hand the 30B reads them as
