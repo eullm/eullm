@@ -466,7 +466,8 @@ def check_audit(rep: Report, log: str, audit_dir: Path, expect_records: bool) ->
         rep.add("audit records written", None, "no inference ran")
         return
     try:
-        lines = [l for l in f.read_text().splitlines() if l.strip()]
+        lines = [l for l in f.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if l.strip()]
         parsed = [json.loads(l) for l in lines]
     except Exception as e:
         rep.add("audit records written", False, f"unreadable: {e}")
@@ -1014,7 +1015,8 @@ def check_perimeter(
             try:
                 records = [
                     json.loads(l)
-                    for l in (audit_dir / "audit.jsonl").read_text().splitlines()
+                    for l in (audit_dir / "audit.jsonl").read_text(
+                        encoding="utf-8", errors="replace").splitlines()
                     if l.strip()
                 ]
             except Exception as e:
