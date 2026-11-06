@@ -209,3 +209,14 @@ def test_an_eu_rewrite_may_name_its_act_by_number():
     # A number that is neither in the article nor in the act's name is still refused.
     assert check_rewrite(a, "parafrasi", ok + " Il termine è di 30 giorni.") in (
         "number", "deadline")
+
+
+def test_reverse_states_the_heading_first_and_the_number_last():
+    plain = program_rows(articles(), absent_share=1.0)
+    rev = program_rows(articles(), absent_share=1.0, reverse=3)
+    assert [r for r in rev if r["forma"] != "rubrica_inversa"] == plain  # nothing else moves
+    furto = [r["text"] for r in rev if r["forma"] == "rubrica_inversa" and r["articolo"] == "624"]
+    assert len(furto) == 3 and len(set(furto)) == 3
+    for t in furto:
+        assert t.index("«Furto»") < t.rindex("624") and "{" not in t
+    assert not any(r["articolo"] == "594" for r in rev if r["forma"] == "rubrica_inversa")

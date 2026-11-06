@@ -41,11 +41,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--exclude", nargs="*", type=Path, default=[],
                     help="evaluation sets whose made-up numbers are never stated as absent")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--reverse", type=int, default=0,
+                    help="heading-first statements an article, against the reversal curse")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
     fakes, _ = excluded([p for p in args.exclude if p.is_file()])
-    rows = program_rows(load_articles(args.norms), fakes=fakes, seed=args.seed)
+    rows = program_rows(load_articles(args.norms), fakes=fakes, seed=args.seed,
+                        reverse=args.reverse)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     # written aside and renamed: two chains starting together each write the
     # same rows, and neither can read the other's half-written file
