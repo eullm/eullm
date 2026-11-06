@@ -59,7 +59,8 @@ def describe(points: list, log_lines: int = 20, clusters: int = 4) -> list:
         key = (p.get("group"), when(t, "%d-%m %H"))
         if key not in [k for k, _, _ in seen]:
             seen.append((key, t, p))
-    for (group, _), t, p in seen[-clusters:]:
+    # A slice [-0:] is the whole list: 0 asks for none.
+    for (group, _), t, p in (seen[-clusters:] if clusters > 0 and log_lines > 0 else []):
         lines.append(f"--- {group} {p.get('model')} {p.get('kv', '')}, {when(t)}: "
                      f"the last {log_lines} lines of its note")
         lines.extend(last_note(p)[-log_lines:])
@@ -70,7 +71,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--queue", default=os.environ.get("CAMPAIGN_DIR"))
     ap.add_argument("--label", required=True)
-    ap.add_argument("--log", type=int, default=20, help="lines of each note shown (20)")
+    ap.add_argument("--log", type=int, default=20, help="lines of each note shown (20, 0 for none)")
     ap.add_argument("--clusters", type=int, default=4,
                     help="groups and hours whose note is shown, the latest (4)")
     args = ap.parse_args(argv)
