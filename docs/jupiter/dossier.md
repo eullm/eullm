@@ -356,6 +356,150 @@ JUPITER, named by its Slurm job id.
   jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
   end of the third rounds to the next submission.
 
+**04-11-2026**
+* Closed book (roadmap E0): the 716 questions of the closed-book suite, no
+  texts, GGUF Q4_K_M through EULLM Engine, scored by program (2667840):
+
+  | | right | real article recognised | number from heading / heading from number | deadline | penalty | made-up article denied | made-up ruling not confirmed |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | dqp-d-q9b | 176 | 0% | 3% / 10% | 14% | 8% | 100% | 8% |
+  | g9r-r2 | 206 | 0% | 3% / 5% | 13% | 12% | 100% | 90% |
+  | g4-r3 | 91 | 3% | 2% / 5% | 15% | 17% | 44% | 5% |
+
+  Without texts the models know almost nothing of the articles. The 9B
+  ones score by denying: every made-up article and half the real ones
+  called nonexistent ("denies-real" 50-51%), the reflex the roadmap counts
+  apart. What they know rather than deny is 2-17% a kind; E1-mini must add
+  15 points there.
+* The sets copied from Leonardo, open book as the product runs them
+  (2667839, judges 2667842-2667843): devbig (472) dqp-d-q9b 411 + 19,
+  g9r-r2 438 + 11, g4-r3 447 + 6; practical held-out (70) 41 + 8, 45 + 9,
+  40 + 10; live LexIA (5) 2 each. GRPO's gain holds on sets never used
+  in training or selection: +27 (9B) and +36 (4B) on devbig.
+* The EU rewrites with the question-and-answer style and a second sample
+  (four links from 22:15): 595,661 rewrites kept in all, 4-6% refused.
+* The nine codes' memory corpus completed here rather than copied: the
+  rewrites the stalled file held are asked again on the codes, skipping
+  those Leonardo wrote (2677072).
+* E1-mini written (`memory_cpt.py`, `sbatch_memory_cpt.slurm`): LoRA on
+  g9r-r2 over the nine codes' corpus, with 25% of the tokens a replay of the
+  post-training (open-book and false-premise pairs, prompt masked) and 20%
+  general Italian (a sample of the Italian Wikipedia), packed in blocks of
+  2,048 tokens, three epochs; a 30-step smoke test first gives the hours.
+* Qwen3.8-Flash-Next authorised by the user for research (Qwen Community
+  License 1.0, not Apache 2.0): ~180B stored, a 125B MoE with 6B active,
+  a 51B n-gram table at layer 2 and a 4B MTP head, 360 GB in BF16; in
+  transformers since 5.19 (`qwen4_exp`, the venv's version), which keeps
+  the table off the GPUs. It is the roadmap's phase 3 already built: the
+  question is whether the table alone, the backbone frozen, can learn the
+  law. A one-hour probe (`flashnext_probe.py`) loads it on one node, asks
+  three questions and trains the table a few steps. Not yet a product:
+  llama.cpp supports it only in a fork.
+* The nine codes' corpus completed (2677072): 5,855 rewrites kept, 206
+  refused. E1-mini's data, prepared by its smoke test (2677279): 78,576
+  texts of the nine codes (17.2 M tokens), 15,815 replay pairs, 40,000
+  Wikipedia articles (42.3 M tokens); three epochs of 31.4 M tokens each,
+  55% corpus, 25% replay, 20% general. The smoke test then stopped at
+  `warmup_ratio`, gone from TrainingArguments in transformers 5 (now
+  `warmup_steps` as a share); its three links, behind it with afterok, did
+  not run. The Flash-Next probe (2686808) stopped at the backward: its
+  linear attention refuses the module's Triton on Hopper, and the probe
+  had not put libs-qwen35's Triton 3.8 first. Both fixed and queued again.
+  Qwen3.8-Flash-Next downloaded in 1 min 36 s (336 GiB).
+* **05-11:** E1-mini trained and merged on both sizes in one link each:
+  the smoke test (2690536) at 4.0 s a step, loss 1.26; g9r-r2 in 1 h 43
+  min (2690537), g4-r3 in 1 h 47 min (2690540), three epochs of 31.4 M
+  tokens. The other links found the work done and ended in a minute, so
+  the nodes stood idle from about midnight: the smoke test's estimate of
+  the run (0.1 h) divided by the steps twice, fixed. Next: GGUF, closed
+  book, open book, regression.
+* Flash-Next loads on one node in 382 s (2690543), the n-gram table
+  (320,001,536 x 160, 95.4 GiB) on the CPU, and answers at 3-6 tokens a
+  second through transformers. Its first training step and its exam
+  (2690720) ran out of GPU memory: transformers kept room on the first GPU
+  for the largest layer, counting the table it then left on the CPU, so
+  the first GPU stayed empty and the other three held ~78 GiB each. The
+  layers are now spread over the four GPUs by our own map
+  (`eval/placement.py`), for the probe and for `legal_eval.py`. With it the
+  model loaded in 349 s at 58-60 GiB a GPU (2698993), then stopped on
+  "tensors on two devices": the parts outside the layers had been mapped
+  tensor by tensor, which leaves accelerate no module to move inputs into.
+  They are now mapped as whole modules, as "auto" maps them.
+* **06-11, E1-mini on the closed book** (716 questions, GGUF Q4_K_M,
+  scored by program; share right by kind):
+
+  | | right | denies real | real recognised | number from heading | heading from number | deadline | penalty | made-up article denied | made-up ruling not confirmed |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 (start) | 206 | 51% | 0% | 3% | 5% | 13% | 12% | 100% | 90% |
+  | e1-g9 (r64, 3 epochs) | 167 | 8% | 15% | 0% | 21% | 16% | 33% | 63% | 0% |
+  | e1-g9-e5 (5 epochs) | 167 | 15% | 15% | 3% | 22% | 21% | 21% | 67% | 5% |
+  | e1-g9-lr3 (lr 3e-4) | 182 | 17% | 17% | 0% | 41% | 22% | 38% | 66% | 0% |
+  | e1-g9-r256 (rank 256) | 218 | 5% | 28% | 0% | 35% | 26% | 46% | 74% | 2% |
+  | g4-r3 (start) | 91 | 19% | 3% | 2% | 5% | 15% | 17% | 44% | 5% |
+  | e1-g4 | 151 | 36% | 1% | 0% | 14% | 13% | 38% | 68% | 0% |
+  | e1-g4-e5 | 167 | 26% | 7% | 1% | 21% | 13% | 38% | 60% | 0% |
+
+  Knowledge went in, through LoRA alone. On the roadmap's measure (real
+  articles recognised and number and heading, the denials left out) the
+  9B's average goes from 2.7% to 21.0% with rank 256 (+18.3 points) and
+  19.3% with lr 3e-4 (+16.7): both pass the +15 of the stop rule; deadlines
+  and penalties rise too (13 to 26%, 12 to 46%). The "non esiste" reflex is
+  gone (denials of real articles 51% to 5%). Three things against it, to
+  weigh before going on: (1) the heading is learnt from the number but not
+  the number from the heading (0-3% everywhere: the reversal curse; the
+  corpus states the pair in one direction); (2) made-up articles are now
+  confirmed a quarter to a third of the time, and made-up rulings almost
+  always (90% refused before, 0-5% after): what GRPO taught is lost, the
+  replay held the post-training pairs but not GRPO's behaviour; (3)
+  procedibility rises to 60-80% only by answering "querela", which 92% of
+  the items want. The open-book sets and the regression decide the rest.
+* **E1-mini open book and regression** (judge; GGUF Q4_K_M through the
+  engine, hybrid retrieval, no note):
+
+  | | held-out (217) | devbig (472) | practical (145) | practical held-out (70) | traps (390) | rewritten traps (1050) | LexIA (36) | GSM8K | ARC-E | ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 383 | 975 | 12 | 353 | 361 | 326 |
+  | e1-g9 | 193 + 5 | 427 + 16 | 59 + 18 | 36 + 8 | 372 | 883 | 11 | 358 | 381 | 361 |
+  | e1-g9-e5 | 186 + 5 | 414 + 20 | 63 + 15 | 35 + 7 | 377 | 919 | 15 | 355 | 385 | 361 |
+  | e1-g9-lr3 | 191 + 7 | 421 + 22 | 64 + 15 | 38 + 8 | 385 | 938 | 12 | 346 | 369 | 352 |
+  | e1-g9-r256 | 186 + 2 | 420 + 16 | 68 + 12 | 44 + 7 | 379 | 890 | 16 | 353 | 383 | 375 |
+  | g4-r3 | 198 + 1 | 447 + 6 | 76 + 18 | 40 + 10 | 386 | 958 | 10 | 336 | 364 | 348 |
+  | e1-g4 | 192 + 5 | 435 + 14 | 54 + 20 | 41 + 8 | 384 | 936 | 12 | 334 | 384 | 362 |
+  | e1-g4-e5 | 199 + 3 | 434 + 16 | 64 + 15 | 37 + 12 | 382 | 896 | 13 | 339 | 310 | 290 |
+
+  Verdict on E1-mini as the roadmap set it: the closed book passes (+18
+  points with rank 256), the second condition does not. Open book every
+  9B variant loses (rank 256: held-out -11, devbig -18, practical -8) and
+  the rewritten traps fall by 37-92 of 1,050: the trap behaviour GRPO had
+  taught is what the continued pretraining wears away, as the made-up
+  rulings on the closed book showed. The general abilities, on the
+  contrary, come back: ARC-Challenge from 326 to 375 with rank 256, what
+  GRPO had cost the 9B and more (the Wikipedia share). e1-g4-e5's ARC fall
+  (to 310 and 290) is to be read in its answers. Flash-Next in bf16, open
+  book: held-out 195 + 6, practical 73 + 1, LexIA 14. Not stopped: GRPO
+  on top of e1-g9-r256 (g9e-r1, the round that taught the traps) is
+  queued, and so are rank 256 with lr 3e-4 together and, against the
+  reversal curse, four heading-first statements an article.
+* Flash-Next learns through its n-gram table alone (2705520): one batch of
+  1,024 tokens of legislation, everything frozen but the table, plain SGD
+  on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,
+  0.286, 0.177, 0.145 in eight steps, 28 s a step, 59-62 GiB peak a GPU.
+  The memory fits one node; the speed (~36 tokens a second) is far from a
+  run on the corpus (17 M tokens), so the next probe measures larger
+  batches. Its open-book exam (2698994) is with the judge.
+* 05-11: JUPITER in maintenance all day (5,196 Booster nodes "maint",
+  677 drained, 8 down at 17:30); only a one-hour job of ours ran. Slurm
+  expects the queue to move from 03:00 on 06-11.
+* For 06-11, a day without anyone at the terminal: four more E1-mini runs
+  queued end to end by `submit_memory_round.sh` (training, GGUF, closed
+  book, seven open-book sets, regression), so that the verdict does not
+  rest on one recipe: five epochs on the 9B and on the 4B (e1-g9-e5,
+  e1-g4-e5), LoRA rank 256 (e1-g9-r256), learning rate 3e-4 (e1-g9-lr3);
+  one judge chain behind all of them.
+* Every job of the night printed "module load PyTorch failed" and still
+  worked, through the environment of the submitting shell. env.sh now
+  retries after loading Stages/2026 and prints Lmod's message.
+
 **23-10-2026**
 * The second node idle overnight: the submission script refused the
   distillation checkpoints given as "base+adapter" as missing models, which

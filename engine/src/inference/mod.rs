@@ -62,7 +62,7 @@ pub fn init_shared_backend()
 -> Result<std::sync::Arc<LlamaBackend>, Box<dyn std::error::Error + Send + Sync>> {
     tracing::info!("Initializing llama.cpp backend...");
     let backend = LlamaBackend::init()?;
-    if llama_log_wanted(std::env::var("RUST_LOG").ok().as_deref()) {
+    if llama_log_wanted(crate::settings::var("RUST_LOG").as_deref()) {
         tracing::info!("llama.cpp's log goes to the log (RUST_LOG names llama-cpp-2)");
     }
     llama_cpp_2::send_logs_to_tracing(llama_cpp_2::LogOptions::default());
@@ -261,8 +261,7 @@ fn required_media_batch(max_media_tokens: u32, floor: u32) -> Result<u32, u32> {
 }
 
 fn multimodal_batch_size() -> u32 {
-    let img_budget = std::env::var("EULLM_IMAGE_MAX_TOKENS")
-        .ok()
+    let img_budget = crate::settings::var("EULLM_IMAGE_MAX_TOKENS")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
     img_budget.max(512)
@@ -2279,11 +2278,11 @@ impl InferenceEngine {
         // Dynamic-resolution vision models (e.g. Gemma 4) cap image tokens
         // (Gemma4UV defaults to max 280). That low cap aggressively downscales
         // images, hurting hard cases (dark / low-contrast / small subject).
-        // EULLM_IMAGE_MAX_TOKENS / EULLM_IMAGE_MIN_TOKENS let us raise the
-        // budget to give the encoder more resolution. `-1` keeps the default.
-        // NOTE: very high values can OOM or crash some projectors — raise in
-        // moderate steps (e.g. 512, then 1024).
-        let env_i32 = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<i32>().ok());
+        // EULLM_IMAGE_MAX_TOKENS / EULLM_IMAGE_MIN_TOKENS (environment or
+        // .env) let us raise the budget to give the encoder more resolution.
+        // `-1` keeps the default. NOTE: very high values can OOM or crash some
+        // projectors — raise in moderate steps (e.g. 512, then 1024).
+        let env_i32 = |k: &str| crate::settings::var(k).and_then(|v| v.parse::<i32>().ok());
         if let Some(maxt) = env_i32("EULLM_IMAGE_MAX_TOKENS") {
             params.image_max_tokens = maxt;
             tracing::info!("Override image_max_tokens = {maxt} (EULLM_IMAGE_MAX_TOKENS)");

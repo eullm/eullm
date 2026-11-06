@@ -79,6 +79,30 @@ Le leve, misurate sulla 1147 (`allocation-recovery.md`):
    catena che finisce va sostituita nello stesso messaggio (regola 8 di
    `forge/CLAUDE.md`).
 
+### Manutenzioni già pianificate (`scontrol show reservation`, 4 novembre 2026)
+
+| Prenotazione | Quando | Nodi Booster |
+|---|---|---:|
+| `maint_4B1` | 10/11 07:00 → 12/11 07:00 | 540 |
+| `maint_4B2` | 12/11 07:00 → 14/11 07:00 | 180 |
+| `maint_23112026_booster` | **23/11 08:00 → 25/11 08:00** | **tutti (3.456)** |
+
+Il 23-25 novembre il Booster è fermo: sono due giorni su 92, e nessun job
+che finirebbe dopo le 8:00 del 23 parte nelle ore prima. Dal 10 al 14
+novembre manca un quinto dei nodi e la coda sarà più lenta. Il ritmo di
+novembre va tenuto più alto prima, non recuperato dopo.
+
+### Fermi non pianificati
+
+| Quando | Cosa | Effetto su di noi |
+|---|---|---|
+| 4/11/2026, pomeriggio → (in corso) | login e storage di Leonardo non rispondono (avviso HPC-News di CINECA "Leonardo: login and storage access disruption") | dai login si bloccano `git`, `ls`, `tail` su `$WORK`; una nuova sessione ssh non arriva al prompt nemmeno con `bash --norc`, perché si ferma sulla `$HOME`. Le prove di 30 minuti di A2-mini non sono partite |
+
+Alla ripresa: `sacct -X -S 2026-11-04 --format=JobID,JobName,State,Elapsed`
+per i job morti nel fermo (una catena riparte da sola dall'ultimo
+salvataggio; un job singolo va rilanciato), e un controllo che la copia in
+`archive-1147` sia rimasta intera.
+
 ### Traguardi cumulativi
 
 | Data | GPU-ore spese | Lineare |
@@ -375,6 +399,9 @@ novembre (domande 5 e 7).
 Si raccoglie dal primo giorno, non alla fine:
 * GPU-ore per fase, da `sacct`, con un prefisso di nome per WP;
 * il registro di coda con le attese datate;
+* il diario dell'infrastruttura (`fastlane-infrastruttura.md`): fermi,
+  attese per forma di job, carico dei nodi di login, misurati giorno per
+  giorno;
 * le tabelle dei risultati con la base di confronto;
 * il costo di un ciclo completo (C5);
 * la curva di scalabilità su più nodi (B1).

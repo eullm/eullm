@@ -226,7 +226,8 @@ eullm serve --daemon --logfile /var/log/eullm.log    # custom log file location
 
 ### Gated and private Hugging Face models (`HF_TOKEN`)
 
-Set `HF_TOKEN` to a Hugging Face access token and `eullm pull` / `eullm run
+Set `HF_TOKEN` to a Hugging Face access token, in the environment or in the
+`.env` file of the folder eullm starts from, and `eullm pull` / `eullm run
 hf.co/<owner>/<repo>[:<quant>]` — and the model catalog in the Chat UI — fetch
 gated and private repositories too, shards and projector included:
 
@@ -1036,9 +1037,10 @@ on `ggml-org/llama.cpp`, current as of July 2026):
 hatch for anyone who wants to reproduce or build on this, but is not a
 recommended path to KV reuse on hybrid/recurrent architectures. The
 practical mitigations today: use `--ctx-checkpoints` (below), keep
-conversations reasonably short, and use non-thinking mode (`--think off` /
-official `preserve_thinking: false` behavior) to bound how fast the
-re-prefill cost grows per turn.
+conversations reasonably short, and use non-thinking mode (`/no_think` in the
+terminal chat, `"think": false` in a request, or the official
+`preserve_thinking: false` behavior) to bound how fast the re-prefill cost
+grows per turn.
 
 ### The actual root cause of small/unstable reuse: retokenizing history every turn
 

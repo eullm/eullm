@@ -134,18 +134,30 @@ partition caps a job at 24 h and 64 nodes. One day's reading, so the rules
 below are the starting point and the probe is run again when the queue
 seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
 
-1. **Long links for 3-GPU work, short only where they pay.** A 3-GPU job of
-   up to 24 h starts at once: chain 24 h links (`submit_chain.sh ... -t
-   24:00:00`, the script's own stop time raised to match, e.g.
-   `law_rewrites.py --stop-after 85500`) instead of 2 h ones, which lose
-   ~14 min of start-up (20 %) each. Whole nodes and multi-node jobs wait
-   ~2 h for any length: worth it for work that needs the shape (the sharded
-   30B MoE, the multi-node study), not as a habit. The script headers still
-   say 2 h and `tests/test_leonardo_job_shape.py` still holds them to it, so
-   the longer time goes on the command line; the test is revised with the
-   first script that needs a whole node by design. On the Playground (from
-   2026-09-21) 24 h and whole-node jobs waited for days; if the probe ever
-   reads like that again, rules 1-2 go back to 2 h and 3 GPUs.
+1. **Two-hour links by default; longer only on a day the queue says so.**
+   On 4-11-2026, a day after the probe above, 7,025 jobs were pending in
+   `boost_usr_prod` (3,688 on 2026-09-22), no node was idle, and our 3-GPU
+   jobs of 24 h got no planned start at all, although our priority (144,400)
+   was above the 90th percentile of the queue (143,054): the same backfill
+   problem as in September, so priority is not the lever, the wall time is.
+   Chains of 2 h links (`submit_chain.sh ... -t 02:00:00`, `save_steps` well
+   inside a link, e.g. 50) start; a 24 h link starts only when the machine is
+   quiet. Before giving the user a longer link, check that day's queue
+   (`squeue --me --start`, or `fastlane_probe.sh` with `FLP_HOLD=1`): planned
+   starts for long jobs, or the long probes started within minutes. Whole
+   nodes and multi-node jobs follow the same rule and wait longer.
+   The same afternoon a ladder of probes found the edge: **1-GPU jobs of
+   30 min, 1, 2 and 4 h started in 16-24 s, while 2- and 3-GPU jobs, even of
+   one hour, got no planned start.** On a day like that the work is cut into
+   1-GPU jobs (one teacher `llama-server` per job, 4B-9B models in bf16,
+   exams of small models), and the multi-GPU chains stay queued for the
+   holes that open later.
+   The evening after (probe of 4-11 20:37, after the storage outage): 3-GPU
+   jobs started in 10 min (2 h), 30 min (4-8 h) and **50 min (24 h)**; whole
+   nodes, from 1 to 8 and from 2 to 24 h, waited 9.5-10.3 h and all started
+   between 06:05 and 06:54. So multi-node work submitted in the evening runs
+   the next morning, and on a day like that 3-GPU links can be longer than
+   2 h; `docs/cineca/fastlane-infrastruttura.md` keeps the series.
 2. **Three GPUs, 24 cores, 340 GB — all three numbers — for a part of a
    node.** Four GPUs or 32 cores make the job exclusive: ask for that only
    when the whole node is meant (rule 1), never by accident through the
@@ -189,6 +201,18 @@ seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
    to spend the hours; running out early with better models is fine, burning
    them on runs that answer nothing is not. `status.sh` flags an empty GPU
    queue with `[!!]`.
+   **A day left to the queue is sized from when each chain ends, not from
+   how much there is.** On 2026-11-05 the user left for the day with "the
+   day covered": a rewrite pass estimated at hours had 8,900 items left and
+   ended in 26 minutes, the other chains ended by 08:40, nothing was queued
+   behind them, and the GPUs stood idle for eleven hours. Before saying a
+   day is covered: write down when each queued chain ends (steps left ×
+   seconds a step, or items left ÷ items an hour, from its own log), and
+   queue useful work behind the earliest ends until the last one is past
+   the next time the user is back. And a run that diverges stops: the
+   trainers skip a non-finite loss and stop for good after a few in a row
+   (`ngram_train.py --max-bad-steps`), since the LoRA control of that night
+   trained on NaN for its last twenty hours.
 
 Rules 1 and 2 are also enforced by the build: `tests/test_leonardo_job_shape.py`
 fails CI for any `boost_usr_prod` script over 2 h, over three GPUs, or over
@@ -296,5 +320,23 @@ Only fully permissive licenses:
   wrapper (`Gemma4ForConditionalGeneration`, text under `text_config`) and
   needs transformers 5.5+ (the 12B 5.10+): check the venv can load it
   before planning a run on it, and never upgrade the shared venv for it.
+
+**One exception, decided by the PI on 2026-11-04: Qwen3.8-Flash-Next**
+(`Qwen/Qwen3.8-Flash-Next`, 180B, 10 of 512 experts active, native hashed
+3-gram tables), under the **Qwen Community License 1.0**, not Apache 2.0.
+The licence allows use, fine-tuning, derivative works, distribution and sale,
+and does not forbid training other models on it or on its outputs. Its
+conditions: the copyright and licence notice travels with every copy and
+derivative; a licensee that runs a *Model as a Service* (third parties
+reach the model through an API or a hosted endpoint) or an *AI Work
+Assistant* business (coding or office productivity) needs a separate licence
+from Qwen for commercial use, derivatives included; internal use is exempt
+as long as nothing of the model, its outputs or its capabilities reaches a
+third party. So: allowed for research, as a teacher, and as the base of
+models sold on-premises; **before any of its derivatives, or a student it
+taught, is offered through an API, the separate licence is obtained first.**
+Every model card of a derivative says so. Every other Qwen model used so far
+(Qwen3, 3.5, 3.6, 3.8-27B) is Apache 2.0; check each new one, the same family
+does not mean the same licence.
 
 Llama (Meta) is excluded from the default catalog due to "Built with Llama" branding requirement.

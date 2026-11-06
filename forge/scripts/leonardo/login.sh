@@ -17,6 +17,15 @@
 #   coda     the queue, one line per job
 #   spazio   space used in $WORK, the fast scratch and $HOME
 #   budget   budget.sh: GPU-hours spent against the allocation, from sacct
+#   carico   how loaded this login node is now, also written to the load log
+#
+# Every login also appends one line, in the background, to
+# $WORK/eullm_runs/login-load.tsv: time, node, users, load, cores, processes
+# waiting on the disk (state D), CPU split from vmstat (user, system, idle,
+# I/O wait), available memory and swap used. On 2026-11-04, after the
+# storage outage, the login nodes ran at load 76-96 with 19-27% I/O wait;
+# the Fast Lane's final report describes the infrastructure with a series
+# of these numbers, not with screenshots.
 
 module load python/3.11.7 2>/dev/null
 
@@ -46,6 +55,23 @@ _eullm_space() {
             awk -v l="$label" '{printf "== space  %-5s %6s of %-6s (%s)\n", l, $1, $2, $3}'
     done
 }
+
+EULLM_LOAD_LOG="${EULLM_LOAD_LOG:-$WORK/eullm_runs/login-load.tsv}"
+_eullm_login_load() {
+    local cpu users dstate mem
+    cpu="$(vmstat 1 2 2>/dev/null | awk 'NR == 2 {for (i = 1; i <= NF; i++) c[$i] = i}
+        NR == 4 {printf "%s\t%s\t%s\t%s", $c["us"], $c["sy"], $c["id"], $c["wa"]}')"
+    users="$(who 2>/dev/null | awk '{print $1}' | sort -u | wc -l)"
+    dstate="$(ps -eo stat= 2>/dev/null | grep -c '^D')"
+    mem="$(free -g 2>/dev/null | awk '/^Mem:/ {m = $7} /^Swap:/ {s = $3} END {printf "%s\t%s", m, s}')"
+    [ -s "$EULLM_LOAD_LOG" ] ||
+        printf 'time\thost\tusers\tload1\tcores\tproc_D\tus\tsy\tid\twa\tmem_avail_G\tswap_used_G\n' > "$EULLM_LOAD_LOG"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -Is)" "$(hostname -s)" "$users" \
+        "$(cut -d' ' -f1 /proc/loadavg)" "$(nproc)" "$dstate" "${cpu:-?\t?\t?\t?}" "${mem:-?\t?}" \
+        >> "$EULLM_LOAD_LOG"
+}
+alias carico='_eullm_login_load; column -t "$EULLM_LOAD_LOG" | sed -n "1p;\$p"'
+[ -d "$(dirname "$EULLM_LOAD_LOG")" ] && { _eullm_login_load >/dev/null 2>&1 & disown; } 2>/dev/null
 
 _eullm_login_summary() {
     local venv="${VIRTUAL_ENV:-none}" branch commit running pending

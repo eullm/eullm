@@ -759,3 +759,61 @@ The first is now a premise kind of its own (`premessa_numero`: an offence
 named with a number that does not exist; the answer corrects it, names the
 article that provides for it and answers from it, and the reward pays only
 all three); the second is the memory plan and the wider index.
+
+## 14. 2026-11-05: Qwen3.8-Flash-Next on the closed-book suite
+
+Same suite as section 13 (716 questions, no text, `score_closed_book.py`),
+Flash-Next as the UD-Q4_K_XL GGUF through llama-server, beside every model
+already asked:
+
+| model | right | sure-wrong | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | proc | abrog | sent? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| flashnext-q4 | 229 (32%) | 434 | 18% | 24% | 90% | 22% | 18% | 21% | 33% | 4% | 9% | 18% |
+| r2q | 220 (31%) | 401 | 45% | 0% | 91% | 2% | 7% | 9% | 17% | 60% | 22% | 100% |
+| r2l | 215 (30%) | 360 | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 88% | 45% | 100% |
+| moe-i2507 (30B-A3B) | 166 (23%) | 511 | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 16% | 1% | 10% |
+| q36-27b | 149 (21%) | 515 | 5% | 14% | 72% | 10% | 8% | 10% | 8% | 0% | 4% | 10% |
+| pub8b | 53 (7%) | 373 | 0% | 4% | 7% | 5% | 8% | 18% | 8% | 4% | 1% | 15% |
+| jpn14 | 26 (4%) | 430 | 0% | 10% | 0% | 0% | 3% | 0% | 0% | 0% | 1% | 30% |
+| jpn17 | 24 (3%) | 489 | 6% | 8% | 0% | 0% | 2% | 0% | 0% | 0% | 1% | 32% |
+
+92% of the procedibility items want "querela", so a model answering it
+every time scores 92% there.
+
+**The totals hide what each model knows.** r2l and r2q reach 30-31% mostly
+through three columns a reflex can fill: procedibility (88% and 60%, near
+the "querela" baseline), made-up rulings (100%) and made-up articles; r2q
+also denies 45% of the real articles. Flash-Next's 32% comes from the other
+columns: it is first by a wide margin on everything that asks for the
+content of an article from memory: the article's number from its heading
+(22%, against at most 10% for every other model), the heading from the
+number (18%), terms (21%), penalties (33%), and recognising that a real
+article exists (24%). It recognises 90% of the made-up articles while
+denying only 18% of the real ones, so its "falso" is discrimination, not a
+reflex.
+
+**Read with three limits.** It is a 180B model against 8-30B ones, so
+size alone explains part of it; the GGUF is 4-bit; and only 355 of its 716
+answers ended their turn within the 400 new tokens, so its score is a lower
+bound. The run with 1000 tokens (`EXAM_ARGS="--max-new-tokens 1000"`) is the
+one to quote: **247/716 (34%)**, sure-wrong 407, denies-real 17%; the
+knowledge columns stay where they were (n<-rub 22%, rub<-n 21%, terms 23%,
+penalties 29%) and made-up rulings rise to 42%, which a cut answer had not
+reached.
+
+**As an open-book teacher it is not better than the one we have.** On
+the statute exam of the rounds (`norm-exam-v2`, 231 questions, judge, read
+by counts only), 1000 tokens:
+Flash-Next 167 right, Qwen3-30B-A3B-Instruct-2507 170; paired, 17 against
+14, p = 0.72, no difference; on the part graded without the judge 111/145
+against 105/145, p = 0.18. With the texts in hand the 30B reads them as
+well as the 180B, at a sixth of the memory. What Flash-Next has more is
+what it knows with no text, which is what line A is about.
+
+**Why it matters for line A.** Number and heading of an article are exactly
+the lexical, citation-shaped facts a hashed n-gram table can hold, and
+Flash-Next is the one model here that has such a table
+(`docs/research/flash-next-ngram.md`). That is a hint, not evidence, since
+size is confounded with it; the evidence is the same suite with its n-gram
+layer switched off (the first measurement listed in that document), and
+A2-mini's gate on the 8B.

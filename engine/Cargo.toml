@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.8.7"
+version = "0.8.8"
 edition = "2024"
 description = "eullm — sovereign LLM inference engine"
 license = "AGPL-3.0-or-later"
@@ -29,7 +29,7 @@ metal = ["llama-cpp-2/metal"]
 multimodal = ["llama-cpp-2/mtmd"]
 
 [dependencies]
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6", features = ["derive", "wrap_help"] }
 tokio = { version = "1.54.1", features = ["full"] }
 axum = "0.8"
 serde = { version = "1.0", features = ["derive"] }

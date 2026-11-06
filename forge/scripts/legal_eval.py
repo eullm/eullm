@@ -139,15 +139,22 @@ def load_model(auto_cls, path: str, n_gpus: int, fallback_cls=None):
     """
     import torch
 
-    kwargs = {"dtype": torch.bfloat16}
-    if n_gpus > 1:
-        kwargs["device_map"] = "auto"
+    from eullm_forge.eval.placement import device_map_for
+
+    def kwargs(cls) -> dict:
+        # A model with parameters kept off the GPUs (Flash-Next's n-gram table)
+        # gets its layers spread evenly: "auto" left its first GPU empty.
+        out = {"dtype": torch.bfloat16}
+        if n_gpus > 1:
+            out["device_map"] = device_map_for(path, n_gpus, cls)
+        return out
+
     try:
-        model = auto_cls.from_pretrained(path, **kwargs)
+        model = auto_cls.from_pretrained(path, **kwargs(auto_cls))
     except ValueError as exc:
         if fallback_cls is None or "Unrecognized configuration class" not in str(exc):
             raise
-        model = fallback_cls.from_pretrained(path, **kwargs)
+        model = fallback_cls.from_pretrained(path, **kwargs(fallback_cls))
     return model.to("cuda") if n_gpus == 1 else model
 
 
@@ -324,6 +331,12 @@ def main() -> int:
                     help="with --gguf: questions decoded together")
     ap.add_argument("--server-ctx", type=int, default=16384,
                     help="with --gguf: context tokens per question (prompt + answer)")
+    ap.add_argument("--ngram-memory", type=Path,
+                    help="graft this n-gram memory (forge/scripts/ngram_train.py, "
+                         "<out>/memory) onto the model before answering")
+    ap.add_argument("--adapter", type=Path,
+                    help="a PEFT LoRA adapter merged into the model before answering "
+                         "(the LoRA control of ngram_train.py, <out>/adapter)")
     ap.add_argument("--quiet", action="store_true",
                     help="print totals only, never a question or an answer: for the "
                          "held-out exam, whose questions nobody improving the models "
@@ -345,6 +358,8 @@ def main() -> int:
         ap.error("--retrieval-cache holds document embeddings: give --embedder")
     if args.gate and not args.norms:
         ap.error("--gate judges the retrieved texts: give --norms")
+    if (args.ngram_memory or args.adapter) and args.gguf:
+        ap.error("--ngram-memory and --adapter graft onto the HF model: not with --gguf")
 
     from transformers import AutoTokenizer
 
@@ -421,6 +436,18 @@ def main() -> int:
         cuda = torch.cuda.is_available()
         model = load_model(AutoModelForCausalLM, args.model, torch.cuda.device_count(),
                            fallback_cls=AutoModelForImageTextToText)
+        if args.adapter:
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
+            print(f"[eval] LoRA adapter {args.adapter} merged", flush=True)
+        if args.ngram_memory:
+            from eullm_forge.memory import NGramMemory, attach, decoder_layers
+            memory = NGramMemory.load(args.ngram_memory)
+            layer = decoder_layers(model)[memory.config.layer]
+            attach(model, memory.to(next(layer.parameters()).device).eval())
+            print(f"[eval] n-gram memory {args.ngram_memory}: after layer {memory.config.layer}, "
+                  f"{memory.n_params() / 1e6:.1f}M parameters, scale "
+                  f"{memory.scale.item():.3g}", flush=True)
         model.eval()
         batch = args.batch_size or (16 if cuda else 1)
         print(f"[eval] {len(items)} items on {'GPU' if cuda else 'CPU'}, batch {batch}",

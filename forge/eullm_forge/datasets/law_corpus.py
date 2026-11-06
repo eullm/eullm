@@ -49,7 +49,7 @@ from .premise_gen import (
 )
 
 FORMS = ("testo", "indice", "rubrica", "termine", "pena", "procedibilita", "abrogato",
-         "inesistente")
+         "inesistente", "rubrica_inversa")
 STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 # What is asked unless a run names its styles. Not the case: applying a rule
 # to facts is where the teacher errs, and no check by program sees it. Of six
@@ -83,6 +83,15 @@ RUBRICA_BACK = [
     "{In} la disciplina di «{h}» si trova all'art. {n}.",
     "«{h}» è la materia dell'art. {n} {of}.",
     "{In} l'articolo dedicato a «{h}» è il {n}.",
+]
+# Heading first, number last, for `reverse` (program_rows): E1-mini learnt the
+# heading from the number but not the number from the heading (0-3% on the
+# closed book against 35-41% the other way, 06-11-2026), the reversal curse,
+# with one heading-first sentence an article.
+RUBRICA_REV = RUBRICA_BACK + [
+    "Chi cerca «{h}» {in_} lo trova all'art. {n}.",
+    "Per «{h}» l'articolo {of} da citare è il {n}.",
+    "{In}, «{h}»: art. {n}.",
 ]
 
 
@@ -179,9 +188,14 @@ def excluded(paths: list[Path]) -> tuple[set[tuple[str, str]], set[tuple[str, st
 
 def program_rows(articles: dict[tuple[str, str], Article], *,
                  fakes: set[tuple[str, str]] = frozenset(), seed: int = 0,
-                 absent_share: float = 0.3) -> list[dict]:
-    """Every program-written form of every article: statements, never questions."""
+                 absent_share: float = 0.3, reverse: int = 0) -> list[dict]:
+    """Every program-written form of every article: statements, never questions.
+
+    ``reverse`` adds that many heading-first statements an article
+    (``rubrica_inversa``, from `RUBRICA_REV`), the number always last.
+    """
     rng = random.Random(seed)
+    rev_rng = random.Random(seed + 1)       # its own draws: the other rows stay as they were
     rows: list[dict] = []
 
     def add(form, code, number, text):
@@ -211,6 +225,11 @@ def program_rows(articles: dict[tuple[str, str], Article], *,
                     RUBRICA_FWD[i].format(n=a.number, of=of, h=h) + " "
                     + RUBRICA_BACK[(i + 1) % len(RUBRICA_BACK)].format(
                         n=a.number, of=of, h=h, In=In))
+                for k, t in enumerate(rev_rng.sample(RUBRICA_REV, min(reverse, len(RUBRICA_REV)))):
+                    rows.append({"id": f"rubrica_inversa|{code}|{a.number}|{k}", "code": code,
+                                 "articolo": a.number, "forma": "rubrica_inversa",
+                                 "source": "program",
+                                 "text": t.format(n=a.number, of=of, h=h, In=In, in_=in_)})
             # deadlines ("entro trenta giorni"), not the length of a penalty
             timed = [s for _, s in split_sentences(_plain(a.text)) if _deadlines(s)]
             if timed:
