@@ -69,6 +69,10 @@ if [ -f "$OUT/DONE" ]; then
     echo "[ng] finished already: $(cat "$OUT/DONE")"
     exit 0
 fi
+if [ -f "$OUT/DIVERGED" ]; then  # the rest of the chain costs seconds, not a link each
+    echo "[ng] diverged: $(cat "$OUT/DIVERGED"); start again with a lower --lr in a new NG_OUT"
+    exit 0
+fi
 fail=0
 case "$MODE" in ngram|lora) ;; *) echo "[ng] NG_MODE is ngram or lora, not $MODE" >&2; fail=1 ;; esac
 [ -f "$MODEL/config.json" ] || { echo "[ng] no model at $MODEL" >&2; fail=1; }

@@ -180,6 +180,10 @@ def main(argv=None) -> int:
     ap.add_argument("--stop-after", type=float, default=0, help="seconds; 0 = run to the end")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--max-steps", type=int, default=0, help="for tests")
+    ap.add_argument("--clip", type=float, default=1.0,
+                    help="gradient norm clip of the dense parameters (0 = none)")
+    ap.add_argument("--max-bad-steps", type=int, default=20,
+                    help="non-finite losses in a row that stop the run for good")
     a = ap.parse_args(argv)
 
     import torch
@@ -192,6 +196,10 @@ def main(argv=None) -> int:
     if (out / "DONE").exists():
         print(f"[ngram] {out} is finished (DONE): nothing to do", flush=True)
         return 0
+    if (out / "DIVERGED").exists():
+        print(f"[ngram] {out} diverged ({(out / 'DIVERGED').read_text().strip()}): "
+              "not resumed; start again with a lower --lr", flush=True)
+        return 3
     out.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(a.seed)
 
@@ -222,6 +230,7 @@ def main(argv=None) -> int:
         memory = memory.to(next(decoder_layers(model)[memory.config.layer].parameters()).device)
         attach(model, memory)
         dense = [p for n, p in memory.named_parameters() if not n.startswith("table.")]
+        clipped = dense
         opts = [torch.optim.SparseAdam([memory.table.weight], lr=a.lr_table),
                 torch.optim.AdamW(dense, lr=a.lr, weight_decay=0.0)]
         trainable = memory.n_params()
@@ -240,6 +249,7 @@ def main(argv=None) -> int:
                                                      target_modules=targets,
                                                      lora_dropout=0.0, task_type="CAUSAL_LM"))
         params = [p for p in model.parameters() if p.requires_grad]
+        clipped = params
         opts = [torch.optim.AdamW(params, lr=a.lr, weight_decay=0.0)]
         trainable = sum(p.numel() for p in params)
     for i, opt in enumerate(opts):
@@ -272,7 +282,7 @@ def main(argv=None) -> int:
     log = open(out / "train-log.jsonl", "a", encoding="utf-8")
     done = state["step"]  # steps completed so far
     total = (len(rows) // a.batch) * a.epochs
-    seen, t_log = 0, time.monotonic()
+    seen, t_log, bad = 0, time.monotonic(), 0
     for step, epoch, idx in batches(len(rows), a.batch, a.seed, state["step"], a.epochs):
         if a.max_steps and step >= a.max_steps:
             break
@@ -287,7 +297,27 @@ def main(argv=None) -> int:
                 g["lr"] = lr * warm
         batch = torch.from_numpy(rows[idx]).long().to(dev)
         loss = model(input_ids=batch, labels=batch).loss
+        if not torch.isfinite(loss):
+            # A non-finite loss is skipped, never stepped: one bad batch
+            # costs a step, a run that has diverged stops instead of training
+            # on NaN to the end (the LoRA control of 2026-11-05 did, for 20 h).
+            for opt in opts:
+                opt.zero_grad(set_to_none=True)
+            bad += 1
+            print(f"[ngram] non-finite loss at step {step} ({bad} in a row)", flush=True)
+            if bad >= a.max_bad_steps:
+                (out / "DIVERGED").write_text(json.dumps({"step": step, "lr": a.lr,
+                                                          "lr_table": a.lr_table}))
+                log.close()
+                print(f"[ngram] DIVERGED at step {step}: stopped; the last save is "
+                      f"ckpt (step {state['step']} or later), nothing written after it",
+                      flush=True)
+                return 3
+            continue
+        bad = 0
         loss.backward()
+        if a.clip:
+            torch.nn.utils.clip_grad_norm_(clipped, a.clip)
         for opt in opts:
             opt.step()
             opt.zero_grad(set_to_none=True)

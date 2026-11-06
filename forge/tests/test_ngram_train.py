@@ -147,3 +147,29 @@ def test_lora_rank_matches_the_parameter_budget(tiny_dir):
     assert nt.lora_rank_for(model, 5 * per_rank, targets) == 5
     assert nt.lora_rank_for(model, 1, targets) == 1
     assert nt.lora_rank_for(model, 5 * per_rank, r".*\.(q_proj|o_proj)") == 5
+
+
+def test_a_run_whose_loss_is_not_finite_stops_and_stays_stopped(tiny_dir, data, tmp_path,
+                                                                 monkeypatch):
+    out = tmp_path / "run"
+    monkeypatch.setattr(torch, "isfinite", lambda x: torch.tensor(False))
+    args = ["--model", str(tiny_dir), "--data", str(data), "--out", str(out),
+            "--seq-len", "16", "--batch", "4", "--rows-per-head", "101", "--embed-dim", "32",
+            "--heads-per-ngram", "2", "--max-bad-steps", "3"]
+    assert nt.main(args) == 3
+    assert json.loads((out / "DIVERGED").read_text())["step"] == 2
+    assert not (out / "DONE").exists()
+    monkeypatch.undo()
+    assert nt.main(args) == 3  # a later link does not train on from a diverged state
+
+
+def test_clipping_keeps_the_resume_exact(tiny_dir, data, tmp_path):
+    run(tiny_dir, data, tmp_path / "one", "--max-steps", "4", "--clip", "0.01")
+    run(tiny_dir, data, tmp_path / "two", "--max-steps", "2", "--clip", "0.01")
+    run(tiny_dir, data, tmp_path / "two", "--max-steps", "4", "--clip", "0.01")
+    from eullm_forge.memory import NGramMemory
+
+    a = NGramMemory.load(tmp_path / "one" / "ckpt" / "memory").state_dict()
+    b = NGramMemory.load(tmp_path / "two" / "ckpt" / "memory").state_dict()
+    for k in a:
+        assert torch.equal(a[k], b[k]), k
