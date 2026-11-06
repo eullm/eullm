@@ -1029,3 +1029,25 @@ def test_store_gguf_reads_a_manifest_of_utf8_text(tmp_path, monkeypatch):
     monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "models"))
     # The sorted fallback would pick a.gguf: only the manifest names z\u00c1.gguf.
     assert point.store_gguf("m") == os.path.join(str(d), "z\u00c1.gguf")
+
+
+def test_smi_output_is_decoded_as_utf8(monkeypatch):
+    """The device reader asks for UTF-8 from nvidia-smi/rocm-smi, not the
+    host locale: a device name or a message in non-ASCII text is kept."""
+    import devices
+
+    class Out:
+        stdout = "0, 100, 1000, 50\n"
+        stderr = ""
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(devices.subprocess, "run", run)
+    assert devices.read_smi("cuda") == {
+        "0": {"used": 100 * 2**20, "total": 1000 * 2**20, "use": 50}}
+    assert seen[0].get("encoding") == "utf-8"
