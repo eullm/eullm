@@ -883,6 +883,38 @@ two-day soaks and one long one, 23439625 from 19:23), 23 failed; `c16` done,
 48 points of 48. Left 2,778 node-hours, 22.6 a day to 09-03-2027, 317 ahead
 of the straight line (12.6 days); the last 7 days at 27.0 a day.
 
+`c16-load-order` read whole the same evening, median load seconds, cold,
+the node alone, 2-3 trials, 0.8.5 / 0.8.7 / 0.8.7 with `0014`:
+
+| load | `v085` | `v087` | `v087fo` |
+|---|---|---|---|
+| Qwen3.8-27B Q8, one GCD | 130 | 95 | 44 |
+| Qwen3-32B, `--split-mode tensor`, four GCDs | 101 | 107 | 31 |
+| Qwen3-235B Q8_0, eight GCDs | 686 | 652 | 261 |
+| Qwen3-Coder-480B, `--no-mmap`, eight GCDs | 183 | 185 | 149 |
+| Qwen3-235B Q4_K_M, four GCDs | 330 | 148 | 184 |
+| two Qwen3-235B Q4_K_M together | 186 | 164 | 188 |
+
+The slowdown read on 04-11 was not b12032's: side by side, 0.8.5 and 0.8.7
+load alike, and 0.8.5 itself took 155-265 s for the two 235B together this
+week where it took 103 in `r-v085` (Lustre slower for everyone, not the
+binary). Reading in file order is what makes the difference, against both:
+two to three times faster for the models up to 64 GiB and the 235B Q8_0,
+20% for the 480B, level for the 235B Q4_K_M, where trials spread two to
+three times. The likely reason: in some GGUF files the tensors do not lie
+in the order llama.cpp creates them, so neither earlier order reads the
+file in one pass. `0014`, already on `main` (#1260), stays, with its
+description, the README row and the changelog rewritten from these figures.
+
+The 24 failed points of `v087` (`failures.py --label v087`): `b12-dsa`'s
+30K prompt (03-11, known); `load-together-235b` with `--mmap` (warm-up timed
+out); `ram-671b` and `ram-480b`/`ram-prompt` (time limits and timeouts, as
+in every round); and twelve of `c07`'s `rt-prefill` and `rt-throughput`
+stopped after an hour, three times their estimate, between 20:51 and 23:23
+on 04-11, plus three earlier with Ollama's "timed out waiting for
+llama-server to start". Which runtime the twelve ran is not in the list:
+`failures.py` now names it (`--group rt-` to see them alone).
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were

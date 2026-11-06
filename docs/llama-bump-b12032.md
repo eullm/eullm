@@ -190,11 +190,15 @@ second; MTP without `--mtp` / with `--mtp 2`, drafts kept, gsm8k accuracy.
   the attention is not where its time goes at these lengths. (The first
   30,000-token point did not fit its 32,768-token slot: 34,375 tokens with
   DeepSeek's tokenizer.)
-- **Loading took longer on 0.8.7** in five of six points, but it varies by a
-  factor of 15 on the same binary (DeepSeek on 0.8.5: 16.5 and 245 s), and
-  0.8.7 ran just after a maintenance, with Lustre busy. EuLLM does not ask
-  for upstream's direct IO (`use_mmap(false)` is `LLAMA_LOAD_MODE_NONE`).
-  To check in the next round's `c09`, which times loads against earlier ones.
+- **Loading is level with b11925.** It looked slower in this round and in
+  `r-v087`'s `c09` (two Qwen3-235B together 160 s against 103-121 s in the
+  rounds before), but measured side by side (`c16-load-order`, cold, the
+  node alone, 5-6 November) b11925 and b12032 load alike: Lustre itself was
+  slower that week. What the side by side found instead is that neither
+  reads a model in file order without mmap (b11925 in the order llama.cpp
+  creates the tensors, b12032 biggest-first, #31321); EuLLM's patch `0014`
+  does, and loads Qwen3.8-27B Q8 in 44 s against 95-130, Qwen3-32B split
+  by tensor in 31 against 101-107, Qwen3-235B Q8_0 in 261 against 650-690.
 - **The soaks hold**: two and a half hours at 32 requests, the same speed
   and requests within 1%, VRAM flat, no server died, and 0.8.7's logs hold
   no HSA error, no out-of-memory and no NaN. 0.8.5's logs hold one

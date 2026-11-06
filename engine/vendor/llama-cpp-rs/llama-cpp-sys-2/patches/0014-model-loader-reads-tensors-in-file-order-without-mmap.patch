@@ -1,22 +1,23 @@
 llama : without mmap, read the tensors in file order
 
-#31321 (b12032) loads the tensors of a model read without mmap biggest-first,
-so that the one staging buffer it now reuses only ever shrinks. On a network
-file system read cold that order costs more than it saves: the reads jump
-across the file instead of going through it once, and the client's
-read-ahead stops helping. On LUMI-G (Lustre), the first round on b12032
-loaded two Qwen3-235B Q4_K_M at once in 160 s, where the four rounds before
-it on b11925 and earlier took 103-121 s, the same point each time;
-the mmap variant of that point, 17 minutes before, ran past the warm-up's
-time limit, and DeepSeek, Qwen3-32B split by tensor and the 235B with the
-expert cache loaded slower too. On ROCm every one of these loads takes the
-async upload, so the order is all b12032 changed for them.
+A model loaded without mmap is read tensor by tensor, and the order is not
+the file's: before #31321 it was the order llama.cpp creates the tensors in,
+which in some GGUF files is far from how they lie on disk, and since #31321
+(b12032) it is biggest-first, for the one staging buffer it now reuses. On a
+network file system read cold, the jumps either order makes cost the
+client's read-ahead. The tensors now come sorted by file and offset, one
+pass from the first byte to the last, and the staging buffer only grows, to
+the largest tensor: the peak upstream's first allocation had anyway,
+without a reallocation, and its page faults, at every size change.
 
-The tensors now come sorted by file and offset, one pass from the first
-byte to the last (before #31321 they came in the context's order, nearly
-the same), and the staging buffer only grows, to the largest tensor: the
-peak upstream's first allocation had anyway, without a reallocation, and its
-page faults, at every size change.
+Measured on LUMI-G (Lustre), cold loads with the node alone, 2-3 each
+(tools/lumi/campaigns/c16-load-order.json, 5-6 November 2026), median
+seconds for b11925 / b12032 / b12032 with this patch: Qwen3.8-27B Q8 on one
+GCD 130 / 95 / 44, Qwen3-32B split by tensor on four 101 / 107 / 31,
+Qwen3-235B Q8_0 on eight 686 / 652 / 261, Qwen3-Coder-480B 183 / 185 / 149;
+Qwen3-235B Q4_K_M on four and two of it loading together level (330 / 148 /
+184, 186 / 164 / 188), inside a spread of two to three times between
+trials. b11925 and b12032 load alike.
 
 EuLLM patch on llama.cpp b12032, after 0012 (which changes the same
 function).

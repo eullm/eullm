@@ -22,8 +22,9 @@ import sys
 import time
 
 
-def failed_points(queue: str, label: str) -> list:
-    """(time it failed, point) of every failed point of `label`, oldest first."""
+def failed_points(queue: str, label: str, group: str = "") -> list:
+    """(time it failed, point) of every failed point of `label` whose group
+    starts with `group`, oldest first."""
     d = os.path.join(queue, "failed")
     out = []
     for name in os.listdir(d) if os.path.isdir(d) else []:
@@ -35,7 +36,7 @@ def failed_points(queue: str, label: str) -> list:
                 p = json.load(f)
         except (OSError, ValueError):
             continue
-        if (p.get("engine_label") or "") == label:
+        if (p.get("engine_label") or "") == label and p.get("group", "").startswith(group):
             out.append((os.path.getmtime(path), p))
     return sorted(out, key=lambda tp: tp[0])
 
@@ -52,8 +53,9 @@ def describe(points: list, log_lines: int = 20, clusters: int = 4) -> list:
     lines = [f"{len(points)} failed"]
     for t, p in points:
         first = (last_note(p) or [""])[0][:90]
+        runtime = p.get("runtime") or "eullm"
         lines.append(f"{when(t)} {p.get('group', '?'):16} {p.get('model')} {p.get('kv', '')}"
-                     f" gcds {p.get('gcds')}: {first}")
+                     f" gcds {p.get('gcds')}{'' if runtime == 'eullm' else ' ' + runtime}: {first}")
     seen = []
     for t, p in points:
         key = (p.get("group"), when(t, "%d-%m %H"))
@@ -71,13 +73,15 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--queue", default=os.environ.get("CAMPAIGN_DIR"))
     ap.add_argument("--label", required=True)
+    ap.add_argument("--group", default="", help="only groups whose name starts with this")
     ap.add_argument("--log", type=int, default=20, help="lines of each note shown (20, 0 for none)")
     ap.add_argument("--clusters", type=int, default=4,
                     help="groups and hours whose note is shown, the latest (4)")
     args = ap.parse_args(argv)
     if not args.queue:
         ap.error("--queue, or CAMPAIGN_DIR in the environment")
-    for line in describe(failed_points(args.queue, args.label), args.log, args.clusters):
+    for line in describe(failed_points(args.queue, args.label, args.group), args.log,
+                         args.clusters):
         print(line)
     return 0
 
