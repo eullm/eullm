@@ -1029,3 +1029,25 @@ def test_store_gguf_reads_a_manifest_of_utf8_text(tmp_path, monkeypatch):
     monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "models"))
     # The sorted fallback would pick a.gguf: only the manifest names z\u00c1.gguf.
     assert point.store_gguf("m") == os.path.join(str(d), "z\u00c1.gguf")
+
+
+def test_sacct_is_read_as_utf8(monkeypatch):
+    """A job's name is whatever its user submitted: sacct's output is read as
+    UTF-8, not with the host locale, so a non-ASCII name is kept as written."""
+    import budget
+
+    class Out:
+        returncode = 0
+        stderr = ""
+        stdout = "1|citt\u00e0-job|standard-g|COMPLETED|3600|1|cpu=1,gpu=1\n"
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(budget.subprocess, "run", run)
+    [job] = budget.read_sacct("2026-09-02")
+    assert job["name"] == "citt\u00e0-job"
+    assert seen[0].get("encoding") == "utf-8"

@@ -192,7 +192,8 @@ def read_sacct(start: str, account=None) -> list:
     cmd = ["sacct", "-X", "-n", "-P", "-S", start, "-E", "now", "-o", SACCT_FIELDS]
     if account:
         cmd += ["-A", account, "--allusers"]
-    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    out = subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                         encoding="utf-8", errors="replace")
     if out.returncode != 0:
         raise RuntimeError(f"sacct failed: {out.stderr.strip()}")
     return parse_sacct(out.stdout)
