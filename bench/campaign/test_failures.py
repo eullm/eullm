@@ -62,3 +62,15 @@ def test_no_log_asked_shows_the_list_only(tmp_path, capsys):
     assert failures.main(["--queue", str(tmp_path), "--label", "v087", "--log", "0"]) == 0
     out = capsys.readouterr().out.splitlines()
     assert len(out) == 2 and not any(line.startswith("---") for line in out)
+
+
+def test_a_group_and_the_runtime_are_named(tmp_path, capsys):
+    """The c07 points compare runtimes: which one failed is the first question."""
+    fail(tmp_path, "a", time.time(), engine_label="v087", group="rt-throughput", model="m",
+         runtime="ollama", notes=["PointError: stopped after 3600 s"])
+    fail(tmp_path, "b", time.time(), engine_label="v087", group="ram-671b", model="d",
+         notes=["PointError: stopped after 10800 s"])
+    assert failures.main(["--queue", str(tmp_path), "--label", "v087", "--group", "rt-",
+                          "--log", "0"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "1 failed" and "gcds None ollama: PointError" in out[1]

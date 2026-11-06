@@ -25,6 +25,9 @@ something changed, less so for understanding what it means.
 ### Changed
 - **`eullm import-ollama` is gone.** Models come from the catalog, from Hugging Face (`hf.co/OWNER/REPO`), from a URL, or from any folder of GGUF files (`EULLM_MODEL_LIBRARIES`, which uses an LM Studio or Hugging Face folder where it is). Models imported with it before keep working.
 
+### Performance
+- **A model loaded without mmap is read from its file in one pass**, the tensors in the order they lie on disk, instead of the order llama.cpp creates them (0.8.5 and earlier) or largest first (0.8.6 and 0.8.7). It matters where the engine reads a model whole rather than mapping it, as it does from a network file system: on LUMI-G's Lustre, read cold, Qwen3.8-27B Q8 loaded on one GPU in 44 s instead of 95-130, Qwen3-32B split by tensor over four in 31 s instead of 101-107, and Qwen3-235B Q8_0 over eight in 261 s instead of 650-690; Qwen3-235B Q4_K_M loaded no faster.
+
 ## 0.8.7 — 2026-11-02
 
 ### Fixed
