@@ -243,7 +243,7 @@ def main():
     args = parser.parse_args()
 
     url = args.url.rstrip("/") + "/v1/systemone"
-    with open(args.dataset) as f:
+    with open(args.dataset, encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
     if len(rows) < FOLDS * 2:
         print(

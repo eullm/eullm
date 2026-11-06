@@ -1051,3 +1051,25 @@ def test_smi_output_is_decoded_as_utf8(monkeypatch):
     assert devices.read_smi("cuda") == {
         "0": {"used": 100 * 2**20, "total": 1000 * 2**20, "use": 50}}
     assert seen[0].get("encoding") == "utf-8"
+
+
+def test_sacct_is_read_as_utf8(monkeypatch):
+    """A job's name is whatever its user submitted: sacct's output is read as
+    UTF-8, not with the host locale, so a non-ASCII name is kept as written."""
+    import budget
+
+    class Out:
+        returncode = 0
+        stderr = ""
+        stdout = "1|citt\u00e0-job|standard-g|COMPLETED|3600|1|cpu=1,gpu=1\n"
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(budget.subprocess, "run", run)
+    [job] = budget.read_sacct("2026-09-02")
+    assert job["name"] == "citt\u00e0-job"
+    assert seen[0].get("encoding") == "utf-8"
