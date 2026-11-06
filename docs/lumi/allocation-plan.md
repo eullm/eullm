@@ -872,6 +872,17 @@ same 0.5 per GCD-hour, `--mem=60G` to bill one GCD), and no helper job goes to
 `debug` again, as 23253738 did on 28-10 to release `r-v0794`'s held chains
 after `c14`: chains follow each other by dependency (`AFTER`) instead.
 
+05-11-2026, evening, for a day without anyone at the terminal (06-11): the
+two-day soaks of `c12` (`days-*`, eight points of one GCD, 44 to 46 hours)
+planned for 0.8.7 under a label of their own, `v087-days`, round `r-v087`,
+and submitted as one 48-hour job, 23497732, which started at 18:50 on
+nid006141. The block was run a second time on 06-11 at 20:09 and submitted
+23526305 as well, with nothing left for it to run: cancelled. That evening:
+`r-v087` 807 points done, 4 waiting (the long soaks), 9 running (the eight
+two-day soaks and one long one, 23439625 from 19:23), 23 failed; `c16` done,
+48 points of 48. Left 2,778 node-hours, 22.6 a day to 09-03-2027, 317 ahead
+of the straight line (12.6 days); the last 7 days at 27.0 a day.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
