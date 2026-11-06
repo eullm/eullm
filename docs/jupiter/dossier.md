@@ -425,6 +425,41 @@ JUPITER, named by its Slurm job id.
   "tensors on two devices": the parts outside the layers had been mapped
   tensor by tensor, which leaves accelerate no module to move inputs into.
   They are now mapped as whole modules, as "auto" maps them.
+* **06-11, E1-mini on the closed book** (716 questions, GGUF Q4_K_M,
+  scored by program; share right by kind):
+
+  | | right | denies real | real recognised | number from heading | heading from number | deadline | penalty | made-up article denied | made-up ruling not confirmed |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 (start) | 206 | 51% | 0% | 3% | 5% | 13% | 12% | 100% | 90% |
+  | e1-g9 (r64, 3 epochs) | 167 | 8% | 15% | 0% | 21% | 16% | 33% | 63% | 0% |
+  | e1-g9-e5 (5 epochs) | 167 | 15% | 15% | 3% | 22% | 21% | 21% | 67% | 5% |
+  | e1-g9-lr3 (lr 3e-4) | 182 | 17% | 17% | 0% | 41% | 22% | 38% | 66% | 0% |
+  | e1-g9-r256 (rank 256) | 218 | 5% | 28% | 0% | 35% | 26% | 46% | 74% | 2% |
+  | g4-r3 (start) | 91 | 19% | 3% | 2% | 5% | 15% | 17% | 44% | 5% |
+  | e1-g4 | 151 | 36% | 1% | 0% | 14% | 13% | 38% | 68% | 0% |
+  | e1-g4-e5 | 167 | 26% | 7% | 1% | 21% | 13% | 38% | 60% | 0% |
+
+  Knowledge went in, through LoRA alone. On the roadmap's measure (real
+  articles recognised and number and heading, the denials left out) the
+  9B's average goes from 2.7% to 21.0% with rank 256 (+18.3 points) and
+  19.3% with lr 3e-4 (+16.7): both pass the +15 of the stop rule; deadlines
+  and penalties rise too (13 to 26%, 12 to 46%). The "non esiste" reflex is
+  gone (denials of real articles 51% to 5%). Three things against it, to
+  weigh before going on: (1) the heading is learnt from the number but not
+  the number from the heading (0-3% everywhere: the reversal curse; the
+  corpus states the pair in one direction); (2) made-up articles are now
+  confirmed a quarter to a third of the time, and made-up rulings almost
+  always (90% refused before, 0-5% after): what GRPO taught is lost, the
+  replay held the post-training pairs but not GRPO's behaviour; (3)
+  procedibility rises to 60-80% only by answering "querela", which 92% of
+  the items want. The open-book sets and the regression decide the rest.
+* Flash-Next learns through its n-gram table alone (2705520): one batch of
+  1,024 tokens of legislation, everything frozen but the table, plain SGD
+  on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,
+  0.286, 0.177, 0.145 in eight steps, 28 s a step, 59-62 GiB peak a GPU.
+  The memory fits one node; the speed (~36 tokens a second) is far from a
+  run on the corpus (17 M tokens), so the next probe measures larger
+  batches. Its open-book exam (2698994) is with the judge.
 * 05-11: JUPITER in maintenance all day (5,196 Booster nodes "maint",
   677 drained, 8 down at 17:30); only a one-hour job of ours ran. Slurm
   expects the queue to move from 03:00 on 06-11.
