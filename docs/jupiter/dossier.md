@@ -480,6 +480,39 @@ JUPITER, named by its Slurm job id.
   on top of e1-g9-r256 (g9e-r1, the round that taught the traps) is
   queued, and so are rank 256 with lr 3e-4 together and, against the
   reversal curse, four heading-first statements an article.
+* **07-08 Nov, the weekend idle.** The 26 jobs queued on Friday evening as
+  covering the weekend all ended well by 23:22 the same evening: their
+  coverage had been reckoned from their time limits, not from what they
+  take. Measured here: an E1-mini training 1 h 45 min to 2 h, a GRPO round
+  of 300 steps 1 h 50 min, a GGUF 5 min, the closed book 3 min, seven
+  open-book sets 25 min, the regression 3 min, five bf16 sets 40 min, a
+  judge 10-30 min. Coverage is reckoned from these from now on.
+* **Second E1 batch and the first GRPO on top** (closed book by program;
+  open book by the judge, GGUF Q4 unless said):
+
+  | | closed right | real recognised | number from heading | heading from number | deadline | penalty | made-up article denied | made-up ruling refused | held-out | devbig | practical | rewritten traps | LexIA | GSM8K / ARC-E / ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | g9r-r2 | 206 | 0% | 3% | 5% | 13% | 12% | 100% | 90% | 197 + 4 | 438 + 11 | 76 + 19 | 975 | 12 | 353 / 361 / 326 |
+  | e1-g9-rl (rank 256, lr 3e-4) | **276** | **43%** | 6% | **49%** | **31%** | 33% | 89% | 0% | 183 + 4 | 397 + 14 | 67 + 14 | 940 | 14 | 342 / 355 / 341 |
+  | e1-g9-rev (rank 256, heading first) | 207 | 18% | 6% | 37% | 13% | 29% | 86% | 0% | 176 + 4 | 413 + 18 | 65 + 14 | 945 | 13 | 348 / 378 / 355 |
+  | g9e-r1 (GRPO on e1-g9-r256, bf16) | | | | | | | | | 193 + 2 | | 69 + 18 | 925 | **17** | |
+  | e1-g4-rl | 250 | 2% | 2% | 50% | 24% | 50% | 98% | 12% | 172 + 7 | 383 + 20 | 68 + 15 | 915 | 14 | **262 / 244 / 241** |
+
+  Rank 256 with lr 3e-4 puts the most in: the roadmap's measure from 2.7%
+  to 32.7% (+30 points), made-up articles still denied 89% of the time.
+  The heading-first statements did not undo the reversal curse (number
+  from heading 0 to 6%, the same 6% the plain rank-256-lr-3e-4 run
+  reached). GRPO on top gives back part of what the memory cost: the
+  rewritten traps from 890 to 925 (975 before), the held-out exam from 186
+  to 193, LexIA 17, the best yet; the practical exam stays low. The 4B
+  does not take lr 3e-4: its general abilities collapse (GSM8K 336 to
+  262, ARC-C 348 to 241), as the five-epoch 4B's ARC did. Flash-Next with
+  four times the batch: 4,096 tokens in ~90 s a step against 1,024 in
+  28 s, ~45 tokens a second, days an epoch of the corpus through
+  transformers; it stays a teacher and a judge for now.
+  Next: two GRPO lines of three rounds, from g9e-r1 and from e1-g9-rl,
+  each round measured as shipped; and e1-g9-rl at five epochs with two
+  GRPO rounds on it.
 * Flash-Next learns through its n-gram table alone (2705520): one batch of
   1,024 tokens of legislation, everything frozen but the table, plain SGD
   on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,

@@ -11,7 +11,9 @@
 #
 # MC_PREPARE_ARGS / MC_TRAIN_ARGS reach the training (memory_cpt.py prepare /
 # train); MR_LINKS training links (default 2) of MR_LINK_H hours (default 6);
-# MR_AFTER a job the first link waits for. Nothing is submitted when a check
+# MR_AFTER a job the first link waits for. MR_LINKS=0 measures a model made
+# elsewhere: no training, its merged directory MR_SFT/NAME/merged (MR_SFT
+# default runs/memory; runs/grpo for a GRPO round, MR_AFTER its last link). Nothing is submitted when a check
 # fails, or when the round is already queued. The last line printed is
 # "OPEN <job>", the open-book evaluation, for the judge to wait on.
 
@@ -25,7 +27,8 @@ REPO="$(cd "$HERE/../../.." && pwd)"
 NAME="${1:?usage: submit_memory_round.sh NAME MODEL}"
 MODEL="${2:?usage: submit_memory_round.sh NAME MODEL}"
 R="$FORGE_RUN_DIR" D="$FORGE_DATA_DIR" P="${FORGE_PRIVATE_EVAL:-$FORGE_HOME/private-eval}"
-G="$R/gguf" OUT="$R/memory/$NAME" LOGS="$R/logs" S=forge/scripts/jupiter
+SFT="${MR_SFT:-$R/memory}"
+G="$R/gguf" OUT="$SFT/$NAME" LOGS="$R/logs" S=forge/scripts/jupiter
 bad=0
 [ -f "$MODEL/config.json" ] || [ -n "${MR_AFTER:-}" ] || { echo "[!!] no model at $MODEL"; bad=1; }
 for f in "$D/memory/general-it.jsonl" "$D/openbook/pairs.jsonl" "$D/eval/leonardo/closed-book.jsonl" \
@@ -42,13 +45,13 @@ cd "$REPO" || exit 1
 sub() { local id; id=$(sbatch_retry --parsable --account "$SBATCH_ACCOUNT" "$@") || exit 1; echo "${id%%;*}"; }
 
 prev="${MR_AFTER:-}"
-for i in $(seq 1 "${MR_LINKS:-2}"); do
+for i in $(seq 1 "${MR_LINKS:-2}"); do     # none with MR_LINKS=0
     prev=$(MC_MODEL="$MODEL" MC_OUT="$OUT" sub --job-name="forge-mem-$NAME" \
         --time="${MR_LINK_H:-6}:00:00" ${prev:+--dependency=afterany:$prev} \
         --output="$LOGS/memory-cpt-%j.out" $S/sbatch_memory_cpt.slurm) || exit 1
     echo "[ok] training link $i: $prev"
 done
-v=$(VERT_SFT="$R/memory" VERT_ARMS="$NAME" sub --time=04:00:00 --dependency="afterany:$prev" \
+v=$(VERT_SFT="$SFT" VERT_ARMS="$NAME" sub --time=04:00:00 ${prev:+--dependency=afterany:$prev} \
     --output="$LOGS/vertical-%j.out" $S/sbatch_vertical.slurm) || exit 1
 M="$NAME=$OUT/merged=$G/$NAME/$NAME-q4_k_m.gguf"
 cb=$(PE_MODELS="$M" PE_CLOSED=1 PE_SETS="closed-book=$D/eval/leonardo/closed-book.jsonl" \

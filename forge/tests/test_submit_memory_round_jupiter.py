@@ -52,7 +52,7 @@ echo "$n"
            "PROJECT": project.as_posix(), "USER": "tester", "SLURM_JOB_ID": "",
            "MC_PREPARE_ARGS": "--epochs 5"}
     for k in ("FORGE_HOME", "FORGE_VENV", "FORGE_DATA_DIR", "FORGE_RUN_DIR", "FORGE_EXTRA_LIBS",
-              "FORGE_PRIVATE_EVAL", "LMOD_CMD", "MR_AFTER", "MR_LINKS", "PE_CLOSED"):
+              "FORGE_PRIVATE_EVAL", "LMOD_CMD", "MR_AFTER", "MR_LINKS", "MR_SFT", "PE_CLOSED"):
         env.pop(k, None)
     return env, runs, log, queue
 
@@ -79,3 +79,15 @@ def test_a_round_is_queued_in_order_and_once(tmp_path):
     p = subprocess.run(run, env=env, capture_output=True, text=True, timeout=60)
     assert p.returncode == 0 and "already queued" in p.stdout
     assert len(log.read_text().splitlines()) == 6
+
+
+def test_a_model_made_elsewhere_is_measured_without_training(tmp_path):
+    env, runs, log, _ = _setup(tmp_path)
+    env.update({"MR_LINKS": "0", "MR_SFT": str(runs / "grpo"), "MR_AFTER": "555"})
+    p = subprocess.run(["bash", str(SCRIPT), "g9e-r2", str(runs / "grpo" / "g9e-r2" / "merged")],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    vert, closed, open_, reg = log.read_text().splitlines()
+    assert "--dependency=afterany:555" in vert and "ARMS=g9e-r2" in vert
+    assert str(runs / "grpo" / "g9e-r2" / "merged") in closed
+    assert "--dependency=afterany:100" in open_ and "RG=g9e-r2=" in reg
