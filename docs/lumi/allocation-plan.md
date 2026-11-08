@@ -928,6 +928,13 @@ inference), on the campaigns where loading weighs: `c02`, `c07` (whose
 `moe-235b-soak-x2`) and without `ram-671b` and `ram-prompt`, which run into
 their time limit or time out in every round and wait for a fix rather than
 another try.
+Submitted the same afternoon: `eullm 0.8.8 (ROCm) [d47b3fb3736a]`, the
+tag's commit; 376 points planned, 25 set aside (the soaks and `ram-671b`,
+`ram-prompt`), all 351 others timed from earlier runs; two chains of 9 jobs
+of 4 hours, 23538238 at once and 23538229 after 23439628, the long soaks'
+job running from 11:38 (its successor 23439629 holds the last of them). The
+queue lasts to about 10-11-2026 in the morning: the next work goes in
+before then.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
