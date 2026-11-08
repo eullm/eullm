@@ -915,6 +915,20 @@ on 04-11, plus three earlier with Ollama's "timed out waiting for
 llama-server to start". Which runtime the twelve ran is not in the list:
 `failures.py` now names it (`--group rt-` to see them alone).
 
+08-11-2026: the queue ran out. The two-day soaks ended on 07-11 in the
+evening and the long soaks' chain around midday on 08-11 (one job left
+running at 13:13, 2.1 node-hours that day by then); the 0.8.8 load checks
+promised for after the soaks had not been queued. The week before: 33.3
+node-hours a day, 2,764 left, 289 ahead of the straight line (11.5 days).
+Queued that afternoon: `r-v088`, the release 0.8.8 (patch `0014`'s
+file-order loads, the help, `.env` read for every setting; no change to
+inference), on the campaigns where loading weighs: `c02`, `c07` (whose
+`rt-*` points failed on `v087`), `c09`, `c10`, `c11`, `c16`, in two chains of
+4-hour jobs, without the points no 4-hour job holds (`moe-soak`,
+`moe-235b-soak-x2`) and without `ram-671b` and `ram-prompt`, which run into
+their time limit or time out in every round and wait for a fix rather than
+another try.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
