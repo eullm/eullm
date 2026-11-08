@@ -173,3 +173,36 @@ def test_clipping_keeps_the_resume_exact(tiny_dir, data, tmp_path):
     b = NGramMemory.load(tmp_path / "two" / "ckpt" / "memory").state_dict()
     for k in a:
         assert torch.equal(a[k], b[k]), k
+
+
+def test_replay_pairs_render_in_the_chat_format_and_train(tiny_dir, data, tmp_path):
+    from transformers import AutoTokenizer
+
+    from eullm_forge.identity import CHATML_TEMPLATE
+
+    tok = AutoTokenizer.from_pretrained(tiny_dir)
+    tok.chat_template = CHATML_TEMPLATE
+    model_dir = tmp_path / "tpl"
+    tok.save_pretrained(model_dir)
+    for f in tiny_dir.iterdir():
+        if f.name.startswith(("config", "model", "generation")):
+            (model_dir / f.name).write_bytes(f.read_bytes())
+    pairs = tmp_path / "pairs.jsonl"
+    pairs.write_text("\n".join(json.dumps({"instruction": f"articolo comma {i}",
+                                           "output": "legge decreto", "task": "x"})
+                               for i in range(20)) + "\n")
+    spec = importlib.util.spec_from_file_location(
+        "render_pairs_text", SCRIPT.parent / "render_pairs_text.py")
+    rp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rp)
+    out = tmp_path / "replay.jsonl"
+    assert rp.main(["--model", str(model_dir), "--pairs", str(pairs), "--out", str(out)]) == 0
+    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    assert len(rows) == 20
+    assert rows[0]["text"].startswith("<|im_start|>user\narticolo comma 0<|im_end|>")
+    assert "<|im_start|>assistant\nlegge decreto<|im_end|>" in rows[0]["text"]
+    pytest.importorskip("peft")
+    args = ["--model", str(model_dir), "--data", str(data), str(out), "--out",
+            str(tmp_path / "run"), "--mode", "lora", "--lora-params", "2000", "--seq-len", "16",
+            "--batch", "4", "--max-steps", "2", "--lr", "1e-4"]
+    assert nt.main(args) == 0

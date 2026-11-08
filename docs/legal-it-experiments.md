@@ -817,3 +817,52 @@ Flash-Next is the one model here that has such a table
 size is confounded with it; the evidence is the same suite with its n-gram
 layer switched off (the first measurement listed in that document), and
 A2-mini's gate on the 8B.
+
+## 15. 2026-11-08: the gate of A2-mini — the n-gram memory loses to its LoRA control
+
+Line A of the Fast Lane (`docs/cineca/fastlane-plan.md`), experiment E2-mini
+of `docs/research/legal-memory-plan.md`. The frozen model plus a hashed
+n-gram memory of 0.42 B parameters (`forge/scripts/ngram_train.py`), against
+a LoRA of the same size on the same 67 M tokens of the memory corpus
+(program rows and teacher rewrites of the articles), same order, 3 epochs.
+The first LoRA (lr 1e-3) diverged to NaN and answered nothing; the one
+below is lr 1e-4 with gradient clipping.
+
+**Closed book** (716 questions, `score_closed_book.py`):
+
+| model | right | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | proc | sent? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| r2l | 215 (30%) | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 88% | 100% |
+| r2l + memory, seed 0 | 127 (18%) | 9% | 11% | 25% | 6% | 21% | 19% | 42% | 40% | 38% |
+| r2l + memory, seed 1 | 132 (18%) | 10% | 12% | 14% | 6% | 27% | 15% | 25% | 16% | 78% |
+| r2l + memory after layer 0 | 143 (20%) | 2% | 15% | 28% | 5% | 17% | 18% | 38% | 12% | 70% |
+| r2l + memory ×4 (1.64 B) | 143 (20%) | 11% | 9% | 41% | 4% | 21% | 20% | 50% | 0% | 15% |
+| **r2l + LoRA control** | **259 (36%)** | 51% | 0% | 100% | **19%** | **48%** | **34%** | **67%** | 32% | 5% |
+| Qwen3-30B-A3B | 166 (23%) | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 16% | 10% |
+| Qwen3-30B-A3B + memory | 136 (19%) | 17% | 12% | 71% | 2% | 9% | 11% | 12% | 0% | 8% |
+
+**Open book** (`norm-exam-v2`, 231 questions, judge, counts only): r2l 159;
+r2l + memory 149 (10:20, p = 0.10, no difference shown); **r2l + LoRA 102
+(9:66, p < 0.001, worse)**; Qwen3-30B-A3B 170, + memory 129 (12:42,
+p < 0.001, worse).
+
+**The gate is not passed.** On every column that asks for the content of an
+article the LoRA control learnt far more than the memory: heading from
+number 48% against 21-27%, penalties 67% against 25-50%, terms 34% against
+15-20%, number from heading 19% against 4-6%. A table four times larger or
+read at layer 0 does not close the gap. On the MoE the memory adds almost
+nothing and costs 41 open-book answers.
+
+**What the memory does do** is keep the open book: r2l loses 10 answers
+with it (not significant), 57 with the LoRA. The LoRA bought its knowledge
+by forgetting how to answer from texts (and by a new reflex: it denies 51%
+of real articles and calls every article asked about nonexistent), which is
+what continued pretraining on raw text without replay does.
+
+**What follows.** As the plan states, line A as an n-gram table stops here;
+the 7,000 hours of A3 go elsewhere. The finding worth keeping is the
+control's: **a LoRA trained on the rewritten articles gives an 8B more
+statute knowledge with no text (259, 36%) than any model measured,
+Flash-Next's 247 included**. The question it opens is E1 of the memory plan:
+the same continued pretraining *with replay* of the open-book data, to keep
+both.
