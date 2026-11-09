@@ -7,7 +7,8 @@
     "expert cache against --cpu-moe against the engine's own choice (c10's comparison for the",
     "235B); on 2, 4 and 8 GCDs as the engine places it; at 1, 8 and 32 requests. Then 300 gsm8k",
     "questions at temperature 0 on four GCDs, and a soak of two to three hours at 16 requests.",
-    "Queued on 09-11-2026 on 0.8.8 (label v088), ahead of the rest of that release's round."
+    "Queued on 09-11-2026 on 0.8.8 (label v088), ahead of the rest of that release's round.",
+    "dsv4-soak-long: four soaks of six to seven hours on four GCDs each, two to a node, the sparse attention b12032 enabled on CDNA run for hours; under their own label (v088-long) in 8-hour jobs that start when the 4-hour chains end, so the queue does not run dry overnight (09-11-2026)."
   ],
   "pull": [
     "hf.co/unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q4_K_XL"
@@ -106,6 +107,39 @@
         "env": {
           "RUST_LOG": "eullm=info,llama-cpp-2=info"
         }
+      }
+    },
+    {
+      "name": "dsv4-soak-long",
+      "priority": 126,
+      "set": {
+        "kind": "workload",
+        "gcds": 4,
+        "exclusive": false,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 21600,
+        "max_duration_s": 26400,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      },
+      "axes": {
+        "batch": [
+          8,
+          32
+        ],
+        "kv": [
+          "f16/f16",
+          "q8_0/q8_0"
+        ]
       }
     }
   ]
