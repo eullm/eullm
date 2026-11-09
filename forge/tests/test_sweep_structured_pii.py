@@ -334,3 +334,27 @@ def test_cli_rejects_an_unknown_layer(tmp_path):
 
     with pytest.raises(SystemExit):
         mod.main([str(src), "--layers", "cf,nomi"])
+
+
+def test_star_field_scans_every_field_and_only_reports(tmp_path):
+    import json as _json
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    script = _Path(__file__).resolve().parents[1] / "scripts" / "sweep_structured_pii.py"
+    f = tmp_path / "cards.jsonl"
+    rows = [{"massima": "Il ricorrente, mario.rossi@example.com, propone ricorso."},
+            {"massima": "Nessun dato."}]
+    f.write_text("".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    before = f.read_text()
+    p = subprocess.run([_sys.executable, str(script), str(f), "--field", "*", "--quiet"],
+                       capture_output=True, text=True)
+    assert p.returncode == 1 and "1 record" in p.stdout
+    assert f.read_text() == before                          # nothing rewritten
+    p = subprocess.run([_sys.executable, str(script), str(f), "--field", "text", "--quiet"],
+                       capture_output=True, text=True)
+    assert p.returncode == 0                                # 'text' alone misses it
+    p = subprocess.run([_sys.executable, str(script), str(f), "--field", "*", "--apply"],
+                       capture_output=True, text=True)
+    assert p.returncode != 0

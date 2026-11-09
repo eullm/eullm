@@ -1504,6 +1504,16 @@ figures below with the site's energy mix.
   and the transfer starts without waiting for a reply. Before upload every
   text file passes the structured-identifier check (`sweep_structured_pii.py`,
   report only, nothing found), as the checklist declared.
+* **What comes from Leonardo (09-11-2026):** the ruling summaries
+  rewritten (`principi*.jsonl`, 1.3 GB), the ruling cards (`cds` 0.2 GB,
+  `cass` 1.8 GB), the pseudonymised decisions as training sets
+  (`legal_it` 2.9 GB, `legal_it_amm` 1.0 GB), the 30B teacher's continued
+  pretraining adapter on the decisions (0.4 GB) and the jpn14 and jpn17
+  adapters; not the evaluation answers on the decisions (`eval/cds`,
+  `eval/cass`, 11.7 GB). Every JSONL file is checked on Leonardo before it
+  leaves, every field of every line (`sweep_structured_pii.py --field '*'`,
+  report only): a file with a hit is not sent. Into
+  `$PROJECT/$USER/forge/caselaw/`, readable by the user alone.
 * **Until the addendum was signed and returned** JUPITER held legislation (Normattiva,
   EUR-Lex: public), public benchmarks, synthetic pairs generated from them
   and ruling summaries that carry nothing of the case, and no court
