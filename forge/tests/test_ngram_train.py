@@ -206,3 +206,11 @@ def test_replay_pairs_render_in_the_chat_format_and_train(tiny_dir, data, tmp_pa
             str(tmp_path / "run"), "--mode", "lora", "--lora-params", "2000", "--seq-len", "16",
             "--batch", "4", "--max-steps", "2", "--lr", "1e-4"]
     assert nt.main(args) == 0
+
+
+def test_a_given_lora_rank_is_used_as_given(tiny_dir, data, tmp_path):
+    pytest.importorskip("peft")
+    out = tmp_path / "run"
+    run(tiny_dir, data, out, "--mode", "lora", "--lora-rank", "3", "--max-steps", "1")
+    cfg = json.loads((out / "ckpt" / "adapter" / "adapter_config.json").read_text())
+    assert cfg["r"] == 3

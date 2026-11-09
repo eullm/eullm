@@ -167,6 +167,9 @@ def main(argv=None) -> int:
     ap.add_argument("--embed-dim", type=int, default=1024)
     ap.add_argument("--heads-per-ngram", type=int, default=8)
     ap.add_argument("--conv-kernel", type=int, default=4)
+    ap.add_argument("--lora-rank", type=int, default=0,
+                    help="LoRA rank as given, instead of sized to --lora-params: a MoE's "
+                         "fused experts take LoRA too, which the sizing does not count")
     ap.add_argument("--lora-params", type=int, default=0,
                     help="LoRA size to match (default: the n-gram memory these options build)")
     ap.add_argument("--seq-len", type=int, default=1024)
@@ -244,7 +247,7 @@ def main(argv=None) -> int:
             model = PeftModel.from_pretrained(model, ckpt / "adapter", is_trainable=True)
         else:
             targets = lora_target_modules(model)
-            rank = lora_rank_for(model, target, targets)
+            rank = a.lora_rank or lora_rank_for(model, target, targets)
             model = get_peft_model(model, LoraConfig(r=rank, lora_alpha=rank,
                                                      target_modules=targets,
                                                      lora_dropout=0.0, task_type="CAUSAL_LM"))
