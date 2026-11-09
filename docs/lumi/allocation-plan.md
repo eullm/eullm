@@ -948,6 +948,16 @@ first; then the rest of 0.8.8's round (`c01`, `c03`, `c06`, `c08`, `c13`), so
 that 0.8.8 has a whole round as 0.8.7 does, without `soak-node`, which no
 4-hour job holds. From now on every submission says how long the queue
 lasts, and the next work is queued a day before it ends.
+Submitted: `r-v088` had ended with 350 points done and one failed (the
+`rt-*` failures of `v087` did not come back); 495 points planned now, 3
+set aside (`soak-node`), 472 timed from earlier runs; two chains of 8 jobs
+of 4 hours, 23577110 to 23577117 and 23577118 to 23577125. At `r-v088`'s
+rate, half its estimate, they end on 10-11 between morning and midday; so
+behind them, by dependency (`afterany:23577117:23577125`), a chain of
+8-hour jobs under the label `v088-long`: `c17`'s `dsv4-soak-long`, four
+soaks of six to seven hours of DeepSeek-V4-Flash on four GCDs each, two to
+a node, about sixteen hours of one node, to 11-11 in the morning. GLM-5
+is prepared on 10-11 to follow.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
