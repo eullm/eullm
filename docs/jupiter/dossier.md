@@ -536,6 +536,15 @@ JUPITER, named by its Slurm job id.
   hold only 10 about rulings (premessa_sentenza 7, _vera 3) of 2,184. The
   4B takes rank 256 at lr 1e-4 without falling apart but gains only +9
   on the measure.
+
+  General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
+  326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
+  line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
+  lr 3e-4 break them and GRPO does not mend it (e1-g9-rl5 294 / 259 / 206,
+  g9el5-r3 293 / 266 / 214), so that line is closed, LexIA 7 with it.
+  The 4B line loses ARC-C (348 to 315-324). The 9B candidate from memory
+  is g9el-r3: a third of the closed book, open book above g9r-r2, 12 GSM8K
+  questions and 36 rewritten traps below it.
 * Flash-Next learns through its n-gram table alone (2705520): one batch of
   1,024 tokens of legislation, everything frozen but the table, plain SGD
   on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,
