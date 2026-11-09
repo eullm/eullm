@@ -1464,9 +1464,15 @@ figures below with the site's energy mix.
   be stored or processed on JUPITER; the data are encrypted in transfer to
   and from JSC (SSH, rsync and scp over SSH; UFTP only with its data
   channel encrypted); and they are kept only as long as processing them
-  requires and deleted immediately afterwards, not only at the end of the
-  project. The PI and every project member are responsible for it.
-* **Until the addendum is signed and returned** JUPITER holds legislation (Normattiva,
+  requires and deleted immediately afterwards. The PI and every project
+  member are responsible for it. The PI's reading of the retention clause
+  (09-11-2026): the data stay on JUPITER as long as the project still needs
+  to process them, across runs, and are deleted once it no longer does,
+  at the end of the project at the latest; the signed amendment is sent
+  and the transfer starts without waiting for a reply. Before upload every
+  text file passes the structured-identifier check (`sweep_structured_pii.py`,
+  report only, nothing found), as the checklist declared.
+* **Until the addendum was signed and returned** JUPITER held legislation (Normattiva,
   EUR-Lex: public), public benchmarks, synthetic pairs generated from them
   and ruling summaries that carry nothing of the case, and no court
   decision is uploaded. The teacher on JUPITER is accordingly the Base
