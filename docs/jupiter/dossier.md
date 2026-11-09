@@ -1514,6 +1514,18 @@ figures below with the site's energy mix.
   leaves, every field of every line (`sweep_structured_pii.py --field '*'`,
   report only): a file with a hit is not sent. Into
   `$PROJECT/$USER/forge/caselaw/`, readable by the user alone.
+* **The check before the transfer (09-11-2026)** found 25 tax codes in 23
+  records of `legal_it/train.jsonl`, which the pseudonymisation had let
+  through; the other 18 files were clean, and nothing was sent. A copy was
+  corrected on Leonardo (`--apply`: each code replaced by
+  `[CODICE_FISCALE]`, the backup with the originals deleted at once),
+  checked again on every field (nothing found), and that copy is what
+  went. The original on Leonardo, on which the 30B's continued
+  pretraining of September was trained, still holds them: left to the
+  PI. The rejects files of the cards (nine, 9-27 KB) went with the rest
+  through a filter of ours in the wrong order without having been checked;
+  checked afterwards on every field, all nine clean, and deleted on
+  JUPITER since nothing needs them.
 * **Until the addendum was signed and returned** JUPITER held legislation (Normattiva,
   EUR-Lex: public), public benchmarks, synthetic pairs generated from them
   and ruling summaries that carry nothing of the case, and no court
