@@ -513,6 +513,29 @@ JUPITER, named by its Slurm job id.
   Next: two GRPO lines of three rounds, from g9e-r1 and from e1-g9-rl,
   each round measured as shipped; and e1-g9-rl at five epochs with two
   GRPO rounds on it.
+* **08-11, GRPO on top of E1** (47.5 node-hours that day). Three lines of
+  rounds, each round as shipped (GGUF Q4_K_M, engine; closed book by
+  program, the rest by the judge). "Measure" is the roadmap's: real
+  articles recognised and number and heading, the denials left out.
+
+  | | measure | made-up ruling refused | held-out (217) | devbig (472) | practical (145) | practical held-out (70) | traps (390) | rewritten traps (1050) | LexIA (36) |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 | 2.7% | 90% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 383 | 975 | 12 |
+  | g9e-r1 / r2 / r3 (on e1-g9-r256) | 19.0 / 18.0 / 19.3% | 5 / 0 / 0% | 193 / 194 / 195 | 442 / 440 / 442 | 68 / 69 / 71 + 21 | 39 / 38 / 40 | 380 / 382 / 381 | 913 / 924 / 927 | 14 / 13 / 14 |
+  | g9el-r1 / r2 / r3 (on e1-g9-rl) | 33.0 / 31.3 / 33.0% | 0 / 0 / 5% | 201 / 203 / 203 | 433 / 443 / 441 | 69 / 70 / 63 | 40 / 41 / 41 | 383 / 384 / 383 | 920 / 929 / 939 | 14 / 13 / 13 |
+  | g9el5-r1 / r2 / r3 (on e1-g9-rl5) | 34.0 / 30.0 / 34.3% | 2 / 5 / 8% | 197 / 199 / 204 | 437 / 443 / 440 | 64 / 65 / 63 + 20 | 40 / 43 / 43 | 387 | 928 / 938 / 939 | |
+  | g4e-r1 / r2 (on e1-g4-r256) | 12.0 / 10.7% | 2 / 0% | 196 / 199 | 438 / 441 | 68 / 65 | 44 / 44 | 381 / 383 | 955 / 954 | 14 / 16 |
+
+  Memory then behaviour works for the open book: g9el-r2 keeps a third of
+  the closed book (31% against 3%) and answers the held-out exam and devbig
+  better than the candidate (203 + 3 and 443 + 9 against 197 + 4 and
+  438 + 11), the traps level or better. Two things are not back: the
+  rewritten traps climb ~10 a round (920, 929, 939) but stay 36 under
+  g9r-r2, and made-up rulings are refused 0-8% of the time against 90%;
+  the practical exam is 6 under (70 + 18 against 76 + 19). GRPO's prompts
+  hold only 10 about rulings (premessa_sentenza 7, _vera 3) of 2,184. The
+  4B takes rank 256 at lr 1e-4 without falling apart but gains only +9
+  on the measure.
 * Flash-Next learns through its n-gram table alone (2705520): one batch of
   1,024 tokens of legislation, everything frozen but the table, plain SGD
   on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,
