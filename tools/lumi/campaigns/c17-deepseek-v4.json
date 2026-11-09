@@ -1,0 +1,112 @@
+{
+  "campaign": "c17-deepseek-v4",
+  "notes": [
+    "DeepSeek-V4-Flash (0731, 284B, 13B active, architecture deepseek4, MIT), unsloth's UD-Q4_K_XL",
+    "(155 GB, 145 GiB), the first DeepSeek 4 model measured here beyond c15's check of b12032's",
+    "sparse attention. Where it runs and how fast: on one GCD with most experts in RAM, the",
+    "expert cache against --cpu-moe against the engine's own choice (c10's comparison for the",
+    "235B); on 2, 4 and 8 GCDs as the engine places it; at 1, 8 and 32 requests. Then 300 gsm8k",
+    "questions at temperature 0 on four GCDs, and a soak of two to three hours at 16 requests.",
+    "Queued on 09-11-2026 on 0.8.8 (label v088), ahead of the rest of that release's round."
+  ],
+  "pull": [
+    "hf.co/unsloth/DeepSeek-V4-Flash-0731-GGUF:UD-Q4_K_XL"
+  ],
+  "defaults": {
+    "kind": "throughput",
+    "repeats": 3,
+    "exclusive": true,
+    "cores": "reserved",
+    "slot_ctx": 4096,
+    "model": "deepseek-v4-flash-0731-gguf-ud-q4_k_xl"
+  },
+  "groups": [
+    {
+      "name": "dsv4-ram",
+      "priority": 130,
+      "est_s": 2400,
+      "set": {
+        "gcds": 1
+      },
+      "axes": {
+        "batch": [
+          1,
+          8,
+          32
+        ],
+        "extra_args": [
+          [
+            "--moe-cache",
+            "auto"
+          ],
+          [
+            "--cpu-moe"
+          ],
+          []
+        ]
+      }
+    },
+    {
+      "name": "dsv4-gcds",
+      "priority": 129,
+      "est_s": 1800,
+      "axes": {
+        "gcds": [
+          2,
+          4,
+          8
+        ],
+        "batch": [
+          1,
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "dsv4-graded",
+      "priority": 128,
+      "est_s": 3600,
+      "set": {
+        "kind": "workload",
+        "gcds": 4,
+        "batch": 1,
+        "slot_ctx": 8192,
+        "sets": [
+          "gsm8k"
+        ],
+        "limit": 300,
+        "concurrency": 1,
+        "max_tokens": 768,
+        "think": false,
+        "extra_args": [
+          "--fit-strict"
+        ]
+      }
+    },
+    {
+      "name": "dsv4-soak",
+      "priority": 127,
+      "set": {
+        "kind": "workload",
+        "gcds": 4,
+        "batch": 16,
+        "concurrency": 16,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 10800,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      }
+    }
+  ]
+}
