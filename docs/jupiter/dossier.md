@@ -1456,7 +1456,17 @@ figures below with the site's energy mix.
   processes and accesses them, storage, legal basis, retention, data
   minimisation, technical and organisational measures), to assess them
   with its DPO, and for any prior approval of ours or consent form.
-* **Until the addendum is signed** JUPITER holds legislation (Normattiva,
+* **08-11-2026: the addendum.** After the checklist, JSC's DPO raised no
+  objection to the processing as described, and JSC sent an amendment to
+  clause 1 of the usage agreement, to be signed by the PI and returned
+  before any transfer. Its terms: only anonymised or pseudonymised data,
+  and nothing that could allow the data subjects to be re-identified, may
+  be stored or processed on JUPITER; the data are encrypted in transfer to
+  and from JSC (SSH, rsync and scp over SSH; UFTP only with its data
+  channel encrypted); and they are kept only as long as processing them
+  requires and deleted immediately afterwards, not only at the end of the
+  project. The PI and every project member are responsible for it.
+* **Until the addendum is signed and returned** JUPITER holds legislation (Normattiva,
   EUR-Lex: public), public benchmarks, synthetic pairs generated from them
   and ruling summaries that carry nothing of the case, and no court
   decision is uploaded. The teacher on JUPITER is accordingly the Base
