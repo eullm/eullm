@@ -37,6 +37,13 @@
 #   GRPO_START_SETS  the sets START may be asked (default all five; those it
 #                    has answers for are skipped): narrower when some are
 #                    being asked of it by a job already queued
+#   GRPO_AFTER       a job id: the round waits for it to end (afterany), and
+#                    START may not exist yet, the merged model of a round
+#                    still running (give the id of its last GRPO link). No
+#                    smoke test, and START is not asked: its own round asks it.
+#                    Prompts files that job writes (sbatch_grpo_prompts.slurm)
+#                    may not exist yet either: the first GRPO link filters
+#                    them then, with the command left in NAME/filter.sh
 #
 # Idempotent: a round with jobs in the queue, or merged already, is not
 # submitted again; the prompts once written are kept.
@@ -62,9 +69,15 @@ SETS="trap-test=$D/eval/trap-test.jsonl trap-test-para=$D/eval/trap-test-para.js
 
 bad=0
 case "$LINKS$STEPS" in *[!0-9]*) echo "[!!] LINKS and MAX_STEPS are numbers"; bad=1 ;; esac
-[ -f "$START/config.json" ] || { echo "[!!] no start model at $START"; bad=1; }
+[ -n "${GRPO_AFTER:-}" ] || [ -f "$START/config.json" ] || { echo "[!!] no start model at $START"; bad=1; }
+case "${GRPO_AFTER:-0}" in *[!0-9]*) echo "[!!] GRPO_AFTER is a job id"; bad=1 ;; esac
 [ "${#PROMPTS[@]}" -gt 0 ] || { echo "[!!] no prompts in $D/grpo/leonardo: copy Leonardo's there"; bad=1; }
-for f in "${PROMPTS[@]}"; do [ -s "$f" ] || { echo "[!!] missing $f"; bad=1; }; done
+DEFER=0
+for f in "${PROMPTS[@]}"; do
+    [ -s "$f" ] && continue
+    if [ -n "${GRPO_AFTER:-}" ]; then DEFER=1; echo "[..] $f not written yet: filtered by the first link"
+    else echo "[!!] missing $f"; bad=1; fi
+done
 for s in $SETS; do [ -s "${s#*=}" ] || { echo "[!!] missing ${s#*=}"; bad=1; }; done
 [ -d "$FORGE_HOME/libs-grpo" ] || { echo "[!!] no $FORGE_HOME/libs-grpo: setup_grpo_libs.sh"; bad=1; }
 [ -d "$LIBS" ] || { echo "[!!] no $LIBS: setup_qwen35_libs.sh"; bad=1; }
@@ -83,8 +96,14 @@ if [ ! -s "$OUT/prompts.jsonl" ]; then
     EXCL=()
     for s in $SETS; do EXCL+=("${s#*=}"); done
     for f in "$D"/eval/norm-exam*.jsonl; do [ -s "$f" ] && EXCL+=("$f"); done
-    python "$REPO/forge/scripts/filter_grpo_prompts.py" "${PROMPTS[@]}" \
-        --exclude-exam "${EXCL[@]}" --out "$OUT/prompts.jsonl" || { echo "[!!] nothing submitted"; exit 1; }
+    FILTER=(python "$REPO/forge/scripts/filter_grpo_prompts.py" "${PROMPTS[@]}"
+            --exclude-exam "${EXCL[@]}" --out "$OUT/prompts.jsonl")
+    if [ "$DEFER" = 1 ]; then
+        printf '%q ' "${FILTER[@]}" >"$OUT/filter.sh" && echo >>"$OUT/filter.sh"
+        echo "[ok] prompts to be filtered by the first link: $OUT/filter.sh"
+    else
+        "${FILTER[@]}" || { echo "[!!] nothing submitted"; exit 1; }
+    fi
 fi
 printf '%s\n' "$START" >"$OUT/start"
 
@@ -95,7 +114,10 @@ sub() {    # sub <sbatch options...>: the job id, or a failure said aloud
 }
 export FORGE_EXTRA_LIBS="$LIBS"
 dep=""
-if [ "${GRPO_SMOKE:-1}" != 0 ] && [ ! -f "$OUT-smoke/adapter/adapter_config.json" ]; then
+if [ -n "${GRPO_AFTER:-}" ]; then
+    dep="--dependency=afterany:$GRPO_AFTER"
+    echo "[ok] after job $GRPO_AFTER, which writes $START"
+elif [ "${GRPO_SMOKE:-1}" != 0 ] && [ ! -f "$OUT-smoke/adapter/adapter_config.json" ]; then
     smoke=$(GRPO_MODEL="$START" GRPO_PROMPTS="$OUT/prompts.jsonl" GRPO_OUT="$OUT-smoke" GRPO_NO_MERGE=1 \
             GRPO_ARGS="--lr $LR --max-steps 3 --limit 48" \
             sub -J "forge-grpo-$NAME" --time=00:40:00 --output="$LOGS/grpo-%j.out" \
@@ -122,6 +144,7 @@ ids=":$ev"
 echo "[ok] $NAME asked the five sets: job $ev"
 missing=""
 for s in $SETS; do
+    [ -z "${GRPO_AFTER:-}" ] || break
     case " ${GRPO_START_SETS:-${s%%=*}} " in *" ${s%%=*} "*) ;; *) continue ;; esac
     [ -s "$R/teacher-eval/answers-${s%%=*}-$START_LABEL.jsonl" ] || missing="$missing $s"
 done

@@ -10,10 +10,12 @@ mod inference;
 mod lineedit;
 mod llama_archs;
 mod models;
+mod monitor;
 mod picker;
 mod gpu_split;
 mod readahead;
 mod registry;
+mod settings;
 mod tools;
 mod ui;
 mod update;
@@ -116,10 +118,132 @@ fn picker_run(model: &str) -> Commands {
     cmd
 }
 
+// ── Help ────────────────────────────────────────────────────────────────────
+//
+// `eullm --help` ends with how to start, the options most launches use and the
+// settings that are not flags; `run` and `serve` end with examples and the same
+// settings. `help_tests` checks every option and setting they name against the
+// parser and the code, so the help cannot advertise what does not exist.
+
+/// The settings read from the environment or `.env`, at the end of
+/// `eullm --help`, `eullm run --help` and `eullm serve --help`. A macro rather
+/// than a const so that `concat!` can join it to each command's examples.
+macro_rules! settings_help {
+    () => {
+        "Settings that are not options, read from the environment, else from a .env
+file in the folder eullm starts from (the startup log says which was used):
+  EULLM_MODELS_DIR               where models are downloaded [~/.eullm/models]
+  EULLM_MODEL_LIBRARIES          other programs' model folders, ;-separated,
+                                 read where they are and never changed
+  EULLM_ALLOWED_IPS              who may connect besides this machine: IPs and
+                                 subnets, comma-separated [this machine only]
+  EULLM_API_KEYS                 require a key: id:secret[:rpm=N],...
+  EULLM_API_KEYS_FILE            the same, one key per line of a file
+  EULLM_ALLOWED_ORIGINS          web pages on other hosts that may call the API
+  EULLM_AUDIT_DIR                where the audit trail goes [~/.eullm/audit]
+  EULLM_WEB_ALLOWED_DOMAINS      --web fetches from these domains only
+  EULLM_WEB_ALLOW_HTTP=1         --web fetches http pages too, not only https
+  EULLM_WEB_ALLOW_PRIVATE_HOSTS=1  --web fetches from private addresses too
+  EULLM_ALLOW_MODEL_PATHS=1      a request may name a GGUF file by its path
+  EULLM_DECISION_POLICY          a JSON file of rules for /v1/systemone
+  EULLM_DECISION_TRACES          a folder where /v1/systemone keeps decisions
+  EULLM_DOWNLOAD_CONNECTIONS     connections per download, 1 to 16 [8]
+  EULLM_IMAGE_MAX_TOKENS         most tokens an image is read as (finer detail)
+  EULLM_IMAGE_MIN_TOKENS         fewest tokens an image is read as
+  HF_TOKEN                       a Hugging Face token, for gated models
+  RUST_LOG                       what the log shows [eullm=info]"
+    };
+}
+
+/// What `eullm --help` shows after the commands.
+const TOP_AFTER_HELP: &str = concat!(
+    "Start:
+  eullm                                      choose a model from a menu
+  eullm run qwen3-8b                         a model of the EuLLM catalog
+  eullm run hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M  a GGUF repo on Hugging Face
+  eullm run ./model.gguf                     a GGUF file
+  eullm serve                                no model: each request names one
+A model is downloaded the first time it runs. While eullm runs, the chat is at
+http://localhost:11435, the API at http://localhost:11434 (Ollama's) and
+http://localhost:11434/v1 (OpenAI's).
+
+The options of run and serve used most (all of them: eullm run --help):
+  -c, --ctx-size <N|auto>        tokens of context, split among --batch-size
+                                 [4096]
+      --batch-size <N>           requests answered at the same time [1]
+  -t, --threads <N>              CPU threads [one per physical core]
+      --keep-alive <DURATION>    unload a model idle this long: 10m, 1h [never]
+      --web                      fetch the pages linked in a message
+  -p, --port <PORT>              port of the API [11434]
+      --ui-port <PORT>           port of the chat [11435]
+      --no-ui                    no chat in the browser: the API only
+      --cli                      run: chat in the terminal, no browser
+      --gpu-layers <N>           at most N layers on the GPU, 0: none [what fits]
+      --cache-type-k <TYPE>      KV cache for keys: f16, q8_0 (half) ... [f16]
+      --cache-type-v <TYPE>      KV cache for values, the same types [f16]
+      --cpu-moe                  a MoE model's experts in RAM, the rest on the GPU
+      --moe-cache <auto|MIB|off> experts in RAM, the most used ones in VRAM
+      --mtp <N>                  faster writing with a model's MTP head [0: off]
+      --max-loaded-models <N>    models loaded at the same time [1]
+      --default-model <NAME>     the model of a request that names none
+      --embedding-model <NAME>   load an embedding model too, for RAG
+      --daemon                   run in the background, log in ~/.eullm/logs
+
+",
+    settings_help!(),
+    "
+
+More: eullm help <command>, and docs/quickstart.md and docs/engine.md in
+github.com/eullm/eullm."
+);
+
+/// What `eullm run --help` shows after the options.
+const RUN_AFTER_HELP: &str = concat!(
+    "Examples:
+  eullm run qwen3-8b
+  eullm run hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M -c 32768 --batch-size 2
+  eullm run ./model.gguf --cli --no-ui
+  eullm run qwen3.6-35b-a3b -c 16384 --cache-type-k q8_0 --cache-type-v q8_0
+  eullm run ./model.gguf --daemon
+
+",
+    settings_help!()
+);
+
+/// What `eullm serve --help` shows after the options.
+const SERVE_AFTER_HELP: &str = concat!(
+    "Examples:
+  eullm serve
+  eullm serve --default-model qwen3-8b --keep-alive 10m
+  eullm serve -c 16384 --batch-size 4 --max-loaded-models 2
+  eullm serve --no-ui --daemon
+A request names its model (\"model\": \"qwen3-8b\"), loaded the first time it is
+asked for: a model `eullm list` shows, or NAME for /models/NAME.gguf or
+/data/models/NAME.gguf; a path to a GGUF only with EULLM_ALLOW_MODEL_PATHS=1.
+
+",
+    settings_help!()
+);
+
+/// What `eullm pull --help` shows after the options.
+const PULL_AFTER_HELP: &str = "Examples:
+  eullm pull qwen3-8b
+  eullm pull hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M
+  eullm pull https://example.eu/models/model-Q4_K_M.gguf
+Downloads go to EULLM_MODELS_DIR [~/.eullm/models]; HF_TOKEN in the environment
+or .env opens gated Hugging Face repos. The catalog's models: eullm pull with no
+model, in a terminal, or the chat's Model hub.";
+
 #[derive(Parser)]
 #[command(name = "eullm")]
 #[command(about = "eullm — sovereign LLM runtime for Europe")]
+#[command(long_about = "eullm — sovereign LLM runtime for Europe
+
+Runs GGUF models on this machine's GPU or CPU: a chat in the browser and in the
+terminal, an API that Ollama and OpenAI clients use as they are, and an audit
+trail of every answer. No telemetry.")]
 #[command(version = VERSION_STRING)]
+#[command(after_help = TOP_AFTER_HELP)]
 struct Cli {
     /// Subcommand to run. When omitted in an interactive terminal, an
     /// interactive picker opens so the user can choose a local model, a
@@ -127,6 +251,20 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 }
+
+/// The headings of `eullm run --help` and `eullm serve --help`, in the order
+/// they appear. The options most launches use have none: they come first,
+/// under "Options". Within a heading the options keep the order of the fields
+/// of [`RuntimeOpts`], and a heading's place is that of its first field.
+const HELP_GPU: &str = "GPU and memory";
+const HELP_MOE: &str = "MoE models whose experts do not all fit in VRAM";
+const HELP_GPUS: &str = "Several GPUs";
+const HELP_MTP: &str = "Faster writing: multi-token prediction (MTP)";
+const HELP_HYBRID: &str = "Hybrid models (Qwen3.5, Qwen3.6): reusing a conversation";
+const HELP_MEDIA: &str = "Images and audio";
+const HELP_MODELS: &str = "More than one model";
+const HELP_BACKGROUND: &str = "In the background";
+const HELP_DEBUG: &str = "Diagnostics";
 
 /// Flags shared by `run` and `serve`.
 ///
@@ -149,24 +287,119 @@ struct Cli {
 /// is sized too (`api::AppState::load_generation_model`). A flag that
 /// reaches a model `serve` loads must still be carried there through
 /// `api::ServeConfig` by hand — see `engine/CLAUDE.md`.
+///
+/// Each doc comment opens with one short line, which is what `-h` shows; the
+/// paragraphs after it are for `--help`. The order of the fields is the order
+/// of the help (see [`HELP_GPU`]).
 #[derive(clap::Args, Debug, PartialEq)]
 struct RuntimeOpts {
-    /// Port for the API server
+    /// Context in tokens, split among --batch-size
+    ///
+    /// The context window, in tokens, or `auto` (also `0`): the largest window,
+    /// up to what the model was trained for and 131072, that still keeps every
+    /// layer on the GPU, never below 4096. For a dense model; a MoE model, a
+    /// launch with `--mtp` or with `--no-fit` takes 4096 and says so. `auto`
+    /// sizes the model `eullm run` loads; with `serve` it is 4096 for the
+    /// models it loads, unless a request sets num_ctx.
+    #[arg(
+        short,
+        long,
+        value_name = "N|auto",
+        default_value_t = 4096,
+        value_parser = fit::parse_ctx_size
+    )]
+    ctx_size: u32,
+
+    /// Requests answered at once, each with ctx-size / N
+    ///
+    /// Maximum concurrent requests served by the continuous-batching
+    /// scheduler, up to 64; 0 answers them one after another without it.
+    ///
+    /// `--ctx-size` is the *total* KV budget and is split evenly across these
+    /// slots, so per-sequence context is `ctx_size / batch_size`. One slot is
+    /// therefore the only default that cannot surprise anyone: the request
+    /// gets the whole window that was asked for.
+    ///
+    /// `serve` used to default to 8. With the 4096 default context that is 512
+    /// tokens per request — which a reasoning model spends before it finishes
+    /// thinking, so the answer stops mid-sentence and is reported as
+    /// `done_reason="length"`. Nothing about that points back at a flag nobody
+    /// set. Concurrency is worth having and worth asking for: raise this to
+    /// 4–16 when using the engine as a backend for simultaneous users, and
+    /// raise `--ctx-size` with it.
+    #[arg(long, value_name = "N", default_value_t = 1)]
+    batch_size: usize,
+
+    /// CPU threads [default: one per physical core]
+    ///
+    /// The default is one thread per physical core (per performance core on
+    /// Apple Silicon), never more than the CPUs this process may run on (the
+    /// ones a Slurm job, a container or `taskset` gives it): threads past the
+    /// cores that can run them made writing about 60% slower.
+    #[arg(short, long, value_name = "N")]
+    threads: Option<u32>,
+
+    /// Unload a model idle this long: 30s, 10m, 2h [default: never]
+    ///
+    /// How long to keep a model resident after its last use, before
+    /// unloading it to free VRAM/RAM. Accepts a duration ("5m", "30s",
+    /// "2h") or a bare number of seconds. Applies to the generation models,
+    /// the embedding model and the decision model (each loaded on demand by a
+    /// request that names it), independently, and is a *default*: a request's
+    /// own `keep_alive` field overrides it for that load.
+    ///
+    /// Unset by default — matches every release before this flag existed,
+    /// where nothing unloaded a model on its own. Set it to make an
+    /// idle GPU actually go idle: without it, a model loaded once and left
+    /// untouched keeps the card's memory clocks up indefinitely (see
+    /// `docs/arm-cix-p1-cpu-profile.md`'s note on why VRAM occupancy itself
+    /// isn't the cost — an active CUDA context is).
+    #[arg(long, value_name = "DURATION")]
+    keep_alive: Option<String>,
+
+    /// Fetch the pages linked in a message, for the model to read
+    ///
+    /// URLs in user messages are fetched and their content is injected into
+    /// the prompt before inference, within the context left: ctx_size minus
+    /// the prompt minus 512 tokens kept for the answer. https only, from
+    /// public addresses, unless the EULLM_WEB_* settings say otherwise (see
+    /// below).
+    #[arg(long)]
+    web: bool,
+
+    /// Port of the API (Ollama and OpenAI)
     #[arg(short, long, default_value_t = 11434)]
     port: u16,
 
-    /// Replace existing service on the port
-    #[arg(long)]
+    /// Not implemented yet: a port in use stops the launch with an error, and
+    /// the help says how to free it. Hidden until it does what it says.
+    #[arg(long, hide = true)]
     replace: bool,
 
-    /// Maximum GPU layers to offload (-1 = all, 0 = CPU only). This is an
-    /// upper bound, not a fixed count: automatic sizing still runs and may
-    /// offload fewer if that is all that fits, so a number chosen for one
-    /// model cannot run the next one out of VRAM. Use --no-fit to force a
-    /// count past the estimate.
-    #[arg(long, allow_hyphen_values = true)]
+    /// Port of the chat in the browser
+    ///
+    /// Separate from the API port so the API surface on --port stays pure.
+    #[arg(long, value_name = "PORT", default_value_t = 11435)]
+    ui_port: u16,
+
+    /// At most N layers on the GPU, 0 none [default: as many as fit]
+    ///
+    /// -1 is every layer, 0 none (the CPU only). This is an upper bound, not a
+    /// fixed count: automatic sizing still runs and may offload fewer if that
+    /// is all that fits, so a number chosen for one model cannot run the next
+    /// one out of VRAM. Use --no-fit to force a count past the estimate.
+    #[arg(long, value_name = "N", allow_hyphen_values = true, help_heading = HELP_GPU)]
     gpu_layers: Option<i32>,
 
+    /// Don't size the offload to the free VRAM: --gpu-layers as given
+    ///
+    /// Never size the GPU offload automatically (the pre-0.6.80 behaviour).
+    /// Wins over --fit.
+    #[arg(long, conflicts_with = "fit", help_heading = HELP_GPU)]
+    no_fit: bool,
+
+    /// Ask before a partial GPU load (sizing is on anyway)
+    ///
     /// Auto-fit GPU layers to available VRAM. Probes free VRAM and the
     /// model's layer count, then offloads as many layers as fit.
     ///
@@ -181,288 +414,71 @@ struct RuntimeOpts {
     /// Turned off by --no-fit. A --gpu-layers of your own is a ceiling it
     /// keeps to, not an off switch. When VRAM cannot be read (no GPU)
     /// automatic sizing stays silent and --gpu-layers is used as-is.
-    #[arg(long)]
+    #[arg(long, help_heading = HELP_GPU)]
     fit: bool,
 
-    /// Never size the GPU offload automatically; use --gpu-layers as given
-    /// (the pre-0.6.80 behaviour). Wins over --fit.
-    #[arg(long, conflicts_with = "fit")]
-    no_fit: bool,
-
-    /// With --fit, refuse to load (instead of offloading a partial split
-    /// or falling back) when the model does not fully fit on the GPU. On
-    /// `serve`, a refused load surfaces as an error to the API caller. A
-    /// MoE model is not refused: one whose experts do not fit loads with
-    /// them in RAM (the expert cache by default where it gains, see --moe-cache,
-    /// or the usual split), as its own sizing decides first.
-    #[arg(long)]
+    /// Refuse to load a model that does not fit whole on the GPU
+    ///
+    /// Refuse to load (instead of offloading a partial split or falling back)
+    /// when the model does not fully fit on the GPU. On `serve`, a refused
+    /// load surfaces as an error to the API caller. A MoE model is not
+    /// refused: one whose experts do not fit loads with them in RAM (the
+    /// expert cache by default where it gains, see --moe-cache, or the usual
+    /// split), as its own sizing decides first.
+    #[arg(long, help_heading = HELP_GPU)]
     fit_strict: bool,
 
-    /// For MoE models (e.g. Qwen3-30B-A3B): keep expert tensors
-    /// (`*.ffn_(up|down|gate)_exps`) on CPU RAM while attention,
-    /// embeddings, and the KV cache stay on GPU. Only a few experts fire
-    /// per token, so this trades a small compute cost for VRAM headroom
-    /// far beyond what --gpu-layers' whole-layer offload can reach — a
-    /// 20+ GB MoE model can run mostly-GPU-speed on a 12 GB card. No
-    /// effect on dense (non-MoE) models. Combines with --gpu-layers/--fit
-    /// (which still control the non-expert tensors) and --ctx-size.
-    #[arg(long)]
-    cpu_moe: bool,
-
-    /// For MoE models: keep expert tensors on CPU RAM for only the
-    /// first N transformer layers, leaving the rest on GPU. Finer
-    /// grained than --cpu-moe — use this when the blanket flag leaves
-    /// VRAM idle (all experts to CPU) but the model doesn't fully fit
-    /// with --gpu-layers alone. Mutually exclusive with --cpu-moe.
-    #[arg(long, default_value_t = 0)]
-    n_cpu_moe: u32,
-
-    /// Recurrent-state rollback window for hybrid/recurrent
-    /// architectures (Mamba/Gated-DeltaNet-style SSM layers, e.g.
-    /// Qwen3.5/3.6's hybrid attention+SSM design). 0 (default, strongly
-    /// recommended) leaves it off. NOT a conversation/KV-cache-reuse
-    /// knob: upstream llama.cpp reserves n_rs_seq for bounded
-    /// speculative-decoding draft-token rollback and hard-zeroes it
-    /// outside that path (`cparams_dft.n_rs_seq = 0`); it is not what
-    /// the official server uses for cross-turn prompt caching on these
-    /// architectures (that's the separate, bounded `--ctx-checkpoints`
-    /// snapshot mechanism). Every recurrent-state tensor scales by
-    /// `(1 + N)`, so nonzero values can multiply resident memory by
-    /// tens of GB and are not yet validated upstream past a small
-    /// synthetic test model. Not needed for a conversation's next turn:
-    /// on these architectures the engine keeps each slot's recurrent
-    /// state 4 tokens before the end of every prompt it reads (where a
-    /// chat template writes the answer's header again) and restores it,
-    /// as llama.cpp's server does with its --ctx-checkpoints.
-    #[arg(long, default_value_t = 0)]
-    rs_seq: u32,
-
-    /// Speculative decoding with the model's own multi-token prediction
-    /// (MTP) head: after each token the model writes, the head drafts up to
-    /// N more, and one decode checks them all. Every draft the model agrees
-    /// with is kept, so the answer is the one it would have written anyway,
-    /// in fewer steps. 0 (default) turns it off; 2 measured best on a GPU
-    /// (see docs/engine-guide.md). Needs a
-    /// model whose GGUF carries its MTP layers (unsloth's `*-MTP-GGUF`
-    /// Qwen3.5/3.6, for instance) and one request at a time (`--batch-size
-    /// 1`, the default): otherwise the load says why and runs without it.
-    /// On a hybrid model (Qwen3.5/3.6) it raises the recurrent-state
-    /// rollback window to N, the drafts it may have to take back.
-    #[arg(
-        long,
-        value_name = "N",
-        default_value_t = 0,
-        value_parser = clap::value_parser!(u32).range(0..=8)
-    )]
-    mtp: u32,
-
-    /// With `--mtp`: stop drafting once the MTP head's own probability for
-    /// its next draft falls below P (0 to 1). Drafts it is unsure of are
-    /// mostly rejected, and each one costs a pass of the head and a position
-    /// in the check, so a threshold lets the draft length follow the text:
-    /// long where the text is predictable, none where it is not. 0 (default,
-    /// llama.cpp's own) always drafts the full N.
-    #[arg(long, value_name = "P", default_value_t = 0.0, value_parser = parse_probability)]
-    mtp_p_min: f32,
-
-    /// With `--mtp`: a GGUF holding the MTP head alone, for a model whose own
-    /// GGUF has none (Qwen3.8-Flash-Next's, for instance: the head is a
-    /// separate file, such as unsloth's `mtp-Qwen3.8-Flash-Next-Q8_0.gguf`).
-    /// It is loaded onto the GPU whole, so it costs that much VRAM (3.85 GB
-    /// for that one), which `--fit` keeps out of the layers and the expert
-    /// cache. Without `--mtp` it is ignored.
-    #[arg(long, value_name = "FILE")]
-    mtp_model: Option<PathBuf>,
-
-    /// For MoE models whose experts do not all fit in VRAM: keep every
-    /// expert in RAM and give the VRAM they would have taken to a cache of
-    /// the ones the model uses most. `auto` sizes it from the VRAM left once
-    /// the rest of the model is placed (with --fit); a number asks for that
-    /// many MiB. On by default on one GPU, CUDA or ROCm, when 25% to 85% of
-    /// the experts do not fit (outside that, a model that nearly fits or one
-    /// whose cache would hold a tenth of them is faster with the usual
-    /// split; the log says which), unless you pass --no-fit, place the
-    /// experts with --cpu-moe or --n-cpu-moe, or use --mtp; `auto` or a size
-    /// asks for it whatever the share, `off` turns it off. It always speeds
-    /// up writing; reading a long prompt
-    /// depends on the model: on an RTX 5070 Ti, Qwen3.6-35B-A3B read 25%
-    /// faster (3,200-3,800 to 4,100-4,900 tokens/s) while Qwen3.8-Flash-Next
-    /// (IQ2_XS) wrote 49.4 tokens/s with an 8,000 MiB cache against 22.4
-    /// without and read a prompt 17% slower. One GPU only, CUDA or ROCm;
-    /// elsewhere an asked-for cache says why and runs without it. Experimental: the cache is llama.cpp PR #29887, which
-    /// this build carries ahead of a llama.cpp release. Unless told
-    /// otherwise, a load with a cache reads prompts 2048 tokens at a time
-    /// (--n-ubatch) and reads the model into memory when the RAM can spare
-    /// the experts (--no-mmap, --mmap): on that model, 55 tokens/s writing
-    /// and 960 reading a prompt.
-    #[arg(long, value_name = "auto|MIB", value_parser = fit::parse_moe_cache)]
-    moe_cache: Option<fit::MoeCache>,
-
-    /// MiB of VRAM that must stay free once the model and its context are
-    /// loaded: the scratch the card needs while generating, and what other
-    /// processes take (a desktop on the same card). Sizing (`--fit`, the
-    /// expert cache) leaves it, and the load refuses a context that would
-    /// leave less. The same amount on a 16 GB card and on a 96 GB one,
-    /// because what it covers does not grow with the card. Lower it on a
-    /// card nothing else uses (the least is 256), raise it on one that
-    /// drives a display or is shared with other programs. `--fit-target`
-    /// is the same setting under llama-server's name.
+    /// MiB of VRAM kept free beside the model
+    ///
+    /// The scratch the card needs while generating, and what other processes
+    /// take (a desktop on the same card). Sizing (`--fit`, the expert cache)
+    /// leaves it, and the load refuses a context that would leave less. The
+    /// same amount on a 16 GB card and on a 96 GB one, because what it covers
+    /// does not grow with the card. Lower it on a card nothing else uses (the
+    /// least is 256), raise it on one that drives a display or is shared with
+    /// other programs. `--fit-target` is the same setting under
+    /// llama-server's name.
     #[arg(
         long,
         visible_alias = "fit-target",
         value_name = "MIB",
         default_value_t = fit::DEFAULT_VRAM_RESERVE_MIB,
-        value_parser = fit::parse_vram_reserve
+        value_parser = fit::parse_vram_reserve,
+        help_heading = HELP_GPU
     )]
     vram_reserve: u32,
 
-    /// Read the model into memory instead of mapping its file. Expert
-    /// tensors kept in RAM (by --moe-cache, --cpu-moe, --n-cpu-moe or the
-    /// --fit split) then go to memory the GPU driver has pinned, which the
-    /// card copies from directly; from a mapped file each copy goes through
-    /// a staging buffer of the driver's, which the expert cache's copies
-    /// measured at 9 GB/s on an RTX 5070 Ti over PCIe 4.0 x16. Loading reads
-    /// the whole file up front, and memory pinned for the experts cannot be
-    /// swapped out: the RAM has to hold them. --moe-cache does this by itself
-    /// when the RAM can spare the experts.
-    #[arg(long)]
-    no_mmap: bool,
-
-    /// Keep the model file mapped where --moe-cache would read it into
-    /// memory to pin its experts, or where a model that goes to the GPUs whole
-    /// is more than half the memory this process may use (the RAM, or a Slurm
-    /// job's --mem) or is on a network file system (Lustre, NFS, GPFS...),
-    /// which is otherwise read in: mapped, such a model did not load in an
-    /// hour on LUMI-G, read in it loaded in 3 to 4 minutes; servers mapping
-    /// one smaller model from Lustre at once took up to half an hour.
-    #[arg(long, conflicts_with = "no_mmap")]
-    mmap: bool,
-
-    /// For MoE models with experts in RAM: while a prompt is read, copy the
-    /// experts of the layers ahead into N slots of VRAM on a second stream
-    /// of the GPU, while the layers before them compute, instead of halting
-    /// the computing for every copy. 2 to 8 slots, 4 by default; 0 turns it
-    /// off. It works on one GPU, CUDA or ROCm, with the experts in pinned memory (a
-    /// model read into memory: --no-mmap, which --moe-cache chooses when the
-    /// RAM can spare the experts), on micro-batches of 512 tokens or more.
-    /// Each slot holds the largest expert tensor, and --moe-cache keeps that
-    /// VRAM out of the cache where there is room: on an RTX 5070 Ti,
-    /// Qwen3.8-Flash-Next (IQ2_XS) took four slots of 256 MiB out of its
-    /// cache, read a 33,200-token prompt 42% faster, to the same answer, and
-    /// wrote as fast.
-    #[arg(
-        long,
-        value_name = "N",
-        default_value_t = fit::MOE_PREFETCH_SLOTS,
-        value_parser = fit::parse_moe_prefetch
-    )]
-    moe_prefetch: u32,
-
-    /// Threads that read the model file ahead of the load, into the page
-    /// cache, so the load finds it in memory. Off by default (0): on Lustre
-    /// it made loads slower, not faster (LUMI-G, cold: a 132 GiB model 110 s
-    /// without readers, 128 s with 16): llama.cpp alone read the file at
-    /// 0.7-1.3 GB/s there.
-    /// Kept for file systems where it has not been measured. `auto` uses 16
-    /// on Lustre, NFS, SMB, GPFS, BeeGFS, CephFS and 9p and none on a local
-    /// disk. Never for a model larger than the memory free for the page cache
-    /// (the RAM, or a Slurm job's --mem).
-    #[arg(
-        long,
-        value_name = "N|auto",
-        default_value = "0",
-        value_parser = readahead::parse_load_threads
-    )]
-    load_threads: readahead::LoadThreads,
-
-    /// One KV cache for every sequence (llama.cpp's `--kv-unified`) instead of
-    /// one per sequence, with several slots (`--batch-size` above 1).
-    /// Experimental, off by default. With one cache per sequence llama.cpp
-    /// splits a decode step into one pass of the model for every run of
-    /// consecutive slot numbers among the answering sequences, so a slot left
-    /// out of a step (waiting for its prompt, or idle) splits it in two; one
-    /// cache takes any slots in one pass, and its attention reads every
-    /// sequence's cells, masked. Measured on an MI250X: 1-4% faster with
-    /// short requests that come and go, 2-7% slower with sixteen at once,
-    /// 38-45% slower with 32k-token contexts.
-    #[arg(long)]
-    kv_unified: bool,
-
-    /// How a model goes across several GPUs: `layer` (the default) puts
-    /// whole layers on each GPU, run one after another; `tensor` cuts
-    /// weights and KV cache across them and runs every layer on all at once
-    /// (llama.cpp's experimental tensor parallelism; the load says which
-    /// architectures lack it). Tensor can make one request faster, where
-    /// layer only adds memory: on an MI250X a model on four GCDs as layers
-    /// wrote no faster than on one. No effect with one GPU visible; to use
-    /// one GPU of several, make only it visible (CUDA_VISIBLE_DEVICES,
-    /// ROCR_VISIBLE_DEVICES). llama.cpp's `row` is not offered: its CUDA and
-    /// ROCm backends no longer support it.
-    #[arg(long, value_name = "layer|tensor", default_value = "layer",
-          value_parser = gpu_split::parse_split_mode)]
-    split_mode: gpu_split::SplitMode,
-
-    /// The share of the model each GPU takes, as proportions in the order
-    /// the GPUs are listed, e.g. `3,1`. Without it the split follows each
-    /// GPU's free memory.
-    #[arg(long, value_name = "N0,N1,...", value_parser = gpu_split::parse_tensor_split)]
-    tensor_split: Option<gpu_split::TensorSplit>,
-
-    /// Max full-sequence-state checkpoints kept for prompt-prefix
-    /// restore (bounded alternative to --rs-seq for hybrid/recurrent
-    /// architectures — see the README's "--ctx-checkpoints" section).
-    /// 0 (default) disables checkpointing: no snapshot is ever taken,
-    /// matching pre-checkpoint behavior exactly. Mirrors llama.cpp
-    /// server's flag of the same name (default there: 32); kept off
-    /// here since each checkpoint costs one sequence's full state
-    /// size. Only useful together with continuous batching
-    /// (--batch-size > 0, the default for `run`).
-    #[arg(long, default_value_t = 0)]
-    ctx_checkpoints: usize,
-
-    /// Minimum new tokens since the closest existing checkpoint of the
-    /// same conversation before taking another one. Mirrors llama.cpp
-    /// server's `--checkpoint-min-step` (default there: 8192). Only
-    /// consulted when --ctx-checkpoints > 0.
-    #[arg(long, default_value_t = 8192)]
-    checkpoint_min_step: u32,
-
-    /// Context window size, in tokens, or `auto` (also `0`): the largest window,
-    /// up to what the model was trained for and 131072, that still keeps every
-    /// layer on the GPU, never below 4096. For a dense model; a MoE model, a
-    /// launch with `--mtp` or with `--no-fit` takes 4096 and says so. It sizes the model `eullm run` loads; `serve` takes 4096 for the models it loads unless a request sets num_ctx.
-    #[arg(short, long, default_value_t = 4096, value_parser = fit::parse_ctx_size)]
-    ctx_size: u32,
-
-    /// Maximum concurrent requests served by the continuous-batching scheduler.
+    /// Keys' KV cache: f16, q8_0, q4_0, q4_1, q5_0, q5_1, f32
     ///
-    /// `--ctx-size` is the *total* KV budget and is split evenly across these
-    /// slots, so per-sequence context is `ctx_size / batch_size`. One slot is
-    /// therefore the only default that cannot surprise anyone: the request
-    /// gets the whole window that was asked for.
+    /// q8_0 takes half the memory of f16 for a very small quality cost: room
+    /// for a longer --ctx-size. A four-bit key cache (q4_0, q4_1) with flash
+    /// attention on produces nonsense, so it is raised to q8_0 and the log
+    /// says so; Gemma 4 models always use f16.
+    #[arg(long, value_name = "TYPE", default_value = "f16", help_heading = HELP_GPU)]
+    cache_type_k: String,
+
+    /// Values' KV cache, the same types as for keys
     ///
-    /// `serve` used to default to 8. With the 4096 default context that is 512
-    /// tokens per request — which a reasoning model spends before it finishes
-    /// thinking, so the answer stops mid-sentence and is reported as
-    /// `done_reason="length"`. Nothing about that points back at a flag nobody
-    /// set. Concurrency is worth having and worth asking for: raise this to
-    /// 4–16 when using the engine as a backend for simultaneous users, and
-    /// raise `--ctx-size` with it.
-    #[arg(long, default_value_t = 1)]
-    batch_size: usize,
+    /// Values tolerate quantization better than keys: q4_0 values with q8_0
+    /// keys is a reasonable trade at long context. Gemma 4 models always use
+    /// f16.
+    #[arg(long, value_name = "TYPE", default_value = "f16", help_heading = HELP_GPU)]
+    cache_type_v: String,
 
-    /// Number of CPU threads (default: all available)
-    #[arg(short, long)]
-    threads: Option<u32>,
-
-    /// Disable flash attention (enabled by default for faster inference)
-    #[arg(long)]
+    /// Turn flash attention off (it is on by default)
+    #[arg(long, help_heading = HELP_GPU)]
     no_flash_attn: bool,
 
-    /// Prompt processing batch size (tokens per eval during prefill)
-    #[arg(long, default_value_t = 2048)]
+    /// Prompt tokens per decode call
+    ///
+    /// llama.cpp's `n_batch`: how many tokens of a prompt one decode call
+    /// takes while the prompt is read. --n-ubatch is how many of them the GPU
+    /// reads in one pass.
+    #[arg(long, value_name = "N", default_value_t = 2048, help_heading = HELP_GPU)]
     n_batch: u32,
 
+    /// Prompt tokens the GPU reads in one pass [default: 512]
+    ///
     /// Physical micro-batch: how many prompt tokens the GPU processes in
     /// one pass (llama.cpp's `n_ubatch`; default 512, llama.cpp's own, and
     /// 2048 for a model loaded with an expert cache, see --moe-cache).
@@ -476,64 +492,269 @@ struct RuntimeOpts {
     #[arg(
         long,
         value_name = "N",
-        value_parser = clap::value_parser!(u32).range(32..=16_384)
+        value_parser = clap::value_parser!(u32).range(32..=16_384),
+        help_heading = HELP_GPU
     )]
     n_ubatch: Option<u32>,
 
-    /// KV cache type for keys. Options: f16 (default, best GPU compat), q8_0, q4_0
-    #[arg(long, default_value = "f16")]
-    cache_type_k: String,
-
-    /// KV cache type for values. Options: f16 (default, best GPU compat), q8_0, q4_0
-    #[arg(long, default_value = "f16")]
-    cache_type_v: String,
-
-    /// Enable transparent web browsing: URLs in user messages are fetched
-    /// and their content is injected into the prompt before inference.
-    /// Dynamic budget: available context = ctx_size - prompt - 512 reserve.
-    #[arg(long)]
-    web: bool,
-
-    /// Port for the embedded chat UI (separate from the API port so
-    /// the API surface on --port stays pure). Default 11435.
-    #[arg(long, default_value_t = 11435)]
-    ui_port: u16,
-
-    /// Run as a background daemon (writes PID to --pidfile)
-    #[arg(long)]
-    daemon: bool,
-
-    /// PID file path (used with --daemon)
-    #[arg(long, default_value = DEFAULT_PIDFILE)]
-    pidfile: String,
-
-    /// Log file for the background daemon (used with --daemon).
+    /// One KV cache for all the --batch-size slots (experimental)
     ///
-    /// Defaults to `~/.eullm/logs/eullm.log`. It used to be derived from
-    /// `--pidfile`, which put it in `/tmp` by default: a directory that is
-    /// small on many systems and gets cleared exactly when something is
-    /// filling it up or the machine is rebooted after a crash — the two
-    /// moments the log is the only record of what happened (#354). The
-    /// PID file stays in `/tmp`, where a file that is meaningless across
-    /// reboots belongs.
+    /// One KV cache for every sequence (llama.cpp's `--kv-unified`) instead of
+    /// one per sequence, with several slots (`--batch-size` above 1).
+    /// Experimental, off by default. With one cache per sequence llama.cpp
+    /// splits a decode step into one pass of the model for every run of
+    /// consecutive slot numbers among the answering sequences, so a slot left
+    /// out of a step (waiting for its prompt, or idle) splits it in two; one
+    /// cache takes any slots in one pass, and its attention reads every
+    /// sequence's cells, masked. Measured on an MI250X: 1-4% faster with
+    /// short requests that come and go, 2-7% slower with sixteen at once,
+    /// 38-45% slower with 32k-token contexts.
+    #[arg(long, help_heading = HELP_GPU)]
+    kv_unified: bool,
+
+    /// Read the model into memory instead of mapping its file
     ///
-    /// Setting `--pidfile` without `--logfile` still puts the log next to
-    /// the PID file, so an existing deployment that redirects one keeps
-    /// both together.
-    #[arg(long, value_name = "PATH")]
-    logfile: Option<String>,
+    /// Expert tensors kept in RAM (by --moe-cache, --cpu-moe, --n-cpu-moe or
+    /// the --fit split) then go to memory the GPU driver has pinned, which the
+    /// card copies from directly; from a mapped file each copy goes through
+    /// a staging buffer of the driver's, which the expert cache's copies
+    /// measured at 9 GB/s on an RTX 5070 Ti over PCIe 4.0 x16. Loading reads
+    /// the whole file up front, and memory pinned for the experts cannot be
+    /// swapped out: the RAM has to hold them. --moe-cache does this by itself
+    /// when the RAM can spare the experts.
+    #[arg(long, help_heading = HELP_GPU)]
+    no_mmap: bool,
 
-    /// Enable extra internal diagnostics for the Rust engine layer. Off
-    /// by default (zero added per-token cost, matches upstream
-    /// llama.cpp). Today this enables a NaN/Inf scan of every generated
-    /// token's logits before sampling — added to help diagnose garbage
-    /// output (issue #140) — at the cost of one extra linear scan over
-    /// the vocab per token. Not a general log-level flag; use RUST_LOG
-    /// for that.
-    #[arg(long)]
-    rust_debug: bool,
+    /// Keep the model file mapped where eullm would read it into memory
+    ///
+    /// Where --moe-cache would read the model into memory to pin its experts,
+    /// or where a model that goes to the GPUs whole is more than half the
+    /// memory this process may use (the RAM, or a Slurm job's --mem) or is on
+    /// a network file system (Lustre, NFS, GPFS...), which is otherwise read
+    /// in: mapped, such a model did not load in an hour on LUMI-G, read in it
+    /// loaded in 3 to 4 minutes; servers mapping one smaller model from
+    /// Lustre at once took up to half an hour.
+    #[arg(long, conflicts_with = "no_mmap", help_heading = HELP_GPU)]
+    mmap: bool,
 
-    /// Path to a multimodal projector (mmproj GGUF) for this model.
+    /// Threads that read the model file ahead of the load
+    ///
+    /// They read it into the page cache, so the load finds it in memory. Off
+    /// by default (0): on Lustre it made loads slower, not faster (LUMI-G,
+    /// cold: a 132 GiB model 110 s without readers, 128 s with 16): llama.cpp
+    /// alone read the file at 0.7-1.3 GB/s there. Kept for file systems where
+    /// it has not been measured. `auto` uses 16 on Lustre, NFS, SMB, GPFS,
+    /// BeeGFS, CephFS and 9p and none on a local disk. Never for a model
+    /// larger than the memory free for the page cache (the RAM, or a Slurm
+    /// job's --mem).
+    #[arg(
+        long,
+        value_name = "N|auto",
+        default_value = "0",
+        value_parser = readahead::parse_load_threads,
+        help_heading = HELP_GPU
+    )]
+    load_threads: readahead::LoadThreads,
+
+    /// Experts in RAM, the rest of the model on the GPU
+    ///
+    /// For MoE models (e.g. Qwen3-30B-A3B): keep expert tensors
+    /// (`*.ffn_(up|down|gate)_exps`) on CPU RAM while attention,
+    /// embeddings, and the KV cache stay on GPU. Only a few experts fire
+    /// per token, so this trades a small compute cost for VRAM headroom
+    /// far beyond what --gpu-layers' whole-layer offload can reach — a
+    /// 20+ GB MoE model can run mostly-GPU-speed on a 12 GB card. No
+    /// effect on dense (non-MoE) models. Combines with --gpu-layers/--fit
+    /// (which still control the non-expert tensors) and --ctx-size.
+    #[arg(long, help_heading = HELP_MOE)]
+    cpu_moe: bool,
+
+    /// The experts of the first N layers in RAM
+    ///
+    /// Finer grained than --cpu-moe — use this when the blanket flag leaves
+    /// VRAM idle (all experts to CPU) but the model doesn't fully fit with
+    /// --gpu-layers alone. Mutually exclusive with --cpu-moe.
+    #[arg(long, value_name = "N", default_value_t = 0, help_heading = HELP_MOE)]
+    n_cpu_moe: u32,
+
+    /// All experts in RAM, the ones used most cached in VRAM
+    ///
+    /// For MoE models whose experts do not all fit in VRAM: keep every
+    /// expert in RAM and give the VRAM they would have taken to a cache of
+    /// the ones the model uses most. `auto` sizes it from the VRAM left once
+    /// the rest of the model is placed (with --fit); a number asks for that
+    /// many MiB. On by default on one GPU, CUDA or ROCm, when 25% to 85% of
+    /// the experts do not fit (outside that, a model that nearly fits or one
+    /// whose cache would hold a tenth of them is faster with the usual
+    /// split; the log says which), unless you pass --no-fit, place the
+    /// experts with --cpu-moe or --n-cpu-moe, or use --mtp; `auto` or a size
+    /// asks for it whatever the share, `off` turns it off. It always speeds
+    /// up writing; reading a long prompt depends on the model: on an RTX 5070
+    /// Ti, Qwen3.6-35B-A3B read 25% faster (3,200-3,800 to 4,100-4,900
+    /// tokens/s) while Qwen3.8-Flash-Next (IQ2_XS) wrote 49.4 tokens/s with an
+    /// 8,000 MiB cache against 22.4 without and read a prompt 17% slower. One
+    /// GPU only, CUDA or ROCm; elsewhere an asked-for cache says why and runs
+    /// without it. Experimental: the cache is llama.cpp PR #29887, which this
+    /// build carries ahead of a llama.cpp release. Unless told otherwise, a
+    /// load with a cache reads prompts 2048 tokens at a time (--n-ubatch) and
+    /// reads the model into memory when the RAM can spare the experts
+    /// (--no-mmap, --mmap): on that model, 55 tokens/s writing and 960
+    /// reading a prompt.
+    #[arg(
+        long,
+        value_name = "auto|MIB|off",
+        value_parser = fit::parse_moe_cache,
+        help_heading = HELP_MOE
+    )]
+    moe_cache: Option<fit::MoeCache>,
+
+    /// VRAM slots for experts copied ahead of use
+    ///
+    /// For MoE models with experts in RAM: while a prompt is read, copy the
+    /// experts of the layers ahead into N slots of VRAM on a second stream
+    /// of the GPU, while the layers before them compute, instead of halting
+    /// the computing for every copy. 2 to 8 slots, 4 by default; 0 turns it
+    /// off. It works on one GPU, CUDA or ROCm, with the experts in pinned
+    /// memory (a model read into memory: --no-mmap, which --moe-cache chooses
+    /// when the RAM can spare the experts), on micro-batches of 512 tokens or
+    /// more. Each slot holds the largest expert tensor, and --moe-cache keeps
+    /// that VRAM out of the cache where there is room: on an RTX 5070 Ti,
+    /// Qwen3.8-Flash-Next (IQ2_XS) took four slots of 256 MiB out of its
+    /// cache, read a 33,200-token prompt 42% faster, to the same answer, and
+    /// wrote as fast.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = fit::MOE_PREFETCH_SLOTS,
+        value_parser = fit::parse_moe_prefetch,
+        help_heading = HELP_MOE
+    )]
+    moe_prefetch: u32,
+
+    /// Layers per GPU, or tensors cut across GPUs
+    ///
+    /// `layer` (the default) puts whole layers on each GPU, run one after
+    /// another; `tensor` cuts weights and KV cache across them and runs every
+    /// layer on all at once (llama.cpp's experimental tensor parallelism; the
+    /// load says which architectures lack it). Tensor can make one request
+    /// faster, where layer only adds memory: on an MI250X a model on four GCDs
+    /// as layers wrote no faster than on one. No effect with one GPU visible;
+    /// to use one GPU of several, make only it visible (CUDA_VISIBLE_DEVICES,
+    /// ROCR_VISIBLE_DEVICES). llama.cpp's `row` is not offered: its CUDA and
+    /// ROCm backends no longer support it.
+    #[arg(
+        long,
+        value_name = "layer|tensor",
+        default_value = "layer",
+        value_parser = gpu_split::parse_split_mode,
+        help_heading = HELP_GPUS
+    )]
+    split_mode: gpu_split::SplitMode,
+
+    /// The share of the model each GPU takes, e.g. 3,1
+    ///
+    /// Proportions in the order the GPUs are listed. Without it the split
+    /// follows each GPU's free memory.
+    #[arg(
+        long,
+        value_name = "N0,N1,...",
+        value_parser = gpu_split::parse_tensor_split,
+        help_heading = HELP_GPUS
+    )]
+    tensor_split: Option<gpu_split::TensorSplit>,
+
+    /// Tokens the MTP head drafts ahead; 2 is best on a GPU
+    ///
+    /// Speculative decoding with the model's own multi-token prediction
+    /// (MTP) head: after each token the model writes, the head drafts up to
+    /// N more, and one decode checks them all. Every draft the model agrees
+    /// with is kept, so the answer is the one it would have written anyway,
+    /// in fewer steps. 0 (default) turns it off; 2 measured best on a GPU
+    /// (see docs/engine-guide.md). Needs a model whose GGUF carries its MTP
+    /// layers (unsloth's `*-MTP-GGUF` Qwen3.5/3.6, for instance) and one
+    /// request at a time (`--batch-size 1`, the default): otherwise the load
+    /// says why and runs without it. On a hybrid model (Qwen3.5/3.6) it
+    /// raises the recurrent-state rollback window to N, the drafts it may
+    /// have to take back.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 0,
+        value_parser = clap::value_parser!(u32).range(0..=8),
+        help_heading = HELP_MTP
+    )]
+    mtp: u32,
+
+    /// Stop drafting below this head probability, 0 to 1
+    ///
+    /// With `--mtp`: stop drafting once the MTP head's own probability for
+    /// its next draft falls below P. Drafts it is unsure of are mostly
+    /// rejected, and each one costs a pass of the head and a position in the
+    /// check, so a threshold lets the draft length follow the text: long
+    /// where the text is predictable, none where it is not. 0 (default,
+    /// llama.cpp's own) always drafts the full N.
+    #[arg(
+        long,
+        value_name = "P",
+        default_value_t = 0.0,
+        value_parser = parse_probability,
+        help_heading = HELP_MTP
+    )]
+    mtp_p_min: f32,
+
+    /// A GGUF holding the MTP head alone, for a model whose GGUF has none
+    ///
+    /// With `--mtp`: for a model whose own GGUF has no head
+    /// (Qwen3.8-Flash-Next's, for instance: the head is a separate file, such
+    /// as unsloth's `mtp-Qwen3.8-Flash-Next-Q8_0.gguf`). It is loaded onto the
+    /// GPU whole, so it costs that much VRAM (3.85 GB for that one), which
+    /// `--fit` keeps out of the layers and the expert cache. Without `--mtp`
+    /// it is ignored.
+    #[arg(long, value_name = "FILE", help_heading = HELP_MTP)]
+    mtp_model: Option<PathBuf>,
+
+    /// Snapshots kept to resume a conversation
+    ///
+    /// Max full-sequence-state checkpoints kept for prompt-prefix restore
+    /// (bounded alternative to --rs-seq for hybrid/recurrent architectures —
+    /// see docs/engine-guide.md, "--ctx-checkpoints"). 0 (default) disables
+    /// checkpointing: no snapshot is ever taken, matching pre-checkpoint
+    /// behavior exactly. Mirrors llama.cpp server's flag of the same name
+    /// (default there: 32); kept off here since each checkpoint costs one
+    /// sequence's full state size.
+    #[arg(long, value_name = "N", default_value_t = 0, help_heading = HELP_HYBRID)]
+    ctx_checkpoints: usize,
+
+    /// New tokens between two snapshots of a conversation
+    ///
+    /// Minimum new tokens since the closest existing checkpoint of the same
+    /// conversation before taking another one. Mirrors llama.cpp server's
+    /// `--checkpoint-min-step` (default there: 8192). Only consulted when
+    /// --ctx-checkpoints > 0.
+    #[arg(long, value_name = "N", default_value_t = 8192, help_heading = HELP_HYBRID)]
+    checkpoint_min_step: u32,
+
+    /// Recurrent-state rollback window; leave it at 0
+    ///
+    /// For hybrid/recurrent architectures (Mamba/Gated-DeltaNet-style SSM
+    /// layers, e.g. Qwen3.5/3.6's hybrid attention+SSM design). 0 (default,
+    /// strongly recommended) leaves it off. NOT a conversation/KV-cache-reuse
+    /// knob: upstream llama.cpp reserves n_rs_seq for bounded
+    /// speculative-decoding draft-token rollback and hard-zeroes it outside
+    /// that path (`cparams_dft.n_rs_seq = 0`); it is not what the official
+    /// server uses for cross-turn prompt caching on these architectures
+    /// (that's the separate, bounded `--ctx-checkpoints` snapshot mechanism).
+    /// Every recurrent-state tensor scales by `(1 + N)`, so nonzero values can
+    /// multiply resident memory by tens of GB and are not yet validated
+    /// upstream past a small synthetic test model. Not needed for a
+    /// conversation's next turn: on these architectures the engine keeps each
+    /// slot's recurrent state 4 tokens before the end of every prompt it
+    /// reads (where a chat template writes the answer's header again) and
+    /// restores it, as llama.cpp's server does with its --ctx-checkpoints.
+    #[arg(long, value_name = "N", default_value_t = 0, help_heading = HELP_HYBRID)]
+    rs_seq: u32,
+
+    /// The model's projector (mmproj GGUF), if not found by itself
     ///
     /// Normally unnecessary: a model pulled from the catalog gets its
     /// projector alongside the weights, and one sitting next to the GGUF
@@ -542,11 +763,10 @@ struct RuntimeOpts {
     /// HuggingFace repo. A projector belongs to the model it was trained
     /// with: pairing it with different weights produces confident
     /// nonsense rather than an error.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = HELP_MEDIA)]
     mmproj: Option<PathBuf>,
 
-    /// Keep a multimodal model's projector on the GPU, whatever sizing
-    /// would decide. The name is llama.cpp's.
+    /// Keep the projector on the GPU, whatever sizing would decide
     ///
     /// By default, with sizing on, the projector goes on the GPU only when
     /// the whole text model still fits beside it, and to system RAM
@@ -554,110 +774,20 @@ struct RuntimeOpts {
     /// runs once per image and sits idle for every token after it; a text
     /// layer in RAM slows every token of every request. Worth forcing when
     /// nearly every request carries an image, at the price of text layers.
-    #[arg(long, conflicts_with = "no_mmproj_offload")]
+    /// The name is llama.cpp's.
+    #[arg(long, conflicts_with = "no_mmproj_offload", help_heading = HELP_MEDIA)]
     mmproj_offload: bool,
 
-    /// Keep a multimodal model's projector in system RAM, whatever sizing
-    /// would decide: the most VRAM for the text model, and images encoded
-    /// on the CPU. The name is llama.cpp's.
-    #[arg(long)]
+    /// Keep the projector in system RAM, whatever sizing would decide
+    ///
+    /// The most VRAM for the text model, and images encoded on the CPU. The
+    /// name is llama.cpp's.
+    #[arg(long, help_heading = HELP_MEDIA)]
     no_mmproj_offload: bool,
 
-    /// How long to keep a model resident after its last use, before
-    /// unloading it to free VRAM/RAM. Accepts a duration ("5m", "30s",
-    /// "2h") or a bare number of seconds. Applies to both the generation
-    /// model and the embedding model (loaded on demand by naming it in a
-    /// `/v1/embeddings` or `/api/embed` request), independently, and is a
-    /// *default*: a request's own `keep_alive` field overrides it for that
-    /// load.
+    /// Generation models loaded at the same time, 1 to 16
     ///
-    /// Unset by default — matches every release before this flag existed,
-    /// where nothing unloaded a model on its own. Set it to make an
-    /// idle GPU actually go idle: without it, a model loaded once and left
-    /// untouched keeps the card's memory clocks up indefinitely (see
-    /// `docs/arm-cix-p1-cpu-profile.md`'s note on why VRAM occupancy itself
-    /// isn't the cost — an active CUDA context is).
-    #[arg(long, value_name = "DURATION")]
-    keep_alive: Option<String>,
-
-    /// Load a text-embedding model (BGE, E5, and similar) at startup and
-    /// reserve VRAM for it before sizing the generation model, so both stay
-    /// resident together instead of leaving it to chance whether `--fit`'s
-    /// own safety margin happens to be enough.
-    ///
-    /// Without this flag, an embedding model named in a `/v1/embeddings` or
-    /// `/api/embed` request still loads on demand — see `docs/engine.md`'s
-    /// "Text Embeddings and the Embedding Slot" — but nothing is reserved
-    /// for it ahead of time: on a card where the generation model's own
-    /// `--fit` sizing consumes past what a small embedder needs, the first
-    /// embedding request evicts the generation model to make room, and it
-    /// reloads on the next generation request. Fine for a card too small
-    /// for both anyway; wasteful churn for one that has room for both but
-    /// where `--fit`'s margin, sized for the generation model alone, was
-    /// never told to leave any extra behind.
-    ///
-    /// With this flag, the embedding model is treated as a **reserved
-    /// companion**: it loads first, with the context its inputs are embedded
-    /// in (built for its longest input and kept for every request), so both
-    /// already show up as used VRAM by the time `--fit` reads free VRAM to
-    /// size the generation model — no separate bookkeeping needed there —
-    /// and `--fit` also keeps a small margin free on top of that, for what a
-    /// decode allocates beside them. A later chat-model swap (a different
-    /// model named in a request)
-    /// protects the same margin again rather than evicting the companion —
-    /// it keeps its place across the process's lifetime, not just at
-    /// launch.
-    ///
-    /// Accepts a GGUF path or a name already in the model store, the same
-    /// two forms `--mmproj` accepts — trusted like any other CLI argument,
-    /// unlike a request's `model` field, which is gated by
-    /// `EULLM_ALLOW_MODEL_PATHS` (see `docs/engine.md`). If reserving its
-    /// space would leave the generation model no room at all, the launch
-    /// proceeds anyway with a warning: the embedder falls back to loading
-    /// on demand, exactly as if this flag had not been given, rather than
-    /// refusing to start over a sizing decision automatic sizing already
-    /// makes gracefully everywhere else.
-    #[arg(long, value_name = "PATH_OR_NAME")]
-    embedding_model: Option<String>,
-
-    /// Load a decision model for `POST /v1/systemone` at startup.
-    ///
-    /// `/v1/systemone` answers typed questions about a state — yes/no,
-    /// one-of-N, a level on a scale — from the model's next-token
-    /// probabilities instead of generated text (see `docs/engine.md`). It
-    /// runs on its own model slot, like embeddings, and this flag gives that
-    /// slot the same reserved-companion treatment as `--embedding-model`:
-    /// the model loads first, `--fit` keeps free the VRAM a request's
-    /// context needs (its KV cache at `--decision-ctx` plus a compute
-    /// buffer), and a later chat-model swap does not evict it. Without the
-    /// flag, the first request that names a model loads it on demand.
-    ///
-    /// A small instruction-tuned model is the intended shape — Qwen3 0.6B
-    /// to 4B from the catalog. Accepts a GGUF path or a store name, like
-    /// `--embedding-model`.
-    #[arg(long, value_name = "PATH_OR_NAME")]
-    decision_model: Option<String>,
-
-    /// Most tokens of context one `/v1/systemone` request may use: the state
-    /// plus its longest question (plus every other question too in
-    /// `batched` mode).
-    ///
-    /// The decision model keeps one context between requests, sized by the
-    /// largest request so far, so this is a ceiling, not memory held from
-    /// the start — but it is what the decision slot keeps free in VRAM
-    /// (for Qwen3-0.6B, 112 KiB per token: 896 MiB at the default). 8192
-    /// fits a state of nearly 8k tokens, or in `batched` mode a 4k-token
-    /// state with about fifty short questions.
-    #[arg(
-        long,
-        value_name = "N",
-        default_value_t = inference::decision::DEFAULT_DECISION_CTX,
-        value_parser = clap::value_parser!(u32).range(512..=131_072)
-    )]
-    decision_ctx: u32,
-
-    /// How many generation models to keep loaded at once, 1 to 16. The
-    /// embedding and decision models have slots of their own and are not
+    /// The embedding and decision models have slots of their own and are not
     /// counted.
     ///
     /// A model a request names that is not loaded is loaded beside the
@@ -683,12 +813,14 @@ struct RuntimeOpts {
         long,
         value_name = "N",
         default_value_t = 1,
-        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16),
+        help_heading = HELP_MODELS
     )]
     max_loaded_models: usize,
 
-    /// The generation model a request that names none is answered by: a
-    /// store name or a GGUF path, like --decision-model.
+    /// The model of a request that names none
+    ///
+    /// A store name or a GGUF path, like --decision-model.
     ///
     /// A request with no `model` field, or an empty one, goes to this model,
     /// which is loaded for it when it is not loaded, as if the request had
@@ -701,11 +833,93 @@ struct RuntimeOpts {
     ///
     /// Checked at startup: a name that is no model stops the server there,
     /// rather than letting every request that names none fail.
-    #[arg(long, value_name = "NAME_OR_PATH")]
+    #[arg(long, value_name = "NAME", help_heading = HELP_MODELS)]
     default_model: Option<String>,
 
-    /// A model `"model": "auto"` may choose, as NAME or NAME=DESCRIPTION.
-    /// Give it two to eight times, smallest model first.
+    /// Load an embedding model too (BGE, E5...), with VRAM kept for it
+    ///
+    /// A store name or a GGUF path. The model is loaded at startup and VRAM is
+    /// reserved for it before sizing the generation model, so both stay
+    /// resident together instead of leaving it to chance whether `--fit`'s own
+    /// safety margin happens to be enough.
+    ///
+    /// Without this flag, an embedding model named in a `/v1/embeddings` or
+    /// `/api/embed` request still loads on demand — see `docs/engine.md`'s
+    /// "Text Embeddings and the Embedding Slot" — but nothing is reserved
+    /// for it ahead of time: on a card where the generation model's own
+    /// `--fit` sizing consumes past what a small embedder needs, the first
+    /// embedding request evicts the generation model to make room, and it
+    /// reloads on the next generation request. Fine for a card too small
+    /// for both anyway; wasteful churn for one that has room for both but
+    /// where `--fit`'s margin, sized for the generation model alone, was
+    /// never told to leave any extra behind.
+    ///
+    /// With this flag, the embedding model is treated as a **reserved
+    /// companion**: it loads first, with the context its inputs are embedded
+    /// in (built for its longest input and kept for every request), so both
+    /// already show up as used VRAM by the time `--fit` reads free VRAM to
+    /// size the generation model — no separate bookkeeping needed there —
+    /// and `--fit` also keeps a small margin free on top of that, for what a
+    /// decode allocates beside them. A later chat-model swap (a different
+    /// model named in a request) protects the same margin again rather than
+    /// evicting the companion — it keeps its place across the process's
+    /// lifetime, not just at launch.
+    ///
+    /// Accepts a GGUF path or a name already in the model store, the same
+    /// two forms `--mmproj` accepts — trusted like any other CLI argument,
+    /// unlike a request's `model` field, which is gated by
+    /// `EULLM_ALLOW_MODEL_PATHS` (see `docs/engine.md`). If reserving its
+    /// space would leave the generation model no room at all, the launch
+    /// proceeds anyway with a warning: the embedder falls back to loading
+    /// on demand, exactly as if this flag had not been given, rather than
+    /// refusing to start over a sizing decision automatic sizing already
+    /// makes gracefully everywhere else.
+    #[arg(long, value_name = "NAME", help_heading = HELP_MODELS)]
+    embedding_model: Option<String>,
+
+    /// Load a decision model for POST /v1/systemone at startup
+    ///
+    /// A store name or a GGUF path. `/v1/systemone` answers typed questions
+    /// about a state — yes/no, one-of-N, a level on a scale — from the model's
+    /// next-token probabilities instead of generated text (see
+    /// `docs/engine.md`). It
+    /// runs on its own model slot, like embeddings, and this flag gives that
+    /// slot the same reserved-companion treatment as `--embedding-model`:
+    /// the model loads first, `--fit` keeps free the VRAM a request's
+    /// context needs (its KV cache at `--decision-ctx` plus a compute
+    /// buffer), and a later chat-model swap does not evict it. Without the
+    /// flag, the first request that names a model loads it on demand.
+    ///
+    /// A small instruction-tuned model is the intended shape — Qwen3 0.6B
+    /// to 4B from the catalog. Accepts a GGUF path or a store name, like
+    /// `--embedding-model`.
+    #[arg(long, value_name = "NAME", help_heading = HELP_MODELS)]
+    decision_model: Option<String>,
+
+    /// Most tokens of context of a /v1/systemone request
+    ///
+    /// The state plus its longest question (plus every other question too in
+    /// `batched` mode).
+    ///
+    /// The decision model keeps one context between requests, sized by the
+    /// largest request so far, so this is a ceiling, not memory held from
+    /// the start — but it is what the decision slot keeps free in VRAM
+    /// (for Qwen3-0.6B, 112 KiB per token: 896 MiB at the default). 8192
+    /// fits a state of nearly 8k tokens, or in `batched` mode a 4k-token
+    /// state with about fifty short questions.
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = inference::decision::DEFAULT_DECISION_CTX,
+        value_parser = clap::value_parser!(u32).range(512..=131_072),
+        help_heading = HELP_MODELS
+    )]
+    decision_ctx: u32,
+
+    /// A model "model": "auto" may choose, and what it is for
+    ///
+    /// NAME or NAME=TEXT, given two to eight times, smallest model first; TEXT
+    /// describes it.
     ///
     /// A request naming the model `auto` is answered by one of these: those
     /// that cannot take it — it carries an image and the model has no
@@ -721,110 +935,196 @@ struct RuntimeOpts {
     /// not answer within --auto-timeout-ms, it failed — the fallback
     /// answers: --default-model when it is one of these, the last otherwise.
     /// `POST /api/route` shows the choice for a request without generating.
-    #[arg(long, value_name = "NAME[=DESCRIPTION]", action = clap::ArgAction::Append)]
+    #[arg(
+        long,
+        value_name = "NAME[=TEXT]",
+        action = clap::ArgAction::Append,
+        help_heading = HELP_MODELS
+    )]
     auto_model: Vec<String>,
 
-    /// The most routing (`"model": "auto"`) may add to a request, in
-    /// milliseconds, 10 to 60000: a decision not made by then is abandoned,
-    /// and the fallback answers.
+    /// Time limit of a "model": "auto" choice, in ms
+    ///
+    /// 10 to 60000: a decision not made by then is abandoned, and the
+    /// fallback answers.
     #[arg(
         long,
         value_name = "MS",
         default_value_t = api::DEFAULT_AUTO_TIMEOUT_MS,
-        value_parser = clap::value_parser!(u64).range(10..=60_000)
+        value_parser = clap::value_parser!(u64).range(10..=60_000),
+        help_heading = HELP_MODELS
     )]
     auto_timeout_ms: u64,
+
+    /// Run in the background, writing the PID to --pidfile
+    #[arg(long, help_heading = HELP_BACKGROUND)]
+    daemon: bool,
+
+    /// Where --daemon writes its PID
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = DEFAULT_PIDFILE,
+        help_heading = HELP_BACKGROUND
+    )]
+    pidfile: String,
+
+    /// Where --daemon writes its log [default: ~/.eullm/logs/eullm.log]
+    ///
+    /// It used to be derived from `--pidfile`, which put it in `/tmp` by
+    /// default: a directory that is small on many systems and gets cleared
+    /// exactly when something is filling it up or the machine is rebooted
+    /// after a crash — the two moments the log is the only record of what
+    /// happened (#354). The PID file stays in `/tmp`, where a file that is
+    /// meaningless across reboots belongs.
+    ///
+    /// Setting `--pidfile` without `--logfile` still puts the log next to
+    /// the PID file, so an existing deployment that redirects one keeps
+    /// both together.
+    #[arg(long, value_name = "PATH", help_heading = HELP_BACKGROUND)]
+    logfile: Option<String>,
+
+    /// Check each token's logits for NaN/Inf, for garbage output
+    ///
+    /// Enable extra internal diagnostics for the Rust engine layer. Off by
+    /// default (zero added per-token cost, matches upstream llama.cpp). Today
+    /// this enables a NaN/Inf scan of every generated token's logits before
+    /// sampling — added to help diagnose garbage output (issue #140) — at the
+    /// cost of one extra linear scan over the vocab per token. Not a general
+    /// log-level flag; use RUST_LOG for that.
+    #[arg(long, help_heading = HELP_DEBUG)]
+    rust_debug: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Pull a model from the EU catalog
+    /// Download a model: from the EuLLM catalog, Hugging Face or a URL
     ///
-    /// With no argument in an interactive terminal, opens the picker
-    /// filtered to catalog models only.
+    /// With no model in an interactive terminal, opens a menu of the
+    /// catalog's models.
+    #[command(after_help = PULL_AFTER_HELP)]
     Pull {
-        /// Model id (e.g., qwen3-8b) — see `eullm catalog` or the picker
+        /// A catalog id (qwen3-8b), a Hugging Face repo
+        /// (hf.co/OWNER/REPO[:QUANT]) or the https URL of a GGUF file
         model: Option<String>,
     },
-    /// Run a model locally (starts API server)
+    /// Load a model and chat with it: in the browser, the terminal and the API
     ///
-    /// With no argument in an interactive terminal, opens the picker so
-    /// the user can choose a local model, a catalog model, or paste a
-    /// custom path/URL.
+    /// A model not on this machine is downloaded first. The chat opens in
+    /// the browser (on --ui-port) and in the terminal, and the API (on
+    /// --port) answers Ollama and OpenAI clients. With no model in an
+    /// interactive terminal, a menu opens to pick one.
+    #[command(after_help = RUN_AFTER_HELP)]
     Run {
-        /// Model id (catalog), path to a local GGUF file, URL to one, or a
-        /// HuggingFace repo shorthand (`hf.co/<owner>/<repo>[:<quant>]`)
+        /// A catalog id (qwen3-8b), a Hugging Face repo
+        /// (hf.co/OWNER/REPO[:QUANT]), the https URL of a GGUF, a model
+        /// `eullm list` shows, or a .gguf file
         model: Option<String>,
 
         #[command(flatten)]
         opts: RuntimeOpts,
 
-        /// Disable the embedded chat UI (otherwise served on --ui-port).
-        /// Use this for headless / backend / RAG deployments where you only
-        /// want the OpenAI/Ollama API surface exposed.
+        /// No chat in the browser: the API only
+        ///
+        /// For headless / backend / RAG deployments where you only want the
+        /// OpenAI/Ollama API surface exposed.
         #[arg(long)]
         no_ui: bool,
 
-        /// Terminal-only: don't auto-open the browser chat on startup, just
-        /// drop into the CLI REPL. (The chat UI is still served on --ui-port
-        /// unless --no-ui is also given.) Alias: --no-chat.
+        /// Chat in the terminal; don't open the browser
+        ///
+        /// The chat UI is still served on --ui-port unless --no-ui is also
+        /// given. Alias: --no-chat.
         #[arg(long, visible_alias = "no-chat")]
         cli: bool,
 
-        /// (Multimodal MVP, --features multimodal builds only.) Path to an
-        /// image or audio file to send together with the first prompt.
-        /// Triggers the multimodal inference path (mtmd) which requires the
-        /// model's mmproj projector to be available; for catalog models it
-        /// is auto-downloaded during `pull`. The HTTP API also routes media
-        /// (web chat / `/api/chat` `images`); this flag is the CLI one-shot.
-        #[arg(long, value_name = "PATH")]
+        /// Send this image or audio file with the first prompt
+        ///
+        /// (Multimodal MVP, --features multimodal builds only.) Triggers the
+        /// multimodal inference path (mtmd), which requires the model's mmproj
+        /// projector to be available; for catalog models it is auto-downloaded
+        /// during `pull`. The HTTP API also routes media (web chat /
+        /// `/api/chat` `images`); this flag is the CLI one-shot.
+        #[arg(long, value_name = "PATH", help_heading = HELP_MEDIA)]
         image: Option<PathBuf>,
     },
-    /// List locally available models
+    /// List the models on this machine
+    ///
+    /// The models in the models folder (EULLM_MODELS_DIR, where `eullm pull`
+    /// downloads) and in the model libraries (EULLM_MODEL_LIBRARIES): each
+    /// runs by the name shown. With none, the catalog's models.
     List,
-    /// Show model information
+    /// Show the models found in the model folders, and what was left out
+    ///
+    /// The folders of EULLM_MODEL_LIBRARIES (environment or .env, separated
+    /// by ;) and the store's own folder are read through every subfolder, in
+    /// place: nothing is moved, renamed or written, so LM Studio or any other
+    /// program keeps using the same folder. Every model found is listed by
+    /// `eullm list` and `/api/tags` and runs by its name, with no command
+    /// needed; this one only shows the scan, with the files it skipped
+    /// (projectors without a model, incomplete split models) and why.
+    Import {
+        /// Accepted for compatibility with 0.7.95 and ignored: every folder
+        /// is always read whole
+        #[arg(hide = true)]
+        target: Option<String>,
+    },
+    /// Show a model's details: base, languages, VRAM, size, license, status
     Show {
-        /// Model name
+        /// The model's name, as `eullm list` shows it, or a catalog id
         model: String,
     },
-    /// Remove a locally downloaded model (frees disk space)
-    ///
-    /// Examples:
-    ///   eullm rm qwen3-14b
-    ///   eullm rm qwen3-14b --force      (skip the confirmation prompt)
-    #[command(visible_alias = "remove")]
+    /// Remove a downloaded model, freeing its disk space
+    #[command(
+        visible_alias = "remove",
+        after_help = "Examples:
+  eullm rm qwen3-14b
+  eullm rm qwen3-14b --force    (no confirmation prompt)"
+    )]
     Rm {
-        /// Model id (as shown by `eullm list`)
+        /// The model's name, as `eullm list` shows it
         model: String,
 
         /// Skip the confirmation prompt
         #[arg(short, long)]
         force: bool,
     },
-    /// Start the API server without loading a model
+    /// Start the API and the chat with no model: each request names one
+    ///
+    /// A request names its model, which is loaded the first time it is asked
+    /// for and swapped when another one is (see --max-loaded-models and
+    /// --default-model). The same options as `run`.
+    #[command(after_help = SERVE_AFTER_HELP)]
     Serve {
         #[command(flatten)]
         opts: RuntimeOpts,
 
-        /// Enable the embedded chat UI (off by default for headless serve).
-        /// Pass --ui to also expose the chat at http://localhost:<ui-port>/.
+        /// No chat in the browser: the API only
+        ///
+        /// The UI listener enforces the same API keys, IP allowlist and
+        /// origins as the API; a UI port already taken is logged and the API
+        /// is served anyway.
         #[arg(long)]
+        no_ui: bool,
+
+        /// Accepted and ignored: the chat UI is on by default since 0.8.5.
+        /// Kept so that existing scripts and compose files still start.
+        #[arg(long, hide = true, conflicts_with = "no_ui")]
         ui: bool,
     },
-    /// Unload generation models from a running eullm server, freeing their
-    /// VRAM — without restarting the server.
+    /// Unload models from a running eullm, freeing their VRAM
     ///
     /// Every loaded generation model, or with --model only that one, the
-    /// others staying loaded. Requests still running on an unloaded model
-    /// are cut off. A later request with a `model` field (or another `eullm
-    /// run <model>`) loads a model back in. Useful for temporarily handing
-    /// GPU memory to another process — e.g. an embedding model needed during
-    /// RAG document ingestion — then reloading the LLM once it's done.
-    ///
-    /// Examples:
-    ///   eullm unload
-    ///   eullm unload --model qwen3-8b
-    ///   eullm unload --port 11500
+    /// others staying loaded, without restarting the server. Requests still
+    /// running on an unloaded model are cut off. A later request with a
+    /// `model` field (or another `eullm run <model>`) loads a model back in.
+    /// Useful for temporarily handing GPU memory to another process — e.g.
+    /// an embedding model needed during RAG document ingestion — then
+    /// reloading the LLM once it's done.
+    #[command(after_help = "Examples:
+  eullm unload
+  eullm unload --model qwen3-8b
+  eullm unload --port 11500")]
     Unload {
         /// Port of the running eullm API server
         #[arg(short, long, default_value_t = 11434)]
@@ -835,34 +1135,16 @@ enum Commands {
         #[arg(long, value_name = "NAME")]
         model: Option<String>,
     },
-    /// Import a model from a local Ollama installation
-    ///
-    /// Copies the GGUF blob from Ollama's storage into EULLM's model store,
-    /// so you can test both engines with the exact same model file.
-    ///
-    /// Examples:
-    ///   eullm import-ollama llama3.2
-    ///   eullm import-ollama qwen3:14b
-    ///   eullm import-ollama gemma3 --ollama-dir /custom/ollama/path
-    ImportOllama {
-        /// Ollama model name (e.g., llama3.2, qwen3:14b)
-        model: String,
-
-        /// Custom Ollama data directory (default: ~/.ollama)
-        #[arg(long)]
-        ollama_dir: Option<String>,
-    },
-    /// Update EuLLM to the latest release
+    /// Update eullm to the latest release
     ///
     /// Asks github.com which release is the latest: the only time EuLLM
     /// looks, since it never checks on its own. When there is a newer one,
     /// downloads the same build as this one (CPU, CUDA, Vulkan, ROCm),
     /// checks it against the release's checksums, makes sure it starts, and
     /// puts it in place of this one. A build from source is not replaced.
-    ///
-    /// Examples:
-    ///   eullm update --check    (only say whether a newer release exists)
-    ///   eullm update
+    #[command(after_help = "Examples:
+  eullm update --check    (only say whether a newer release exists)
+  eullm update")]
     Update {
         /// Only say whether a newer release exists; change nothing
         #[arg(long)]
@@ -873,19 +1155,20 @@ enum Commands {
     /// llama.cpp's own trainer, so its limits: an F32 GGUF, flash attention
     /// off, the whole window in one micro-batch. Validation loss is measured
     /// before and after each epoch; the result is a new F32 GGUF.
-    ///
-    /// Examples:
-    ///   eullm finetune ./model-f32.gguf --data corpus.txt --epochs 2
-    ///   eullm finetune ./model-f32.gguf --data train.jsonl --optimizer sgd --dry-run
+    #[command(after_help = "Examples:
+  eullm finetune ./model-f32.gguf --data corpus.txt --epochs 2
+  eullm finetune ./model-f32.gguf --data train.jsonl --optimizer sgd --dry-run")]
     Finetune {
         #[command(flatten)]
         opts: finetune::FinetuneOpts,
     },
-    /// Verticalize a model: compress, specialize, and brand it
+    /// Verticalize a model with the Forge pipeline: compress, specialize, brand
     ///
-    /// Examples:
-    ///   eullm forge Qwen/Qwen3-14B --profile legal-it
-    ///   eullm forge Qwen/Qwen3-30B --profile medical-de --identity "MedAI"
+    /// Runs `eullm-forge`, the Python pipeline in forge/ of the repository,
+    /// which is installed apart from eullm.
+    #[command(after_help = "Examples:
+  eullm forge Qwen/Qwen3-14B --profile legal-it
+  eullm forge Qwen/Qwen3-30B --profile medical-de --identity \"MedAI\"")]
     Forge {
         /// Source model (HuggingFace ID or local path)
         source: String,
@@ -979,7 +1262,7 @@ async fn main() {
         // logging (KV-reuse diagnostics, context/scheduler startup
         // info, etc.) unless RUST_LOG was set explicitly.
         tracing_subscriber::EnvFilter::try_new(inference::log_filter(
-            std::env::var("RUST_LOG").ok().as_deref(),
+            crate::settings::var("RUST_LOG").as_deref(),
         ))
         .unwrap_or_else(|_| inference::log_filter(None).into()),
     )
@@ -1025,10 +1308,12 @@ async fn main() {
                 eprintln!("eullm — sovereign LLM runtime for Europe");
                 eprintln!();
                 eprintln!("Usage:");
-                eprintln!("  eullm run <model.gguf | catalog-id>   Run a model");
-                eprintln!("  eullm list                            List local models");
-                eprintln!("  eullm pull <catalog-id>               Download a catalog model");
-                eprintln!("  eullm --help                          Show full help");
+                eprintln!("  eullm run <MODEL>    Load a model and chat with it: a catalog id,");
+                eprintln!("                       hf.co/OWNER/REPO[:QUANT], a GGUF URL or file");
+                eprintln!("  eullm serve          The API and the chat; a request names its model");
+                eprintln!("  eullm pull <MODEL>   Download a model");
+                eprintln!("  eullm list           List the models on this machine");
+                eprintln!("  eullm --help         Every command, the options and the settings");
                 eprintln!();
                 eprintln!(
                     "Tip: launch `eullm` from an interactive terminal to pick a model from a menu."
@@ -1148,7 +1433,10 @@ async fn main() {
                     Some(picker::Picked::Quit) => return,
                     None => {
                         eprintln!("Error: missing <MODEL> argument.");
-                        eprintln!("Usage: eullm run <model.gguf | catalog-id>");
+                        eprintln!(
+                            "Usage: eullm run <MODEL>  (a catalog id, hf.co/OWNER/REPO[:QUANT], \
+                             a GGUF URL or file; eullm run --help)"
+                        );
                         std::process::exit(1);
                     }
                 },
@@ -1246,9 +1534,10 @@ async fn main() {
             .await;
         }
         Commands::List => cmd_list(&store),
+        Commands::Import { target: _ } => cmd_import(&store),
         Commands::Show { model } => cmd_show(&store, &model),
         Commands::Rm { model, force } => cmd_rm(&store, &model, force),
-        Commands::Serve { ui, opts } => {
+        Commands::Serve { no_ui, ui: _, opts } => {
             // One `let` re-binds every shared flag under the name the body
             // already uses, so extracting `RuntimeOpts` cost nothing below
             // this line.
@@ -1360,7 +1649,7 @@ async fn main() {
                 }
                 (k, corrected)
             };
-            let ui_port_opt = if ui { Some(ui_port) } else { None };
+            let ui_port_opt = if no_ui { None } else { Some(ui_port) };
             cmd_serve(
                 port,
                 replace,
@@ -1405,9 +1694,6 @@ async fn main() {
             .await;
         }
         Commands::Unload { port, model } => cmd_unload(port, model.as_deref()).await,
-        Commands::ImportOllama { model, ollama_dir } => {
-            cmd_import_ollama(&store, &model, ollama_dir.as_deref())
-        }
         Commands::Update { check } => {
             if let Err(e) = update::run(check).await {
                 eprintln!("Error: {e}");
@@ -1485,7 +1771,9 @@ async fn cmd_pull_maybe(store: &ModelStore, model: Option<&str>) {
         Some(picker::Picked::Quit) => {}
         None => {
             eprintln!("Error: missing <MODEL> argument.");
-            eprintln!("Usage: eullm pull <catalog-id>");
+            eprintln!(
+                "Usage: eullm pull <MODEL>  (a catalog id, hf.co/OWNER/REPO[:QUANT] or a GGUF URL)"
+            );
             std::process::exit(1);
         }
     }
@@ -1612,23 +1900,7 @@ fn url_to_model_id(url: &str) -> (String, String) {
         .to_string();
 
     let stem = filename.strip_suffix(".gguf").unwrap_or(&filename);
-    let id: String = stem
-        .to_lowercase()
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect();
-    let id = id.trim_matches('-').to_string();
-    let id = if id.is_empty() {
-        "model".to_string()
-    } else {
-        id
-    };
+    let id = models::store::model_id_for(stem);
 
     // Ensure the stored filename ends in .gguf so gguf_path() finds it.
     let filename = if filename.to_lowercase().ends_with(".gguf") {
@@ -1722,9 +1994,13 @@ async fn cmd_pull(store: &ModelStore, model: &str) -> String {
         Some(e) => e,
         None => {
             eprintln!("Error: model '{model}' not found in EU catalog.");
-            eprintln!("Run `eullm list` to see available models.");
+            eprintln!(
+                "The catalog's models: `eullm pull` with no model, in a terminal, or the chat's \
+                 Model hub."
+            );
             eprintln!();
-            eprintln!("You can also pull any GGUF by URL:");
+            eprintln!("You can also pull a Hugging Face repo, or any GGUF by URL:");
+            eprintln!("  eullm pull hf.co/owner/repo[:quant]");
             eprintln!("  eullm pull https://host/path/model.gguf");
             std::process::exit(1);
         }
@@ -2037,33 +2313,67 @@ async fn download_mmproj(
     }
 }
 
-/// Report model directories that hold weights but that `list()` could not
-/// read, so they do not vanish from the listing without explanation.
-///
-/// Printed after the table rather than mixed into it: these are not usable
-/// models, and putting them in the same list would suggest they can be run.
-fn print_unlisted(store: &ModelStore) {
-    let unlisted = store.unlisted();
-    if unlisted.is_empty() {
+/// The folders models are read from, for the head of `eullm list` and
+/// `eullm import`.
+fn print_folders(store: &ModelStore) {
+    let (root, source) = store.root_with_source();
+    println!("Models in {} [{source}]", root.display());
+    let (libraries, source) = store.libraries_with_source();
+    for l in libraries {
+        let missing = if l.is_dir() { "" } else { "  (not found)" };
+        println!("Library   {} [{source}]{missing}", l.display());
+    }
+}
+
+/// The `.gguf` files a scan of the libraries left out, and why.
+fn print_skipped(store: &ModelStore) {
+    let scan = store.library();
+    if scan.skipped.is_empty() {
         return;
     }
-    println!("\nNot listed above — weights on disk, manifest unusable:");
-    for (name, reason) in &unlisted {
-        println!("  {name:<24} {reason}");
+    println!("\nNot models (left as they are):");
+    for s in &scan.skipped {
+        println!("  {}  {}", s.path.display(), s.reason);
     }
-    println!(
-        "\n  Repair with `eullm pull <name>` (re-downloads and rewrites the manifest),\n           or run the file directly: `eullm run <path-to-the-.gguf>`."
-    );
+}
+
+/// `eullm import`: what a scan of the libraries and the store's folder finds.
+/// Writes nothing: every model found is listed and runs without a manifest,
+/// and 0.7.95's import, which moved loose files into folders of their own,
+/// changed a folder other programs may also read.
+fn cmd_import(store: &ModelStore) {
+    print_folders(store);
+    let scan = store.library();
+    println!();
+    if scan.models.is_empty() {
+        println!("No model found outside the store's downloaded models.");
+    }
+    for m in &scan.models {
+        let projector = m
+            .mmproj
+            .as_deref()
+            .and_then(|p| p.file_name())
+            .map(|n| format!("  + {}", n.to_string_lossy()))
+            .unwrap_or_default();
+        println!(
+            "  {:<32} {:>8}  {}{projector}",
+            m.id,
+            format_bytes(m.size_bytes),
+            m.path.display()
+        );
+    }
+    print_skipped(store);
+    if let Some(first) = scan.models.first() {
+        println!("\nNothing to import: they are listed and run as they are, e.g. eullm run {}", first.id);
+    }
 }
 
 fn cmd_list(store: &ModelStore) {
-    match store.list() {
+    match store.list_all() {
         Ok(models) if models.is_empty() => {
-            let (root, source) = store.root_with_source();
-            println!("No models installed in {} [{}].", root.display(), source);
-            // Before the catalog: "nothing installed" is misleading when a
-            // model's weights are right there and only its manifest is gone.
-            print_unlisted(store);
+            print_folders(store);
+            println!("\nNo models installed.");
+            print_skipped(store);
             println!("\nAvailable models in EU catalog:");
             for entry in catalog::EU_CATALOG.iter() {
                 println!(
@@ -2077,8 +2387,8 @@ fn cmd_list(store: &ModelStore) {
         Ok(models) => {
             // NAME is the addressable id — exactly what you pass to `eullm run`.
             // The human-readable name is shown as a trailing description.
-            let (root, source) = store.root_with_source();
-            println!("Models in {} [{}]\n", root.display(), source);
+            print_folders(store);
+            println!();
             println!(
                 "{:<24} {:>8} {:>6} {:<16} DESCRIPTION",
                 "NAME", "SIZE", "VRAM", "STATUS"
@@ -2094,8 +2404,13 @@ fn cmd_list(store: &ModelStore) {
                 // copy, so a stale display name (e.g. an old "(text-only)" tag)
                 // self-corrects without a re-pull. External models fall back to
                 // the manifest name.
-                let desc = catalog::find_model(id)
-                    .map(|e| e.name.as_str())
+                // A library model has no name of its own: its file says
+                // what it is.
+                let library_path = (m.status == "library")
+                    .then(|| m.description.split_once(": ").map(|(_, p)| p))
+                    .flatten();
+                let desc = library_path
+                    .or_else(|| catalog::find_model(id).map(|e| e.name.as_str()))
                     .unwrap_or(m.name.as_str());
                 // `status` is whatever was written into the manifest at pull
                 // time, so it keeps saying `ready` for a model whose GGUF is
@@ -2121,7 +2436,7 @@ fn cmd_list(store: &ModelStore) {
                     })
                     .unwrap_or("<NAME>")
             );
-            print_unlisted(store);
+            print_skipped(store);
         }
         Err(e) => {
             eprintln!("Error listing models: {e}");
@@ -2131,8 +2446,8 @@ fn cmd_list(store: &ModelStore) {
 }
 
 fn cmd_show(store: &ModelStore, model: &str) {
-    // First check local store
-    match store.get(model) {
+    // First check local store, and the libraries
+    match store.get_any(model) {
         Ok(Some(manifest)) => {
             // Show the addressable id and the fresh catalog name when known.
             let id = if manifest.id.is_empty() {
@@ -2181,6 +2496,18 @@ fn cmd_show(store: &ModelStore, model: &str) {
 fn cmd_rm(store: &ModelStore, model: &str, force: bool) {
     // Resolve the model to its on-disk manifest so we can show name + size
     // in the confirmation prompt. If there's no manifest, refuse.
+    // A library's files belong to the user and to whatever else reads the
+    // folder: EuLLM lists and runs them, and deletes nothing there.
+    if store.get(model).ok().flatten().is_none()
+        && let Some(m) = store.library_model(model)
+    {
+        eprintln!(
+            "Error: '{model}' is {} in a model library, which EuLLM only reads.\n  \
+             Delete the file yourself if you want it gone.",
+            m.path.display()
+        );
+        std::process::exit(1);
+    }
     let manifest = match store.get(model) {
         Ok(Some(m)) => m,
         Ok(None) => {
@@ -2250,8 +2577,8 @@ fn resolve_model_path(model: &str, store: &ModelStore) -> Option<PathBuf> {
         return Some(path);
     }
 
-    // Check model store for downloaded GGUF files
-    store.gguf_path(model)
+    // Check model store for downloaded GGUF files, then the libraries
+    store.resolve_gguf(model)
 }
 
 /// `--max-loaded-models`, `--default-model` and `--auto-model`, resolved
@@ -2508,8 +2835,32 @@ async fn detect_port_service(port: u16) -> Option<String> {
     Some("unknown service".into())
 }
 
-/// Ensure the port is available, or exit with a helpful message.
-async fn ensure_port_available(port: u16, replace: bool) {
+/// The ports a command will not start without, each with the flag that
+/// moves it, checked before anything is loaded.
+///
+/// `eullm run` is the chat: with its UI port answered by another service the
+/// browser would open someone else's page, so both ports must be free.
+/// `eullm serve` is the API: since 0.8.5 it opens the chat UI too, but a UI
+/// port already taken must not stop it, as the 0.8.5 changelog says;
+/// `api::serve` logs that the UI could not be bound and serves the API. 0.8.5
+/// refused it, and on a LUMI node, where every benchmark server has its own
+/// API port, each server after the first exited at start (226 points of the
+/// `r-v085` round, 01/02-11-2026).
+fn ports_required(
+    api_port: u16,
+    ui_port: Option<u16>,
+    ui_required: bool,
+) -> Vec<(u16, &'static str)> {
+    let mut ports = vec![(api_port, "--port")];
+    if ui_required && let Some(p) = ui_port {
+        ports.push((p, "--ui-port"));
+    }
+    ports
+}
+
+/// Ensure the port is available, or exit with a helpful message naming
+/// `flag`, the option that moves it.
+async fn ensure_port_available(port: u16, flag: &str, replace: bool) {
     if let Some(service) = detect_port_service(port).await {
         if replace {
             eprintln!("Port {port} is in use by {service}.");
@@ -2522,8 +2873,8 @@ async fn ensure_port_available(port: u16, replace: bool) {
             eprintln!("Options:");
             eprintln!("  1. Stop the existing service on port {port}");
             eprintln!(
-                "  2. Use a different port:  eullm serve --port {}",
-                port + 1
+                "  2. Use a different port:  {flag} {}",
+                port.saturating_add(1)
             );
             std::process::exit(1);
         }
@@ -2677,6 +3028,28 @@ mod launch_batch_size_tests {
     }
 }
 
+#[cfg(test)]
+mod ports_required_tests {
+    use super::ports_required;
+
+    #[test]
+    fn serve_needs_its_api_port_only_and_run_its_chat_port_too() {
+        // `serve` with the chat UI on: another server holding 11435 is no
+        // reason to refuse the API (a node of several benchmark servers).
+        assert_eq!(
+            ports_required(18020, Some(11435), false),
+            vec![(18020, "--port")]
+        );
+        // `run` is the chat: its UI port taken stops it, naming the flag.
+        assert_eq!(
+            ports_required(11434, Some(11435), true),
+            vec![(11434, "--port"), (11435, "--ui-port")]
+        );
+        // `--no-ui`: nothing but the API port, either way.
+        assert_eq!(ports_required(11434, None, true), vec![(11434, "--port")]);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn cmd_run(
     store: &ModelStore,
@@ -2773,9 +3146,8 @@ async fn cmd_run(
     let flag_n_cpu_moe = n_cpu_moe;
 
     if !multimodal_oneshot {
-        ensure_port_available(port, replace).await;
-        if let Some(p) = ui_port {
-            ensure_port_available(p, replace).await;
+        for (p, flag) in ports_required(port, ui_port, true) {
+            ensure_port_available(p, flag, replace).await;
         }
     }
 
@@ -3009,7 +3381,8 @@ async fn cmd_run(
                 eprintln!("  eullm run ./path/to/model.gguf         # Run a local GGUF file");
                 eprintln!("  eullm run https://host/model.gguf      # Run any GGUF by URL");
                 eprintln!("  eullm run hf.co/owner/repo[:quant]     # Run from HuggingFace");
-                eprintln!("  eullm run legal-it-7b                  # Run a catalog model");
+                eprintln!("  eullm run qwen3-8b                     # Run a catalog model");
+                eprintln!("  eullm run NAME                         # A model `eullm list` shows");
                 std::process::exit(1);
             }
         }
@@ -3046,8 +3419,8 @@ async fn cmd_run(
         // then finds missing.
         let mmproj_for_config = mmproj
             .clone()
-            .or_else(|| store.mmproj_path(&model_name))
-            .or_else(|| store.mmproj_path(model))
+            .or_else(|| store.resolve_mmproj(&model_name))
+            .or_else(|| store.resolve_mmproj(model))
             .or_else(|| crate::models::store::mmproj_beside(&gguf_path));
         // `--mtp` drafts on the scheduler's one slot only, which a projector
         // rules out: see `projector_with_mtp`.
@@ -3783,9 +4156,8 @@ async fn cmd_serve(
         eprintln!("Error: {e}");
         std::process::exit(1);
     });
-    ensure_port_available(port, replace).await;
-    if let Some(p) = ui_port {
-        ensure_port_available(p, replace).await;
+    for (p, flag) in ports_required(port, ui_port, false) {
+        ensure_port_available(p, flag, replace).await;
     }
 
     let threads = threads.unwrap_or_else(inference::default_thread_count);
@@ -4041,395 +4413,6 @@ fn unload_report(body: &serde_json::Value, asked_for: Option<&str>) -> Vec<Strin
     lines
 }
 
-// ── Import from Ollama ────────────────────────────────────────────────────
-//
-// Ollama stores downloaded models as content-addressed blobs under
-// `~/.ollama/models/`.  The on-disk layout is:
-//
-//   ~/.ollama/models/
-//   ├── manifests/registry.ollama.ai/library/{model}/{tag}   ← JSON manifest
-//   └── blobs/sha256-{hex}                                    ← raw files
-//
-// Each manifest lists "layers" with an OCI-style mediaType.  The layer
-// with `application/vnd.ollama.image.model` is the GGUF weights file.
-//
-// **Licensing note:** Ollama itself does not add any additional license or
-// copyright on top of the original model weights.  The GGUF blob is the
-// same file distributed by the upstream model author (e.g. on HuggingFace).
-// Copying it into the EULLM store is no different from copying a local file
-// you already possess.  The license of the model itself still applies — for
-// example Apache 2.0 for Qwen 3, MIT for DeepSeek, Gemma terms for Gemma,
-// etc.  Always verify the upstream license before redistribution.
-//
-// **What this command does:**
-//
-// 1. Reads the Ollama manifest at
-//    `~/.ollama/models/manifests/registry.ollama.ai/library/{name}/{tag}`
-// 2. Locates the model layer (`application/vnd.ollama.image.model`)
-// 3. Resolves the blob path (`~/.ollama/models/blobs/sha256-{hash}`)
-// 4. Copies the blob into `~/.eullm/models/{name}/{name}.gguf`
-// 5. Writes a EULLM `manifest.json` so the model appears in `eullm list`
-//
-// After import, the model can be used with `eullm run {name}`, enabling
-// bit-identical benchmarks between EULLM Engine and Ollama.
-
-/// Ollama manifest layer entry (OCI-style).
-#[derive(serde::Deserialize)]
-struct OllamaLayer {
-    /// OCI media type — `application/vnd.ollama.image.model` for the GGUF weights.
-    #[serde(rename = "mediaType")]
-    media_type: String,
-    /// Content-addressed digest, e.g. `sha256:abc123...`.
-    digest: String,
-    /// Layer size in bytes.
-    size: u64,
-}
-
-/// Top-level Ollama manifest (simplified — we only need `layers`).
-#[derive(serde::Deserialize)]
-struct OllamaManifest {
-    layers: Vec<OllamaLayer>,
-}
-
-/// Whether `digest` is exactly `sha256:` followed by 64 lowercase hex chars —
-/// the only shape ever produced by Ollama's own manifests. Rejects anything
-/// else before it becomes a filesystem path component.
-fn is_valid_sha256_digest(digest: &str) -> bool {
-    let Some(hex) = digest.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-#[cfg(test)]
-mod digest_validation_tests {
-    use super::is_valid_sha256_digest;
-
-    #[test]
-    fn accepts_a_real_shaped_digest() {
-        assert!(is_valid_sha256_digest(&format!(
-            "sha256:{}",
-            "a".repeat(64)
-        )));
-    }
-
-    #[test]
-    fn rejects_path_traversal_attempts() {
-        assert!(!is_valid_sha256_digest("sha256:../../../../etc/passwd"));
-    }
-
-    #[test]
-    fn rejects_wrong_length_and_missing_prefix() {
-        assert!(!is_valid_sha256_digest("sha256:abcd"));
-        assert!(!is_valid_sha256_digest(
-            "c62ccde5630c20c8a9cc0548233e78dc9414540c62d4d5b3f1a5a89e4b6b6c0"
-        ));
-    }
-
-    #[test]
-    fn rejects_uppercase_hex() {
-        assert!(!is_valid_sha256_digest(&format!(
-            "sha256:{}",
-            "A".repeat(64)
-        )));
-    }
-}
-
-/// Import a model from a local Ollama installation into the EULLM store.
-///
-/// This copies the GGUF blob so that EULLM and Ollama can be benchmarked
-/// against the exact same model weights.  The copy is always a full
-/// physical copy (no symlinks) to remain independent of Ollama's storage.
-///
-/// # Arguments
-///
-/// * `store` — EULLM local model store (`~/.eullm/models/`)
-/// * `model` — Ollama model specifier, e.g. `"llama3.2"` or `"qwen3:14b"`
-/// * `ollama_dir` — Optional override for the Ollama data directory
-///   (defaults to `~/.ollama`)
-fn cmd_import_ollama(store: &ModelStore, model: &str, ollama_dir: Option<&str>) {
-    // Resolve Ollama data directory
-    let ollama_root = if let Some(dir) = ollama_dir {
-        PathBuf::from(dir)
-    } else {
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        PathBuf::from(home).join(".ollama")
-    };
-
-    if !ollama_root.exists() {
-        eprintln!(
-            "Error: Ollama directory not found: {}",
-            ollama_root.display()
-        );
-        eprintln!("  Is Ollama installed? Try: ollama --version");
-        eprintln!(
-            "  Or specify a custom path: eullm import-ollama {model} --ollama-dir /path/to/ollama"
-        );
-        std::process::exit(1);
-    }
-
-    // Parse model name and tag (e.g., "llama3.2:8b" → name="llama3.2", tag="8b")
-    let (model_name, model_tag) = if let Some(pos) = model.find(':') {
-        (&model[..pos], &model[pos + 1..])
-    } else {
-        (model, "latest")
-    };
-
-    // Find the Ollama manifest file
-    // Ollama stores manifests at: manifests/registry.ollama.ai/library/{name}/{tag}
-    let manifest_path = ollama_root
-        .join("models")
-        .join("manifests")
-        .join("registry.ollama.ai")
-        .join("library")
-        .join(model_name)
-        .join(model_tag);
-
-    if !manifest_path.exists() {
-        eprintln!("Error: Ollama model '{model}' not found.");
-        eprintln!("  Looked in: {}", manifest_path.display());
-        eprintln!();
-
-        // Try to list available models
-        let library_dir = ollama_root
-            .join("models")
-            .join("manifests")
-            .join("registry.ollama.ai")
-            .join("library");
-        if library_dir.is_dir() {
-            eprintln!("Available Ollama models:");
-            if let Ok(entries) = std::fs::read_dir(&library_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        let name = entry.file_name();
-                        // List tags
-                        if let Ok(tags) = std::fs::read_dir(entry.path()) {
-                            for tag in tags.flatten() {
-                                let tag_name = tag.file_name();
-                                println!(
-                                    "  {}:{}",
-                                    name.to_string_lossy(),
-                                    tag_name.to_string_lossy()
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            eprintln!("No Ollama models found. Pull one first: ollama pull {model}");
-        }
-        std::process::exit(1);
-    }
-
-    // Parse the Ollama manifest JSON
-    let manifest_data = match std::fs::read_to_string(&manifest_path) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("Error reading Ollama manifest: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    let manifest: OllamaManifest = match serde_json::from_str(&manifest_data) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Error parsing Ollama manifest: {e}");
-            std::process::exit(1);
-        }
-    };
-
-    // Find the model layer (the GGUF blob)
-    let model_layer = manifest
-        .layers
-        .iter()
-        .find(|l| l.media_type == "application/vnd.ollama.image.model");
-
-    let model_layer = match model_layer {
-        Some(l) => l,
-        None => {
-            eprintln!("Error: no model layer found in Ollama manifest for '{model}'.");
-            eprintln!("  This may not be a standard Ollama model.");
-            std::process::exit(1);
-        }
-    };
-
-    if !is_valid_sha256_digest(&model_layer.digest) {
-        eprintln!(
-            "Error: malformed digest in Ollama manifest for '{model}': {}",
-            model_layer.digest
-        );
-        std::process::exit(1);
-    }
-
-    // The blob is stored at: blobs/{digest} (with ":" replaced by "-")
-    let blob_filename = model_layer.digest.replace(':', "-");
-    let blob_path = ollama_root
-        .join("models")
-        .join("blobs")
-        .join(&blob_filename);
-
-    if !blob_path.exists() {
-        eprintln!("Error: Ollama blob not found: {}", blob_path.display());
-        eprintln!("  The model may be partially downloaded. Try: ollama pull {model}");
-        std::process::exit(1);
-    }
-
-    // Determine EULLM model name
-    let eullm_name = if model_tag == "latest" {
-        model_name.to_string()
-    } else {
-        format!("{model_name}-{model_tag}")
-    };
-
-    // Check if already imported
-    if let Some(existing) = store.gguf_path(&eullm_name) {
-        println!("Model '{}' is already imported.", eullm_name);
-        println!("  GGUF: {}", existing.display());
-        println!("\nRun with: eullm run {eullm_name}");
-        return;
-    }
-
-    let blob_size = model_layer.size;
-    println!("Importing Ollama model '{model}' → eullm/{eullm_name}");
-    println!("  Source: {}", blob_path.display());
-    println!("  Size:   {}", format_bytes(blob_size));
-    println!("  Copying GGUF blob...");
-
-    // Create destination directory and copy
-    let dest_dir = store.model_path(&eullm_name);
-    if let Err(e) = std::fs::create_dir_all(&dest_dir) {
-        eprintln!("Error creating directory: {e}");
-        std::process::exit(1);
-    }
-
-    let gguf_filename = format!("{eullm_name}.gguf");
-    let dest_path = dest_dir.join(&gguf_filename);
-
-    // Try patched copy first — fixes Ollama GGUF metadata quirks
-    // (e.g. qwen35.rope.dimension_sections with 3 elements instead of 4).
-    let patched = match gguf_patch::patch_gguf_if_needed(&blob_path, &dest_path) {
-        Ok(true) => {
-            println!(
-                "  Patched GGUF metadata during copy (fixed array lengths for llama.cpp compatibility)."
-            );
-            true
-        }
-        Ok(false) => false,
-        Err(e) => {
-            tracing::warn!("GGUF patch check failed ({e}), falling back to plain copy");
-            false
-        }
-    };
-
-    // If no patching was needed (or patching failed), do a normal copy.
-    if !patched {
-        match copy_with_progress(&blob_path, &dest_path, blob_size) {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!("\nError copying model: {e}");
-                // Clean up partial copy
-                let _ = std::fs::remove_file(&dest_path);
-                std::process::exit(1);
-            }
-        }
-    }
-
-    eprintln!(); // newline after progress
-
-    // Write EULLM manifest
-    let manifest = models::store::ModelManifest {
-        id: eullm_name.clone(),
-        name: format!("eullm/{eullm_name}"),
-        description: format!("Imported from Ollama: {model}"),
-        languages: vec![],
-        base: model_name.to_string(),
-        vram_gb: estimate_vram(blob_size),
-        size_bytes: blob_size,
-        license: "See original model".into(),
-        digest: model_layer.digest.clone(),
-        pulled_at: chrono::Utc::now().to_rfc3339(),
-        status: "ready".into(),
-        gguf_file: Some(gguf_filename),
-        mmproj_file: None,
-        hf_repo: None,
-        hf_filename: None,
-    };
-
-    let manifest_json = serde_json::to_string_pretty(&manifest).unwrap();
-    let manifest_path = dest_dir.join("manifest.json");
-    if let Err(e) = std::fs::write(&manifest_path, manifest_json) {
-        eprintln!("Warning: model copied but manifest write failed: {e}");
-    }
-
-    println!("  Done. Model imported successfully.");
-    println!();
-    println!("Run with: eullm run {eullm_name}");
-}
-
-/// Copy a file from `src` to `dst` with a progress indicator on stderr.
-///
-/// Uses 8 MB buffered I/O for throughput.  Progress is printed every 50 MB
-/// as a carriage-return line (`\r`) so it updates in place.
-fn copy_with_progress(
-    src: &std::path::Path,
-    dst: &std::path::Path,
-    total: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::{Read, Write};
-
-    let mut reader = std::io::BufReader::with_capacity(8 * 1024 * 1024, std::fs::File::open(src)?);
-    let mut writer =
-        std::io::BufWriter::with_capacity(8 * 1024 * 1024, std::fs::File::create(dst)?);
-
-    let mut copied: u64 = 0;
-    let mut buf = vec![0u8; 8 * 1024 * 1024]; // 8MB buffer
-    let mut last_report: u64 = 0;
-
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        writer.write_all(&buf[..n])?;
-        copied += n as u64;
-
-        // Report every 50MB
-        if copied - last_report > 50_000_000 || copied >= total {
-            last_report = copied;
-            let pct = if total > 0 {
-                (copied as f64 / total as f64 * 100.0) as u32
-            } else {
-                0
-            };
-            eprint!(
-                "\r  {}/{} ({}%)",
-                format_bytes(copied),
-                format_bytes(total),
-                pct
-            );
-            let _ = std::io::stderr().flush();
-        }
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
-/// Rough VRAM estimate from GGUF file size.
-///
-/// For Q4_K_M quantized models the file size is a reasonable proxy for
-/// runtime memory usage.  We add ~500 MB for KV cache and runtime overhead.
-fn estimate_vram(size_bytes: u64) -> u32 {
-    let gb = size_bytes as f64 / 1_000_000_000.0;
-    (gb + 0.5).ceil() as u32
-}
-
 #[allow(clippy::too_many_arguments)]
 fn cmd_forge(
     source: &str,
@@ -4603,7 +4586,7 @@ async fn interactive_chat(
     // Resolved once, outside the loop: the policy cannot change while the
     // session runs, and reading the environment per fetch would make the log
     // line below a claim about a different policy than the one enforced.
-    let web_policy = crate::tools::guard::WebPolicy::from_env();
+    let web_policy = crate::tools::guard::WebPolicy::load();
     if web_enabled {
         eprintln!("[web] enabled — fetchable: {}", web_policy.describe());
     }
@@ -5439,6 +5422,29 @@ mod cli_default_parity_tests {
         }
     }
 
+    /// Whether the chat UI is served, as `run` and `serve` parsed their flags.
+    fn ui_on(argv: &[&str]) -> bool {
+        match Cli::parse_from(argv).command.expect("subcommand") {
+            Commands::Run { no_ui, .. } | Commands::Serve { no_ui, .. } => !no_ui,
+            other => panic!(
+                "unexpected subcommand: {:?}",
+                std::mem::discriminant(&other)
+            ),
+        }
+    }
+
+    /// The chat UI is on for both commands unless `--no-ui` (until 0.8.0 `serve`
+    /// used to need `--ui`, which is still accepted so old scripts start).
+    #[test]
+    fn the_chat_ui_is_on_unless_told_otherwise() {
+        assert!(ui_on(&["eullm", "run", "m.gguf"]));
+        assert!(ui_on(&["eullm", "serve"]));
+        assert!(ui_on(&["eullm", "serve", "--ui"]));
+        assert!(!ui_on(&["eullm", "run", "m.gguf", "--no-ui"]));
+        assert!(!ui_on(&["eullm", "serve", "--no-ui"]));
+        assert!(Cli::try_parse_from(["eullm", "serve", "--ui", "--no-ui"]).is_err());
+    }
+
     /// The KV cache defaults of `run` and `serve`.
     fn kv_defaults(argv: &[&str]) -> (String, String) {
         let o = runtime_opts(argv);
@@ -5955,5 +5961,237 @@ mod cli_default_parity_tests {
             run, serve,
             "run and serve must agree on the default context"
         );
+    }
+}
+
+/// The help against the parser, the code and the documentation: a help that
+/// names an option that does not exist, or leaves out a setting the code
+/// reads, is how `eullm --help` came to list the commands and nothing else
+/// while the README described options no command had.
+#[cfg(test)]
+mod help_tests {
+    use super::*;
+    use clap::CommandFactory;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    /// Every long option of every command, visible aliases included.
+    fn every_long_option() -> BTreeSet<String> {
+        let mut cli = Cli::command();
+        cli.build();
+        let mut options = BTreeSet::new();
+        for cmd in std::iter::once(&cli).chain(cli.get_subcommands()) {
+            for arg in cmd.get_arguments() {
+                options.extend(arg.get_long().map(|l| format!("--{l}")));
+                for alias in arg.get_visible_aliases().unwrap_or_default() {
+                    options.insert(format!("--{alias}"));
+                }
+            }
+        }
+        options
+    }
+
+    /// The `--option` words of a text, as written: two dashes at the start
+    /// of a word, then lowercase letters, digits and dashes.
+    fn options_named_in(text: &str) -> Vec<String> {
+        let b = text.as_bytes();
+        let mut found = Vec::new();
+        let mut i = 0;
+        while let Some(at) = text[i..].find("--") {
+            let start = i + at;
+            let mut end = start + 2;
+            while end < b.len()
+                && (b[end].is_ascii_lowercase() || b[end].is_ascii_digit() || b[end] == b'-')
+            {
+                end += 1;
+            }
+            let starts_a_word =
+                start == 0 || !(b[start - 1].is_ascii_alphanumeric() || b[start - 1] == b'-');
+            let word = text[start..end].trim_end_matches('-');
+            if starts_a_word && word.len() > 2 && b[start + 2].is_ascii_lowercase() {
+                found.push(word.to_string());
+            }
+            i = end.max(start + 2);
+        }
+        found
+    }
+
+    /// The names of the settings `settings_help!` lists.
+    fn settings_in_the_help() -> BTreeSet<String> {
+        settings_help!()
+            .lines()
+            .filter_map(|line| line.trim_start().split(['=', ' ']).next())
+            .filter(|w| w.len() > 3 && w.chars().all(|c| c.is_ascii_uppercase() || c == '_'))
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// The engine's own source files.
+    fn source_files() -> Vec<PathBuf> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        files
+    }
+
+    #[test]
+    fn every_option_the_help_names_exists() {
+        let options = every_long_option();
+        for (what, text) in [
+            ("eullm --help", TOP_AFTER_HELP),
+            ("eullm run --help", RUN_AFTER_HELP),
+            ("eullm serve --help", SERVE_AFTER_HELP),
+            ("eullm pull --help", PULL_AFTER_HELP),
+        ] {
+            for option in options_named_in(text) {
+                assert!(
+                    options.contains(&option),
+                    "{what} names {option}, which no command has"
+                );
+            }
+        }
+    }
+
+    /// The complaint this help answers: `eullm --help` listed the commands
+    /// and nothing about starting one.
+    #[test]
+    fn the_top_help_shows_how_to_start_and_the_options_used_most() {
+        let named: BTreeSet<String> = options_named_in(TOP_AFTER_HELP).into_iter().collect();
+        for option in [
+            "--ctx-size",
+            "--batch-size",
+            "--threads",
+            "--port",
+            "--ui-port",
+            "--no-ui",
+            "--cli",
+            "--gpu-layers",
+            "--cache-type-k",
+            "--moe-cache",
+            "--mtp",
+            "--web",
+            "--keep-alive",
+            "--max-loaded-models",
+            "--daemon",
+        ] {
+            assert!(named.contains(option), "eullm --help leaves out {option}");
+        }
+        for start in [
+            "eullm run qwen3-8b",
+            "eullm run hf.co/",
+            "eullm run ./model.gguf",
+            "eullm serve",
+        ] {
+            assert!(
+                TOP_AFTER_HELP.contains(start),
+                "eullm --help leaves out `{start}`"
+            );
+        }
+        assert!(TOP_AFTER_HELP.contains("EULLM_ALLOWED_IPS"));
+    }
+
+    /// Every `EULLM_*` setting the code reads at run time is in the help.
+    /// Variables only `--ignored` tests read are not settings, and are left
+    /// out by name.
+    #[test]
+    fn every_setting_the_code_reads_is_in_the_help() {
+        const TEST_ONLY: [&str; 2] = ["EULLM_JEV_REFERENCE", "EULLM_JEV_TOLERANCE"];
+        const READERS: [&str; 5] = [
+            "var(",
+            "var_with_source(",
+            "flag(",
+            "env_i32(",
+            "env_file_var(",
+        ];
+        let help = settings_in_the_help();
+        let mut read = BTreeSet::new();
+        for file in source_files() {
+            if file.to_string_lossy().ends_with("tests.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).unwrap();
+            for (at, _) in text.match_indices("\"EULLM_") {
+                let name: String = text[at + 1..]
+                    .chars()
+                    .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                    .collect();
+                let before = &text[at.saturating_sub(60)..at];
+                let is_read = READERS.iter().any(|r| before.contains(r));
+                if is_read && !name.contains("_TEST_") && !TEST_ONLY.contains(&name.as_str()) {
+                    read.insert(name);
+                }
+            }
+        }
+        assert!(
+            read.contains("EULLM_ALLOWED_IPS"),
+            "the scan found nothing: {read:?}"
+        );
+        let missing: Vec<_> = read.difference(&help).collect();
+        assert!(
+            missing.is_empty(),
+            "read by the code but not in the help: {missing:?}"
+        );
+    }
+
+    /// And every setting the help lists is one the code reads.
+    #[test]
+    fn every_setting_the_help_names_is_read() {
+        let sources: Vec<String> = source_files()
+            .iter()
+            .map(|f| std::fs::read_to_string(f).unwrap())
+            .collect();
+        let help = settings_in_the_help();
+        assert!(
+            help.len() > 10,
+            "the help's settings were not found: {help:?}"
+        );
+        for name in help {
+            let quoted = format!("\"{name}\"");
+            assert!(
+                sources.iter().any(|s| s.contains(&quoted)),
+                "the help lists {name}, which the code never reads"
+            );
+        }
+    }
+
+    /// The option tables of the quick start and the engine reference name
+    /// options that exist.
+    #[test]
+    fn every_option_in_the_documentation_tables_exists() {
+        let options = every_long_option();
+        let docs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs");
+        for doc in ["quickstart.md", "engine.md"] {
+            let text = std::fs::read_to_string(docs.join(doc)).unwrap();
+            for row in text.lines().filter(|l| l.starts_with("| `-")) {
+                let first_cell = row.split('|').nth(1).unwrap_or_default();
+                for option in options_named_in(first_cell) {
+                    assert!(
+                        options.contains(&option),
+                        "docs/{doc} lists {option}: {row}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn options_named_in_reads_words_only() {
+        assert_eq!(
+            options_named_in("-c, --ctx-size <N>  split among --batch-size; eullm run --help"),
+            ["--ctx-size", "--batch-size", "--help"]
+        );
+        assert!(options_named_in("a -- b, x--y, ---z, --A").is_empty());
     }
 }

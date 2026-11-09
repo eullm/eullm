@@ -4,9 +4,10 @@
 # configuration against its last earlier measurement (`compare --job`), how
 # each point's VRAM moved while it ran (vram_slopes.py), and, for servers with
 # llama.cpp's log on, how long reading and copying their weights took (patch
-# 0012's load_all_data line, c11's load-* groups). sbatch_campaign.slurm
-# runs it when its runner ends; summary_after.sh queues it behind jobs that
-# were submitted before that.
+# 0012's load_all_data line, c11's load-* groups), and what the server logs say
+# of the expert cache, the VRAM pool and ROCm errors (log_checks.py).
+# sbatch_campaign.slurm runs it when its runner ends; summary_after.sh queues
+# it behind jobs that were submitted before that.
 #
 #   bash tools/lumi/job_summary.sh 22981849 [...]
 
@@ -26,6 +27,9 @@ for JOB in "$@"; do
         echo
         echo "=== VRAM of each point while it ran ==="
         "$PY" "$EULLM_REPO/tools/lumi/vram_slopes.py" --queue "$CAMPAIGN_DIR" "$JOB"
+        echo
+        echo "=== the expert cache's statistics, llama.cpp's pool and errors (server logs) ==="
+        "$PY" "$EULLM_REPO/tools/lumi/log_checks.py" --queue "$CAMPAIGN_DIR" "$JOB"
         # The engine's log drops llama.cpp's "load_all_data: " in front of the
         # line; the point's environment (RUST_LOG left out) says which way it
         # loaded.

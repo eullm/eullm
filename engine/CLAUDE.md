@@ -17,6 +17,7 @@ Two channels, and the choice is not a matter of taste.
   `EULLM_ALLOWED_IPS`, `EULLM_ALLOWED_ORIGINS`, `EULLM_WEB_ALLOWED_DOMAINS`,
   `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`,
   `EULLM_ALLOW_MODEL_PATHS`, `EULLM_AUDIT_DIR`, `EULLM_MODELS_DIR`,
+  `EULLM_MODEL_LIBRARIES`,
   `EULLM_DECISION_POLICY`, `EULLM_DECISION_TRACES`.
 
 Three reasons, in order of how expensive they are to get wrong: a secret on a

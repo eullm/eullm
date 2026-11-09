@@ -171,58 +171,52 @@ def test_a_chain_started_halfway_asks_the_middle_of_the_list(tmp_path, monkeypat
                      "Art. 624-bis del codice penale (Furto in abitazione)"]
 
 
-def test_eu_acts_are_named_from_their_title():
-    from eullm_forge.datasets.law_corpus import eu_label
+def test_eu_acts_are_named_from_their_celex_number_and_rewritten():
+    from eullm_forge.datasets.law_corpus import by_code, labels
 
-    assert eu_label("REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO EUROPEO E DEL CONSIGLIO "
-                    "del 27 aprile 2016") == ("del regolamento (UE) 2016/679",
-                                              "nel regolamento (UE) 2016/679")
-    assert eu_label("Regolamento (CE) n. 1907/2006 del Parlamento europeo")[0] == \
-        "del regolamento (CE) 1907/2006"
-    assert eu_label("DIRETTIVA (UE) 2019/1937 DEL PARLAMENTO EUROPEO")[0] == \
-        "della direttiva (UE) 2019/1937"
-    assert eu_label("DIRETTIVA 2011/83/UE DEL PARLAMENTO EUROPEO E DEL CONSIGLIO")[0] == \
-        "della direttiva 2011/83/UE"
-    assert eu_label("REGOLAMENTO DI ESECUZIONE (UE) 2021/1234 DELLA COMMISSIONE")[0] == \
-        "del regolamento (UE) 2021/1234"
-    assert eu_label("Comunicazione della Commissione sugli aiuti di Stato") is None
-
-
-def test_an_eu_act_is_rewritten_and_checked_like_a_code():
-    from eullm_forge.datasets.law_corpus import (
-        CODE_LABELS,
-        by_code,
-        check_rewrite,
-        register_eu_labels,
-        rewrite_messages,
-    )
-
+    assert labels("eurlex_32016R0679") == ("del regolamento (UE) 2016/679",
+                                           "nel regolamento (UE) 2016/679")
+    assert labels("eurlex_32012R1215")[0] == "del regolamento (UE) n. 1215/2012"
+    assert labels("eurlex_32003R0001")[0] == "del regolamento (CE) n. 1/2003"
+    assert labels("eurlex_32011L0083")[0] == "della direttiva 2011/83/UE"
+    assert labels("eurlex_32019L1937")[0] == "della direttiva (UE) 2019/1937"
+    assert labels("eurlex_52020PC0825") is None          # a proposal: left out
+    assert labels("codice_penale")[0] == "del codice penale"
+    # A chunk as prepare_eurlex.py writes it: the act's title, then the article.
     title = "REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO EUROPEO E DEL CONSIGLIO"
-    code = "eurlex_32016R0679"
-    records = [
-        {"code": code, "chunk_index": 0, "text": f"{title}\nArticolo 6\nLiceità del trattamento\n"
-         "Il trattamento è lecito solo se l'interessato ha espresso il consenso al trattamento "
-         "dei propri dati personali per una o più specifiche finalità."},
-        {"code": code, "chunk_index": 0, "text": f"{title}\nArticolo 7\nCondizioni per il "
-         "consenso\nIl titolare del trattamento deve essere in grado di dimostrare che "
-         "l'interessato ha prestato il proprio consenso al trattamento."},
-        {"code": "eurlex_52020DC0001", "chunk_index": 0,
-         "text": "Comunicazione della Commissione\nArticolo 1\nTesto qualunque."},
-    ]
-    try:
-        assert register_eu_labels(records) == 1
-        arts = articles_from_records(records)
-        codes = by_code(arts)
-        assert [a.number for a in codes[code]] == ["6", "7"]
-        assert "eurlex_52020DC0001" not in codes          # no regulation named: left out
-        art6 = codes[code][0]
-        msg = rewrite_messages(art6, "parafrasi")[1]["content"]
-        assert msg.startswith("Art. 6 del regolamento (UE) 2016/679 (Liceità del trattamento)")
-        ok = ("L'art. 6 del regolamento (UE) 2016/679 stabilisce che il trattamento dei dati "
-              "personali è lecito solo se l'interessato ha dato il suo consenso per una o più "
-              "finalità specifiche.")
-        assert check_rewrite(art6, "parafrasi", ok) is None
-        bad = ok.replace("il suo consenso", "il suo consenso entro 2018 giorni")
-        assert check_rewrite(art6, "parafrasi", bad) == "number"
-    finally:
-        CODE_LABELS.pop(code, None)
+    body = ("Articolo 5\nPrincipi applicabili al trattamento di dati personali\n"
+            "1. I dati personali sono trattati in modo lecito, corretto e trasparente nei "
+            "confronti dell'interessato." + PAD)
+    arts = articles_from_records([{"code": "eurlex_32016R0679", "chunk_index": 0,
+                                   "article_num": "5", "text": f"{title}\n{body}"}])
+    assert [a.number for a in by_code(arts)["eurlex_32016R0679"]] == ["5"]
+    msgs = rewrite_messages(arts[("eurlex_32016R0679", "5")], "parafrasi")
+    assert "del regolamento (UE) 2016/679" in json.dumps(msgs, ensure_ascii=False)
+
+
+def test_an_eu_rewrite_may_name_its_act_by_number():
+    title = "REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO EUROPEO E DEL CONSIGLIO"
+    body = ("Articolo 5\nPrincipi applicabili al trattamento di dati personali\n"
+            "1. I dati personali sono trattati in modo lecito, corretto e trasparente nei "
+            "confronti dell'interessato." + PAD)
+    a = articles_from_records([{"code": "eurlex_32016R0679", "chunk_index": 0,
+                                "article_num": "5", "text": f"{title}\n{body}"}])[
+        ("eurlex_32016R0679", "5")]
+    ok = ("L'art. 5 del regolamento (UE) 2016/679 stabilisce che i dati personali devono "
+          "essere trattati in modo lecito, corretto e trasparente nei confronti "
+          "dell'interessato.")
+    assert check_rewrite(a, "parafrasi", ok) is None
+    # A number that is neither in the article nor in the act's name is still refused.
+    assert check_rewrite(a, "parafrasi", ok + " Il termine è di 30 giorni.") in (
+        "number", "deadline")
+
+
+def test_reverse_states_the_heading_first_and_the_number_last():
+    plain = program_rows(articles(), absent_share=1.0)
+    rev = program_rows(articles(), absent_share=1.0, reverse=3)
+    assert [r for r in rev if r["forma"] != "rubrica_inversa"] == plain  # nothing else moves
+    furto = [r["text"] for r in rev if r["forma"] == "rubrica_inversa" and r["articolo"] == "624"]
+    assert len(furto) == 3 and len(set(furto)) == 3
+    for t in furto:
+        assert t.index("«Furto»") < t.rindex("624") and "{" not in t
+    assert not any(r["articolo"] == "594" for r in rev if r["forma"] == "rubrica_inversa")

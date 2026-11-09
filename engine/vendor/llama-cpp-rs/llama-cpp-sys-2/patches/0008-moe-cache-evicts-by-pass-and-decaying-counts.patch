@@ -1,0 +1,571 @@
+llama : MoE cache - evict by the pass and by decaying counts, in place of the SLRU
+
+Upstream replaced the cache's LRU with a 50/50 SLRU (#30637). Its victim is
+still the least recently used slot, of probation and then of the protected
+half, so replayed through bench/moe_cache_sim (EuLLM) it finds the experts the
+LRU found, and none when a step wants more experts than there are slots: 0%
+of the experts in VRAM for Qwen3-235B with 32 sequences and Qwen3-Coder-480B
+with 8, where this eviction keeps 73% and 60%. This patch puts the eviction
+below in its place: what were EuLLM's patches 0008 and 0009, one patch since
+llama.cpp b11925.
+
+The pass (evict the most recently used slot when a pass wants more experts than the slots):
+
+The cache's slots are shared by all its layers, and the layers come in the same order every step. When a
+step selects more experts than there are slots, the least recently used slot always holds an expert of
+one of the next layers, the one the step is about to select again, so the least recently used eviction
+copies every expert: on LUMI-G (one MI250X GCD, Qwen3-235B Q4_K_M, 3,900 slots of 12,032) 32 sequences
+found 0.85% of their experts in VRAM and uploaded 50 GiB a step; Qwen3-Coder-480B found 17% with 8.
+
+The least recently used slot is now evicted only while it is stale: its expert was not selected during the
+last pass over the layers. When every slot was used within the last pass, the miss takes the most recently
+used slot outside the current layer, whose expert is selected again a whole pass later at the earliest. The
+slots filled early in a pass stay and hit in the next one; the rest of the pass goes through the slots last
+taken. While a pass's experts fit, a stale slot always exists and the eviction is the plain LRU's, slot for
+slot. Replayed through bench/moe_cache_sim (EuLLM) on routing calibrated to the LUMI measurements: the same
+hits as LRU with 1 and 8 sequences on the 235B, 72% instead of 0% with 32 (Belady's bound: 81%), 43% to 57%
+instead of 0% for the 480B with 8. LLAMA_MOE_CACHE_EVICT=lru evicts the least recently used slot always (as the SLRU does, slot for slot, for these traces).
+
+Statistics: LLAMA_MOE_CACHE_STATS=N counts every step that went through the cache (32 tokens or fewer),
+not only those of up to 8, and says which share of the copies went into a slot used within the pass.
+
+LLAMA_MOE_CACHE_TRACE=FILE writes the experts selected in every layer the cache plans (a header, then the
+layer, the number of ids and the ids, int32), the input of bench/moe_cache_sim.
+
+The counts (evict by decaying counts among the stale slots and the slots the pass has passed):
+
+The pass rule evicts the least recently used slot while one is stale (its expert unused for a whole pass over the
+layers), else the most recently used slot outside the current layer. Replayed on the routing Qwen3-235B and
+Qwen3-Coder-480B selected on LUMI-G (one MI250X GCD, LLAMA_MOE_CACHE_TRACE), counts that decay won where the
+steps fit and lost where they overflowed the cache, which the pass rule decides by the order of the layers.
+
+Counts are now kept for every expert of every layer, cached or not: each selection adds 1 to a count halved
+every 4 passes. A miss takes, among the stale slots, the one whose expert has the lowest count; when every slot
+was used within the last pass, the lowest count among the slots used earlier in this pass, whose next use is a
+pass away (the most recently used one when there is none yet). The counts are compared as
+ln(count) - t*ln(decay), which does not change with time, so a miss compares numbers and computes no decay.
+
+Replayed (bench/moe_cache_sim, lfu-pass), experts found in VRAM, the pass alone -> with the counts: 235B at 8 sequences 88.9% ->
+91.0% (copies 98 -> 80 a pass), at 32 56.2% -> 59.9%; 480B at 1 77.2% -> 78.6%, at 8 57.6% -> 61.4%, at 32
+16.9% -> 18.9%; the 235B at 1 level (94.3%). The planning costs about 0.4 ms a step more with one sequence and
+11 ms with 32 (steps of 47 and 1,540 ms on the GCD). LLAMA_MOE_CACHE_EVICT=pass evicts by the pass
+alone, LLAMA_MOE_CACHE_EVICT=lru by the plain LRU.
+
+EuLLM patch on llama.cpp b11925, after 0002.
+
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index f71701e2..396825d5 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -7,6 +7,8 @@
+ #include "ggml-cpp.h"
+ 
+ #include <algorithm>
++#include <cerrno>
++#include <cmath>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+@@ -22,29 +24,81 @@
+ 
+ namespace {
+ 
+-// SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
+-struct moe_cache_slru {
++// LRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
++//
++// EuLLM: this replaces upstream's 50/50 SLRU (#30637), whose victim is still the least recently used slot of
++// probation and then of the protected half: replayed through bench/moe_cache_sim it finds the same experts in VRAM
++// as the plain LRU, and none when a step wants more experts than there are slots, the case below.
++//
++// EuLLM: the layers come in the same order every step. When a step selects more experts than there are slots, the
++// least recently used slot always holds an expert of one of the next layers, which the step is about to
++// select again: every expert misses and is uploaded (0.85% hits on Qwen3-235B with 32 sequences, 50 GiB a
++// step). So the least recently used slot is evicted only while it is stale, its expert not selected during the
++// last pass over the layers; once every slot was used within the last pass, the miss takes the most recently
++// used slot outside the current layer instead, whose expert is selected again a whole pass later at the
++// earliest. The slots filled early in a pass then stay and hit in the next one, and the rest of the pass goes
++// through the slots last taken. While the experts of a pass fit, a stale slot always exists and the eviction is
++// the plain LRU's. LLAMA_MOE_CACHE_EVICT=lru evicts the least recently used slot always.
++//
++// EuLLM: which stale slot, and which slot used within the pass, goes by counts that decay, kept for
++// every expert of every layer whether cached or not: each selection adds 1 to a count halved every 4 passes.
++// Among the stale slots the one whose expert has the lowest count goes instead of the least recently used, and
++// when every slot was used within the last pass, the lowest count among the slots used earlier in this pass (the
++// most recently used if there is none). Replayed on the routing that Qwen3-235B and Qwen3-Coder-480B selected on
++// LUMI-G, 1-4 more points of the experts found in VRAM than the most recently used alone, never fewer
++// (bench/moe_cache_sim, lfu-pass). The counts are compared as ln(count) - t*ln(decay), which does not change
++// with time, so a miss compares numbers without computing a decay. LLAMA_MOE_CACHE_EVICT=pass evicts by the pass alone.
++enum moe_cache_evict {
++    MOE_CACHE_EVICT_LRU,
++    MOE_CACHE_EVICT_PASS,
++    MOE_CACHE_EVICT_COUNTS,
++};
++
++struct moe_cache_lru {
+     int32_t n_expert = 0;
+     int32_t n_slots  = 0;
+ 
++    moe_cache_evict evict = MOE_CACHE_EVICT_COUNTS;
++    uint64_t pass_len = 0;  // plans in a pass over the layers of the group
++    uint64_t t        = 0;  // plans so far
++    std::vector<uint64_t> last_t; // [n_slots] plan of the last use
++
++    // the decaying counts of every (layer, expert), il*n_expert + expert
++    double   log_decay  = 0.0;    // per plan
++    uint64_t pass_start = 0;      // plan that began the current pass
++    int32_t  last_il    = INT32_MAX;
++    std::vector<double>   count;   // at count_t
++    std::vector<uint64_t> count_t;
++    std::vector<double>   rank;    // ln(count) - count_t*log_decay: lower goes first
++
+     std::vector<int32_t *> slot_map; // [n_layer] data of the slot maps, -1 if the expert is not cached
+     std::vector<int32_t>   key_of;   // [n_slots] il*n_expert + expert, -1 if empty
+ 
+-    // probation and protected LRU lists; hits promote slots to the protected half
++    // doubly linked list of the slots, head is the least recently used
+     std::vector<int32_t> prev;
+     std::vector<int32_t> next;
+-    int32_t head[2] = { -1, -1 };
+-    int32_t tail[2] = { -1, -1 };
+-    std::vector<bool> is_protected;
+-    int32_t n_protected = 0;
++    int32_t head = -1;
++    int32_t tail = -1;
+ 
+     std::vector<uint32_t> seen; // [n_expert]
+     uint32_t seen_gen = 0;
+     std::vector<int32_t> uniq;
+ 
+-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
++    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, int32_t n_group_layers, moe_cache_evict evict) {
+         this->n_expert = n_expert;
+         this->n_slots  = n_slots;
++        this->evict    = evict;
++        pass_len = (uint64_t) n_group_layers;
++        t = 0;
++        last_t.assign(n_slots, 0);
++        log_decay  = std::log(0.5)/(4.0*n_group_layers);
++        pass_start = 0;
++        last_il    = INT32_MAX;
++        if (evict == MOE_CACHE_EVICT_COUNTS) {
++            count.assign((size_t) n_layer*n_expert, 0.0);
++            count_t.assign((size_t) n_layer*n_expert, 0);
++            rank.assign((size_t) n_layer*n_expert, 0.0);
++        }
+         slot_map.assign(n_layer, nullptr);
+         key_of.assign(n_slots, -1);
+         prev.resize(n_slots);
+@@ -53,59 +107,27 @@ struct moe_cache_slru {
+             prev[s] = s - 1;
+             next[s] = s + 1 < n_slots ? s + 1 : -1;
+         }
+-        head[0] = 0;
+-        tail[0] = n_slots - 1;
+-        is_protected.assign(n_slots, false);
++        head = 0;
++        tail = n_slots - 1;
+         seen.assign(n_expert, 0);
+     }
+ 
+-    // move slot s to the most recently used end of a segment
+-    void move(int32_t s, bool protect) {
+-        const bool from = is_protected[s];
+-        if (from == protect && s == tail[from]) {
++    // move slot s to the tail (most recently used)
++    void touch(int32_t s) {
++        if (s == tail) {
+             return;
+         }
+         if (prev[s] >= 0) {
+             next[prev[s]] = next[s];
+         } else {
+-            head[from] = next[s];
+-        }
+-        if (next[s] >= 0) {
+-            prev[next[s]] = prev[s];
+-        } else {
+-            tail[from] = prev[s];
++            head = next[s];
+         }
++        prev[next[s]] = prev[s];
+ 
+-        prev[s] = tail[protect];
++        prev[s] = tail;
+         next[s] = -1;
+-        if (tail[protect] >= 0) {
+-            next[tail[protect]] = s;
+-        } else {
+-            head[protect] = s;
+-        }
+-        tail[protect] = s;
+-        is_protected[s] = protect;
+-        n_protected += int(protect) - int(from);
+-    }
+-
+-    void touch(int32_t s) {
+-        move(s, true);
+-        if (n_protected > n_slots/2) {
+-            move(head[1], false);
+-        }
+-    }
+-
+-    int32_t victim(int32_t il) const {
+-        for (int segment = 0; segment < 2; ++segment) {
+-            for (int32_t s = head[segment]; s >= 0; s = next[s]) {
+-                const int32_t key = key_of[s];
+-                // keep every expert selected by this request, including earlier fills
+-                if (key < 0 || key / n_expert != il || seen[key % n_expert] != seen_gen) {
+-                    return s;
+-                }
+-            }
+-        }
+-        GGML_ABORT("no SLRU victim");
++        next[tail] = s;
++        tail = s;
+     }
+ 
+     struct fill {
+@@ -113,11 +135,18 @@ struct moe_cache_slru {
+         int32_t slot;
+     };
+ 
+-    // give a slot to each expert selected by ids in layer il, evicting from probation first
++    // give a slot to each expert selected by ids in layer il, the misses evict as described above; n_full counts
++    // the misses that took a slot used within the last pass
+     // returns false if the ids select more distinct experts than there are slots
+-    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, size_t & n_hit) {
++    bool plan(int32_t il, const int32_t * ids, size_t n_ids, std::vector<fill> & fills, size_t & n_hit, size_t & n_full) {
+         fills.clear();
+-        n_hit = 0;
++        n_hit  = 0;
++        n_full = 0;
++        ++t;
++        if (il <= last_il) {
++            pass_start = t;
++        }
++        last_il = il;
+ 
+         if (++seen_gen == 0) {
+             std::fill(seen.begin(), seen.end(), 0);
+@@ -137,10 +166,25 @@ struct moe_cache_slru {
+ 
+         int32_t * slots = slot_map[il];
+ 
+-        // promote hits before choosing victims for misses
++        if (evict == MOE_CACHE_EVICT_COUNTS) {
++            for (int32_t e : uniq) {
++                const size_t k = (size_t) il*n_expert + e;
++                count[k]   = count[k]*std::exp(log_decay*(double) (t - count_t[k])) + 1.0;
++                count_t[k] = t;
++                rank[k]    = std::log(count[k]) - (double) t*log_decay;
++            }
++        }
++
++        // hits go to the tail first, so the head can be evicted below; the slots of this layer are then the last
++        // ones of the list, from first to the tail
++        int32_t first = -1;
+         for (int32_t e : uniq) {
+             if (slots[e] >= 0) {
+                 touch(slots[e]);
++                last_t[slots[e]] = t;
++                if (first < 0) {
++                    first = slots[e];
++                }
+                 n_hit++;
+             }
+         }
+@@ -150,13 +194,45 @@ struct moe_cache_slru {
+             if (slots[e] >= 0) {
+                 continue;
+             }
+-            const int32_t s = victim(il);
++            int32_t s = head;
++            if (evict != MOE_CACHE_EVICT_LRU && key_of[s] >= 0 && t - last_t[s] < pass_len) {
++                // every slot was used within the last pass; this layer has fewer experts than there are slots,
++                // so one precedes its own
++                s = first >= 0 ? prev[first] : tail;
++                n_full++;
++                if (evict == MOE_CACHE_EVICT_COUNTS && last_t[s] >= pass_start) {
++                    // the lowest count among the slots used earlier in this pass, which precede this layer's
++                    for (int32_t c = prev[s]; c >= 0 && last_t[c] >= pass_start; c = prev[c]) {
++                        if (rank[key_of[c]] < rank[key_of[s]]) {
++                            s = c;
++                        }
++                    }
++                }
++            } else if (evict == MOE_CACHE_EVICT_COUNTS && key_of[s] >= 0) {
++                // the lowest count among the stale slots, which begin the list
++                for (int32_t c = next[s]; c >= 0; c = next[c]) {
++                    if (key_of[c] < 0) {
++                        s = c;
++                        break;
++                    }
++                    if (t - last_t[c] < pass_len) {
++                        break;
++                    }
++                    if (rank[key_of[c]] < rank[key_of[s]]) {
++                        s = c;
++                    }
++                }
++            }
+             if (key_of[s] >= 0) {
+                 slot_map[key_of[s] / n_expert][key_of[s] % n_expert] = -1;
+             }
+             key_of[s] = il*n_expert + e;
+             slots[e] = s;
+-            move(s, false);
++            touch(s);
++            last_t[s] = t;
++            if (first < 0) {
++                first = s;
++            }
+             fills.push_back({ e, s });
+         }
+         return true;
+@@ -224,7 +300,7 @@ struct llama_moe_cache::impl {
+         std::vector<ggml_tensor *> banks; // device storage of all slots, one per expert tensor
+         size_t host_bytes = 0;
+         int32_t n_slots = 0;
+-        moe_cache_slru slru;
++        moe_cache_lru lru;
+     };
+ 
+     struct layer {
+@@ -242,6 +318,7 @@ struct llama_moe_cache::impl {
+     struct stats {
+         size_t hits   = 0;
+         size_t misses = 0;
++        size_t full   = 0; // misses that took a slot used within the last pass
+         size_t bytes  = 0;
+     };
+ 
+@@ -290,8 +367,12 @@ struct llama_moe_cache::impl {
+     stats stats_large;
+     stats stats_copy;  // experts copied from the cache for large batches
+ 
+-    // LLAMA_MOE_CACHE_STATS=N: every N steps of up to 8 tokens, print to stderr where they went
++    // LLAMA_MOE_CACHE_STATS=N: every N steps that went through the cache, print to stderr where they went
+     int32_t     stats_every = 0;
++
++    // LLAMA_MOE_CACHE_TRACE=FILE: the experts selected in every layer planned, for bench/moe_cache_sim
++    FILE *      trace = nullptr;
++    int32_t     trace_group = -1;
+     uint64_t    n_begun     = 0;
+     step_timing cur;
+     step_window win;
+@@ -307,7 +388,7 @@ struct llama_moe_cache::impl {
+     std::unordered_map<const ggml_tensor *, int32_t> layer_of; // slot map -> layer
+ 
+     std::vector<int32_t> ids;
+-    std::vector<moe_cache_slru::fill> fills;
++    std::vector<moe_cache_lru::fill> fills;
+ 
+     // slot maps in host memory
+     ggml_context_ptr ctx_host;
+@@ -406,6 +487,14 @@ struct llama_moe_cache::impl {
+             }
+         }
+ 
++        const char * evict_env = getenv("LLAMA_MOE_CACHE_EVICT");
++        moe_cache_evict evict = MOE_CACHE_EVICT_COUNTS;
++        if (evict_env != nullptr && strcmp(evict_env, "lru") == 0) {
++            evict = MOE_CACHE_EVICT_LRU;
++        } else if (evict_env != nullptr && strcmp(evict_env, "pass") == 0) {
++            evict = MOE_CACHE_EVICT_PASS;
++        }
++
+         // within a device the budget is split by the size of the experts, so each group caches the same fraction of its experts
+         std::vector<size_t> n_tensors(devices.size(), 0);
+         size_t n_tensors_host = 0;
+@@ -422,7 +511,7 @@ struct llama_moe_cache::impl {
+                 g.n_slots = 0;
+                 continue;
+             }
+-            g.slru.init(model.layers.size(), n_expert, g.n_slots);
++            g.lru.init(model.layers.size(), n_expert, g.n_slots, (int32_t) g.layers.size(), evict);
+             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
+             n_tensors_host  += g.layers.size();
+         }
+@@ -502,7 +591,7 @@ struct llama_moe_cache::impl {
+             for (group & g : groups) {
+                 for (int32_t il : g.layers) {
+                     if (layers[il].slot_map != nullptr) {
+-                        g.slru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
++                        g.lru.slot_map[il] = (int32_t *) layers[il].slot_map->data;
+                     }
+                 }
+             }
+@@ -531,10 +620,20 @@ struct llama_moe_cache::impl {
+             }
+         }
+ 
++        LLAMA_LOG_INFO("%s: eviction: %s\n", __func__,
++            evict == MOE_CACHE_EVICT_LRU  ? "least recently used (LLAMA_MOE_CACHE_EVICT=lru)" :
++            evict == MOE_CACHE_EVICT_PASS ? "least recently used while stale, most recently used when a pass wants more "
++                                            "experts than the slots (LLAMA_MOE_CACHE_EVICT=pass)" :
++                                            "the lowest decaying count among the stale slots, or among the slots used earlier "
++                                            "in the pass when a pass wants more experts than the slots");
++
+         if (!no_alloc) {
+             if (const char * env = getenv("LLAMA_MOE_CACHE_STATS")) {
+                 stats_every = std::max(0, atoi(env));
+             }
++            if (const char * env = getenv("LLAMA_MOE_CACHE_TRACE")) {
++                open_trace(env, model);
++            }
+             pin_experts();
+         }
+     }
+@@ -545,6 +644,9 @@ struct llama_moe_cache::impl {
+ 
+     ~impl() {
+         log_stats();
++        if (trace != nullptr) {
++            fclose(trace);
++        }
+ 
+         // llama_context synchronizes its backends before it frees anything, no upload is still reading these
+         for (const pinned_range & r : pinned) {
+@@ -552,6 +654,43 @@ struct llama_moe_cache::impl {
+         }
+     }
+ 
++    // the trace's header: magic "MOEC", version 1, the model's layers, experts and experts per token, then the first
++    // group's slots and layers; a record per plan follows: the layer, the number of ids, the ids (all int32)
++    void open_trace(const char * path, const llama_model & model) {
++        const group * g = nullptr;
++        for (const group & gi : groups) {
++            if (gi.n_slots > 0) {
++                g = &gi;
++                break;
++            }
++        }
++        if (g == nullptr) {
++            return;
++        }
++        trace = fopen(path, "wb");
++        if (trace == nullptr) {
++            fprintf(stderr, "llama_moe_cache: cannot write the trace to %s: %s\n", path, strerror(errno));
++            return;
++        }
++        const uint32_t head[2] = { 0x43454f4d, 1 };
++        const int32_t  info[5] = { (int32_t) model.layers.size(), g->lru.n_expert, n_expert_used, g->n_slots, (int32_t) g->layers.size() };
++        fwrite(head, sizeof(head), 1, trace);
++        fwrite(info, sizeof(info), 1, trace);
++        fwrite(g->layers.data(), sizeof(int32_t), g->layers.size(), trace);
++        trace_group = (int32_t) (g - groups.data());
++        fprintf(stderr, "llama_moe_cache: tracing the experts selected in %zu layers to %s%s\n", g->layers.size(), path,
++            groups.size() > 1 ? " (the first group of layers only)" : "");
++    }
++
++    void trace_plan(int32_t il, int32_t ig) {
++        if (trace == nullptr || ig != trace_group) {
++            return;
++        }
++        const int32_t rec[2] = { il, (int32_t) ids.size() };
++        fwrite(rec, sizeof(rec), 1, trace);
++        fwrite(ids.data(), sizeof(int32_t), ids.size(), trace);
++    }
++
+     // pin the host experts, so that the uploads run at the full bus speed instead of being staged by the driver
+     // the pages are pinned once, through the backend of the first device that caches experts: the CUDA backend
+     // registers them as portable, so every device of that backend uploads from them at the full speed
+@@ -658,8 +797,9 @@ struct llama_moe_cache::impl {
+ 
+     // count the step that began at cur.t_begin and ends at t, and report every stats_every steps
+     void end_step(int64_t t) {
+-        // only steps of up to 8 tokens that went through the cache, and not a pause between requests
+-        if (cur.n_layers == 0 || cur.n_ids > (int64_t) 8*n_expert_used || t - cur.t_begin > 1000000) {
++        // only steps that went through the cache, and not a pause between requests (a step of 32 tokens that copies
++        // every expert takes up to a few seconds)
++        if (cur.n_layers == 0 || t - cur.t_begin > 10000000) {
+             return;
+         }
+ 
+@@ -668,6 +808,7 @@ struct llama_moe_cache::impl {
+         win.n_layers  += cur.n_layers;
+         win.st.hits   += cur.st.hits;
+         win.st.misses += cur.st.misses;
++        win.st.full   += cur.st.full;
+         win.st.bytes  += cur.st.bytes;
+         if (cur.sampled) {
+             win.n_sampled++;
+@@ -698,6 +839,10 @@ struct llama_moe_cache::impl {
+         }
+         const size_t n = win.st.hits + win.st.misses;
+         line += format("; %.1f MiB/step copied, %.1f%% of the experts in VRAM", win.st.bytes/1048576.0/n_steps, n > 0 ? 100.0*win.st.hits/n : 0.0);
++        if (win.st.full > 0) {
++            line += format(", %.1f%% of the copies into a slot used within the pass (more experts than slots)",
++                100.0*win.st.full/win.st.misses);
++        }
+         if (win.n_sampled > 0 && win.copy_us > 0) {
+             line += format("; copying takes %.1f ms/step (%.1f GB/s)", win.copy_us/1e3/win.n_sampled, win.copy_bytes/1e3/win.copy_us);
+         }
+@@ -734,7 +879,7 @@ struct llama_moe_cache::impl {
+         }
+ 
+         // large batches only read the cache, so the experts used in generation stay in it
+-        const int32_t * slots = g.slru.slot_map[b.il];
++        const int32_t * slots = g.lru.slot_map[b.il];
+         if (slots == nullptr || slots[e] < 0) {
+             return 0;
+         }
+@@ -766,12 +911,12 @@ struct llama_moe_cache::impl {
+         }
+         const binding & b = it->second;
+         const group & g = groups[layers[b.il].ig];
+-        const int32_t * slots = g.slru.slot_map[b.il];
+-        if (slots == nullptr || src->ne[2] != g.slru.n_expert) {
++        const int32_t * slots = g.lru.slot_map[b.il];
++        if (slots == nullptr || src->ne[2] != g.lru.n_expert) {
+             return false;
+         }
+         bool any = false;
+-        for (int32_t e = 0; e < g.slru.n_expert; ++e) {
++        for (int32_t e = 0; e < g.lru.n_expert; ++e) {
+             slot_of[e] = slots[e];
+             any = any || slots[e] >= 0;
+         }
+@@ -826,10 +971,12 @@ struct llama_moe_cache::impl {
+         ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
+         ggml_backend_synchronize(backend);
+ 
+-        size_t n_hit = 0;
+-        if (!g.slru.plan(il, ids.data(), ids.size(), fills, n_hit)) {
++        size_t n_hit  = 0;
++        size_t n_full = 0;
++        if (!g.lru.plan(il, ids.data(), ids.size(), fills, n_hit, n_full)) {
+             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
+         }
++        trace_plan(il, l.ig);
+ 
+         // upload the missing experts, consecutive experts going to consecutive slots are uploaded together
+         size_t bytes = 0;
+@@ -851,6 +998,7 @@ struct llama_moe_cache::impl {
+         stats & st = ids.size() <= (size_t) 8*n_expert_used ? stats_small : stats_large;
+         st.hits   += n_hit;
+         st.misses += fills.size();
++        st.full   += n_full;
+         st.bytes  += bytes;
+ 
+         // the next copy synchronizes the backend before it changes the slot map again
+@@ -874,6 +1022,7 @@ struct llama_moe_cache::impl {
+             }
+             cur.st.hits   += n_hit;
+             cur.st.misses += fills.size();
++            cur.st.full   += n_full;
+             cur.st.bytes  += bytes;
+             cur.t_hook = t_end;
+         }
+@@ -887,8 +1036,8 @@ struct llama_moe_cache::impl {
+             if (n == 0) {
+                 return;
+             }
+-            const std::string line = format("llama_moe_cache: %s: hits = %zu, misses = %zu, hit rate = %.2f%%, uploaded = %.2f MiB\n",
+-                name, st.hits, st.misses, 100.0*st.hits/n, st.bytes/1024.0/1024.0);
++            const std::string line = format("llama_moe_cache: %s: hits = %zu, misses = %zu, hit rate = %.2f%%, uploaded = %.2f MiB, "
++                "misses into a slot used within the pass = %zu\n", name, st.hits, st.misses, 100.0*st.hits/n, st.bytes/1024.0/1024.0, st.full);
+             LLAMA_LOG_INFO("%s", line.c_str());
+             if (stats_every > 0) {
+                 fprintf(stderr, "%s", line.c_str());

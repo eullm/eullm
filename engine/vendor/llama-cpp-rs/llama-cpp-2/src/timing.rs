@@ -37,6 +37,9 @@ impl LlamaTimings {
                 n_p_eval,
                 n_eval,
                 n_reused,
+                // EuLLM: added by llama.cpp b11925; not settable here
+                n_reallocs_same: 0,
+                n_reallocs_diff: 0,
             },
         }
     }

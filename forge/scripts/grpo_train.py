@@ -73,6 +73,9 @@ def main(argv: list[str] | None = None) -> int:
                     "grades the judged questions (e.g. http://127.0.0.1:8080)")
     ap.add_argument("--judge-parallel", type=int, default=8,
                     help="grading requests sent to the judge at once")
+    ap.add_argument("--citation-weight", type=float, default=0.0,
+                    help="weight of eullm_forge.rl.citation_reward, paid to a judged answer "
+                         "that cites its question's article (0: off, as on Leonardo)")
     ap.add_argument("--seed", type=int, default=42,
                     help="order of the prompts: a round continuing another on the same "
                          "prompts takes another seed, or it sees the same ones first")
@@ -105,13 +108,20 @@ def main(argv: list[str] | None = None) -> int:
     dataset = Dataset.from_list(
         [{"prompt": r["prompt"], "tipo": r["tipo"], "keywords": r["keywords"],
           "question": r.get("question", ""), "reference": r.get("reference", ""),
-          "rubric": r.get("rubric", "")} for r in rows])
+          "rubric": r.get("rubric", ""), "code": str(r.get("code") or ""),
+          "articolo": str(r.get("articolo") or "")} for r in rows])
     rewards = [answer_reward]
     if args.judge_url:
         from eullm_forge.rl.judge_reward import JudgeReward
         rewards.append(JudgeReward(args.judge_url, parallel=args.judge_parallel))
         print(f"[grpo] {judged} of {len(rows)} prompts graded by the judge at "
               f"{args.judge_url}", flush=True)
+    weights = None
+    if args.citation_weight > 0:
+        from eullm_forge.rl.citation import citation_reward
+        rewards.append(citation_reward)
+        weights = [1.0] * (len(rewards) - 1) + [args.citation_weight]
+        print(f"[grpo] citing the question's article pays {args.citation_weight}", flush=True)
 
     cuda = torch.cuda.is_available()
     tok = AutoTokenizer.from_pretrained(args.model)
@@ -139,6 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         save_total_limit=3,
         report_to="none",
         seed=args.seed,
+        reward_weights=weights,
         use_cpu=not cuda,
     )
     peft_config = LoraConfig(r=args.rank, lora_alpha=2 * args.rank, lora_dropout=0.0,

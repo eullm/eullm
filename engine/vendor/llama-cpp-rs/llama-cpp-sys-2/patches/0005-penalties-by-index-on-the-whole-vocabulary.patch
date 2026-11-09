@@ -13,13 +13,13 @@ token before, 2 us after, same checksum over the whole array. With 16
 sequences at once that was 19 ms of every decode step. test-sampling gains a
 case for the arrays the fast path must leave alone.
 
-EuLLM patch on llama.cpp b86d2f0 (b11479 + 3).
+EuLLM patch on llama.cpp b11925.
 
 diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
-index 521c571..c2c54bf 100644
+index 9004efa2..f0eb5cd8 100644
 --- a/src/llama-sampler.cpp
 +++ b/src/llama-sampler.cpp
-@@ -2960,26 +2960,45 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
+@@ -2961,26 +2961,45 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
          return;
      }
  
@@ -79,7 +79,7 @@ index 521c571..c2c54bf 100644
  
      cur_p->sorted = false;
 diff --git a/tests/test-sampling.cpp b/tests/test-sampling.cpp
-index 353a5a1..b945368 100644
+index 353a5a1a..b9453683 100644
 --- a/tests/test-sampling.cpp
 +++ b/tests/test-sampling.cpp
 @@ -188,6 +188,37 @@ static void test_penalties(

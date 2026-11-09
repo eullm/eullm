@@ -1,0 +1,54 @@
+cuda : top-k MoE group mask without a ballot on HIP
+
+The grouped top-k MoE fusion (#29181) builds the mask of the kept expert
+groups with __ballot_sync. ROCm 6.x declares __ballot_sync only when
+HIP_ENABLE_WARP_SYNC_BUILTINS is defined, so ggml-hip did not compile for
+the MI250X (gfx90a) with ROCm 6.3.4, the version EuroHPC sites run and
+EuLLM's gfx90a release builds with: 13 errors in topk-moe.cu, every
+topk_moe_cuda<n> rejecting group_mask_warp_inplace. ROCm 7 declares it,
+which is why the RDNA builds did not show it. A ballot would also span two
+of these 32-lane warps on a 64-wide wavefront.
+
+On HIP each lane now asks lane g whether group g is kept, with the shuffle
+vendors/hip.h maps for every HIP version and wavefront width; the result is
+the same mask. CUDA keeps the ballot.
+
+EuLLM patch on llama.cpp b11925. Checked with ROCm 6.3.4's clang for
+gfx90a (compiled), gfx1100 and gfx1201.
+
+diff --git a/ggml/src/ggml-cuda/topk-moe.cu b/ggml/src/ggml-cuda/topk-moe.cu
+index 158b736f..37d96441 100644
+--- a/ggml/src/ggml-cuda/topk-moe.cu
++++ b/ggml/src/ggml-cuda/topk-moe.cu
+@@ -115,6 +115,23 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
+         const float other = __shfl_sync(0xFFFFFFFF, score, g, WARP_SIZE);
+         rank += other > score || (other == score && g < lane);
+     }
++#if defined(GGML_USE_HIP)
++    // EuLLM: no ballot on HIP. ROCm 6.x declares __ballot_sync only with
++    // HIP_ENABLE_WARP_SYNC_BUILTINS, so this did not compile for the MI250X
++    // builds (ROCm 6.3.4); and on a 64-wide wavefront a ballot spans two of
++    // these 32-lane warps. Each lane asks lane g whether group g is kept,
++    // through the shuffle every HIP version and wavefront width maps.
++    const int kept = lane < n_groups && rank < n_group_used;
++#pragma unroll
++    for (int i = 0; i < experts_per_thread; i++) {
++        const int g = (i * WARP_SIZE + lane) / n_per_group;
++        // every lane takes part in the shuffle, whatever its group
++        const int g_kept = __shfl_sync(0xFFFFFFFF, kept, g < n_groups ? g : 0, WARP_SIZE);
++        if (g >= n_groups || !g_kept) {
++            vals[i] = -INFINITY;
++        }
++    }
++#else
+     const auto keep = __ballot_sync(0xFFFFFFFFULL, lane < n_groups && rank < n_group_used);
+ 
+ #pragma unroll
+@@ -124,6 +141,7 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const
+             vals[i] = -INFINITY;
+         }
+     }
++#endif // defined(GGML_USE_HIP)
+ }
+ #endif // !defined(GGML_USE_HIP) || HIP_VERSION >= 60300000
+ 

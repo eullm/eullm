@@ -11,28 +11,22 @@ into freed temporaries, and every replay computed NaN or faulted
 Before allocating a new buffer, the pool now frees its cached buffers when the
 allocation would leave less than GGML_CUDA_POOL_KEEP_FREE_MB of VRAM free (512
 by default; 0 keeps them until an allocation fails, as before), unless a graph
-is being captured. Every flush, this one or the one after a failed
-allocation, is counted per device, and a context drops its CUDA graphs when a
-pool of its device flushed since its last compute, so they are captured again
-with live addresses.
+is being captured. That flush drops the
+context's CUDA graphs, so they are captured again with live addresses: upstream
+does the same since b11925 when the pool frees after a failed allocation
+(invalidate_cuda_graphs), and this patch calls it from its own flush.
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 33ebfdf..a57b69c 100644
+index 558ba7c2..f5806942 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -409,6 +409,31 @@ const ggml_cuda_device_info & ggml_cuda_info() {
+@@ -438,6 +438,25 @@ const ggml_cuda_device_info & ggml_cuda_info() {
  
  // #define DEBUG_CUDA_MALLOC
  
 +// Whether a CUDA graph is being captured, on any context: freeing the cached
 +// buffers then would break the capture, or free the temporaries it recorded.
 +static bool ggml_cuda_graph_capture_in_progress();
-+
-+// How many times a legacy pool of each device freed its cached buffers. A CUDA
-+// graph captured before holds the addresses of the pool's temporaries and would
-+// replay into freed memory, so ggml_backend_cuda_graph_compute drops the graphs
-+// of a context whose device's pools flushed since (ggml_cuda_graphs_after_pool_flush).
-+static std::atomic<uint64_t> ggml_cuda_pool_flushes[GGML_CUDA_MAX_DEVICES];
 +
 +// The VRAM a legacy pool leaves free when it allocates a buffer, freeing its
 +// cached buffers first when it would leave less. The pool keeps every buffer it
@@ -52,28 +46,7 @@ index 33ebfdf..a57b69c 100644
  // buffer pool for cuda (legacy)
  struct ggml_cuda_pool_leg : public ggml_cuda_pool {
      static const int MAX_BUFFERS = 256;
-@@ -433,6 +458,7 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
- 
-     void clear_pool() {
-         ggml_cuda_set_device(device);
-+        bool freed = false;
-         for (int i = 0; i < MAX_BUFFERS; ++i) {
-             ggml_cuda_buffer & b = buffer_pool[i];
-             if (b.ptr != nullptr) {
-@@ -440,8 +466,12 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
-                 pool_size -= b.size;
-                 b.ptr  = nullptr;
-                 b.size = 0;
-+                freed = true;
-             }
-         }
-+        if (freed) {
-+            ggml_cuda_pool_flushes[device].fetch_add(1, std::memory_order_relaxed);
-+        }
-     }
- 
-     void * alloc(size_t size, size_t * actual_size) override {
-@@ -451,9 +481,11 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
+@@ -496,9 +515,11 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
  #endif
          size_t best_diff = 1ull << 36;
          int ibest = -1;
@@ -85,7 +58,7 @@ index 33ebfdf..a57b69c 100644
  #ifdef DEBUG_CUDA_MALLOC
                  ++nnz;
                  if (b.size > max_size) max_size = b.size;
-@@ -486,6 +518,17 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
+@@ -531,6 +552,18 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
          size_t look_ahead_size = (size_t) (1.05 * size);
          look_ahead_size = 256 * ((look_ahead_size + 255)/256);
          ggml_cuda_set_device(device);
@@ -98,12 +71,13 @@ index 33ebfdf..a57b69c 100644
 +                              device, free_mem/1024.0/1024.0, cached/1024.0/1024.0, look_ahead_size/1024.0/1024.0);
 +                CUDA_CHECK(cudaDeviceSynchronize());
 +                clear_pool();
++                invalidate_cuda_graphs();
 +            }
 +        }
          cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
          if (err == cudaErrorMemoryAllocation) {
              (void)cudaGetLastError();
-@@ -693,6 +736,10 @@ static std::mutex ggml_cuda_lock;
+@@ -741,6 +774,10 @@ static std::mutex ggml_cuda_lock;
  static std::condition_variable ggml_cuda_lock_cv;
  static std::atomic<int> ggml_cuda_lock_counter;
  
@@ -114,43 +88,3 @@ index 33ebfdf..a57b69c 100644
  ggml_backend_cuda_context::~ggml_backend_cuda_context() {
      std::unique_lock<std::mutex> lock(ggml_cuda_lock);
      ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
-@@ -4544,6 +4591,30 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx, co
- }
- #endif // USE_CUDA_GRAPH
- 
-+#ifdef USE_CUDA_GRAPH
-+// Drops every CUDA graph of cuda_ctx when a legacy pool of its device freed its
-+// cached buffers since the last call: the graphs hold the addresses of pool
-+// temporaries, and replaying one into freed memory computed NaN, or faulted
-+// (HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION on ROCm), from then on. The
-+// graphs are captured again on the next calls.
-+static void ggml_cuda_graphs_after_pool_flush(ggml_backend_cuda_context * cuda_ctx) {
-+    static std::mutex mutex;
-+    static std::unordered_map<const ggml_backend_cuda_context *, uint64_t> seen;
-+    const uint64_t flushes = ggml_cuda_pool_flushes[cuda_ctx->device].load(std::memory_order_relaxed);
-+    bool drop = false;
-+    {
-+        std::lock_guard<std::mutex> lock(mutex);
-+        uint64_t & last = seen[cuda_ctx];
-+        drop = last != flushes;
-+        last = flushes;
-+    }
-+    if (drop && !cuda_ctx->cuda_graphs.empty()) {
-+        CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
-+        cuda_ctx->cuda_graphs.clear();
-+    }
-+}
-+#endif // USE_CUDA_GRAPH
-+
- static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
- 
-@@ -4554,6 +4625,8 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend,
-     const void * graph_key = nullptr;
- 
- #ifdef USE_CUDA_GRAPH
-+    ggml_cuda_graphs_after_pool_flush(cuda_ctx);
-+
-     graph_key = ggml_cuda_graph_get_key(cgraph);
- 
-     ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);

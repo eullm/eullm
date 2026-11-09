@@ -595,6 +595,61 @@ def test_failed_points_can_be_retried_by_group(tmp_path):
     assert q.ids("failed") == ["rt-1"]
 
 
+def test_failed_points_can_be_retried_by_label_and_cause(tmp_path):
+    """After a cause is fixed, the points it failed go back, not the others
+    of the same label nor those of another label (r-v085, 02-11-2026)."""
+    q = Queue(str(tmp_path))
+    taken = "server on port 18020 exited (1):\nError: port 11435 is already in use by another"
+    for pid, label, note in (("a-1", "v085", taken), ("a-2", "v085", "every request timed out"),
+                             ("a-3", "v0794", taken)):
+        q.add({"id": pid, "kind": "throughput", "engine_label": label})
+        q.claim(pid, {"job": "j"})
+        q.finish(pid, "failed", note, retry=False)
+    assert q.retry("", "v085", "11435 is already in use") == ["a-1"]
+    assert sorted(q.ids("failed")) == ["a-2", "a-3"]
+    assert q.retry("", "v085") == ["a-2"]
+    assert q.ids("failed") == ["a-3"]
+
+
+def test_an_eullm_server_is_started_without_the_chat_ui_where_it_can_be(monkeypatch):
+    """0.8.5's `serve` opens the chat UI on 11435 and exits when that port is
+    taken, so each server of a node after the first died at start: the runner
+    turns the UI off where the engine has `--no-ui`, and asks nothing of an
+    engine from before it, which would reject the flag."""
+    import point
+
+    fake = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_eullm.py")
+    monkeypatch.setattr(point, "_NO_UI", {})
+    cmd = point.Server(fake, 18020, ["--batch-size", "1"], {}, "log").command()
+    assert cmd[:5] == [fake, "serve", "--port", "18020", "--no-ui"]
+    assert cmd[-2:] == ["--batch-size", "1"]
+    monkeypatch.setattr(point, "_NO_UI", {})
+    monkeypatch.setenv("FAKE_EULLM_NO_UI", "0")
+    assert "--no-ui" not in point.Server(fake, 18020, [], {}, "log").command()
+    monkeypatch.setattr(point, "_NO_UI", {})
+    assert point.no_ui_args("/nonexistent/eullm") == []
+    # Asked once per binary.
+    monkeypatch.setattr(point, "_NO_UI", {fake: True})
+    assert point.no_ui_args(fake) == ["--no-ui"]
+
+
+def test_waiting_points_are_set_aside_by_label_round_and_group(tmp_path):
+    """A round an engine has made pointless leaves the queue whole, its points
+    kept beside it (r-v085 for r-v087, 03-11-2026); a point already claimed
+    stays with its job."""
+    q = Queue(str(tmp_path / "q"))
+    for pid, label, round_ in (("soak-node-1", "v087", "r-v087"), ("dense-1", "v085", "r-v085"),
+                               ("dense-2", "v085", "r-v085"), ("dense-3", "v087", "r-v087"),
+                               ("dense-4", "v085", "r-b12032")):
+        q.add({"id": pid, "kind": "throughput", "engine_label": label, "round": round_})
+    q.claim("dense-2", {"job": "j"})
+    dest = str(tmp_path / "q" / "dropped" / "2026-11-03")
+    assert q.set_aside(dest, label="v085", round_="r-v085") == ["dense-1"]
+    assert q.set_aside(dest, label="v087", prefixes=("soak-node", "moe-soak")) == ["soak-node-1"]
+    assert sorted(os.listdir(dest)) == ["dense-1.json", "soak-node-1.json"]
+    assert q.ids("todo") == ["dense-3", "dense-4"] and q.ids("running") == ["dense-2"]
+
+
 def test_status_gives_one_line_per_group_and_cause_not_the_server_logs():
     from campaign import stopped_lines
 
@@ -713,6 +768,25 @@ def test_the_report_tells_points_apart_by_their_environment():
     assert any("LLAMA_MOE_CACHE_EVICT=lru" in line and "12" in line for line in lines)
     assert any("LLAMA_MOE_CACHE_TRACE=" in line and "36" in line for line in lines)
     assert not any("STATS" in line for line in lines)
+
+
+def test_the_report_keeps_two_engines_of_one_round_apart():
+    """An old and a new binary measured in the same round (c15: 0.8.5 against
+    0.8.7, r-b12032) are two rows, not one average of both."""
+    import campaign
+    import report
+
+    def result(label, tok_s):
+        return campaign.row_of({"campaign": "c15", "group": "b12-moe", "kind": "throughput",
+                                "outcome": "measured",
+                                "params": {"model": "m", "batch": 8, "round": "r-b12032",
+                                           "engine_label": label},
+                                "throughput": {"aggregate_tok_s_mean": tok_s}})
+
+    lines = report.report([result("v085", 33.7), result("v087", 34.9)], {}, {"c15"}).splitlines()
+    assert lines[1].split()[0] == "engine_label"
+    assert any(line.split()[:2] == ["v085", "33.7"] for line in lines)
+    assert any(line.split()[:2] == ["v087", "34.9"] for line in lines)
 
 
 def test_leftover_servers_are_those_of_this_job_outside_every_running_point():
@@ -901,3 +975,101 @@ def test_a_long_round_goes_as_chains_of_short_jobs():
                            "exclusive": True, "min_duration_s": 7200,
                            "max_duration_s": 86400}))
     assert campaign.chain_plan([soak], max_hours=8) == (8 * 3600, 3)
+
+
+def test_a_server_log_is_read_as_utf8(tmp_path):
+    """`Server.log_tail` reads the engine's log as UTF-8: the last lines of a
+    failure are shown as written, not as mojibake, on any host locale."""
+    import point
+
+    log = tmp_path / "server.log"
+    log.write_text("errore: modello non trovato a citt\u00e0\n", encoding="utf-8")
+    server = point.Server("/bin/eullm", 18080, [], {}, str(log))
+    assert "citt\u00e0" in server.log_tail()
+
+def test_a_result_file_is_read_as_utf8(tmp_path):
+    """`collect` reads a result's JSON as UTF-8, like `measured_s` does: a
+    group or model named in non-ASCII text comes through unchanged."""
+    import json
+
+    results = tmp_path / "results"
+    (results / "c").mkdir(parents=True)
+    (results / "c" / "p.j1.json").write_text(json.dumps(
+        {"schema": campaign.SCHEMA, "campaign": "c", "group": "gr\u00fcppe",
+         "point": "p"}, ensure_ascii=False), encoding="utf-8")
+    [row] = campaign.result_rows(str(results))
+    assert row["group"] == "gr\u00fcppe"
+
+def test_a_campaign_spec_is_read_as_utf8(tmp_path):
+    """A spec is written by hand and may name a campaign or a group in
+    non-ASCII text: it is read as UTF-8, not with the host's locale."""
+    import json
+
+    spec = tmp_path / "citta.json"
+    spec.write_text(json.dumps({"campaign": "città", "groups": []},
+                               ensure_ascii=False), encoding="utf-8")
+    [(path, loaded)] = campaign.load_specs([str(spec)])
+    assert path == str(spec) and loaded["campaign"] == "città"
+
+
+def test_store_gguf_reads_a_manifest_of_utf8_text(tmp_path, monkeypatch):
+    """A model whose manifest names non-ASCII text still resolves its
+    `gguf_file`: the store's manifest is UTF-8, whatever the host locale."""
+    import json
+
+    import point
+
+    d = tmp_path / "models" / "m"
+    d.mkdir(parents=True)
+    (d / "a.gguf").write_bytes(b"GGUF first")
+    (d / "z\u00c1.gguf").write_bytes(b"GGUF named")
+    (d / "manifest.json").write_text(json.dumps(
+        {"name": "Mod\u00e8le", "gguf_file": "z\u00c1.gguf"},
+        ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "models"))
+    # The sorted fallback would pick a.gguf: only the manifest names z\u00c1.gguf.
+    assert point.store_gguf("m") == os.path.join(str(d), "z\u00c1.gguf")
+
+
+def test_smi_output_is_decoded_as_utf8(monkeypatch):
+    """The device reader asks for UTF-8 from nvidia-smi/rocm-smi, not the
+    host locale: a device name or a message in non-ASCII text is kept."""
+    import devices
+
+    class Out:
+        stdout = "0, 100, 1000, 50\n"
+        stderr = ""
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(devices.subprocess, "run", run)
+    assert devices.read_smi("cuda") == {
+        "0": {"used": 100 * 2**20, "total": 1000 * 2**20, "use": 50}}
+    assert seen[0].get("encoding") == "utf-8"
+
+
+def test_sacct_is_read_as_utf8(monkeypatch):
+    """A job's name is whatever its user submitted: sacct's output is read as
+    UTF-8, not with the host locale, so a non-ASCII name is kept as written."""
+    import budget
+
+    class Out:
+        returncode = 0
+        stderr = ""
+        stdout = "1|citt\u00e0-job|standard-g|COMPLETED|3600|1|cpu=1,gpu=1\n"
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(budget.subprocess, "run", run)
+    [job] = budget.read_sacct("2026-09-02")
+    assert job["name"] == "citt\u00e0-job"
+    assert seen[0].get("encoding") == "utf-8"

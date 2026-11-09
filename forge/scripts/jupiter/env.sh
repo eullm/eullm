@@ -53,8 +53,20 @@ if command -v module >/dev/null 2>&1; then
     _forge_nounset=""
     [[ $- == *u* ]] && _forge_nounset=1
     set +u
-    module load "${FORGE_MODULES:-PyTorch}" >/dev/null 2>&1 ||
-        echo "[!!] module load ${FORGE_MODULES:-PyTorch} failed: see 'module spider PyTorch'" >&2
+    # On failure the default stage is loaded first and the load tried again
+    # (the stages were reset by the software update of 02-11-2026, after
+    # which every job of the night printed this failure), and Lmod's own
+    # words are shown, not swallowed.
+    # In this shell, not a $(...) subshell: a load there would not last.
+    _forge_err=$(mktemp 2>/dev/null || echo "/tmp/forge-module-$$")
+    if ! module load "${FORGE_MODULES:-PyTorch}" >/dev/null 2>"$_forge_err"; then
+        module load Stages/2026 >/dev/null 2>&1
+        module load "${FORGE_MODULES:-PyTorch}" >/dev/null 2>&1 ||
+            { echo "[!!] module load ${FORGE_MODULES:-PyTorch} failed: see 'module spider PyTorch'" >&2
+              grep -v '^\s*$' "$_forge_err" | head -4 | sed 's/^/     /' >&2; }
+    fi
+    rm -f "$_forge_err"
+    unset _forge_err
     [ -n "$_forge_nounset" ] && set -u
     unset _forge_nounset
 fi

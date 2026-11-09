@@ -224,6 +224,95 @@ struct policy_lru : policy {
     }
 };
 
+// llama.cpp's moe_cache_slru::plan since #30637 (b11777 and later), unchanged:
+// a probation and a protected LRU list, a hit moves its slot to the protected
+// one, which holds at most half the slots (its least recently used slot goes
+// back to probation); a miss takes the least recently used slot of probation,
+// then of the protected list, skipping the experts this layer chose, and the
+// new expert starts in probation.
+struct policy_slru : policy {
+    std::vector<int32_t> prev, next;
+    int32_t head[2] = { -1, -1 };
+    int32_t tail[2] = { -1, -1 };
+    std::vector<bool> is_protected;
+    int32_t n_protected = 0;
+
+    policy_slru(int32_t l, int32_t e, int32_t s) : policy(l, e, s), prev(s), next(s), is_protected(s, false) {
+        for (int32_t i = 0; i < s; ++i) {
+            prev[i] = i - 1;
+            next[i] = i + 1 < s ? i + 1 : -1;
+        }
+        head[0] = 0;
+        tail[0] = s - 1;
+    }
+    const char * name() const override { return "slru"; }
+
+    void move(int32_t s, bool protect) {
+        const bool from = is_protected[s];
+        if (from == protect && s == tail[from]) {
+            return;
+        }
+        if (prev[s] >= 0) {
+            next[prev[s]] = next[s];
+        } else {
+            head[from] = next[s];
+        }
+        if (next[s] >= 0) {
+            prev[next[s]] = prev[s];
+        } else {
+            tail[from] = prev[s];
+        }
+        prev[s] = tail[protect];
+        next[s] = -1;
+        if (tail[protect] >= 0) {
+            next[tail[protect]] = s;
+        } else {
+            head[protect] = s;
+        }
+        tail[protect] = s;
+        is_protected[s] = protect;
+        n_protected += int(protect) - int(from);
+    }
+    void touch(int32_t s) {
+        move(s, true);
+        if (n_protected > n_slots/2) {
+            move(head[1], false);
+        }
+    }
+    int32_t victim(int32_t il) const {
+        for (int segment = 0; segment < 2; ++segment) {
+            for (int32_t s = head[segment]; s >= 0; s = next[s]) {
+                const int32_t key = key_of[s];
+                if (key < 0 || key / n_expert != il || seen[key % n_expert] != seen_gen) {
+                    return s;
+                }
+            }
+        }
+        throw std::runtime_error("no SLRU victim");
+    }
+
+    void plan(size_t, int32_t il, const int32_t * ids, size_t n, size_t & hits, size_t & misses) override {
+        distinct(ids, n);
+        for (int32_t e : uniq) {
+            const int32_t s = slot_of[(size_t) il*n_expert + e];
+            if (s >= 0) {
+                touch(s);
+                hits++;
+            }
+        }
+        std::sort(uniq.begin(), uniq.end());
+        for (int32_t e : uniq) {
+            if (slot_of[(size_t) il*n_expert + e] >= 0) {
+                continue;
+            }
+            const int32_t s = victim(il);
+            assign(s, il, e);
+            move(s, false);
+            misses++;
+        }
+    }
+};
+
 // The proposal: the least recently used slot while it is stale, i.e. its
 // expert was not chosen during the last pass over the layers (its own layer
 // came and went without it); when every slot was used within the last pass,
@@ -658,6 +747,7 @@ void run(const trace & t, const run_opts & o, const std::string & label) {
 
     std::vector<std::unique_ptr<policy>> ps;
     ps.emplace_back(new policy_lru(t.n_layer, t.n_expert, slots));
+    ps.emplace_back(new policy_slru(t.n_layer, t.n_expert, slots));
     ps.emplace_back(new policy_stale_mru(t.n_layer, t.n_expert, slots, pass_len));
     ps.emplace_back(new policy_lfu(t.n_layer, t.n_expert, slots, o.half_life*pass_len));
     ps.emplace_back(new policy_stale_lfu(t.n_layer, t.n_expert, slots, pass_len, o.half_life*pass_len, 0, false));

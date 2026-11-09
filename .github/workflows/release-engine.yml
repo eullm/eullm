@@ -2559,11 +2559,15 @@ jobs:
 
             LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: `--mtp` drafts on Qwen3.5 and Qwen3.6, up to twice as fast writing
+            ### This release: a complete `eullm --help`, and `.env` settings that were ignored
 
-            **`--mtp` now drafts on models that come with a projector.** unsloth's Qwen3.5 and Qwen3.6 MTP repositories ship a vision projector, which a pull fetches with the weights, and a model with one was loaded on the engine that does not draft: `--mtp` did nothing on them, while the banner said it did. With `--mtp` the projector now gives way (the model takes no images that way, and one log line says so) and the head drafts. On one GCD of LUMI's AMD MI250X, six of those models write 29-49% faster with `--mtp 1` at the default sampling, and 56-106% faster with `--mtp 2` or `3` at temperature 0.
+            **`eullm --help` says how to start and what can be set**: the ways to start a model, the options of `run` and `serve` used most with their defaults, and every setting read from the environment or `.env`. `eullm run --help` and `eullm serve --help` group their options by subject, one line each under `-h`, the whole explanation under `--help`.
 
-            **The expert cache comes on by itself only where it gains.** 0.7.93's default is kept to MoE models with 25% to 85% of their experts out of VRAM, on CUDA and ROCm alike; outside that band the usual split, which was faster there, and the log says the share and the choice. `/v1/systemone` also loads a Jev-Style model a request names instead of refusing it.
+            **Settings written in `.env` are read.** `EULLM_WEB_ALLOWED_DOMAINS`, `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`, `EULLM_ALLOW_MODEL_PATHS`, `HF_TOKEN`, `EULLM_DOWNLOAD_CONNECTIONS`, `EULLM_IMAGE_MAX_TOKENS`, `EULLM_IMAGE_MIN_TOKENS` and `RUST_LOG` were read from the environment only, so a line for them in `.env` was ignored: a domain allowlist there left `--web` fetching from any public host. If you set any of them in `.env`, it now takes effect.
+
+            **`eullm import-ollama` is gone.** Models come from the catalog, Hugging Face (`hf.co/OWNER/REPO`), a URL, or any folder of GGUF files (`EULLM_MODEL_LIBRARIES`). Models imported with it before keep working.
+
+            Everything else is 0.8.7: llama.cpp b12032, and the chat's sidebar, Model hub and About page.
 
             ### Quick install
 

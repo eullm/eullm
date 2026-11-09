@@ -62,6 +62,21 @@ fn main() {
     let suffix = if dirty { "-dirty" } else { "" };
     println!("cargo:rustc-env=EULLM_GIT_HASH={hash}{suffix}");
 
+    // The llama.cpp the engine is built on, for the chat UI's About page: its
+    // `bNNNNN` tag where the submodule's clone has it, else its commit. Moves
+    // with the submodule pin, which is in the index watched below.
+    let llama_cpp = Command::new("git")
+        .args(["-c", "safe.directory=*", "-C", "vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp"])
+        .args(["describe", "--tags", "--always"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=EULLM_LLAMA_CPP={llama_cpp}");
+
     // The release asset this binary is published as, which each build job in
     // release-engine.yml sets: `eullm update` downloads the same one. Empty
     // for a build from source, which `eullm update` then declines to replace.

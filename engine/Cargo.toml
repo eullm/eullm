@@ -1,6 +1,6 @@
 [package]
 name = "eullm-engine"
-version = "0.7.94"
+version = "0.8.8"
 edition = "2024"
 description = "eullm — sovereign LLM inference engine"
 license = "AGPL-3.0-or-later"
@@ -29,7 +29,7 @@ metal = ["llama-cpp-2/metal"]
 multimodal = ["llama-cpp-2/mtmd"]
 
 [dependencies]
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6", features = ["derive", "wrap_help"] }
 tokio = { version = "1.54.1", features = ["full"] }
 axum = "0.8"
 serde = { version = "1.0", features = ["derive"] }
@@ -66,6 +66,16 @@ rustyline = { version = "18.0.1", default-features = false }
 # Turns on ANSI colour support in the Windows console at start-up (a no-op
 # elsewhere). Already in the tree through clap; MIT OR Apache-2.0.
 anstyle-query = "1.1.5"
+# CPU, memory and the process's disk reads for the chat UI's Monitor page
+# (`monitor::system`). Only the `system` part; MIT.
+sysinfo = { version = "0.40.0", default-features = false, features = ["system"] }
+
+# NVIDIA GPU load, temperature, power and PCIe traffic for the Monitor page,
+# from the driver's NVML. Loaded at run time (libloading): a machine without
+# the NVIDIA driver runs the same binary and shows no NVIDIA figures. NVML
+# exists on Linux and Windows only. MIT OR Apache-2.0.
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+nvml-wrapper = "0.13.0"
 
 [dev-dependencies]
 assert_cmd = "2"

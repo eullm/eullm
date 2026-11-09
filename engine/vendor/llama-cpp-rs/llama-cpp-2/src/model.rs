@@ -142,9 +142,8 @@ pub struct OaiChatTemplateResult {
     /// llama.cpp's `common_chat_format` discriminant for the output syntax
     /// this prompt sets the model up to produce.
     pub format: i32,
-    /// The saved PEG parser for that output syntax (may be empty for
-    /// formats that need none). Opaque; pass to [`chat_parse`] verbatim.
-    pub parser: String,
+    /// The parser of that output syntax. Opaque; pass to [`chat_parse`].
+    pub parser: Option<ChatParser>,
     /// The generation prompt suffix, used by the parser to recognize
     /// message boundaries. May be empty.
     pub generation_prompt: String,
@@ -154,10 +153,38 @@ pub struct OaiChatTemplateResult {
     pub thinking_end_tag: Option<String>,
 }
 
-/// Parse a model's raw output with the format descriptor from
-/// [`LlamaModel::apply_chat_template_oaicompat`]. Model-free and stateless —
-/// callable from any thread, at any time after the render. Returns the
-/// parsed message as OpenAI-compatible JSON
+/// The parser of the output format a chat prompt sets the model up to
+/// produce, from [`LlamaModel::apply_chat_template_oaicompat`]. EuLLM: since
+/// llama.cpp #30210 it is a C++ object with no saved form, so it is held as a
+/// handle, freed with its last clone. llama.cpp only reads it to parse, so it
+/// may be shared between threads.
+#[derive(Clone)]
+pub struct ChatParser(std::sync::Arc<ChatParserHandle>);
+
+struct ChatParserHandle(ptr::NonNull<llama_cpp_sys_2::llama_rs_chat_parser>);
+
+impl Drop for ChatParserHandle {
+    fn drop(&mut self) {
+        unsafe { llama_cpp_sys_2::llama_rs_chat_parser_free(self.0.as_ptr()) }
+    }
+}
+
+// SAFETY: the parser is created whole before the handle exists and is only
+// read afterwards (`common_chat_parse` takes it by const reference); it is
+// freed once, by the last clone's drop.
+unsafe impl Send for ChatParserHandle {}
+unsafe impl Sync for ChatParserHandle {}
+
+impl std::fmt::Debug for ChatParser {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ChatParser")
+    }
+}
+
+/// Parse a model's raw output with the parser from
+/// [`LlamaModel::apply_chat_template_oaicompat`], or as plain content when
+/// `parser` is `None`. Model-free — callable from any thread, at any time
+/// after the render. Returns the parsed message as OpenAI-compatible JSON
 /// (`{"role","content","reasoning_content","tool_calls",...}`).
 ///
 /// # Errors
@@ -165,22 +192,16 @@ pub struct OaiChatTemplateResult {
 pub fn chat_parse(
     input: &str,
     is_partial: bool,
-    format: i32,
-    parser: &str,
-    generation_prompt: &str,
+    parser: Option<&ChatParser>,
 ) -> Result<String, JinjaChatTemplateError> {
     let input_c = CString::new(input)?;
-    let parser_c = CString::new(parser)?;
-    let generation_prompt_c = CString::new(generation_prompt)?;
     let mut out_json: *mut c_char = ptr::null_mut();
 
     let status = unsafe {
         llama_cpp_sys_2::llama_rs_chat_parse(
             input_c.as_ptr(),
             is_partial,
-            format,
-            parser_c.as_ptr(),
-            generation_prompt_c.as_ptr(),
+            parser.map_or(ptr::null(), |p| p.0 .0.as_ptr().cast_const()),
             &raw mut out_json,
         )
     };
@@ -856,7 +877,7 @@ impl LlamaModel {
         let mut was_explicit = false;
         let mut out_prompt: *mut c_char = ptr::null_mut();
         let mut out_format: i32 = 0;
-        let mut out_parser: *mut c_char = ptr::null_mut();
+        let mut out_parser: *mut llama_cpp_sys_2::llama_rs_chat_parser = ptr::null_mut();
         let mut out_generation_prompt: *mut c_char = ptr::null_mut();
         let mut out_thinking_start: *mut c_char = ptr::null_mut();
         let mut out_thinking_end: *mut c_char = ptr::null_mut();
@@ -878,6 +899,9 @@ impl LlamaModel {
                 &raw mut out_thinking_end,
             )
         };
+        // Owned from here, so every return below frees it.
+        let parser =
+            ptr::NonNull::new(out_parser).map(|p| ChatParser(std::sync::Arc::new(ChatParserHandle(p))));
 
         let take_optional_string = |raw: *mut c_char| -> Result<Option<String>, JinjaChatTemplateError> {
             if raw.is_null() {
@@ -894,7 +918,6 @@ impl LlamaModel {
             llama_cpp_sys_2::LLAMA_RS_STATUS_OK => {
                 let prompt = take_optional_string(out_prompt)?
                     .ok_or(JinjaChatTemplateError::NullResult)?;
-                let parser = take_optional_string(out_parser)?.unwrap_or_default();
                 let generation_prompt =
                     take_optional_string(out_generation_prompt)?.unwrap_or_default();
                 let thinking_start_tag = take_optional_string(out_thinking_start)?;

@@ -18,6 +18,12 @@
 #include "llama.cpp/include/llama.h"
 #include "wrapper_utils.h"
 
+// EuLLM: the output parser of a rendered chat prompt (llama_rs_chat_parser in
+// wrapper_common.h): what common_chat_parse needs, kept from the render.
+struct llama_rs_chat_parser {
+    common_chat_parser_params params;
+};
+
 extern "C" llama_rs_status llama_rs_json_schema_to_grammar(
     const char * schema_json,
     bool force_gbnf,
@@ -61,7 +67,7 @@ extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
     bool * out_was_explicit,
     char ** out_prompt,
     int32_t * out_format,
-    char ** out_parser,
+    llama_rs_chat_parser ** out_parser,
     char ** out_generation_prompt,
     char ** out_thinking_start_tag,
     char ** out_thinking_end_tag) {
@@ -99,12 +105,18 @@ extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
 
         const auto params = common_chat_templates_apply(tmpls.get(), inputs);
 
-        *out_prompt = llama_rs_dup_string(params.prompt);
+        *out_prompt = llama_rs_dup_string(params.prompt.str());
         if (!*out_prompt) {
             return LLAMA_RS_STATUS_ALLOCATION_FAILED;
         }
         *out_format = (int32_t) params.format;
-        *out_parser = llama_rs_dup_string(params.parser);
+        // Since llama.cpp #30210 the parser is a C++ object with no saved form,
+        // so it is handed over as a handle. Whether reasoning is split out of
+        // the content is decided here, by inputs.reasoning_format above.
+        auto * parser = new llama_rs_chat_parser();
+        parser->params = common_chat_parser_params(params);
+        parser->params.parser = params.parser;
+        *out_parser = parser;
         *out_generation_prompt = llama_rs_dup_string(params.generation_prompt);
         if (!params.thinking_start_tag.empty()) {
             *out_thinking_start_tag = llama_rs_dup_string(params.thinking_start_tag);
@@ -118,37 +130,25 @@ extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
     }
 }
 
-// EuLLM addition: parse a model's raw output with the format descriptor
-// returned by llama_rs_apply_chat_template_oai. Model-free and stateless:
-// the PEG arena is rebuilt from its saved form on each call, so the two
-// halves can run on different threads at different times. Returns the
-// parsed message as OpenAI-compatible JSON
+// EuLLM addition: parse a model's raw output with the parser returned by
+// llama_rs_apply_chat_template_oai. Model-free: the parser is only read, so
+// the render and the parse can run on different threads at different times.
+// Returns the parsed message as OpenAI-compatible JSON
 // ({"role","content","reasoning_content","tool_calls",...}).
 extern "C" llama_rs_status llama_rs_chat_parse(
     const char * input,
     bool is_partial,
-    int32_t format,
-    const char * parser,
-    const char * generation_prompt,
+    const llama_rs_chat_parser * parser,
     char ** out_json) {
-    if (!input || !out_json || format < 0 || format >= COMMON_CHAT_FORMAT_COUNT) {
+    if (!input || !out_json) {
         return LLAMA_RS_STATUS_INVALID_ARGUMENT;
     }
 
     *out_json = nullptr;
     try {
-        common_chat_parser_params params;
-        params.format = (common_chat_format) format;
-        // Always split reasoning out to reasoning_content — the caller
-        // decides what to do with it, and inline think tags are exactly what
-        // OpenAI-compatible clients cannot render.
-        params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-        if (generation_prompt && generation_prompt[0] != '\0') {
-            params.generation_prompt = common_chat_input(std::string(generation_prompt));
-        }
-        if (parser && parser[0] != '\0') {
-            params.parser.load(parser);
-        }
+        // No parser: the output is plain content.
+        static const common_chat_parser_params content_only;
+        const common_chat_parser_params & params = parser ? parser->params : content_only;
 
         common_chat_msg msg;
         try {
@@ -176,6 +176,10 @@ extern "C" llama_rs_status llama_rs_chat_parse(
     } catch (const std::exception &) {
         return LLAMA_RS_STATUS_EXCEPTION;
     }
+}
+
+extern "C" void llama_rs_chat_parser_free(llama_rs_chat_parser * parser) {
+    delete parser;
 }
 
 // EuLLM addition: renders `n_messages` role/content pairs through the
@@ -218,7 +222,7 @@ extern "C" llama_rs_status llama_rs_apply_chat_template(
 
         const auto params = common_chat_templates_apply(tmpls.get(), inputs);
 
-        *out_prompt = llama_rs_dup_string(params.prompt);
+        *out_prompt = llama_rs_dup_string(params.prompt.str());
         if (!*out_prompt) {
             return LLAMA_RS_STATUS_ALLOCATION_FAILED;
         }

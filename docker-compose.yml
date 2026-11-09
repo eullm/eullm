@@ -22,8 +22,8 @@ services:
       context: .
       dockerfile: engine/Dockerfile
     image: eullm/engine:latest
-    # The chat UI too (`serve` alone is headless): on 11435, next to the API.
-    command: ["serve", "--ui"]
+    # The chat UI is on 11435, next to the API (`serve --no-ui` turns it off).
+    command: ["serve"]
     # The API and the chat UI, on this machine only: its callers reach the
     # container from Docker's own addresses, which the allowlist below admits.
     # To serve other machines, drop the `127.0.0.1:` and set API keys
@@ -68,7 +68,7 @@ services:
       #   CUDA_ARCHS: "80;90"      # A100/H100 instead of RTX 3000/4000/5000
       #   CUDA_VERSION: "12.9.2"   # a driver older than r580 (CUDA 12)
     image: eullm/engine:latest-cuda
-    command: ["serve", "--ui"]
+    command: ["serve"]
     # As the CPU engine's above: this machine only, until API keys are set.
     ports:
       - "127.0.0.1:11434:11434"

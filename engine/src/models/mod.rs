@@ -1,6 +1,7 @@
 //! Local model management — storage, manifests, and catalog.
 
 pub mod catalog;
+pub mod library;
 pub mod pull;
 pub mod store;
 

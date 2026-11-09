@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eullm_forge.datasets.law_corpus import excluded, program_rows, register_eu_labels  # noqa: E402
+from eullm_forge.datasets.law_corpus import excluded, program_rows  # noqa: E402
 from eullm_forge.eval.norm_exam import articles_from_records  # noqa: E402
 
 
@@ -31,7 +31,6 @@ def load_articles(paths: list[Path]):
     for p in paths:
         with p.open(encoding="utf-8") as f:
             records += [json.loads(line) for line in f if line.strip()]
-    register_eu_labels(records)      # EU acts named like the codes (eurlex_<CELEX>)
     return articles_from_records(records)
 
 
@@ -42,11 +41,14 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--exclude", nargs="*", type=Path, default=[],
                     help="evaluation sets whose made-up numbers are never stated as absent")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--reverse", type=int, default=0,
+                    help="heading-first statements an article, against the reversal curse")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
 
     fakes, _ = excluded([p for p in args.exclude if p.is_file()])
-    rows = program_rows(load_articles(args.norms), fakes=fakes, seed=args.seed)
+    rows = program_rows(load_articles(args.norms), fakes=fakes, seed=args.seed,
+                        reverse=args.reverse)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     # written aside and renamed: two chains starting together each write the
     # same rows, and neither can read the other's half-written file

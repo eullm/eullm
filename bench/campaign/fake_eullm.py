@@ -265,7 +265,15 @@ def main(argv):
         Handler.flavour = "llama"
         port = int(flag(argv, "--port"))
         ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    if argv and argv[0] == "serve" and "--help" in argv:
+        # As 0.8.5 has it; FAKE_EULLM_NO_UI=0 plays an engine from before it.
+        if os.environ.get("FAKE_EULLM_NO_UI", "1") == "1":
+            print("      --no-ui  Do not serve the chat UI")
+        return 0
     if argv and argv[0] == "serve":
+        if "--no-ui" in argv and os.environ.get("FAKE_EULLM_NO_UI", "1") != "1":
+            print("error: unexpected argument '--no-ui' found", file=sys.stderr)
+            return 2
         Handler.mtp = int(flag(argv, "--mtp", "0"))
         model = flag(argv, "--decision-model")
         if model and model.startswith("missing"):

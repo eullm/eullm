@@ -69,21 +69,50 @@ pub struct WebPolicy {
     allowed_domains: Vec<String>,
     allow_http: bool,
     allow_private_hosts: bool,
+    /// The settings that were set, each with where it came from, for the
+    /// startup log. Empty: the defaults.
+    sources: Vec<String>,
 }
 
 impl WebPolicy {
-    /// Read the policy from the process environment.
-    pub fn from_env() -> Self {
-        Self::resolve(
-            std::env::var("EULLM_WEB_ALLOWED_DOMAINS").ok().as_deref(),
-            std::env::var("EULLM_WEB_ALLOW_HTTP").ok().as_deref(),
-            std::env::var("EULLM_WEB_ALLOW_PRIVATE_HOSTS")
-                .ok()
-                .as_deref(),
-        )
+    /// Read the policy: each setting from the process environment, else from
+    /// the `.env` file, as every other `EULLM_*` setting ([`crate::settings`]).
+    ///
+    /// It used to read the environment only, so the lines `.env.example`
+    /// shows were ignored in a `.env`: a domain allowlist written there left
+    /// `--web` fetching from any public host, with nothing in the log to say
+    /// so.
+    pub fn load() -> Self {
+        let mut sources = Vec::new();
+        let mut read = |key: &str| {
+            crate::settings::var_with_source(key).map(|(value, source)| {
+                sources.push(format!("{key} ({})", source.label()));
+                value
+            })
+        };
+        let domains = read("EULLM_WEB_ALLOWED_DOMAINS");
+        let allow_http = read("EULLM_WEB_ALLOW_HTTP");
+        let allow_private = read("EULLM_WEB_ALLOW_PRIVATE_HOSTS");
+        let mut policy = Self::resolve(
+            domains.as_deref(),
+            allow_http.as_deref(),
+            allow_private.as_deref(),
+        );
+        policy.sources = sources;
+        policy
     }
 
-    /// Pure resolution step behind [`from_env`], so the flags are testable
+    /// Where the policy came from, for the startup log: the settings that
+    /// were set and where each was found, or `defaults`.
+    pub fn source(&self) -> String {
+        if self.sources.is_empty() {
+            "defaults".to_string()
+        } else {
+            self.sources.join(", ")
+        }
+    }
+
+    /// Pure resolution step behind [`Self::load`], so the flags are testable
     /// without mutating process environment variables.
     fn resolve(
         domains: Option<&str>,
@@ -99,6 +128,7 @@ impl WebPolicy {
                 .collect(),
             allow_http: is_truthy(allow_http),
             allow_private_hosts: is_truthy(allow_private),
+            sources: Vec::new(),
         }
     }
 
@@ -162,12 +192,9 @@ impl WebPolicy {
     }
 }
 
-/// Whether an environment flag is set to something meaning "yes".
+/// Whether a setting is set to something meaning "yes".
 fn is_truthy(v: Option<&str>) -> bool {
-    matches!(
-        v.map(|s| s.trim().to_ascii_lowercase()).as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    )
+    v.is_some_and(crate::settings::is_truthy)
 }
 
 /// Strip control characters from host/URL text before it goes into an error
@@ -592,6 +619,14 @@ mod tests {
             "{}",
             p.describe()
         );
+    }
+
+    /// A policy built from nothing set says it is the defaults: the startup
+    /// log's source for it, beside the settings `load` found.
+    #[test]
+    fn a_policy_from_no_settings_says_it_is_the_defaults() {
+        assert_eq!(WebPolicy::resolve(None, None, None).source(), "defaults");
+        assert_eq!(WebPolicy::default().source(), "defaults");
     }
 
     #[test]

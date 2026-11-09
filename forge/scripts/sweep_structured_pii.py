@@ -190,6 +190,15 @@ def sweep_file(
                     continue
 
                 stripped = raw.strip()
+                if field == "*":
+                    # Every field of the record: the whole line is scanned as
+                    # text (report only; main refuses --apply with "*").
+                    _, stats = anonymize_text(stripped, config=config)
+                    hits = {k: v for k, v in stats.to_dict().items() if v}
+                    if hits:
+                        changed += 1
+                        counts.update(hits)
+                    continue
                 try:
                     rec = json.loads(stripped)
                 except json.JSONDecodeError as exc:
@@ -320,7 +329,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--field",
         default="text",
-        help="Record field holding the training text (default: text)",
+        help="Record field holding the training text (default: text); '*' scans every "
+             "field of each line, report only (cards and files whose text is not in 'text')",
     )
     parser.add_argument(
         "--layers",
@@ -353,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.field == "*" and args.apply:
+        parser.error("--field '*' only reports: name the field to rewrite with --apply")
     layers = [layer.strip() for layer in args.layers.split(",") if layer.strip()]
     unknown = [layer for layer in layers if layer not in LAYERS]
     if unknown:

@@ -124,3 +124,34 @@ def test_start_is_asked_only_the_sets_named(tmp_path):
     start_ev = log.read_text().splitlines()[4]
     assert "MODEL=" + str(runs / "start-model") in start_ev
     assert "SETS=norm-exam=" in start_ev and "practical-dev=" not in start_ev
+
+
+def test_a_round_waits_for_the_one_that_writes_its_start(tmp_path):
+    env, runs, log, _ = _setup(tmp_path)
+    env["GRPO_AFTER"] = "777"
+    start = runs / "grpo" / "r2" / "merged"
+    p = subprocess.run(["bash", str(SCRIPT), "r3", str(start), "2", "200"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    jobs = log.read_text().splitlines()
+    link1, link2, ev, judge = jobs           # no smoke test, START not asked
+    assert "--dependency=afterany:777" in link1 and "--limit" not in link1
+    assert "--dependency=afterany:100" in link2
+    assert "MODEL=" + str(runs / "grpo" / "r3" / "merged") in ev
+    assert "--dependency=afterany:102" in judge
+
+
+def test_prompts_a_queued_job_writes_are_filtered_by_the_first_link(tmp_path):
+    env, runs, log, _ = _setup(tmp_path)
+    env["GRPO_AFTER"] = "555"
+    later = tmp_path / "later.jsonl"            # written by the job the round waits for
+    env["GRPO_PROMPTS"] = str(later)
+    p = subprocess.run(["bash", str(SCRIPT), "r4", str(runs / "start-model"), "1", "50"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 0, p.stdout + p.stderr
+    out = runs / "grpo" / "r4"
+    assert not (out / "prompts.jsonl").exists()
+    filt = (out / "filter.sh").read_text()
+    assert "filter_grpo_prompts.py" in filt and str(later) in filt
+    assert "--dependency=afterany:555" in log.read_text().splitlines()[0]
+

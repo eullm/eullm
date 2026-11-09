@@ -102,6 +102,6 @@ $CAMPAIGN unblock --queue "$CAMPAIGN_DIR" >/dev/null
 cat <<EOF
 
 Next:
-  bash $EULLM_REPO/tools/lumi/submit_campaign.sh 2     # two chains of jobs of up to 8 hours
+  bash $EULLM_REPO/tools/lumi/submit_campaign.sh 2     # two chains of jobs of up to 4 hours
   bash $EULLM_REPO/tools/lumi/status.sh                # budget, jobs, queue
 EOF

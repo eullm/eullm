@@ -5,12 +5,24 @@
 #
 #   bash tools/lumi/submit_campaign.sh [nodes=2] [jobs-per-chain=auto] [sbatch args...]
 #   TOP_UP=1 bash tools/lumi/submit_campaign.sh 4 2
+#   AFTER="23395490" bash tools/lumi/submit_campaign.sh 2
 #
-# jobs-per-chain `auto`: as many jobs of at most MAX_JOB_HOURS (8) as the
+# jobs-per-chain `auto`: as many jobs of at most MAX_JOB_HOURS (4) as the
 # label's waiting points need, spread over the chains (`campaign.py walltime
 # --max-hours`). A round of hundreds of node-hours goes as chains of short
-# jobs, each starting in a gap, rather than jobs of two days that wait for
-# one (26-10-2026: 5 hours started within minutes where 9 waited 29 hours).
+# jobs, each starting in a gap, rather than long jobs that wait for one
+# (26-10-2026: 5 hours started within minutes where 9 waited 29 hours). Every
+# job of a chain looks for a gap of its own when the one before it ends, so
+# what counts is each job's length: `r-v085`'s chains of 8-hour jobs
+# (01-11-2026) asked for gaps twice as long as they need to be, since no
+# point of a round is estimated at more than an hour.
+#
+# AFTER: job ids, one per chain, that the chains continue: the first job of
+# chain n waits for the n-th of them to end (afterany). To change the length
+# of a round's jobs, cancel the ones still waiting and submit again with the
+# running ones in AFTER, so that no chain stops when its running job ends.
+# One entry may name several jobs, `A:B`: a chain that starts when both end.
+# The last line printed names the last job of each chain, for that.
 #
 # TOP_UP=1 makes N the number of chains to have, not to add: the chains
 # already in the queue (a campaign job running, or waiting for anything but
@@ -37,7 +49,8 @@ set -euo pipefail
 
 NODES="${1:-2}"
 LINKS="${2:-auto}"
-MAX_JOB_HOURS="${MAX_JOB_HOURS:-8}"
+MAX_JOB_HOURS="${MAX_JOB_HOURS:-4}"
+read -r -a AFTER_IDS <<< "${AFTER:-}"
 shift $(( $# > 2 ? 2 : $# ))
 
 # shellcheck source-path=SCRIPTDIR source=campaign_env.sh
@@ -88,8 +101,9 @@ if [ "${TOP_UP:-0}" = 1 ]; then
     [ "$NODES" -eq 0 ] && { echo "nothing to add"; exit 0; }
 fi
 
+LASTS=()
 for n in $(seq 1 "$NODES"); do
-    prev=""
+    prev="${AFTER_IDS[$((n - 1))]:-}"
     for i in $(seq 1 "$LINKS"); do
         dep=()
         [ -n "$prev" ] && dep=(--dependency=afterany:"$prev")
@@ -100,5 +114,8 @@ for n in $(seq 1 "$NODES"); do
         echo "chain $n, job $i/$LINKS: $jid${prev:+ (after $prev)}"
         prev="$jid"
     done
+    LASTS+=("$prev")
 done
+# For a chain that is to start when these end: AFTER="$(...last... | tr ' ' ':')".
+echo "last of each chain: ${LASTS[*]}"
 echo "watch: bash $EULLM_REPO/tools/lumi/status.sh"

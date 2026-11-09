@@ -1,0 +1,69 @@
+llama : without mmap, read the tensors in file order
+
+A model loaded without mmap is read tensor by tensor, and the order is not
+the file's: before #31321 it was the order llama.cpp creates the tensors in,
+which in some GGUF files is far from how they lie on disk, and since #31321
+(b12032) it is biggest-first, for the one staging buffer it now reuses. On a
+network file system read cold, the jumps either order makes cost the
+client's read-ahead. The tensors now come sorted by file and offset, one
+pass from the first byte to the last, and the staging buffer only grows, to
+the largest tensor: the peak upstream's first allocation had anyway,
+without a reallocation, and its page faults, at every size change.
+
+Measured on LUMI-G (Lustre), cold loads with the node alone, 2-3 each
+(tools/lumi/campaigns/c16-load-order.json, 5-6 November 2026), median
+seconds for b11925 / b12032 / b12032 with this patch: Qwen3.8-27B Q8 on one
+GCD 130 / 95 / 44, Qwen3-32B split by tensor on four 101 / 107 / 31,
+Qwen3-235B Q8_0 on eight 686 / 652 / 261, Qwen3-Coder-480B 183 / 185 / 149;
+Qwen3-235B Q4_K_M on four and two of it loading together level (330 / 148 /
+184, 186 / 164 / 188), inside a spread of two to three times between
+trials. b11925 and b12032 load alike.
+
+EuLLM patch on llama.cpp b12032, after 0012 (which changes the same
+function).
+
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index 6eeebb2c5..e773f8134 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -1788,16 +1788,20 @@ bool llama_model_loader::load_all_data(
+         tensors.push_back(cur);
+     }
+ 
+-    // without mmap, tensors in non-host buffers are staged through a temporary buffer sized like the tensor
+-    // load them biggest-first so the largest staging buffer is allocated while the fewest weights are resident
++    // EuLLM: without mmap, the tensors are read in the order their data lies in
++    // the files, one pass from the first byte to the last. Upstream reads them
++    // biggest-first (#31321), for a staging buffer that only shrinks; on a
++    // network file system read cold (Lustre on LUMI-G) the jumps that order
++    // makes cost more than the buffer saves: two Qwen3-235B loading together
++    // took 160 s on b12032 against 103-121 s before it. The staging buffer
++    // below grows to the largest tensor instead, the same peak as upstream's.
+     if (!use_mmap) {
+-        std::stable_sort(tensors.begin(), tensors.end(), [](const ggml_tensor * a, const ggml_tensor * b) {
+-            const bool staged_a = a->buffer && !ggml_backend_buffer_is_host(a->buffer);
+-            const bool staged_b = b->buffer && !ggml_backend_buffer_is_host(b->buffer);
+-            if (staged_a != staged_b) {
+-                return staged_a;
+-            }
+-            return staged_a && ggml_nbytes(a) > ggml_nbytes(b);
++        const auto file_position = [this](const ggml_tensor * t) {
++            const auto * w = get_weight(ggml_get_name(t));
++            return w ? std::make_pair((size_t) w->idx, w->offs) : std::make_pair(SIZE_MAX, (size_t) 0);
++        };
++        std::stable_sort(tensors.begin(), tensors.end(), [&](const ggml_tensor * a, const ggml_tensor * b) {
++            return file_position(a) < file_position(b);
+         });
+     }
+ 
+@@ -1948,8 +1952,8 @@ bool llama_model_loader::load_all_data(
+                     const size_t read_size      = (pad + n_size + align - 1) & ~(align - 1);
+                     const size_t buf_size       = read_size + align - 1;
+ 
+-                    // tensors come biggest-first: shrink the buffer when it gets too large, so peak memory stays close to one tensor
+-                    if (read_buf.size() < buf_size || read_buf.size() > 2*buf_size) {
++                    // EuLLM: tensors come in file order, so the buffer only grows, to the largest tensor
++                    if (read_buf.size() < buf_size) {
+                         // free the old buffer first, `read_buf = {}` would keep its capacity
+                         read_buf = std::vector<no_init<uint8_t>>();
+                         read_buf.resize(buf_size);

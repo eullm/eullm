@@ -51,8 +51,9 @@ docker run -d --gpus all -p 127.0.0.1:11434:11434 -v eullm-models:/models \
   -e EULLM_ALLOWED_IPS=172.16.0.0/12,192.168.0.0/16 eullm/engine:cuda
 ```
 
-The container runs `eullm serve` (add `--ui` after the image name for the
-chat UI, as compose does) as uid 10001, with its models in `/models` and its
+The container runs `eullm serve`, with the chat UI on port 11435 (publish it
+with `-p 127.0.0.1:11435:11435`, or add `--no-ui` after the image name to turn
+it off), as uid 10001, with its models in `/models` and its
 audit trail in `/data/audit`. `EULLM_ALLOWED_IPS` admits the Docker addresses
 a published port's callers arrive from; to serve other machines, publish on
 all interfaces and set `EULLM_API_KEYS`. The CUDA image needs the NVIDIA
@@ -62,16 +63,22 @@ the build arguments for CUDA 12 and for datacenter GPUs. Details:
 
 ## CLI Commands
 
-### `eullm run <model> [--port PORT]`
+### `eullm run <model> [options]`
 
-Load a model and start the API server. Supports local GGUF files and catalog models.
+Load a model, open the chat in the browser and in the terminal, and start the
+API server. The model is a catalog id, a Hugging Face repo, the URL of a GGUF,
+a model `eullm list` shows, or a GGUF file; one not on this machine is
+downloaded first.
 
 ```bash
 # Run a local GGUF file (inference works immediately)
 eullm run ./qwen3-7b-q4_k_m.gguf
 
-# Run a catalog model (auto-downloads from HuggingFace)
+# Run a catalog model (downloaded the first time)
 eullm run qwen3-4b
+
+# Run a GGUF repo from Hugging Face
+eullm run hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M
 
 # With options
 eullm run ./model.gguf --port 8080
@@ -79,44 +86,55 @@ eullm run ./model.gguf --gpu-layers 0      # CPU only
 eullm run ./model.gguf --gpu-layers 20     # At most 20 layers on the GPU
 eullm run ./model.gguf --ctx-size 8192     # Larger context window
 eullm run ./model.gguf --threads 8         # Limit CPU threads
+eullm run ./model.gguf --cli --no-ui       # The terminal chat only
 ```
 
-**Options** (`eullm run --help` is authoritative; this table is the short form):
+**Options**, the same for `run` and `serve` unless the table says otherwise.
+`eullm run --help` is authoritative and groups them the same way; `eullm
+--help` lists the ones used most. This table is the short form:
 
 | Option | Default | Description |
 |---|---|---|
-| `model` | (optional) | GGUF path, catalog id, URL, or `hf.co/<owner>/<repo>[:<quant>]`. Omitted on a terminal, opens the model picker |
+| `model` | (optional) | `run` only: a catalog id, `hf.co/<owner>/<repo>[:<quant>]`, the URL of a GGUF, a model `eullm list` shows, or a GGUF path. Omitted on a terminal, opens the model picker |
 | `--port, -p` | `11434` | API server port |
 | `--ui-port` | `11435` | Embedded chat UI port (separate from the API) |
+| `--no-ui` | false | No chat UI: the API only. The UI is on by default for `run` and `serve` |
+| `--cli`, `--no-chat` | false | `run` only: chat in the terminal without opening the browser (the chat UI is still served unless `--no-ui`) |
+| `--image` | (unset) | `run` only: an image or audio file sent with the first prompt (builds with multimodal support) |
 | `--gpu-layers` | automatic | **Upper bound** on GPU layers (-1 = all, 0 = CPU only). Sizing may offload fewer — see below |
 | `--no-fit` | false | Disable automatic sizing; use `--gpu-layers` as given |
 | `--fit` | (implied) | Same sizing, plus an interactive confirmation before a partial split |
 | `--fit-strict` | false | Refuse to load rather than offload a partial split. A MoE model is not refused: one whose experts do not fit loads with them in RAM (the expert cache by default where it gains, see `--moe-cache`) |
+| `--vram-reserve`, `--fit-target` | `1024` | MiB of VRAM kept free beside the model and its context, for the card's scratch and other programs: sizing leaves it, and a load refuses a context that would leave less. At least 256 |
 | `--cpu-moe` | false | MoE models: all expert tensors on CPU RAM (sized automatically when unset) |
 | `--n-cpu-moe` | `0` | MoE models: expert tensors on CPU for the first N layers only |
 | `--split-mode` | `layer` | How a model goes across several GPUs: `layer` (whole layers per GPU, one after another) or `tensor` (llama.cpp's experimental tensor parallelism; not for every architecture: DeepSeek-V3's `deepseek2` has none and fails to load. A model read into memory loads about as fast either way, each weight read by 16 threads at once, `LLAMA_LOAD_READ_THREADS`). No effect with one GPU visible. No `none` (make one GPU visible instead) and no `row` (llama.cpp's CUDA and ROCm backends no longer support it) |
 | `--tensor-split` | (by free memory) | Each GPU's share of the model, as proportions, e.g. `3,1` |
 | `--ctx-size, -c` | `4096` | Total context window (split across batch slots), or `auto`: the largest that keeps every layer on the GPU (dense models; never below 4096, up to what the model was trained for and 131072) |
-| `--threads, -t` | all CPUs | Number of CPU threads |
-| `--batch-size` | `1` | Concurrent requests served by the batching scheduler (raise `--ctx-size` with it) |
-| `--n-batch` | `2048` | Prefill batch size (tokens per eval) |
+| `--threads, -t` | one per physical core | Number of CPU threads. The default counts physical cores (performance cores on Apple Silicon) and never exceeds the CPUs the process may use (a Slurm job's, a container's, `taskset`'s) |
+| `--batch-size` | `1` | Concurrent requests served by the batching scheduler, up to 64; `0` answers them one at a time without it (raise `--ctx-size` with it) |
+| `--n-batch` | `2048` | Prefill batch size (prompt tokens per decode call) |
 | `--n-ubatch` | `512`, `2048` with an expert cache | Prompt tokens one GPU pass reads (llama.cpp's micro-batch). Raise it, to 2048-8192, for an MoE model whose experts do not all fit in VRAM: the experts in RAM are copied to the GPU once per pass, so fewer passes read a long prompt faster. `--fit` keeps fewer experts on the GPU to make room. Raises `--n-batch` to match |
 | `--moe-cache` | on where it gains | `auto`, `off` or a size in MiB: an MoE model whose experts do not all fit in VRAM keeps them all in RAM and caches the ones it uses most in the VRAM they would have taken. On by default (with `--fit`, which is on unless you pass `--no-fit`) on one GPU, CUDA or ROCm, when 25% to 85% of the experts do not fit (a model that nearly fits, or one whose cache would hold a tenth of them, is faster with the usual split), unless you place the experts (`--cpu-moe`, `--n-cpu-moe`) or use `--mtp`. `auto` or a size asks for it whatever the share. Always speeds up writing; reading a prompt depends on the model (Qwen3.6-35B-A3B 25% faster, Qwen3.8-Flash-Next IQ2_XS 17% slower). One GPU only, CUDA or ROCm; experimental (llama.cpp PR #29887); see the guide |
 | `--no-mmap` | off | Read the model into memory instead of mapping its file. Experts kept in RAM then sit in memory the GPU driver has pinned, which the card copies from directly. Loads slower, and the RAM has to hold them; `--moe-cache` does it by itself when the RAM can spare the experts. See the guide |
 | `--mmap` | off | Keep the model file mapped where it would be read into memory: by `--moe-cache`, or because it goes to the GPUs whole and is more than half the memory or on a network file system other than GPFS |
+| `--kv-unified` | false | One KV cache for every slot (llama.cpp's `--kv-unified`) with `--batch-size` above 1. Experimental: on an MI250X 1-4% faster with short requests coming and going, 2-7% slower with sixteen at once, 38-45% slower with 32k-token contexts |
+| `--load-threads` | `0` | Threads that read the model file into the page cache ahead of the load; `auto` uses 16 on a network file system and none on a local disk. Off by default: on Lustre it made loads slower. See the guide |
 | `--moe-prefetch` | 4 | Slots of VRAM (2 to 8, 0 = off) the experts in RAM of a long prompt are copied into ahead of their layer, on a second stream of the GPU. One GPU, CUDA or ROCm, experts in pinned memory (the model read into memory), micro-batches of 512 tokens or more; with `--moe-cache` the slots' VRAM comes out of the cache. See the guide |
-| `--cache-type-k` | `f16` | KV cache type for keys (f16, q8_0, q4_0). Quantizing frees VRAM for more layers |
-| `--cache-type-v` | `f16` | KV cache type for values (f16, q8_0, q4_0) |
+| `--cache-type-k` | `f16` | KV cache type for keys: `f16`, `q8_0`, `q4_0`, `q4_1`, `q5_0`, `q5_1`, `f32`. Quantizing frees VRAM for more layers. Four-bit keys (`q4_0`, `q4_1`) with flash attention on are raised to `q8_0`, since that combination writes nonsense; Gemma 4 always uses `f16` |
+| `--cache-type-v` | `f16` | KV cache type for values, the same types |
 | `--no-flash-attn` | false | Disable flash attention (on by default), for the generation model and the decision model alike |
-| `--web` | false | Fetch URLs found in user messages and inject their content |
+| `--web` | false | Fetch URLs found in user messages and inject their content: https only, from public addresses, unless the `EULLM_WEB_*` settings say otherwise (see [Settings](#settings-in-the-environment-or-env)) |
 | `--mmproj` | (auto) | Multimodal projector path, when it is not beside the weights |
+| `--mmproj-offload` | (sizing decides) | Keep the projector on the GPU, whatever sizing would decide |
+| `--no-mmproj-offload` | (sizing decides) | Keep the projector in system RAM: the most VRAM for the text model, images encoded on the CPU |
 | `--ctx-checkpoints` | `0` | Prompt-prefix state snapshots for hybrid/recurrent models |
 | `--checkpoint-min-step` | `8192` | Minimum new tokens between checkpoints |
 | `--rs-seq` | `0` | Recurrent-state rollback window — leave off unless you know why |
 | `--mtp` | `0` | Speculative decoding with the model's own MTP head: up to N drafted tokens checked per decode (2 measured best on a GPU). Needs a GGUF that carries the MTP layers and `--batch-size 1`. A model whose projector was found with it (a vision repo's `mmproj-*.gguf`, which a pull fetches) loads without it, text only, so that the head can draft; one passed with `--mmproj` stays, and then `--mtp` drafts nothing for that model. The log says which; see the guide |
 | `--mtp-p-min` | `0` | With `--mtp`: stop drafting once the MTP head is less sure than P (0-1) of its next draft, so the draft length follows the text |
+| `--mtp-model` | (unset) | With `--mtp`: a GGUF holding the MTP head alone, for a model whose GGUF has none (Qwen3.8-Flash-Next's). It is loaded onto the GPU whole, and sizing keeps its VRAM out of the layers and the expert cache |
 | `--rust-debug` | false | Per-token NaN/Inf scan of the logits (diagnostics) |
-| `--replace` | false | Replace an existing service on the port |
 | `--daemon` | false | Run as a background daemon |
 | `--pidfile` | `/tmp/eullm.pid` | PID file path (with `--daemon`) |
 | `--logfile` | `~/.eullm/logs/eullm.log` | Daemon log file (with `--daemon`). Set `--pidfile` alone and the log stays beside it |
@@ -182,27 +200,71 @@ layers short of fitting whole, the log says which `--vram-reserve`,
 
 ### `eullm pull <model>`
 
-Download a model from HuggingFace (or the EU registry when available).
+Download a model: a catalog id, a Hugging Face repo
+(`hf.co/<owner>/<repo>[:<quant>]`) or the URL of a GGUF. With no model, in a
+terminal, a menu of the catalog's models opens.
 
 ```bash
 eullm pull qwen3-4b
+eullm pull hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M
+eullm pull https://example.eu/models/model-Q4_K_M.gguf
 ```
 
-The model is stored in `~/.eullm/models/<model>/` with a GGUF file and manifest.
+The model is stored in `~/.eullm/models/<model>/` (or under
+`EULLM_MODELS_DIR`) with a GGUF file and manifest.
 
 Gated and private Hugging Face repositories need an access token: set
-`HF_TOKEN` in the environment (for a gated one, after accepting its terms with
-the same account). It is sent only to `https://huggingface.co`, for the API
-calls and every download request alike. See the README section "Gated and
-private Hugging Face models".
+`HF_TOKEN` in the environment or in `.env` (for a gated one, after accepting
+its terms with the same account). It is sent only to `https://huggingface.co`,
+for the API calls and every download request alike. See the engine guide's
+section "Gated and private Hugging Face models".
 
 ### `eullm list`
 
-Show locally downloaded models. If none are available, displays the EU catalog.
+Show the models on this machine: the ones in the models folder (downloaded
+ones included) and in the model libraries, each by the name it runs by. If
+there are none, displays the EU catalog.
 
 ```bash
 eullm list
 ```
+
+### Model libraries and `eullm import`
+
+Besides the models `eullm pull` downloads, EuLLM lists and runs any GGUF it
+finds, in place:
+
+- in the folders of `EULLM_MODEL_LIBRARIES` (environment first, then `.env`;
+  separated by `;`, on Linux and macOS also by `:`), such as LM Studio's
+  models folder or a Hugging Face cache;
+- in its own folder (`EULLM_MODELS_DIR`, or `~/.eullm/models`), outside the
+  model directories `eullm pull` made.
+
+Every subfolder is read. Nothing is moved, renamed, added or deleted there, so
+the program that made the folder keeps using it; `eullm rm` refuses a library
+model. Hidden folders (a name starting with a dot) are not entered.
+
+- **Names**: from the file (`Qwen3-8B-Q4_K_M.gguf` → `qwen3-8b-q4_k_m`). When
+  two files would get the same name, or a pulled model already has it, each
+  takes its folder's name in front (`unsloth-qwen3-8b-q4_k_m`).
+- **Projectors** (`mmproj*.gguf`, or any GGUF whose header says
+  `general.architecture = clip`) are not models: one in the same folder as a
+  model is that model's projector.
+- **Split models** (`-00001-of-00003.gguf`): one model, opened from its first
+  part; one with parts missing is left out.
+
+`eullm list`, `/api/tags` and `/v1/models` show them (status `library`, the
+file's path as description), and `eullm run <name>` or a request's `model`
+field runs them. The folders are scanned again at most every 5 seconds, so a
+file added or removed shows up without a restart.
+
+```bash
+eullm import          # what the scan found, and what it left out and why
+```
+
+`eullm import` writes nothing. In 0.7.95 it wrote manifests and moved a `.gguf`
+lying loose in the store folder into a folder of its own; manifests it wrote
+then are read as before.
 
 ### `eullm show <model>`
 
@@ -212,6 +274,17 @@ Display detailed information about a model (local or from catalog).
 eullm show qwen3-4b
 ```
 
+### `eullm rm <model>`
+
+Delete a downloaded model's files, after a confirmation (`--force` skips it).
+`remove` is the same command. A model in a model library is refused: EuLLM
+only reads those folders. The API's `DELETE /api/delete` does the same.
+
+```bash
+eullm rm qwen3-14b
+eullm rm qwen3-14b --force
+```
+
 ### `eullm serve [--port PORT]`
 
 Start the API server without loading any model. The first API request with a `"model"` field will load that model dynamically.
@@ -219,7 +292,14 @@ Start the API server without loading any model. The first API request with a `"m
 ```bash
 eullm serve
 eullm serve --port 8080
+eullm serve --no-ui        # API only, no chat UI
 ```
+
+The chat UI is served on `--ui-port` (11435) as with `run`, behind the same
+API keys, IP allowlist and origins as the API; `--no-ui` turns it off. A UI
+port already taken is logged and the API is served anyway. (Until 0.8.0
+`serve` started without the UI unless given `--ui`, which is still accepted
+and does nothing.)
 
 `serve` takes the same runtime flags as `run` (they are one shared set), and
 they apply to every model it loads or swaps to: automatic GPU sizing runs on
@@ -243,40 +323,6 @@ eullm unload --port 11500
 
 The same as `POST /api/unload` — see below.
 
-### `eullm import-ollama <model> [--ollama-dir PATH]`
-
-Import a model from a local Ollama installation into EULLM's model store. Copies the GGUF blob so you can benchmark both engines with the exact same model file.
-
-```bash
-# Import from Ollama (tag "latest")
-eullm import-ollama llama3.2
-
-# Import a specific tag
-eullm import-ollama qwen3:14b
-
-# Custom Ollama directory
-eullm import-ollama gemma3 --ollama-dir /custom/path
-```
-
-**How it works:**
-
-1. Reads the Ollama manifest at `~/.ollama/models/manifests/registry.ollama.ai/library/{name}/{tag}`
-2. Locates the model layer (`application/vnd.ollama.image.model`) — the GGUF blob
-3. Copies the blob to `~/.eullm/models/{name}/{name}.gguf`
-4. Applies GGUF metadata patches if needed (e.g. fixes array lengths for llama.cpp compatibility)
-5. Writes a EULLM manifest so the model appears in `eullm list`
-
-After import:
-
-```bash
-eullm run llama3.2        # Runs on EULLM Engine
-ollama run llama3.2       # Same model on Ollama — identical comparison
-```
-
-**Licensing note:** Ollama does not add any license on top of the original model weights. The GGUF blob is the same file distributed by the upstream model author. The license of the model itself applies (e.g. Apache 2.0 for Qwen3, MIT for DeepSeek).
-
-**GGUF compatibility:** Some Ollama GGUF files contain metadata arrays with fewer elements than upstream llama.cpp expects (e.g. `qwen35.rope.dimension_sections` with 3 elements instead of 4). The import command automatically patches these during copy. Models with hybrid architectures (e.g. Qwen3.5 with SSM/Mamba2 layers) may have incompatible tensor layouts — use the HuggingFace GGUF instead.
-
 ### `eullm update [--check]`
 
 Install the latest stable release in place of the binary that runs the command.
@@ -299,6 +345,19 @@ A running `eullm serve` or `eullm run` keeps the old version until it is restart
 
 It declines, saying why, for a binary built from source or in a Docker image (no release file is known to match it), for the Microsoft Store package, which the Store updates, and for the Windows ROCm build, whose ZIP keeps ROCm's folder layout (`bin\` and `.kpack\`): extract the new ZIP over the folder that holds `bin\` instead. A system-wide install (`/usr/local/bin`) needs `sudo eullm update`. Versions up to 0.7.40 do not have the command: update them once more with the installer or a download from the releases page.
 
+### `eullm finetune <model> --data <file>`
+
+Train a model's weights on a text file, on the CPU or GPU the engine runs on,
+with llama.cpp's own trainer: an F32 GGUF in, a new F32 GGUF out, validation
+loss measured before and after each epoch. `eullm finetune --help` lists its
+options; the engine guide's "Fine-tuning on your own text" explains memory,
+learning rate and the model's conversion to F32.
+
+```bash
+eullm finetune ./model-f32.gguf --data corpus.txt --epochs 2
+eullm finetune ./model-f32.gguf --data train.jsonl --optimizer sgd --dry-run
+```
+
 ### `eullm forge`
 
 Delegate to the EULLM Forge Python pipeline for model verticalizzazione.
@@ -306,6 +365,40 @@ Delegate to the EULLM Forge Python pipeline for model verticalizzazione.
 ```bash
 eullm forge Qwen/Qwen3-14B --profile legal-it --identity "LegalAI"
 ```
+
+### Settings in the environment or `.env`
+
+What is not a command-line option is read from the environment, else from a
+`.env` file in the folder eullm starts from: the environment wins, and a blank
+value counts as unset. The startup log says where the settings that decide who
+may connect and what may be read came from. Secrets stay off the command line,
+where every user of the machine can read them. [`.env.example`](../.env.example)
+has each one with an example; `eullm --help` lists them too.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `EULLM_MODELS_DIR` | `~/.eullm/models` | Where `eullm pull` downloads. Any `.gguf` in it, at any depth, is listed and runs |
+| `EULLM_MODEL_LIBRARIES` | (none) | Other programs' model folders, separated by `;` (on Linux and macOS also by `:`), read where they are and never changed: see [Model libraries](#model-libraries-and-eullm-import) |
+| `EULLM_ALLOWED_IPS` | this machine only | IPs and subnets that may connect without a key, comma-separated. Loopback always stays allowed |
+| `EULLM_API_KEYS` | (none) | `id:secret[:rpm=N]`, comma-separated: every request must carry a key. An entry that does not parse stops the server |
+| `EULLM_API_KEYS_FILE` | (none) | The same keys, one per line of a file that can be `chmod 600` |
+| `EULLM_ALLOWED_ORIGINS` | loopback pages | Web pages on other hosts allowed to call the API; `*` allows every origin |
+| `EULLM_AUDIT_DIR` | `~/.eullm/audit` | Where the audit trail is written. Set and not writable, the server does not start |
+| `EULLM_WEB_ALLOWED_DOMAINS` | any public host | With `--web`: fetch only from these domains and their subdomains, comma-separated |
+| `EULLM_WEB_ALLOW_HTTP` | off | With `--web`: fetch plain `http` pages too |
+| `EULLM_WEB_ALLOW_PRIVATE_HOSTS` | off | With `--web`: fetch from private and loopback addresses too, which turns the protection against requests into the local network off |
+| `EULLM_ALLOW_MODEL_PATHS` | off | A request's `model` may name a GGUF file, or a folder holding one, by its path. For local use only |
+| `EULLM_DECISION_POLICY` | (none) | A JSON file of rules for `/v1/systemone`: see [A server-side decision policy](#a-server-side-decision-policy-eullm_decision_policy) |
+| `EULLM_DECISION_TRACES` | (none) | A folder where `/v1/systemone` keeps its decisions as text: see [Decision traces](#decision-traces-eullm_decision_traces) |
+| `EULLM_DOWNLOAD_CONNECTIONS` | `8` | Parallel connections per download, 1 to 16; 1 downloads in a single stream |
+| `EULLM_IMAGE_MAX_TOKENS` | the projector's | Most tokens an image is read as: more reads finer detail, with more memory. Raise it in steps (512, then 1024): very high values can crash some projectors |
+| `EULLM_IMAGE_MIN_TOKENS` | the projector's | Fewest tokens an image is read as |
+| `HF_TOKEN` | (none) | A Hugging Face access token, for gated and private repositories. Sent to `https://huggingface.co` only |
+| `RUST_LOG` | `eullm=info` | What the log shows, such as `eullm=debug`; naming `llama-cpp-2` (`eullm=info,llama-cpp-2=info`) adds llama.cpp's own log |
+
+Until 0.8.7 the web settings, `EULLM_ALLOW_MODEL_PATHS`, `HF_TOKEN`,
+`EULLM_DOWNLOAD_CONNECTIONS`, the image settings and `RUST_LOG` were read from
+the environment only, and a line for them in `.env` was ignored.
 
 ## Dynamic Model Swap
 
@@ -338,7 +431,7 @@ curl http://localhost:11434/api/generate \
 - With one model at a time (the default), a swap cuts off the requests the old model is still answering: they end with the error `Server shutting down`. To keep several models loaded instead, see [Several models at once](#several-models-at-once)
 - A model served sequentially — every multimodal model, and any with `--batch-size 0` — cannot be cut off, and is freed only when the requests running on it end, so a swap waits for them, up to 30 seconds, before the next model is sized against free VRAM
 - The new model loads on a blocking thread, then atomically replaces the slot
-- The model name must be an imported model (`eullm import-ollama`) or a local GGUF path
+- The model name is one `eullm list` shows (the models folder, the model libraries, a catalog model already downloaded), `NAME` for `/models/NAME.gguf` or `/data/models/NAME.gguf`, or, only with `EULLM_ALLOW_MODEL_PATHS=1`, a GGUF path
 
 **What carries across a swap, and what does not.** The flags you launched
 with are settings, and they apply to every model the process loads: context
@@ -1560,7 +1653,7 @@ another.
 
 #### `GET /api/tags`
 
-List available models. Returns the loaded models first, the most recently used first, each with `"loaded": true` (what admin dashboards check for health), followed by catalog entries and the other models in the store. `GET /api/ps` lists only what is loaded, with what each model holds. With `--auto-model`, `auto` comes last, with `details.family: "eullm-router"` and `details.candidates`.
+List available models. Returns the loaded models first, the most recently used first, each with `"loaded": true` (what admin dashboards check for health), followed by catalog entries and the other models in the store. A model on disk has `details.source`: `store` for the models folder, `library` for a file used where it is (a model library, or a `.gguf` put in the models folder by hand), which EuLLM never deletes. `GET /api/ps` lists only what is loaded, with what each model holds. With `--auto-model`, `auto` comes last, with `details.family: "eullm-router"` and `details.candidates`.
 
 ```bash
 curl http://localhost:11434/api/tags
@@ -1750,6 +1843,109 @@ curl http://localhost:11434/api/ps
   (`--embedding-model`, `--decision-model`) or the model `eullm run` started
   with.
 
+#### `GET /api/about`
+
+What the chat UI's About page (in its sidebar) shows: this build, the machine,
+the devices llama.cpp can use, where models and the audit trail are kept, and
+who may use the server. Read once per call; behind the same perimeter as the
+rest of `/api`.
+
+```bash
+curl http://localhost:11434/api/about
+```
+
+```json
+{
+  "version": "0.8.5", "commit": "a3bbe56fc2b6", "backend": "CUDA",
+  "llama_cpp": "b11925", "release_asset": "eullm-linux-x64-cuda",
+  "cpu_features": "CPU : SSE3 = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | …",
+  "machine": {
+    "os": "Linux (Ubuntu 24.04)", "kernel": "6.8.0", "arch": "x86_64", "host": "b550",
+    "cpu": "AMD Ryzen 9 5950X 16-Core Processor", "cores": 32, "physical_cores": 16,
+    "ram_total": 67328999424, "started_ms": 1793298619000,
+    "devices": [
+      { "name": "CUDA0", "description": "NVIDIA GeForce RTX 5070 Ti", "kind": "gpu", "memory_total": 17094475776 },
+      { "name": "CPU", "description": "AMD Ryzen 9 5950X 16-Core Processor", "kind": "cpu", "memory_total": null }
+    ]
+  },
+  "models_dir": "/home/me/.eullm/models", "models_dir_source": "default",
+  "model_libraries": ["/home/me/.lmstudio/models"],
+  "audit_log": "/home/me/.eullm/audit/audit.jsonl",
+  "api_port": 11434,
+  "protections": {
+    "api_keys": false,
+    "allowed_ips": "127.0.0.1/32, ::1/128",
+    "allowed_ips_source": "default (loopback only — nothing configured)"
+  }
+}
+```
+
+- `commit` ends in `-dirty` for a build with local changes; `release_asset`
+  is the release file the binary was published as, `null` for a build from
+  source.
+- `devices` lists what llama.cpp's backends offer, the CPU included, with the
+  memory of each GPU.
+- `protections` says whether every request needs an API key (never the keys
+  themselves) and which networks are admitted without one
+  (`EULLM_ALLOWED_IPS`).
+
+#### `GET /api/monitor`
+
+What the chat UI's Monitor page (the pulse icon in its top bar) shows: the
+requests running, the last 50 answered, and the machine's last two minutes,
+one sample a second. Kept in the engine's memory only: nothing is written to
+disk (the [audit trail](#audit-trail) is the durable record) and nothing is
+sent anywhere. The models in memory are `/api/ps`.
+
+```bash
+curl http://localhost:11434/api/monitor
+```
+
+```json
+{
+  "active": [
+    { "id": 12, "model": "qwen3-8b", "endpoint": "chat", "started_ms": 1793280000000,
+      "phase": "generating", "prompt_tokens": null, "output_tokens": 210,
+      "prefill_tps": null, "decode_tps": 131.8, "first_token_ms": 84,
+      "duration_ms": null, "drafts": null, "ended": null }
+  ],
+  "history": [
+    { "id": 11, "model": "qwen3-8b", "endpoint": "chat.completions", "started_ms": 1793279990000,
+      "phase": "done", "prompt_tokens": 1520, "output_tokens": 412,
+      "prefill_tps": 5210.4, "decode_tps": 134.2, "first_token_ms": 310,
+      "duration_ms": 3402, "drafts": [300, 162], "ended": "stop" }
+  ],
+  "system": [
+    { "t_ms": 1793280000000, "cpu_pct": 7.5, "cores": 16,
+      "ram_used": 21474836480, "ram_total": 68719476736, "process_ram": 1288490188,
+      "disk_read_bps": 0,
+      "gpus": [
+        { "name": "NVIDIA GeForce RTX 5070 Ti", "source": "nvml", "util_pct": 97.0,
+          "vram_used": 12884901888, "vram_total": 17179869184, "temp_c": 64.0,
+          "power_w": 271.3, "power_limit_w": 300.0,
+          "pcie_rx_bps": 1048576, "pcie_tx_bps": 524288 }
+      ] }
+  ]
+}
+```
+
+- `phase` is `reading` (queued or reading the prompt), `generating`,
+  `done` or `failed`; `ended` is the stop reason (`stop`, `length`) or the
+  error. A running request's `decode_tps` is its speed so far; a finished
+  one's are the engine's own figures, as in the audit trail. `drafts` is
+  `[proposed, kept]` with `--mtp`.
+- `system` is sampled only while someone reads this endpoint: the sampler
+  starts with the first call and stops 30 seconds after the last, so a
+  server nobody watches pays nothing for it, and the first call after a quiet
+  spell returns no samples yet. `disk_read_bps` is what the engine process
+  read from disk in that second (a model loading, weights paged in through
+  mmap).
+- GPUs come from the NVIDIA driver (NVML, loaded at run time; Linux and
+  Windows) with load, VRAM, temperature, power and PCIe traffic; from the
+  `amdgpu` driver's files on Linux, without PCIe traffic; and for any other GPU
+  (Metal, Vulkan, Intel) from llama.cpp's device list, VRAM only. What a
+  driver does not report is `null`.
+
 #### `POST /api/unload`
 
 EuLLM extension: unload generation models now, freeing their VRAM. With a body
@@ -1813,6 +2009,40 @@ Get model metadata.
 curl -X POST http://localhost:11434/api/show \
   -H "Content-Type: application/json" \
   -d '{"name": "eullm/legal-it-4b"}'
+```
+
+#### `DELETE /api/delete`
+
+Remove a model's files from the models folder, as `eullm rm` does; Ollama's
+endpoint of the name. The model is named in `model` (or `name`, Ollama's
+older field).
+
+```bash
+curl -X DELETE http://localhost:11434/api/delete \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3-8b"}'
+```
+
+```json
+{ "deleted": "qwen3-8b", "freed_bytes": 5027783936 }
+```
+
+- 404 when no model of that name is in the models folder.
+- 403 for a file EuLLM uses where it is (`details.source: "library"` in
+  `/api/tags`): delete the file yourself.
+- 409 for a model in memory: unload it first (`POST /api/unload`), so that no
+  request it is answering loses its weights.
+
+#### `GET /api/hf/search`
+
+Search Hugging Face for GGUF repos, through the engine (the browser of the
+chat UI contacts nothing else). `q` is the text to look for, `limit` how many
+(25 by default, at most 100), `sort` the order: `downloads` (the default),
+`likes`, `trending` or `newest`. With a `sort` and no `q`, every GGUF repo in
+that order, which is what the Model hub's Discover tab opens with.
+
+```bash
+curl "http://localhost:11434/api/hf/search?q=qwen3&sort=newest&limit=5"
 ```
 
 #### `POST /api/pull`
@@ -2011,7 +2241,7 @@ its own.
 
 ## Audit Trail
 
-Every inference request is logged to a persistent JSONL file at `~/.eullm/audit/audit.jsonl`. Each line is a self-contained JSON object.
+Every inference request is logged to a persistent JSONL file at `~/.eullm/audit/audit.jsonl`, or `audit.jsonl` in `EULLM_AUDIT_DIR` when that is set (in the environment, or in `.env`). Each line is a self-contained JSON object.
 
 | Field | Type | Description |
 |---|---|---|
@@ -2164,16 +2394,15 @@ The model generates fewer tokens than `num_predict` requested.
 
 | Component | Status |
 |---|---|
-| CLI (pull, run, list, show, serve, forge, import-ollama) | Implemented |
-| Real inference (llama.cpp via llama-cpp-2 0.1.141) | Implemented |
+| CLI (pull, run, list, import, show, rm, serve, unload, update, finetune, forge) | Implemented |
+| Real inference (llama.cpp b12032 via llama-cpp-2 0.1.159) | Implemented |
 | EULLM API routes (Ollama-compatible) | Implemented |
 | OpenAI-compatible API | Implemented |
 | GPU acceleration (CUDA, ROCm, Vulkan, Metal) | Implemented (feature flags) |
 | CORS (Open WebUI compatibility) | Implemented |
-| Model catalog (7 models) | Implemented |
+| Model catalog (25 models) | Implemented |
 | Local model store (~/.eullm/models/) | Implemented |
 | Model download (HuggingFace, streaming with progress) | Implemented |
-| Import from Ollama (import-ollama with GGUF patching) | Implemented |
 | Dynamic model swap (load/unload via API, dynamic batch_size/ctx_size) | Implemented |
 | KV cache (F16 default, automatic fallback from quantized types) | Implemented |
 | Constrained JSON decoding (format: "json" via GBNF) | Implemented |

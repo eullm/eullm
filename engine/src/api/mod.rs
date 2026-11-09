@@ -19,7 +19,7 @@
 mod auth;
 mod decision_policy;
 mod decision_traces;
-mod ip_allowlist;
+pub(crate) mod ip_allowlist;
 mod origin;
 #[cfg(test)]
 mod real_model_tests;
@@ -448,7 +448,7 @@ impl AppState {
         // than an error.
         let found = self
             .store
-            .mmproj_path(&normalized)
+            .resolve_mmproj(&normalized)
             .or_else(|| crate::models::store::mmproj_beside(&gguf_path));
         let named = found.is_none() && self.fallback_mmproj.is_some();
         let mmproj_path = found.or_else(|| {
@@ -1949,23 +1949,25 @@ impl AppState {
         }
 
         // 5. Exact name in model store.
-        if let Some(p) = self.store.gguf_path(name) {
+        if let Some(p) = self.store.resolve_gguf(name) {
             return Ok(p);
         }
 
         // 5. Try normalized name (Ollama tag format).
         let normalized = normalize_model_name(name);
         if normalized != name
-            && let Some(p) = self.store.gguf_path(&normalized)
+            && let Some(p) = self.store.resolve_gguf(&normalized)
         {
             return Ok(p);
         }
 
         Err(ModelError::NotFound(format!(
-            "Model '{name}' not found. Accepted formats:\n  \
-             - GGUF file path: /models/model.gguf\n  \
-             - Directory with GGUF: /models/mymodel/\n  \
-             - Registered name: eullm import-ollama {name}"
+            "Model '{name}' not found. A request can name:\n  \
+             - a model on this machine, by the name `eullm list` gives it (a catalog model is \
+             downloaded first: `eullm pull NAME`, or the chat UI's Model hub)\n  \
+             - NAME for /models/NAME.gguf or /data/models/NAME.gguf\n  \
+             - a GGUF file, or a directory holding one, by its path: only with \
+             EULLM_ALLOW_MODEL_PATHS=1 set where the server starts"
         )))
     }
 }
@@ -3016,14 +3018,10 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             )
         })?
         .map(Arc::new);
-    let web_policy = crate::tools::guard::WebPolicy::from_env();
-    let allow_model_paths = matches!(
-        std::env::var("EULLM_ALLOW_MODEL_PATHS")
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    );
+    let web_policy = crate::tools::guard::WebPolicy::load();
+    // From the environment or `.env`, as `.env.example` shows it: it used to
+    // be read from the environment only.
+    let allow_model_paths = crate::settings::flag("EULLM_ALLOW_MODEL_PATHS");
 
     if api_keys.is_enabled() {
         tracing::info!(
@@ -3062,15 +3060,21 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         decision_policy.source(),
     );
     if cfg.web_enabled {
-        tracing::info!("Web tool: enabled — fetchable: {}", web_policy.describe());
-    }
-    if allow_model_paths {
-        tracing::warn!(
-            "EULLM_ALLOW_MODEL_PATHS is set: a request's `model` field may name any \
-             GGUF path readable by this process. Intended for local use; do not \
-             combine it with an API reachable by untrusted callers."
+        tracing::info!(
+            "Web tool: enabled — fetchable: {}  [source: {}]",
+            web_policy.describe(),
+            web_policy.source()
         );
     }
+    if let Some(source) = allow_model_paths {
+        tracing::warn!(
+            "EULLM_ALLOW_MODEL_PATHS is set ({}): a request's `model` field may name any \
+             GGUF path readable by this process. Intended for local use; do not \
+             combine it with an API reachable by untrusted callers.",
+            source.label()
+        );
+    }
+    let allow_model_paths = allow_model_paths.is_some();
 
     // Fail loudly at startup if the audit destination is unusable, rather than
     // warning once per request after the fact. The trail exists to produce a
@@ -3084,9 +3088,17 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         // directories.
         let (root, source) = cfg.store.root_with_source();
         tracing::info!("Model store: {}  [source: {source}]", root.display());
+        let (libraries, source) = cfg.store.libraries_with_source();
+        for l in libraries {
+            tracing::info!("Model library (read only): {}  [source: {source}]", l.display());
+        }
     }
     match audit.check_writable() {
-        Ok(()) => tracing::info!("Audit trail: {}", audit.log_path().display()),
+        Ok(()) => tracing::info!(
+            "Audit trail: {}  [source: {}]",
+            audit.log_path().display(),
+            crate::audit::AuditLogger::source()
+        ),
         // Explicitly configured destination that doesn't work → refuse to
         // start. Someone who set EULLM_AUDIT_DIR (or mounted a volume at it)
         // asked for the trail; serving without one silently is the failure
@@ -3310,8 +3322,8 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn the optional chat-UI listener on a separate port. It exposes the
     // same API surface (so the embedded JS can call same-origin) plus the
-    // HTML/CSS/JS for the chat at `/`. Disabled by default for `eullm serve`
-    // (headless) and enabled by default for `eullm run` (interactive).
+    // HTML/CSS/JS for the chat at `/`. On by default for both `eullm run` and
+    // `eullm serve`; `--no-ui` turns it off.
     let ui_handle = if let Some(ui_port) = ui_port_opt {
         if ui_port == api_port {
             tracing::warn!(
@@ -3457,7 +3469,7 @@ impl AppState {
             ip_allowlist: ip_allowlist::IpAllowlist::load(absent),
             api_keys: Arc::new(api_keys),
             allowed_origins: origin::AllowedOrigins::load(absent),
-            web_policy: crate::tools::guard::WebPolicy::from_env(),
+            web_policy: crate::tools::guard::WebPolicy::default(),
             allow_model_paths: false,
             launch_model: None,
             default_model: None,
@@ -4008,6 +4020,52 @@ mod http_tests {
             names.iter().any(|n| n.contains("a-pulled-model")),
             "a model in the store must appear in /api/tags, got {names:?}"
         );
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `DELETE /api/delete` removes a model from the models folder, says 404
+    /// for one that is not there, and refuses one in a library, whose files
+    /// are the user's; `/api/tags` says which is which.
+    #[tokio::test]
+    async fn a_model_is_deleted_from_the_folder_and_never_from_a_library() {
+        let tmp = std::env::temp_dir().join(format!("eullm-delete-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let library = tmp.join("library");
+        std::fs::create_dir_all(&library).expect("library dir");
+        std::fs::write(library.join("shelf-model.gguf"), b"not a real gguf").expect("library file");
+        let store = store_with_one_model(&tmp.join("store"), "a-pulled-model").with_libraries(vec![library.clone()]);
+        let base = spawn(store).await;
+
+        let (_, tags) = get_json(&format!("{base}/api/tags")).await;
+        let source = |name: &str| {
+            tags["models"]
+                .as_array()
+                .expect("models")
+                .iter()
+                .find(|m| m["name"] == name)
+                .map(|m| m["details"]["source"].clone())
+        };
+        assert_eq!(source("a-pulled-model"), Some(serde_json::json!("store")));
+        assert_eq!(source("shelf-model"), Some(serde_json::json!("library")));
+
+        let delete = |model: &str| {
+            let url = format!("{base}/api/delete");
+            let body = serde_json::json!({ "model": model });
+            async move {
+                reqwest::Client::new()
+                    .delete(url)
+                    .json(&body)
+                    .send()
+                    .await
+                    .expect("request")
+                    .status()
+            }
+        };
+        assert_eq!(delete("shelf-model").await, 403);
+        assert!(library.join("shelf-model.gguf").exists(), "a library file is never deleted");
+        assert_eq!(delete("a-pulled-model").await, 200);
+        assert!(!tmp.join("store/a-pulled-model").exists());
+        assert_eq!(delete("a-pulled-model").await, 404);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

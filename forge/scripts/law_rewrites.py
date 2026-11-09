@@ -49,7 +49,6 @@ from eullm_forge.datasets.law_corpus import (  # noqa: E402
     check_rewrite,
     clean_reply,
     excluded,
-    register_eu_labels,
     rewritable,
     rewrite_messages,
 )
@@ -61,7 +60,6 @@ def load_articles(paths: list[Path]):
     for p in paths:
         with p.open(encoding="utf-8") as f:
             records += [json.loads(line) for line in f if line.strip()]
-    register_eu_labels(records)      # EU acts named like the codes (eurlex_<CELEX>)
     return articles_from_records(records)
 
 

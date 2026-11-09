@@ -165,17 +165,50 @@ class Queue:
             moved.append(pid)
         return moved
 
-    def retry(self, prefix: str = "") -> list:
+    def retry(self, prefix: str = "", label=None, note=None) -> list:
         """Failed points whose id starts with `prefix` back to todo, with
-        their attempts reset and their notes kept: after the cause is fixed."""
+        their attempts reset and their notes kept: after the cause is fixed.
+        `label`: only the points of that engine label; `note`: only those
+        whose last note holds that text (the cause that was fixed)."""
         moved = []
         for pid in self.ids("failed"):
             if not pid.startswith(prefix):
                 continue
             point = self.load("failed", pid)
+            if label is not None and (point.get("engine_label") or "") != label:
+                continue
+            if note is not None and note not in ((point.get("notes") or [""])[-1] or ""):
+                continue
             point["attempts"] = 0
             _write(self._path("todo", pid), point)
             os.remove(self._path("failed", pid))
+            moved.append(pid)
+        return moved
+
+    def set_aside(self, dest: str, label=None, prefixes=(), round_=None) -> list:
+        """Waiting points moved out of the queue into `dest` (a directory of
+        their own, beside the states), not deleted: those of engine label
+        `label`, of round `round_`, whose id starts with one of `prefixes`,
+        each filter only when given. A point a job claims meanwhile stays
+        with the job. For a round an engine has made pointless, or points
+        no job of the round's length can run (26-10-2026, 03-11-2026)."""
+        moved = []
+        for pid in self.ids("todo"):
+            if prefixes and not any(pid.startswith(p) for p in prefixes):
+                continue
+            try:
+                point = self.load("todo", pid)
+            except (OSError, ValueError):
+                continue
+            if label is not None and (point.get("engine_label") or "") != label:
+                continue
+            if round_ is not None and point.get("round") != round_:
+                continue
+            os.makedirs(dest, exist_ok=True)
+            try:
+                os.replace(self._path("todo", pid), os.path.join(dest, f"{pid}.json"))
+            except FileNotFoundError:
+                continue  # claimed by a job in between
             moved.append(pid)
         return moved
 

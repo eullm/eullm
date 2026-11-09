@@ -96,11 +96,474 @@ JUPITER, named by its Slurm job id.
   the second article the answer needs, cited and applied, where the start
   model cited one and was graded partial or wrong. Three of the five
   losses cite the wrong article, the neighbouring number or the same
-  number of another code among the retrieved texts. The share of such
-  answers before and after GRPO is measured next.
+  number of another code among the retrieved texts. Counted over the
+  whole sets (`citation_check.py`, no judge), GRPO did not bring it:
+  - practical exam: answers citing only articles outside the question's
+    group went from 19 of 145 (dqp) to 15 in every GRPO round;
+  - held-out exam: 1-3 of 217 for every model.
+  Answers citing an article outside the group as well grew a little
+  (43 to 46), all among the right ones (11 to 18), as the completeness
+  gain predicts. The error is old and common: about half of every
+  model's wrong practical answers cite an article outside the group (31
+  of 57 for dqp, 28 of 48 for g9r-r2), against 13-22% of its right ones.
 * The 4B's first round, g4-r1, from dqp-d-q4b with the second rounds'
   settings (2541382-2541387). The vertical of g9-r2 and g9r-r2, GGUF
   Q4_K_M through EULLM Engine (2541390, judge 2541391).
+* Waiting for a node: a 6-hour link (2541383) asked for at 09:50 got
+  one at 19:55; the vertical (4 h asked) waited 1 h 50 min, the short
+  jobs none. The GRPO links are 3 hours from 28-10 (`GRPO_LINK_H=3`).
+
+**28-10-2026**
+* The vertical of the second rounds (2541390, 5 minutes of one node:
+  conversion 66 s, Q4_K_M 21 s, each exam 83-93 s; judge 2541391), the
+  held-out exam open book through EULLM Engine and llama-server. The
+  same exam as dqp's vertical (191 open, 187 without the note).
+
+  | Q4_K_M | engine, open | engine, no note | llama-server, open | llama-server, no note |
+  |---|---:|---:|---:|---:|
+  | g9-r2 | 197 | 197 | 198 | 195 |
+  | g9r-r2 | 196 | 194 | 197 | 195 |
+
+  GRPO's gain survives quantisation: 6 to 10 questions over dqp's Q4.
+* The 4B's first round, g4-r1 (400 steps of six prompts in 3 h 52 min,
+  2541383), against dqp-d-q4b:
+  - held-out exam 197 + 2 against 186 + 13;
+  - practical exam 68 + 22 against 63 + 22;
+  - LexIA 9 against 9;
+  - trap test 385 against 383, rewritten 970 against 956.
+  It is the 9B's pattern: partials turned complete, the traps level.
+* Queued, in 3-hour links: g4-r2 from g4-r1 (2566556-2566561), and
+  g9r-r3 from g9r-r2 (2566890-2566897). g9r-r3 is the control the next
+  reward must beat: a third round of the same recipe.
+* The llama.cpp b11925 test (branch `chore/llama-cpp-b11925`): the first
+  build labelled llama-b11925 was made from this branch's checkout, not
+  the bump's: `EULLM_REPO`, exported by Forge's env.sh in the same shell,
+  overrode the checkout `build_engine.sh` was run from (0.7.93 at
+  2401fe4 instead of 0.7.95). To be built again with
+  `env -u EULLM_REPO`. `tools/jupiter/sbatch_mtp_compare.slurm` is ready
+  for the MTP part.
+
+**29/30-10-2026**
+* Third rounds, the same recipe again (seed 2). Judge's grades, correct
+  (+ partial where it matters):
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | g4-r1 | 9 | 197 | 68 + 22 | 385 | 970 |
+  | g4-r2 | 12 | 199 | 74 + 20 | 387 | 965 |
+  | g4-r3 | 10 | **202** | 75 + 16 | 387 | 966 |
+  | g9r-r2 | 14 | 200 | **81** + 16 | 384 | **973** |
+  | g9r-r3 | **16** | 199 | 75 + 20 | 383 | 968 |
+
+  The 9B has stopped gaining on these prompts. Its third round wins two
+  LexIA traps and loses six practical questions, both within what the
+  judge moves on its own. The 4B still gains a little on the held-out
+  exam, and g4-r3, at 202, is the best model on it of any size. The 4B
+  is level with the 9B within 6 questions on the practical exam and 1 on
+  the trap tests.
+* The citation reward (`--citation-weight 0.3`, c3 rounds from r2 with
+  r3's seed, so that only the reward differs):
+
+  | | LexIA | held-out | practical | trap test | rewritten | only-off citations |
+  |---|---:|---:|---:|---:|---:|---:|
+  | g9r-r3 | 16 | 199 | 75 + 20 | 383 | 968 | 15 |
+  | g9r-c3 | 15 | 201 | 79 + 18 | 383 | 968 | 14 |
+  | g4-r3 | 10 | 202 | 75 + 16 | 387 | 966 | 20 |
+  | g4-c3 | 12 | 200 | 74 + 17 | 386 | 947 | 18 |
+
+  It changed next to nothing: the answers citing only articles outside
+  the question's fell by one or two, and every difference is within what
+  the judge moves alone, except the 4B's rewritten trap test, 19 lower.
+  About 90% of the answers already cite the question's article, so the
+  reward had little left to pay for. The wrong citations are a choice
+  among the retrieved texts, which this reward does not see. Dropped.
+  Since third rounds of the same recipe gave the 9B nothing either, GRPO
+  on these prompts is done for the 9B. The candidates stay g9r-r2 (9B)
+  and g4-r3 (4B), with g4-r4 running (2603577-2603582) and g4-r3's
+  vertical (2603583-2603584).
+* Release 0.8.5 (llama.cpp b11925, the bump the reference PC measured on
+  28-10) built for sm_90 (label v0.8.5, 78b0093) and queued against the
+  engine the jobs use (0.7.90, label sites): c07's 22 points in round
+  r-v085 for each (2603819, then 2603821), then Qwen3.5-9B-MTP Q4_K_M with
+  and without --mtp 2 on both, one server a GPU
+  (`tools/jupiter/sbatch_mtp_compare.slurm`, 2603822).
+
+**31-10-2026**
+* The 4B has stopped gaining too:
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | g4-r3 | 10 | 202 + 3 | 75 + 16 | 387 | 966 |
+  | g4-r4 | 11 | 203 + 2 | 75 + 20 | 383 | 962 |
+  | g4-r5 | 12 | 201 + 2 | 74 + 19 | 384 | 964 |
+
+  The 4B candidate is g4-r3. Its vertical (2603583, judge 2603584), Q4_K_M
+  on the held-out exam open book: 201 + 2 through EULLM Engine and 197
+  through llama-server; 198 for both without the note. Quantisation costs
+  it 1 to 4 questions.
+* Release 0.8.5 against 0.7.90 on GH200, c07's points in round r-v085
+  (2603819 old, 2603821 new). Across 19 configurations the median ratio
+  new/old is 1.01 (0.96-1.08), and none is below 0.95. The lowest is a
+  llama-server point (0.96), the same binary in both jobs, so that spread
+  is the node's.
+* MTP, Qwen3.5-9B-MTP Q4_K_M, one request at a time (2603822, three runs
+  each):
+
+  | | writes, story | writes, code | drafts kept, story / code | reads 16K |
+  |---|---:|---:|---:|---:|
+  | 0.7.90 | 198 | 198 | - | 8,580 |
+  | 0.7.90, --mtp 2 | 197 | 197 | none reported | 8,560 |
+  | 0.8.5 | 209 | 208 | - | 8,530 |
+  | 0.8.5, --mtp 2 | 250 | 321 | 48% / 80% | 7,520 |
+
+  0.7.90 drafted nothing with this model: no drafts reported, and the same
+  speed as without the flag. So the kept share cannot be compared old
+  against new here. 0.8.5's 48% and 80% match the reference PC's figures
+  for the same llama.cpp (50% and 81%). On GH200 0.8.5 writes 6% faster
+  without MTP. With --mtp 2 it writes 20% faster on prose and 54% faster
+  on code, and reads a long prompt 12% slower.
+* Queued for the night: the a1 rounds, g9r-a1 from g9r-r2 (2614847-2614859)
+  and g4-a1 from g4-r3 (2614862-2614870), seed 5, six prompts a step,
+  400 steps. Leonardo's prompts plus 541 made here
+  (`make_grpo_prompts.py --absent-share 1.0`, BM25 retrieval, seed 5):
+  every by-topic deadline question is asked twice, once with its article
+  among the texts and once without, and the answer must tell the two apart.
+  Some of their ids were already among Leonardo's, which were kept, so 266
+  are new. In the 2,450 prompts the article-absent questions go from 46 to
+  140, the nonexistent ones from 172 to 224, the deadline questions from
+  222 to 342. Against r3 and r4, the questions are whether the wrong-article
+  answers on the practical exam fall, and whether the held-out exam keeps
+  its answers.
+
+**01-11-2026**
+* JSC's monthly report: 75,060 of 360,000 core-hours spent (1,042
+  GPU-hours, 20.8%) with 34% of the period gone, about 160 node-hours under
+  the straight line. Storage: 2.0 TiB of the project's 20 TiB quota, the
+  fast scratch (40 TiB) unused.
+* Leonardo's allocation ends on 02-11: the legal-it work moves here, along
+  the roadmap `docs/research/legal-it-roadmap.md` (phase 0 first: what may
+  come to JUPITER, r2l against g9r-r2, a wider index, a regression set; then
+  the C1 benchmark, E1-mini, E2-mini). GRPO on the existing prompts is
+  closed for both sizes.
+* Queued: g9r-r2, g4-r3 and dqp-d-q9b as the product runs them, GGUF Q4_K_M
+  through EULLM Engine 0.8.5, hybrid retrieval, no note, on the five sets
+  (`sbatch_product_eval.slurm`, 2637245; judge 2637247; roadmap 0.2 without
+  r2l, which joins when copied). The memory corpus of the EU acts in Italian,
+  paraphrases and lists of elements by Qwen3-30B-A3B-Instruct-2507 Q8_0,
+  two chains from both ends of the list, four 6-hour links each
+  (`sbatch_law_rewrites.slurm`, 2637980-2637983 and 2637984-2637987). The
+  question-and-answer style and the program part wait for the closed-book
+  suite, so that no article it asks about is trained on as questions.
+
+**02-11-2026**
+* The night's jobs did no work, for two faults.
+  - **The EU rewrites:** all eight links ended in two minutes. The memory
+    corpus knew only the nine codes' labels and dropped every
+    `eurlex_<CELEX>` act. EU acts are now named from their CELEX number
+    ("del regolamento (UE) 2016/679", "della direttiva 2011/83/UE").
+  - **The product evaluation:** the two 9B models answered only the trap
+    test. From 0.8.5 `eullm serve` also opens the chat UI on port 11435, so
+    the second engine on a node stopped. Evaluation engines now start with
+    `--no-ui` where the binary has it (`1090f8b`).
+  - **What was measured:** g4-r3 completed its five sets as the product
+    runs it: held-out exam 198 + 1, practical exam 76 + 18, LexIA 10, trap
+    test 386, rewritten 958. The trap test alone came out for g9r-r2 (383)
+    and dqp-d-q9b (380).
+* Queued again: the EU rewrites, two chains of four 6-hour links
+  (2653435-2653438, 2653439-2653442); the evaluation of the sets still
+  missing (2653443, judge 2653444).
+* The Fast Lane on Leonardo, EHPC-AIF-2026FL01-1400, was accepted with
+  30,000 GPU-hours for three months. Following the roadmap, the scaling
+  runs (E1 at 2-10 B tokens, E2 in three sizes) go there, and JUPITER keeps
+  phases 0-4.
+
+**03-11-2026**
+* The candidates as the product runs them: GGUF Q4_K_M through EULLM
+  Engine 0.8.5, hybrid retrieval, no note (2637245 and 2653443; judges
+  2637247 and 2653444).
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | dqp-d-q9b | 11 | 187 + 6 | 60 + 23 | 380 | 971 |
+  | g9r-r2 | 12 | 197 + 4 | 76 + 19 | 383 | 975 |
+  | g4-r3 | 10 | 198 + 1 | 76 + 18 | 386 | 958 |
+
+  Quantised and served as shipped, the 4B is level with the 9B: the same
+  practical score, one question more on the held-out exam, three more
+  traps; the 9B leads on the rewritten traps (+17) and LexIA (+2). Against
+  their bf16 answers, the Q4 costs g9r-r2 5 practical questions and 3
+  held-out ones, and g4-r3 4 held-out ones. GRPO's gain over dqp-d-q9b
+  holds in the shipped form: +16 on the practical exam, +10 on the held-out.
+* The EU rewrites (2653435, 2653439): 205,654 asked, 4,155 kept. 195,268
+  were refused as "number": the request names the act ("del regolamento
+  (UE) 2016/679"), the rewrite repeats it, and the check allowed only the
+  article's own numbers. The act's numbers are now allowed (checks version
+  2, whose refusals of version 1 are asked again). Of the rest, 4,824 were
+  truncated, 1,527 refused for length, 184 for another article, and 225
+  for deadlines. 15 node-hours went to the refused part.
+* JUPITER reserved for JSC's large-scale tests from 10:30 to about 17:30:
+  no job of ours could start. Queued behind it: a smoke test of the EU
+  rewrites under checks version 2 (2662824), then the two chains
+  (2662825-2662827, 2662828-2662830); the general-abilities regression
+  (GSM8K, ARC-Easy, ARC-Challenge, 400 items each) of the three GGUFs
+  through EULLM Engine (`regression_check.py`, 2662858; roadmap 0.4).
+* From Leonardo, rsync from a Leonardo login node to a JUPITER login node
+  (a JuDoor key limited to CINECA's addresses; Leonardo's data movers allow
+  no onward connection): the program part and three of the four rewrite
+  files of the nine codes' memory corpus, the closed-book suite, the devbig
+  exam, the practical held-out exam and the live LexIA traps. The fourth
+  rewrite file read at 30-40 kB/s on two JUPITER login nodes while the
+  others went at 17-52 MB/s, and was left for later; r2l's GGUF and merged
+  weights were not at the expected path. No court decision was copied.
+* The a1 rounds (GRPO on the prompts with the article left out of the
+  texts, from g9r-r2 and g4-r3; bf16, judge), against their start:
+
+  | | LexIA | held-out | practical | trap test | rewritten |
+  |---|---:|---:|---:|---:|---:|
+  | g9r-r2 | 14 | 200 + 3 | 81 + 16 | 384 | 973 |
+  | g9r-a1 | 15 | 198 + 2 | 73 + 19 | 384 | 973 |
+  | g4-r3 | 10 | 202 + 3 | 75 + 16 | 387 | 966 |
+  | g4-a1 | 11 | 203 + 2 | 72 + 18 | 386 | 956 |
+
+  No gain: one LexIA trap more for each, the practical exam down (8 complete
+  answers for the 9B, 3 for the 4B), the rest level. The candidates stay
+  g9r-r2 and g4-r3; GRPO on these prompts is closed for both sizes.
+* General abilities, GGUF Q4_K_M through EULLM Engine, 400 items a set,
+  greedy, no thinking (2662858, roadmap 0.4):
+
+  | | GSM8K | ARC-Easy | ARC-Challenge |
+  |---|---:|---:|---:|
+  | dqp-d-q9b | 351 | 378 | 348 |
+  | g9r-r2 | 350 | 363 | 324 |
+  | g4-r3 | 335 | 361 | 345 |
+
+  GRPO left the 9B's arithmetic as it was and cost it 15 ARC-Easy and 24
+  ARC-Challenge questions (87.0% to 81.0%). Not yet a conclusion: the
+  answers are not saved, so whether it lost the knowledge or the answer
+  format (a letter at the end) is not known; and the 4B's start was not
+  measured.
+* The EU rewrites under checks version 2 (smoke test 2662824): 384 of 400
+  kept, 16 refused (3 number, 3 truncated, 2 deadline, 2 other article,
+  6 length), 601 a minute on a node.
+* Queued for the night: the three candidates as the product runs them on
+  the sets copied from Leonardo (devbig, practical held-out, live LexIA;
+  2667839), closed book on the closed-book suite (2667840), two judge links
+  behind both (2667842, 2667843); the two EU rewrite chains running since
+  19:28 (2662825, 2662828).
+* The product evaluation can now ask closed book (`PE_CLOSED=1`, no texts,
+  roadmap E0) and any sets (`PE_SETS`).
+* 30-10: login node jpbl-s01-01 without /e mounted (no home, no project);
+  jpbl-s01-02 had it. No job was affected; the nodes stood idle from the
+  end of the third rounds to the next submission.
+
+**04-11-2026**
+* Closed book (roadmap E0): the 716 questions of the closed-book suite, no
+  texts, GGUF Q4_K_M through EULLM Engine, scored by program (2667840):
+
+  | | right | real article recognised | number from heading / heading from number | deadline | penalty | made-up article denied | made-up ruling not confirmed |
+  |---|---:|---:|---:|---:|---:|---:|---:|
+  | dqp-d-q9b | 176 | 0% | 3% / 10% | 14% | 8% | 100% | 8% |
+  | g9r-r2 | 206 | 0% | 3% / 5% | 13% | 12% | 100% | 90% |
+  | g4-r3 | 91 | 3% | 2% / 5% | 15% | 17% | 44% | 5% |
+
+  Without texts the models know almost nothing of the articles. The 9B
+  ones score by denying: every made-up article and half the real ones
+  called nonexistent ("denies-real" 50-51%), the reflex the roadmap counts
+  apart. What they know rather than deny is 2-17% a kind; E1-mini must add
+  15 points there.
+* The sets copied from Leonardo, open book as the product runs them
+  (2667839, judges 2667842-2667843): devbig (472) dqp-d-q9b 411 + 19,
+  g9r-r2 438 + 11, g4-r3 447 + 6; practical held-out (70) 41 + 8, 45 + 9,
+  40 + 10; live LexIA (5) 2 each. GRPO's gain holds on sets never used
+  in training or selection: +27 (9B) and +36 (4B) on devbig.
+* The EU rewrites with the question-and-answer style and a second sample
+  (four links from 22:15): 595,661 rewrites kept in all, 4-6% refused.
+* The nine codes' memory corpus completed here rather than copied: the
+  rewrites the stalled file held are asked again on the codes, skipping
+  those Leonardo wrote (2677072).
+* E1-mini written (`memory_cpt.py`, `sbatch_memory_cpt.slurm`): LoRA on
+  g9r-r2 over the nine codes' corpus, with 25% of the tokens a replay of the
+  post-training (open-book and false-premise pairs, prompt masked) and 20%
+  general Italian (a sample of the Italian Wikipedia), packed in blocks of
+  2,048 tokens, three epochs; a 30-step smoke test first gives the hours.
+* Qwen3.8-Flash-Next authorised by the user for research (Qwen Community
+  License 1.0, not Apache 2.0): ~180B stored, a 125B MoE with 6B active,
+  a 51B n-gram table at layer 2 and a 4B MTP head, 360 GB in BF16; in
+  transformers since 5.19 (`qwen4_exp`, the venv's version), which keeps
+  the table off the GPUs. It is the roadmap's phase 3 already built: the
+  question is whether the table alone, the backbone frozen, can learn the
+  law. A one-hour probe (`flashnext_probe.py`) loads it on one node, asks
+  three questions and trains the table a few steps. Not yet a product:
+  llama.cpp supports it only in a fork.
+* The nine codes' corpus completed (2677072): 5,855 rewrites kept, 206
+  refused. E1-mini's data, prepared by its smoke test (2677279): 78,576
+  texts of the nine codes (17.2 M tokens), 15,815 replay pairs, 40,000
+  Wikipedia articles (42.3 M tokens); three epochs of 31.4 M tokens each,
+  55% corpus, 25% replay, 20% general. The smoke test then stopped at
+  `warmup_ratio`, gone from TrainingArguments in transformers 5 (now
+  `warmup_steps` as a share); its three links, behind it with afterok, did
+  not run. The Flash-Next probe (2686808) stopped at the backward: its
+  linear attention refuses the module's Triton on Hopper, and the probe
+  had not put libs-qwen35's Triton 3.8 first. Both fixed and queued again.
+  Qwen3.8-Flash-Next downloaded in 1 min 36 s (336 GiB).
+* **05-11:** E1-mini trained and merged on both sizes in one link each:
+  the smoke test (2690536) at 4.0 s a step, loss 1.26; g9r-r2 in 1 h 43
+  min (2690537), g4-r3 in 1 h 47 min (2690540), three epochs of 31.4 M
+  tokens. The other links found the work done and ended in a minute, so
+  the nodes stood idle from about midnight: the smoke test's estimate of
+  the run (0.1 h) divided by the steps twice, fixed. Next: GGUF, closed
+  book, open book, regression.
+* Flash-Next loads on one node in 382 s (2690543), the n-gram table
+  (320,001,536 x 160, 95.4 GiB) on the CPU, and answers at 3-6 tokens a
+  second through transformers. Its first training step and its exam
+  (2690720) ran out of GPU memory: transformers kept room on the first GPU
+  for the largest layer, counting the table it then left on the CPU, so
+  the first GPU stayed empty and the other three held ~78 GiB each. The
+  layers are now spread over the four GPUs by our own map
+  (`eval/placement.py`), for the probe and for `legal_eval.py`. With it the
+  model loaded in 349 s at 58-60 GiB a GPU (2698993), then stopped on
+  "tensors on two devices": the parts outside the layers had been mapped
+  tensor by tensor, which leaves accelerate no module to move inputs into.
+  They are now mapped as whole modules, as "auto" maps them.
+* **06-11, E1-mini on the closed book** (716 questions, GGUF Q4_K_M,
+  scored by program; share right by kind):
+
+  | | right | denies real | real recognised | number from heading | heading from number | deadline | penalty | made-up article denied | made-up ruling not confirmed |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 (start) | 206 | 51% | 0% | 3% | 5% | 13% | 12% | 100% | 90% |
+  | e1-g9 (r64, 3 epochs) | 167 | 8% | 15% | 0% | 21% | 16% | 33% | 63% | 0% |
+  | e1-g9-e5 (5 epochs) | 167 | 15% | 15% | 3% | 22% | 21% | 21% | 67% | 5% |
+  | e1-g9-lr3 (lr 3e-4) | 182 | 17% | 17% | 0% | 41% | 22% | 38% | 66% | 0% |
+  | e1-g9-r256 (rank 256) | 218 | 5% | 28% | 0% | 35% | 26% | 46% | 74% | 2% |
+  | g4-r3 (start) | 91 | 19% | 3% | 2% | 5% | 15% | 17% | 44% | 5% |
+  | e1-g4 | 151 | 36% | 1% | 0% | 14% | 13% | 38% | 68% | 0% |
+  | e1-g4-e5 | 167 | 26% | 7% | 1% | 21% | 13% | 38% | 60% | 0% |
+
+  Knowledge went in, through LoRA alone. On the roadmap's measure (real
+  articles recognised and number and heading, the denials left out) the
+  9B's average goes from 2.7% to 21.0% with rank 256 (+18.3 points) and
+  19.3% with lr 3e-4 (+16.7): both pass the +15 of the stop rule; deadlines
+  and penalties rise too (13 to 26%, 12 to 46%). The "non esiste" reflex is
+  gone (denials of real articles 51% to 5%). Three things against it, to
+  weigh before going on: (1) the heading is learnt from the number but not
+  the number from the heading (0-3% everywhere: the reversal curse; the
+  corpus states the pair in one direction); (2) made-up articles are now
+  confirmed a quarter to a third of the time, and made-up rulings almost
+  always (90% refused before, 0-5% after): what GRPO taught is lost, the
+  replay held the post-training pairs but not GRPO's behaviour; (3)
+  procedibility rises to 60-80% only by answering "querela", which 92% of
+  the items want. The open-book sets and the regression decide the rest.
+* **E1-mini open book and regression** (judge; GGUF Q4_K_M through the
+  engine, hybrid retrieval, no note):
+
+  | | held-out (217) | devbig (472) | practical (145) | practical held-out (70) | traps (390) | rewritten traps (1050) | LexIA (36) | GSM8K | ARC-E | ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 383 | 975 | 12 | 353 | 361 | 326 |
+  | e1-g9 | 193 + 5 | 427 + 16 | 59 + 18 | 36 + 8 | 372 | 883 | 11 | 358 | 381 | 361 |
+  | e1-g9-e5 | 186 + 5 | 414 + 20 | 63 + 15 | 35 + 7 | 377 | 919 | 15 | 355 | 385 | 361 |
+  | e1-g9-lr3 | 191 + 7 | 421 + 22 | 64 + 15 | 38 + 8 | 385 | 938 | 12 | 346 | 369 | 352 |
+  | e1-g9-r256 | 186 + 2 | 420 + 16 | 68 + 12 | 44 + 7 | 379 | 890 | 16 | 353 | 383 | 375 |
+  | g4-r3 | 198 + 1 | 447 + 6 | 76 + 18 | 40 + 10 | 386 | 958 | 10 | 336 | 364 | 348 |
+  | e1-g4 | 192 + 5 | 435 + 14 | 54 + 20 | 41 + 8 | 384 | 936 | 12 | 334 | 384 | 362 |
+  | e1-g4-e5 | 199 + 3 | 434 + 16 | 64 + 15 | 37 + 12 | 382 | 896 | 13 | 339 | 310 | 290 |
+
+  Verdict on E1-mini as the roadmap set it: the closed book passes (+18
+  points with rank 256), the second condition does not. Open book every
+  9B variant loses (rank 256: held-out -11, devbig -18, practical -8) and
+  the rewritten traps fall by 37-92 of 1,050: the trap behaviour GRPO had
+  taught is what the continued pretraining wears away, as the made-up
+  rulings on the closed book showed. The general abilities, on the
+  contrary, come back: ARC-Challenge from 326 to 375 with rank 256, what
+  GRPO had cost the 9B and more (the Wikipedia share). e1-g4-e5's ARC fall
+  (to 310 and 290) is to be read in its answers. Flash-Next in bf16, open
+  book: held-out 195 + 6, practical 73 + 1, LexIA 14. Not stopped: GRPO
+  on top of e1-g9-r256 (g9e-r1, the round that taught the traps) is
+  queued, and so are rank 256 with lr 3e-4 together and, against the
+  reversal curse, four heading-first statements an article.
+* **07-08 Nov, the weekend idle.** The 26 jobs queued on Friday evening as
+  covering the weekend all ended well by 23:22 the same evening: their
+  coverage had been reckoned from their time limits, not from what they
+  take. Measured here: an E1-mini training 1 h 45 min to 2 h, a GRPO round
+  of 300 steps 1 h 50 min, a GGUF 5 min, the closed book 3 min, seven
+  open-book sets 25 min, the regression 3 min, five bf16 sets 40 min, a
+  judge 10-30 min. Coverage is reckoned from these from now on.
+* **Second E1 batch and the first GRPO on top** (closed book by program;
+  open book by the judge, GGUF Q4 unless said):
+
+  | | closed right | real recognised | number from heading | heading from number | deadline | penalty | made-up article denied | made-up ruling refused | held-out | devbig | practical | rewritten traps | LexIA | GSM8K / ARC-E / ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | g9r-r2 | 206 | 0% | 3% | 5% | 13% | 12% | 100% | 90% | 197 + 4 | 438 + 11 | 76 + 19 | 975 | 12 | 353 / 361 / 326 |
+  | e1-g9-rl (rank 256, lr 3e-4) | **276** | **43%** | 6% | **49%** | **31%** | 33% | 89% | 0% | 183 + 4 | 397 + 14 | 67 + 14 | 940 | 14 | 342 / 355 / 341 |
+  | e1-g9-rev (rank 256, heading first) | 207 | 18% | 6% | 37% | 13% | 29% | 86% | 0% | 176 + 4 | 413 + 18 | 65 + 14 | 945 | 13 | 348 / 378 / 355 |
+  | g9e-r1 (GRPO on e1-g9-r256, bf16) | | | | | | | | | 193 + 2 | | 69 + 18 | 925 | **17** | |
+  | e1-g4-rl | 250 | 2% | 2% | 50% | 24% | 50% | 98% | 12% | 172 + 7 | 383 + 20 | 68 + 15 | 915 | 14 | **262 / 244 / 241** |
+
+  Rank 256 with lr 3e-4 puts the most in: the roadmap's measure from 2.7%
+  to 32.7% (+30 points), made-up articles still denied 89% of the time.
+  The heading-first statements did not undo the reversal curse (number
+  from heading 0 to 6%, the same 6% the plain rank-256-lr-3e-4 run
+  reached). GRPO on top gives back part of what the memory cost: the
+  rewritten traps from 890 to 925 (975 before), the held-out exam from 186
+  to 193, LexIA 17, the best yet; the practical exam stays low. The 4B
+  does not take lr 3e-4: its general abilities collapse (GSM8K 336 to
+  262, ARC-C 348 to 241), as the five-epoch 4B's ARC did. Flash-Next with
+  four times the batch: 4,096 tokens in ~90 s a step against 1,024 in
+  28 s, ~45 tokens a second, days an epoch of the corpus through
+  transformers; it stays a teacher and a judge for now.
+  Next: two GRPO lines of three rounds, from g9e-r1 and from e1-g9-rl,
+  each round measured as shipped; and e1-g9-rl at five epochs with two
+  GRPO rounds on it.
+* **08-11, GRPO on top of E1** (47.5 node-hours that day). Three lines of
+  rounds, each round as shipped (GGUF Q4_K_M, engine; closed book by
+  program, the rest by the judge). "Measure" is the roadmap's: real
+  articles recognised and number and heading, the denials left out.
+
+  | | measure | made-up ruling refused | held-out (217) | devbig (472) | practical (145) | practical held-out (70) | traps (390) | rewritten traps (1050) | LexIA (36) |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 | 2.7% | 90% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 383 | 975 | 12 |
+  | g9e-r1 / r2 / r3 (on e1-g9-r256) | 19.0 / 18.0 / 19.3% | 5 / 0 / 0% | 193 / 194 / 195 | 442 / 440 / 442 | 68 / 69 / 71 + 21 | 39 / 38 / 40 | 380 / 382 / 381 | 913 / 924 / 927 | 14 / 13 / 14 |
+  | g9el-r1 / r2 / r3 (on e1-g9-rl) | 33.0 / 31.3 / 33.0% | 0 / 0 / 5% | 201 / 203 / 203 | 433 / 443 / 441 | 69 / 70 / 63 | 40 / 41 / 41 | 383 / 384 / 383 | 920 / 929 / 939 | 14 / 13 / 13 |
+  | g9el5-r1 / r2 / r3 (on e1-g9-rl5) | 34.0 / 30.0 / 34.3% | 2 / 5 / 8% | 197 / 199 / 204 | 437 / 443 / 440 | 64 / 65 / 63 + 20 | 40 / 43 / 43 | 387 | 928 / 938 / 939 | |
+  | g4e-r1 / r2 (on e1-g4-r256) | 12.0 / 10.7% | 2 / 0% | 196 / 199 | 438 / 441 | 68 / 65 | 44 / 44 | 381 / 383 | 955 / 954 | 14 / 16 |
+
+  Memory then behaviour works for the open book: g9el-r2 keeps a third of
+  the closed book (31% against 3%) and answers the held-out exam and devbig
+  better than the candidate (203 + 3 and 443 + 9 against 197 + 4 and
+  438 + 11), the traps level or better. Two things are not back: the
+  rewritten traps climb ~10 a round (920, 929, 939) but stay 36 under
+  g9r-r2, and made-up rulings are refused 0-8% of the time against 90%;
+  the practical exam is 6 under (70 + 18 against 76 + 19). GRPO's prompts
+  hold only 10 about rulings (premessa_sentenza 7, _vera 3) of 2,184. The
+  4B takes rank 256 at lr 1e-4 without falling apart but gains only +9
+  on the measure.
+
+  General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
+  326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
+  line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
+  lr 3e-4 break them and GRPO does not mend it (e1-g9-rl5 294 / 259 / 206,
+  g9el5-r3 293 / 266 / 214), so that line is closed, LexIA 7 with it.
+  The 4B line loses ARC-C (348 to 315-324). The 9B candidate from memory
+  is g9el-r3: a third of the closed book, open book above g9r-r2, 12 GSM8K
+  questions and 36 rewritten traps below it.
+* Flash-Next learns through its n-gram table alone (2705520): one batch of
+  1,024 tokens of legislation, everything frozen but the table, plain SGD
+  on the 13,015 rows it touches: loss 1.148, 0.920, 0.620, 0.478, 0.319,
+  0.286, 0.177, 0.145 in eight steps, 28 s a step, 59-62 GiB peak a GPU.
+  The memory fits one node; the speed (~36 tokens a second) is far from a
+  run on the corpus (17 M tokens), so the next probe measures larger
+  batches. Its open-book exam (2698994) is with the judge.
+* 05-11: JUPITER in maintenance all day (5,196 Booster nodes "maint",
+  677 drained, 8 down at 17:30); only a one-hour job of ours ran. Slurm
+  expects the queue to move from 03:00 on 06-11.
+* For 06-11, a day without anyone at the terminal: four more E1-mini runs
+  queued end to end by `submit_memory_round.sh` (training, GGUF, closed
+  book, seven open-book sets, regression), so that the verdict does not
+  rest on one recipe: five epochs on the 9B and on the 4B (e1-g9-e5,
+  e1-g4-e5), LoRA rank 256 (e1-g9-r256), learning rate 3e-4 (e1-g9-lr3);
+  one judge chain behind all of them.
+* Every job of the night printed "module load PyTorch failed" and still
+  worked, through the environment of the submitting shell. env.sh now
+  retries after loading Stages/2026 and prints Lmod's message.
 
 **23-10-2026**
 * The second node idle overnight: the submission script refused the
@@ -1025,7 +1488,33 @@ figures below with the site's energy mix.
   processes and accesses them, storage, legal basis, retention, data
   minimisation, technical and organisational measures), to assess them
   with its DPO, and for any prior approval of ours or consent form.
-* **Until the addendum is signed** JUPITER holds legislation (Normattiva,
+* **08-11-2026: the addendum.** After the checklist, JSC's DPO raised no
+  objection to the processing as described, and JSC sent an amendment to
+  clause 1 of the usage agreement, to be signed by the PI and returned
+  before any transfer. Its terms: only anonymised or pseudonymised data,
+  and nothing that could allow the data subjects to be re-identified, may
+  be stored or processed on JUPITER; the data are encrypted in transfer to
+  and from JSC (SSH, rsync and scp over SSH; UFTP only with its data
+  channel encrypted); and they are kept only as long as processing them
+  requires and deleted immediately afterwards. The PI and every project
+  member are responsible for it. The PI's reading of the retention clause
+  (09-11-2026): the data stay on JUPITER as long as the project still needs
+  to process them, across runs, and are deleted once it no longer does,
+  at the end of the project at the latest; the signed amendment is sent
+  and the transfer starts without waiting for a reply. Before upload every
+  text file passes the structured-identifier check (`sweep_structured_pii.py`,
+  report only, nothing found), as the checklist declared.
+* **What comes from Leonardo (09-11-2026):** the ruling summaries
+  rewritten (`principi*.jsonl`, 1.3 GB), the ruling cards (`cds` 0.2 GB,
+  `cass` 1.8 GB), the pseudonymised decisions as training sets
+  (`legal_it` 2.9 GB, `legal_it_amm` 1.0 GB), the 30B teacher's continued
+  pretraining adapter on the decisions (0.4 GB) and the jpn14 and jpn17
+  adapters; not the evaluation answers on the decisions (`eval/cds`,
+  `eval/cass`, 11.7 GB). Every JSONL file is checked on Leonardo before it
+  leaves, every field of every line (`sweep_structured_pii.py --field '*'`,
+  report only): a file with a hit is not sent. Into
+  `$PROJECT/$USER/forge/caselaw/`, readable by the user alone.
+* **Until the addendum was signed and returned** JUPITER held legislation (Normattiva,
   EUR-Lex: public), public benchmarks, synthetic pairs generated from them
   and ruling summaries that carry nothing of the case, and no court
   decision is uploaded. The teacher on JUPITER is accordingly the Base

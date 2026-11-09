@@ -29,10 +29,10 @@ LLAMA_MOE_PREFETCH_FROM_CACHE=0 copies everything over the bus, as in 0003,
 to compare. One line on stderr says the share of a micro-batch's bytes
 taken from VRAM, the first time there is any.
 
-EuLLM patch on llama.cpp b86d2f0, after 0003.
+EuLLM patch on llama.cpp b11925, after 0003.
 
 diff --git a/ggml/include/ggml-backend-prefetch.h b/ggml/include/ggml-backend-prefetch.h
-index 73a0b3eea..70504eba8 100644
+index 73a0b3ee..70504eba 100644
 --- a/ggml/include/ggml-backend-prefetch.h
 +++ b/ggml/include/ggml-backend-prefetch.h
 @@ -16,6 +16,16 @@ extern "C" {
@@ -53,7 +53,7 @@ index 73a0b3eea..70504eba8 100644
  }
  #endif
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 2684dfa9d..54e79c261 100644
+index 8054150f..20341c56 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -948,6 +948,16 @@ struct ggml_backend_sched_split {
@@ -88,7 +88,7 @@ index 2684dfa9d..54e79c261 100644
  };
  
  struct ggml_backend_sched {
-@@ -1261,10 +1279,62 @@ static void ggml_backend_sched_prefetch_place(ggml_backend_sched_t sched) {
+@@ -1265,10 +1283,62 @@ static void ggml_backend_sched_prefetch_place(ggml_backend_sched_t sched) {
      pf->placed = true;
  }
  
@@ -154,7 +154,7 @@ index 2684dfa9d..54e79c261 100644
      ggml_backend_event_record(pf->copied[in->slot], pf->copy_backend);
  }
  
-@@ -2147,6 +2217,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2158,6 +2228,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
      const int n_staged = pf != NULL ? (int) pf->inputs.size() : 0;
      int staged_issued = 0; // copies queued on the copy stream
      int staged_done   = 0; // staged inputs whose split is queued: their slots can be filled again
@@ -165,7 +165,7 @@ index 2684dfa9d..54e79c261 100644
  
      for (int split_id = 0; split_id < sched->n_splits; split_id++) {
          struct ggml_backend_sched_split * split = &splits[split_id];
-@@ -2165,7 +2239,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2176,7 +2250,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
  
          // EuLLM: queue the copies whose slots are free, ahead of the splits that read them
          while (staged_issued < n_staged && staged_issued < staged_done + pf->n_slots) {
@@ -174,7 +174,7 @@ index 2684dfa9d..54e79c261 100644
          }
  
          // EuLLM: the slots of the copies this split reads, which the GPU waits for after the other
-@@ -2258,6 +2332,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2269,6 +2343,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
          prev_backend_id = split_backend_id;
      }
  
@@ -187,7 +187,7 @@ index 2684dfa9d..54e79c261 100644
      return GGML_STATUS_SUCCESS;
  }
  
-@@ -2488,6 +2568,26 @@ void ggml_backend_sched_set_moe_prefetch(ggml_backend_sched_t sched, int n_slots
+@@ -2505,6 +2585,26 @@ void ggml_backend_sched_set_moe_prefetch(ggml_backend_sched_t sched, int n_slots
      ggml_backend_sched_prefetch_init(sched, n_slots, min_tokens);
  }
  
@@ -215,10 +215,10 @@ index 2684dfa9d..54e79c261 100644
      GGML_ASSERT(sched);
      return sched->n_splits;
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index db2c15a31..b53cf73d5 100644
+index e54ee3da..4978fa98 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -665,6 +665,10 @@ void llama_context::sched_reserve() {
+@@ -732,6 +732,10 @@ void llama_context::sched_new(size_t max_nodes, bool parallel) {
      if (cparams.moe_prefetch_slots > 0) {
          // EuLLM: from 512 tokens a micro-batch uses nearly every expert of a layer
          ggml_backend_sched_set_moe_prefetch(sched.get(), (int) cparams.moe_prefetch_slots, 512);
@@ -227,23 +227,13 @@ index db2c15a31..b53cf73d5 100644
 +            ggml_backend_sched_set_moe_prefetch_lookup(sched.get(), llama_moe_cache::sched_lookup, moe_cache.get());
 +        }
      }
+ }
  
-     llama_memory_context_ptr mctx;
-@@ -708,6 +712,9 @@ void llama_context::sched_reserve() {
-                 ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
-                 if (cparams.moe_prefetch_slots > 0) {
-                     ggml_backend_sched_set_moe_prefetch(sched.get(), (int) cparams.moe_prefetch_slots, 512);
-+                    if (moe_cache) {
-+                        ggml_backend_sched_set_moe_prefetch_lookup(sched.get(), llama_moe_cache::sched_lookup, moe_cache.get());
-+                    }
-                 }
-                 gf = graph_reserve(n_tokens, n_seqs, n_outputs_pp, mctx.get());
-             }
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 16e5e51d7..aa21b9d2a 100644
+index 34b9e6d0..f71701e2 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -640,6 +640,28 @@ struct llama_moe_cache::impl {
+@@ -757,6 +757,28 @@ struct llama_moe_cache::impl {
          return n;
      }
  
@@ -256,12 +246,12 @@ index 16e5e51d7..aa21b9d2a 100644
 +        }
 +        const binding & b = it->second;
 +        const group & g = groups[layers[b.il].ig];
-+        const int32_t * slots = g.lru.slot_map[b.il];
-+        if (slots == nullptr || src->ne[2] != g.lru.n_expert) {
++        const int32_t * slots = g.slru.slot_map[b.il];
++        if (slots == nullptr || src->ne[2] != g.slru.n_expert) {
 +            return false;
 +        }
 +        bool any = false;
-+        for (int32_t e = 0; e < g.lru.n_expert; ++e) {
++        for (int32_t e = 0; e < g.slru.n_expert; ++e) {
 +            slot_of[e] = slots[e];
 +            any = any || slots[e] >= 0;
 +        }
@@ -272,7 +262,7 @@ index 16e5e51d7..aa21b9d2a 100644
      bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {
          const auto it = layer_of.find(src);
          if (it == layer_of.end()) {
-@@ -799,3 +821,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
+@@ -918,3 +940,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
      }
      return res;
  }
@@ -281,10 +271,10 @@ index 16e5e51d7..aa21b9d2a 100644
 +    return static_cast<llama_moe_cache *>(user_data)->pimpl->lookup(src, bank, slot_of);
 +}
 diff --git a/src/llama-moe-cache.h b/src/llama-moe-cache.h
-index 4872370d4..9a3760f3a 100644
+index 6c8e3658..58eb0fdd 100644
 --- a/src/llama-moe-cache.h
 +++ b/src/llama-moe-cache.h
-@@ -31,6 +31,10 @@ public:
+@@ -34,6 +34,10 @@ public:
  
      std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
  

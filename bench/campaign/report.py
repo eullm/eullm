@@ -16,7 +16,7 @@ from collections import defaultdict
 # columns, in this order.
 PARAMS = ("model", "runtime", "gcds", "replicas", "batch", "concurrency", "slot_ctx", "kv",
           "prompt_tokens", "decision_mode", "state_tokens", "questions", "extra_args",
-          "env", "trial", "round")
+          "env", "trial", "round", "engine_label")
 
 # What each kind is read by: (column in summary.csv, heading).
 # Every kind that runs on the GPUs also shows the most VRAM a device held and

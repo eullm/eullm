@@ -191,10 +191,12 @@ fn parse_env_file(contents: &str) -> std::collections::HashMap<String, String> {
 }
 
 /// Read one variable out of `.env` file contents, trimmed, `None` when absent
-/// or blank. Shared with [`super::auth`] so both perimeter settings come from
-/// the same file with the same parsing rules instead of two near-identical
-/// readers drifting apart.
-pub(super) fn env_file_var(contents: &str, key: &str) -> Option<String> {
+/// or blank. Shared with [`super::auth`] and the other perimeter settings,
+/// and with the two directory settings read outside the server
+/// (`models::store` for `EULLM_MODELS_DIR`, `audit` for `EULLM_AUDIT_DIR`),
+/// so every setting comes from the same file with the same parsing rules
+/// instead of near-identical readers drifting apart.
+pub(crate) fn env_file_var(contents: &str, key: &str) -> Option<String> {
     parse_env_file(contents)
         .get(key)
         .map(|s| s.trim().to_string())

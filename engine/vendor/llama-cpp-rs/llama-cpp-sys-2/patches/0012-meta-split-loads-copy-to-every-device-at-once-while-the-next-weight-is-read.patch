@@ -34,8 +34,13 @@ loaded in 248, 206 and 140 s (124 by layer), Qwen3-Coder-480B over eight in
 275, 160 and 121 s (162 by layer), gpt-oss-120b as four servers of two in
 120, 83 and 59 s (69 by layer).
 
+Since upstream #31321 (29-10-2026) the loader's own staging read reuses its
+buffer and reads direct-IO files without a bounce buffer; a buffer that is
+not a meta buffer, or LLAMA_LOAD_OVERLAP=0, goes that way, timed for the log
+line above.
+
 diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
-index ac6d08e..b10c549 100644
+index 0a5482679..b93637948 100644
 --- a/ggml/src/ggml-backend-meta.cpp
 +++ b/ggml/src/ggml-backend-meta.cpp
 @@ -13,8 +13,10 @@
@@ -49,7 +54,7 @@ index ac6d08e..b10c549 100644
  #include <tuple>
  #include <utility>
  #include <vector>
-@@ -1437,6 +1439,35 @@ static void ggml_backend_meta_buffer_memset_tensor(
+@@ -1453,6 +1455,35 @@ static void ggml_backend_meta_buffer_memset_tensor(
  // 19-145 s split by layer), as if each row were copied on its own. The rows
  // are gathered into a buffer instead and copied in pieces of 64 MiB;
  // GGML_META_GATHER_ROWS=0 restores the 2D copy.
@@ -85,7 +90,7 @@ index ac6d08e..b10c549 100644
  static void ggml_backend_meta_set_rows_contiguous(ggml_tensor * simple_tensor, const char * data, size_t offset,
          size_t row_size, size_t n_rows, size_t stride_data) {
      static const bool gather = [] {
-@@ -1452,13 +1483,43 @@ static void ggml_backend_meta_set_rows_contiguous(ggml_tensor * simple_tensor, c
+@@ -1468,13 +1499,43 @@ static void ggml_backend_meta_set_rows_contiguous(ggml_tensor * simple_tensor, c
          return;
      }
      const size_t rows_per_piece = std::max<size_t>(1, (size_t(64) << 20) / row_size);
@@ -132,7 +137,7 @@ index ac6d08e..b10c549 100644
      }
  }
  
-@@ -1538,24 +1599,28 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
+@@ -1554,24 +1615,28 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
              GGML_ASSERT(size   % chunk_size_full == 0);
              const int64_t i_start =  offset        /chunk_size_full;
              const int64_t i_stop  = (offset + size)/chunk_size_full;
@@ -169,10 +174,10 @@ index ac6d08e..b10c549 100644
          case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
              GGML_ASSERT(tensor->type == GGML_TYPE_F32);
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 6cc0b20..a1e1d93 100644
+index 485483ba1..6eeebb2c5 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -8,11 +8,18 @@
+@@ -8,12 +8,19 @@
  
  #include <algorithm>
  #include <array>
@@ -182,6 +187,7 @@ index 6cc0b20..a1e1d93 100644
  #include <cstring>
  #include <future>
  #include <regex>
+ #include <unordered_set>
 +#include <thread>
 +
 +#if defined(__linux__) || defined(__APPLE__)
@@ -191,7 +197,7 @@ index 6cc0b20..a1e1d93 100644
  
  static const size_t kiB = 1024;
  static const size_t MiB = 1024*kiB;
-@@ -1490,6 +1497,57 @@ const void * llama_model_loader::load_data_range(const llama_tensor_weight & w,
+@@ -1562,6 +1569,57 @@ const void * llama_model_loader::load_data_range(const llama_tensor_weight & w,
      return data;
  }
  
@@ -248,8 +254,8 @@ index 6cc0b20..a1e1d93 100644
 +
  bool llama_model_loader::load_all_data(
          struct ggml_context * ctx,
-         llama_buf_map & bufs,
-@@ -1603,6 +1661,56 @@ bool llama_model_loader::load_all_data(
+         std::vector<ggml_backend_buffer_t> & bufs,
+@@ -1675,6 +1733,56 @@ bool llama_model_loader::load_all_data(
              ggml_backend_name(upload_backend));
      }
  
@@ -261,7 +267,7 @@ index 6cc0b20..a1e1d93 100644
 +    // each took is logged. LLAMA_LOAD_OVERLAP=0 reads and copies in turn.
 +    bool overlap = false;
 +    if (!upload_backend && !bufs.empty()) {
-+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(bufs.begin()->second));
++        ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(bufs[0]));
 +        const char * env = getenv("LLAMA_LOAD_OVERLAP");
 +        overlap = dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_META && (env == nullptr || atoi(env) != 0);
 +    }
@@ -306,7 +312,7 @@ index 6cc0b20..a1e1d93 100644
      std::vector<ggml_tensor *> tensors;
      for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
          tensors.push_back(cur);
-@@ -1733,13 +1841,37 @@ bool llama_model_loader::load_all_data(
+@@ -1813,6 +1921,25 @@ bool llama_model_loader::load_all_data(
                          ++buffer_idx;
                          buffer_idx %= n_buffers;
                      }
@@ -330,26 +336,27 @@ index 6cc0b20..a1e1d93 100644
 +                        }
 +                    });
                  } else {
--                    // scoped to one tensor so only one staging buffer is alive at a time
--                    std::vector<no_init<uint8_t>> read_buf(n_size);
-+                    no_init<uint8_t> * read_buf = staged_buf(n_size);
-+                    int64_t t0 = ggml_time_us();
-                     file->seek(weight->offs, SEEK_SET);
--                    file->read_raw(read_buf.data(), n_size);
--                    ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
--                    if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
-+                    file->read_raw(read_buf, n_size);
+                     // with direct IO read the aligned range around the tensor and use the data inside it, so no bounce buffer is needed
+                     const size_t align          = file->read_alignment();
+@@ -1828,11 +1955,17 @@ bool llama_model_loader::load_all_data(
+                         read_buf.resize(buf_size);
+                     }
+                     uint8_t * read_dst = (uint8_t *) GGML_PAD((uintptr_t) read_buf.data(), align);
++                    const int64_t t0 = ggml_time_us();
+                     file->seek(aligned_offset, SEEK_SET);
+                     file->read_raw_unsafe(read_dst, read_size);
 +                    const int64_t t1 = ggml_time_us();
-+                    ggml_backend_tensor_set(cur, read_buf, 0, n_size);
+ 
+                     const uint8_t * data = read_dst + pad;
+                     ggml_backend_tensor_set(cur, data, 0, n_size);
 +                    staged_read_us += t1 - t0;
 +                    staged_copy_us += ggml_time_us() - t1;
 +                    staged_n++;
 +                    staged_bytes += n_size;
-+                    if (check_tensors && !ggml_validate_row_data(cur->type, read_buf, n_size)) {
+                     if (check_tensors && !ggml_validate_row_data(cur->type, data, n_size)) {
                          throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
                      }
-                 }
-@@ -1748,6 +1880,13 @@ bool llama_model_loader::load_all_data(
+@@ -1842,6 +1975,13 @@ bool llama_model_loader::load_all_data(
  
          size_done += n_size;
      }

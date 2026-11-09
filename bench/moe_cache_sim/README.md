@@ -18,7 +18,8 @@ c++ -O2 -std=c++17 -o moe_cache_sim bench/moe_cache_sim/moe_cache_sim.cpp
 
 | name | the slot a miss takes |
 |---|---|
-| `lru` | the least recently used: llama.cpp's `moe_cache_lru::plan`, unchanged |
+| `lru` | the least recently used: llama.cpp's `moe_cache_lru::plan` before #30637 |
+| `slru` | llama.cpp's `moe_cache_slru::plan` since #30637 (b11777 on): a probation and a protected half, a hit promotes, a miss takes probation's least recently used slot first |
 | `stale-mru` | the least recently used while its expert went unused for a whole pass over the layers; when every slot was used within the last pass, the most recently used one outside the current layer. llama.cpp patch `0008` |
 | `lfu-decay` | the one whose expert has the lowest count, counts kept for every expert (cached or not) and halved every 4 passes (`--half-life`) |
 | `stale-lfu` | `stale-mru` when a pass overflows; among the stale slots, the one whose expert has the lowest decayed count instead of the least recently used |
@@ -105,3 +106,20 @@ counts win where the steps fit and lose where they overflow, which is what
 `stale-lfu` and `lfu-pass` combine; on the synthetic routing `lfu-pass`
 gains 1-4 points over `stale-mru` where a pass overflows and is never
 below it.
+
+## llama.cpp's SLRU (27-10-2026)
+Upstream replaced the LRU with a 50/50 SLRU (#30637). Replayed on the same
+synthetic routing as above (`--no-opt` for the 480B), experts in VRAM:
+| model, sequences | `lru` | `slru` | `stale-mru` (`0008`) | `lfu-pass` (`0009`) |
+|---|---:|---:|---:|---:|
+| 235B, 1 | 94.5% | 94.5% | 94.5% | 94.5% |
+| 235B, 8 | 90.7% | 90.6% | 90.7% | 91.1% |
+| 235B, 32 | 0% | 0% | 71.8% | 73.1% |
+| 480B, 1 | 82.0% | 82.2% | 82.0% | 82.4% |
+| 480B, 8 | 0% | 0% | 57.0% | 59.6% |
+| 480B, 32 | 0% | 0% | 28.3% | 32.6% |
+The SLRU is the LRU slot for slot where a step fits, and copies every expert
+where it overflows: its victim is still the least recently used slot, of
+probation and then of the protected half, so a pass larger than the cache
+evicts the experts of the next layers just as the LRU did. Patches `0008` and
+`0009` therefore stay, ported onto the SLRU.

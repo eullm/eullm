@@ -39,12 +39,18 @@ const CHUNK_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// A single TCP stream cannot saturate a high-latency link (the
 /// bandwidth-delay product is large on e.g. Starlink), so we fan out. Default
 /// 8 — the same ballpark `hf_transfer`/`aria2` use, and well within what the
-/// HuggingFace CDN tolerates. Override with `EULLM_DOWNLOAD_CONNECTIONS`
-/// (clamped to 1..=16; 1 forces the legacy single-stream path).
+/// HuggingFace CDN tolerates. Override with `EULLM_DOWNLOAD_CONNECTIONS`, in
+/// the environment or `.env` (clamped to 1..=16; 1 forces the legacy
+/// single-stream path).
 pub fn default_connections() -> usize {
-    std::env::var("EULLM_DOWNLOAD_CONNECTIONS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
+    connections_from(crate::settings::var("EULLM_DOWNLOAD_CONNECTIONS").as_deref())
+}
+
+/// [`default_connections`] from the setting's value: 8 when unset or not a
+/// number.
+fn connections_from(setting: Option<&str>) -> usize {
+    setting
+        .and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(8)
         .clamp(1, 16)
 }
@@ -508,7 +514,7 @@ impl ShardSet {
 
 /// Decompose `…/Model-Q4_K_XL-00002-of-00004.gguf` into its stem, index and
 /// total. `None` for anything that is not a split shard.
-fn parse_shard(name: &str) -> Option<(&str, u32, u32)> {
+pub(crate) fn parse_shard(name: &str) -> Option<(&str, u32, u32)> {
     let base = name.get(..name.len().checked_sub(5)?)?;
     if !name[name.len() - 5..].eq_ignore_ascii_case(".gguf") {
         return None;
@@ -875,6 +881,16 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_connections_default_to_8_within_1_to_16() {
+        assert_eq!(connections_from(None), 8);
+        assert_eq!(connections_from(Some("4")), 4);
+        assert_eq!(connections_from(Some(" 12 ")), 12);
+        assert_eq!(connections_from(Some("0")), 1);
+        assert_eq!(connections_from(Some("64")), 16);
+        assert_eq!(connections_from(Some("many")), 8);
+    }
 
     fn write_temp_file(contents: &[u8]) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("eullm-sha256-test-{}", uuid::Uuid::new_v4()));
@@ -1323,12 +1339,20 @@ pub struct HfModelSummary {
 pub async fn search_hf_models(
     query: &str,
     limit: usize,
+    sort: HfSort,
 ) -> Result<Vec<HfModelSummary>, Box<dyn std::error::Error + Send + Sync>> {
     let limit = limit.clamp(1, 100);
+    // An empty query lists every GGUF repo in that order: what the chat UI's
+    // Model hub opens with.
+    let search = if query.is_empty() {
+        String::new()
+    } else {
+        format!("search={}&", urlencode(query))
+    };
     let url = format!(
-        "https://huggingface.co/api/models?search={}&filter=gguf&sort=downloads&direction=-1&limit={limit}\
+        "https://huggingface.co/api/models?{search}filter=gguf&sort={}&direction=-1&limit={limit}\
          &expand%5B%5D=lastModified&expand%5B%5D=downloads&expand%5B%5D=likes&expand%5B%5D=gated",
-        urlencode(query),
+        sort.as_hub_str(),
     );
     let body = fetch_hf_json(&url, Duration::from_secs(15), |status| {
         format!("HuggingFace search returned HTTP {status}")
@@ -1361,6 +1385,38 @@ pub async fn search_hf_models(
             })
         })
         .collect())
+}
+
+/// The orders a Hub search is offered in, by the Hub's own names. A closed
+/// list: the value goes into the URL the engine fetches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HfSort {
+    #[default]
+    Downloads,
+    Likes,
+    Trending,
+    Newest,
+}
+
+impl HfSort {
+    /// The order a client asked for; anything else is the default.
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "likes" => Self::Likes,
+            "trending" => Self::Trending,
+            "newest" => Self::Newest,
+            _ => Self::Downloads,
+        }
+    }
+
+    fn as_hub_str(self) -> &'static str {
+        match self {
+            Self::Downloads => "downloads",
+            Self::Likes => "likes",
+            Self::Trending => "trendingScore",
+            Self::Newest => "createdAt",
+        }
+    }
 }
 
 /// `owner/repo`, each part a path segment we would be willing to put in a URL.
@@ -1624,6 +1680,18 @@ fn longest_common_prefix(items: &[String]) -> String {
 #[cfg(test)]
 mod catalog_tests {
     use super::*;
+
+    /// The order a client names reaches the Hub by the Hub's own name, and
+    /// anything else is the default, so nothing a client sends is put in the
+    /// URL as it came.
+    #[test]
+    fn a_search_order_is_one_of_the_hub_s_own() {
+        assert_eq!(HfSort::parse("newest").as_hub_str(), "createdAt");
+        assert_eq!(HfSort::parse("trending").as_hub_str(), "trendingScore");
+        assert_eq!(HfSort::parse("likes").as_hub_str(), "likes");
+        assert_eq!(HfSort::parse("downloads&x=1").as_hub_str(), "downloads");
+        assert_eq!(HfSort::parse("").as_hub_str(), "downloads");
+    }
 
     fn sizes(files: &[(&str, u64)]) -> (Vec<String>, impl Fn(&str) -> u64 + use<>) {
         let owned: Vec<(String, u64)> = files

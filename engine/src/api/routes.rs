@@ -185,20 +185,25 @@ pub fn api_routes() -> Router<S> {
     Router::new()
         .route("/tags", get(list_models))
         .route("/ps", get(list_running))
+        .route("/monitor", get(monitor))
+        .route("/about", get(about))
         .route("/generate", post(generate))
         .route("/chat", post(chat))
         .route("/show", post(show_model))
         .route("/pull", post(pull_model))
         .route("/version", get(version))
         .route("/unload", post(unload_model))
+        .route("/delete", axum::routing::delete(delete_model))
         .route("/route", post(route_request))
         .route("/embed", post(embed))
         .route("/hf/search", get(hf_search))
         .route("/hf/repo", get(hf_repo))
 }
 
-/// `GET /api/hf/search?q=<text>&limit=<n>` — search the HuggingFace Hub for
-/// repos containing GGUF files.
+/// `GET /api/hf/search?q=<text>&limit=<n>&sort=<order>` — search the
+/// HuggingFace Hub for repos containing GGUF files, most downloaded first or
+/// in `sort` order (`downloads`, `likes`, `trending`, `newest`). With a
+/// `sort` and no `q`, every GGUF repo in that order.
 ///
 /// The engine makes the call, not the browser. That keeps the viewer's
 /// address away from the Hub, leaves `EULLM_WEB_ALLOWED_DOMAINS` as the one
@@ -208,14 +213,17 @@ pub fn api_routes() -> Router<S> {
 /// compute nodes are offline.
 async fn hf_search(Query(params): Query<HashMap<String, String>>) -> impl IntoResponse {
     let q = params.get("q").map(String::as_str).unwrap_or("").trim();
-    if q.is_empty() {
+    // Without a query, the GGUF repos in this order: `downloads` (the
+    // default), `likes`, `trending` or `newest`.
+    let sort = crate::registry::HfSort::parse(params.get("sort").map(String::as_str).unwrap_or(""));
+    if q.is_empty() && !params.contains_key("sort") {
         return (StatusCode::OK, Json(json!({ "models": [] })));
     }
     let limit = params
         .get("limit")
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(25);
-    match crate::registry::search_hf_models(q, limit).await {
+    match crate::registry::search_hf_models(q, limit, sort).await {
         Ok(models) => (StatusCode::OK, Json(json!({ "models": models }))),
         Err(e) => (
             StatusCode::BAD_GATEWAY,
@@ -1454,6 +1462,58 @@ async fn version(State(state): State<S>) -> Json<Value> {
     }))
 }
 
+/// `DELETE /api/delete` — Ollama's endpoint of the name: remove a model's
+/// files from the models folder, as `eullm rm` does. The body names it in
+/// `model` (Ollama's current field) or `name` (its older one).
+///
+/// 404 when no model of that name is in the folder; 403 for a model in a
+/// library (`EULLM_MODEL_LIBRARIES`), whose files EuLLM only reads; 409 for
+/// a model in memory, which is unloaded first (`/api/unload`) so that no
+/// request it is answering loses its weights.
+async fn delete_model(State(state): State<S>, Json(body): Json<Value>) -> Result<Json<Value>, ApiError> {
+    let refuse = |status: StatusCode, msg: String| (status, Json(json!({ "error": msg })));
+    let name = body
+        .get("model")
+        .or_else(|| body.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| refuse(StatusCode::BAD_REQUEST, "name the model to delete in `model`".to_string()))?
+        .to_string();
+    let in_store = state.store.get(&name).ok().flatten();
+    if in_store.is_none() {
+        if state.store.library_model(&name).is_some() {
+            return Err(refuse(
+                StatusCode::FORBIDDEN,
+                format!(
+                    "'{name}' is a file EuLLM uses where it is (in a model library, or put in the models \
+                     folder by hand) and never deletes: delete the file yourself"
+                ),
+            ));
+        }
+        return Err(refuse(StatusCode::NOT_FOUND, format!("model '{name}' not found")));
+    }
+    let loaded = state
+        .models
+        .read()
+        .await
+        .by_recent_use()
+        .iter()
+        .any(|m| crate::api::model_names_match(&m.name, &name));
+    if loaded {
+        return Err(refuse(
+            StatusCode::CONFLICT,
+            format!("'{name}' is in memory: unload it first (POST /api/unload)"),
+        ));
+    }
+    let removed = state
+        .store
+        .delete(&name)
+        .map_err(|e| refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("could not delete '{name}': {e}")))?;
+    tracing::info!("Deleted model {} from the models folder", crate::audit::sanitize_for_log(&name));
+    Ok(Json(json!({ "deleted": name, "freed_bytes": removed.map(|r| r.freed) })))
+}
+
 /// Unload generation models, freeing their VRAM, without loading a
 /// replacement. EULLM extension (not part of the Ollama API) — the primary
 /// use case is handing GPU memory to a co-resident process (e.g. an
@@ -1848,19 +1908,25 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         .collect();
 
     // The loaded models first (this is what dashboards check).
+    // What the store or a library knows of it; a model loaded from a path
+    // has neither. Its quantization is not guessed: this said Q4_K_M for
+    // every such model, whatever it was.
     let mut models: Vec<Value> = loaded
         .iter()
         .map(|name| {
+            let known = state.store.get_any(name).ok().flatten();
             json!({
                 "name": name,
-                "size": 0,
-                "digest": "",
+                "size": known.as_ref().map_or(0, |m| m.size_bytes),
+                "digest": known.as_ref().map_or_else(String::new, |m| m.digest.clone()),
                 "loaded": true,
+                "downloaded": true,
                 "details": {
                     "format": "gguf",
-                    "family": "",
+                    "family": known.as_ref().map_or_else(String::new, |m| m.base.clone()),
                     "parameter_size": "",
-                    "quantization_level": "Q4_K_M",
+                    "quantization_level": "",
+                    "source": known.as_ref().map(|m| if m.status == "library" { "library" } else { "store" }),
                 }
             })
         })
@@ -1934,10 +2000,13 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         .iter()
         .filter_map(|m| m.get("name").and_then(|v| v.as_str()).map(String::from))
         .collect();
-    for m in state.store.list().unwrap_or_default() {
+    for m in state.store.list_all().unwrap_or_default() {
         if m.id.is_empty() || already.contains(&m.id) {
             continue;
         }
+        // EuLLM extension: where the files are. A library's are read only
+        // (`EULLM_MODEL_LIBRARIES`), so a client offers no delete for them.
+        let source = if m.status == "library" { "library" } else { "store" };
         models.push(json!({
             "name": m.id,
             "size": m.size_bytes,
@@ -1949,6 +2018,7 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
                 "parameter_size": "",
                 "quantization_level": "",
                 "display_name": m.name,
+                "source": source,
             }
         }));
     }
@@ -2044,6 +2114,50 @@ fn running_model_entry(m: &RunningModel, now: chrono::DateTime<chrono::Utc>) -> 
             "size_vram_measured": m.size_vram_measured,
         },
     })
+}
+
+/// `GET /api/monitor` — what the chat UI's Monitor page shows: the requests
+/// running (oldest first) and the last ones answered (newest first), and the
+/// machine's samples of the last two minutes (oldest first). The models in
+/// memory are `/api/ps`. In memory only: see [`crate::monitor`].
+async fn monitor() -> Json<Value> {
+    let (active, history) = crate::monitor::requests();
+    let system = tokio::task::spawn_blocking(crate::monitor::system::snapshot)
+        .await
+        .unwrap_or_default();
+    Json(json!({ "active": active, "history": history, "system": system }))
+}
+
+/// `GET /api/about` — what the chat UI's About page shows: this build, the
+/// machine and the devices llama.cpp can use, where models are kept, and
+/// the server's protections: whether API keys are required (never the keys)
+/// and which networks are admitted without one. Behind the same perimeter
+/// as the rest of `/api`, so it tells nothing to someone not let in.
+async fn about(State(state): State<S>) -> Json<Value> {
+    let machine = tokio::task::spawn_blocking(crate::monitor::system::machine)
+        .await
+        .ok();
+    let (models_dir, models_source) = state.store.root_with_source();
+    let (libraries, _) = state.store.libraries_with_source();
+    Json(json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "commit": env!("EULLM_GIT_HASH"),
+        "backend": crate::inference::backend_label(),
+        "llama_cpp": env!("EULLM_LLAMA_CPP"),
+        "release_asset": Some(env!("EULLM_RELEASE_ASSET")).filter(|a| !a.is_empty()),
+        "cpu_features": crate::inference::cpu_features_summary().trim(),
+        "machine": machine,
+        "models_dir": models_dir,
+        "models_dir_source": models_source,
+        "model_libraries": libraries,
+        "audit_log": crate::audit::AuditLogger::new().log_path(),
+        "api_port": state.api_port,
+        "protections": {
+            "api_keys": state.api_keys.is_enabled(),
+            "allowed_ips": state.ip_allowlist.describe(),
+            "allowed_ips_source": state.ip_allowlist.source(),
+        },
+    }))
 }
 
 /// `GET /api/ps` — the models in memory, Ollama's endpoint of the name: every
@@ -2283,6 +2397,7 @@ async fn generate_with(
     if let Some(ref sched) = snap.scheduler {
         // ── Continuous batching path ────────────────────────────────
         let rx = sched.try_submit(request)?;
+        let rx = crate::monitor::watch(rx, &snap.model_name, "generate");
 
         if is_streaming(&body) {
             Ok(ndjson_stream_response(
@@ -2343,6 +2458,7 @@ async fn generate_with(
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
+            let rx = crate::monitor::watch(rx, &snap.model_name, "generate");
             Ok(ndjson_stream_response(
                 rx,
                 model,
@@ -2353,6 +2469,7 @@ async fn generate_with(
                 split_thinking,
             ))
         } else {
+            let tracker = crate::monitor::begin(&snap.model_name, "generate");
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
                 move || engine.generate(&request)
@@ -2371,6 +2488,7 @@ async fn generate_with(
                 )
             })?;
 
+            tracker.answered(&result);
             audit.log(
                 &model,
                 StreamFormat::OllamaGenerate,
@@ -2540,6 +2658,7 @@ async fn chat_with(
         };
         if is_streaming(&body) {
             let rx = multimodal_to_channel(engine, mm_request, media.items, media.current_turn);
+            let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
             return Ok(ndjson_stream_response(
                 rx,
                 model,
@@ -2551,6 +2670,7 @@ async fn chat_with(
             ));
         }
         let rx = multimodal_to_channel(engine, mm_request, media.items, media.current_turn);
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
         let Collected {
             text,
             tokens_generated,
@@ -2621,6 +2741,7 @@ async fn chat_with(
 
     if let Some(ref sched) = snap.scheduler {
         let rx = sched.try_submit(request)?;
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
 
         if is_streaming(&body) {
             Ok(ndjson_stream_response(
@@ -2679,6 +2800,7 @@ async fn chat_with(
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
+            let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
             Ok(ndjson_stream_response(
                 rx,
                 model,
@@ -2689,6 +2811,7 @@ async fn chat_with(
                 split_thinking,
             ))
         } else {
+            let tracker = crate::monitor::begin(&snap.model_name, "chat");
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
                 move || engine.generate(&request)
@@ -2707,6 +2830,7 @@ async fn chat_with(
                 )
             })?;
 
+            tracker.answered(&result);
             audit.log(
                 &model,
                 StreamFormat::OllamaChat,
@@ -2916,7 +3040,7 @@ fn ndjson_lines(values: impl Stream<Item = Value> + Send + 'static) -> axum::res
 fn local_model_ids(state: &AppState) -> Vec<String> {
     state
         .store
-        .list()
+        .list_all()
         .unwrap_or_default()
         .into_iter()
         .filter(|m| !m.id.is_empty())
@@ -3182,6 +3306,8 @@ async fn chat_completions_with(
         } else {
             sequential_to_channel(Arc::clone(snap.engine.as_ref().unwrap()), request)
         };
+        let rx = rx;
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat.completions");
         let Collected {
             text,
             tokens_generated,
@@ -3279,6 +3405,7 @@ async fn chat_completions_with(
 
     if let Some(ref sched) = snap.scheduler {
         let rx = sched.try_submit(request)?;
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat.completions");
 
         if is_streaming(&body) {
             let stream = stream_from_channel_sse(
@@ -3341,6 +3468,7 @@ async fn chat_completions_with(
 
         if is_streaming(&body) {
             let rx = sequential_to_channel(engine, request);
+            let rx = crate::monitor::watch(rx, &snap.model_name, "chat.completions");
             let stream = stream_from_channel_sse(
                 rx,
                 model,
@@ -3351,6 +3479,7 @@ async fn chat_completions_with(
             );
             Ok(Sse::new(stream).into_response())
         } else {
+            let tracker = crate::monitor::begin(&snap.model_name, "chat.completions");
             let result = tokio::task::spawn_blocking({
                 let engine = engine;
                 move || engine.generate(&request)
@@ -3369,6 +3498,7 @@ async fn chat_completions_with(
                 )
             })?;
 
+            tracker.answered(&result);
             audit.log(
                 &model,
                 StreamFormat::OpenAI,

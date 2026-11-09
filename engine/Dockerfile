@@ -68,7 +68,7 @@ VOLUME ["/models", "/data/audit"]
 ENV EULLM_MODELS_DIR=/models
 ENV EULLM_AUDIT_DIR=/data/audit
 
-# The API, and the chat UI when `serve --ui` turns it on.
+# The API, and the chat UI (`serve --no-ui` turns it off).
 EXPOSE 11434 11435
 
 # Docker sends SIGTERM on `docker stop` — the engine handles it gracefully.

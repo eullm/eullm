@@ -1,0 +1,215 @@
+{
+  "campaign": "c14-llama-bump",
+  "notes": [
+    "llama.cpp b86d2f0 -> b11925 before it is merged, as on branch feat/model-libraries (0.8.0:",
+    "the new llama.cpp, the model libraries, patch 0013 for ggml-hip on ROCm 6), which replaced",
+    "chore/llama-cpp-b11925 on 29-10-2026: the same points on the engine of 0.7.95 (be0cf9e,",
+    "label v0795) and on the branch (label v080), each binary built in a directory of its own,",
+    "each in one job of at most 8 hours. The main checks only, so that the test is short:",
+    "bump-moe first, on the whole node: the expert cache on the 235B at 8 and 32 requests with",
+    "LLAMA_MOE_CACHE_STATS=64, the share of experts in VRAM (tools/lumi/log_checks.py in the job",
+    "summary). Patch 0008 now replaces llama.cpp's new SLRU, which the simulator finds at 0%",
+    "where a step overflows the cache (the 235B at 32).",
+    "bump-soak-*: five hours at 32 requests on one GCD of the configurations that died with",
+    "the HIP graphs, with llama.cpp's log: patch 0011 (the pool keeping VRAM free) is halved",
+    "and calls upstream's graph invalidation. No NaN, no HSA_STATUS_ERROR, 'pool[...] freeing'",
+    "lines where the pool has to give memory back.",
+    "bump-mtp-graded, beside the soaks: the six Qwen3.5/3.6 MTP twins without --mtp and with",
+    "--mtp 2, 100 gsm8k questions at temperature 0. On the reference PC b11925 keeps about 5",
+    "points fewer drafts at --mtp 2 (55 -> 50%, 86 -> 81%) and writes 2-3.5% slower."
+  ],
+  "text_only": [
+    "qwen3.5-9b-mtp-gguf-q4_k_m",
+    "qwen3.5-9b-mtp-gguf-q8_0",
+    "qwen3.6-27b-mtp-gguf-q4_k_m",
+    "qwen3.6-27b-mtp-gguf-q8_0",
+    "qwen3.6-35b-a3b-mtp-gguf-ud-q4_k_m",
+    "qwen3.6-35b-a3b-mtp-gguf-q8_0"
+  ],
+  "pull": [
+    "hf.co/unsloth/Qwen3.5-9B-MTP-GGUF:Q4_K_M",
+    "hf.co/unsloth/Qwen3.5-9B-MTP-GGUF:Q8_0",
+    "hf.co/unsloth/Qwen3.6-27B-MTP-GGUF:Q4_K_M",
+    "hf.co/unsloth/Qwen3.6-27B-MTP-GGUF:Q8_0",
+    "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_M",
+    "hf.co/unsloth/Qwen3.6-35B-A3B-MTP-GGUF:Q8_0",
+    "hf.co/Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M",
+    "hf.co/Qwen/Qwen3-32B-GGUF:Q8_0",
+    "hf.co/Qwen/Qwen3-30B-A3B-GGUF:Q8_0"
+  ],
+  "defaults": {
+    "gcds": 1
+  },
+  "groups": [
+    {
+      "name": "bump-mtp-graded",
+      "priority": 90,
+      "est_s": 1500,
+      "set": {
+        "kind": "workload",
+        "batch": 1,
+        "slot_ctx": 8192,
+        "sets": [
+          "gsm8k"
+        ],
+        "limit": 100,
+        "concurrency": 1,
+        "max_tokens": 768,
+        "think": false
+      },
+      "axes": {
+        "model": [
+          "qwen3.5-9b-mtp-gguf-q4_k_m-text",
+          "qwen3.5-9b-mtp-gguf-q8_0-text",
+          "qwen3.6-27b-mtp-gguf-q4_k_m-text",
+          "qwen3.6-27b-mtp-gguf-q8_0-text",
+          "qwen3.6-35b-a3b-mtp-gguf-ud-q4_k_m-text",
+          "qwen3.6-35b-a3b-mtp-gguf-q8_0-text"
+        ],
+        "extra_args": [
+          [
+            "--fit-strict"
+          ],
+          [
+            "--fit-strict",
+            "--mtp",
+            "2"
+          ]
+        ]
+      }
+    },
+    {
+      "name": "bump-moe",
+      "priority": 100,
+      "est_s": 3000,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "exclusive": true,
+        "cores": "reserved",
+        "slot_ctx": 4096,
+        "extra_args": [
+          "--moe-cache",
+          "auto"
+        ],
+        "env": {
+          "LLAMA_MOE_CACHE_STATS": "64",
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      },
+      "axes": {
+        "model": [
+          "qwen3-235b-a22b-gguf-q4_k_m"
+        ],
+        "batch": [
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "bump-soak-32b",
+      "priority": 99,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 14400,
+        "max_duration_s": 18000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3-32b",
+        "kv": "f16/f16"
+      }
+    },
+    {
+      "name": "bump-soak-32b-q8",
+      "priority": 99,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 14400,
+        "max_duration_s": 18000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3-32b-gguf-q8_0",
+        "kv": "q8_0/q8_0"
+      }
+    },
+    {
+      "name": "bump-soak-30b-a3b",
+      "priority": 99,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 14400,
+        "max_duration_s": 18000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3-30b-a3b-gguf-q8_0",
+        "kv": "f16/f16"
+      }
+    },
+    {
+      "name": "bump-soak-35b-a3b",
+      "priority": 99,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 14400,
+        "max_duration_s": 18000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3.6-35b-a3b",
+        "kv": "f16/f16"
+      }
+    }
+  ]
+}

@@ -7,9 +7,10 @@ the new kernel gives each row to a warp (8 rows to a block), with no shared memo
 in a different order. GGML_CUDA_MMVF_SHORT_ROWS=0 restores the generic kernel.
 
 diff --git a/ggml/src/ggml-cuda/mmvf.cu b/ggml/src/ggml-cuda/mmvf.cu
+index 752d28c4..02bb0e62 100644
 --- a/ggml/src/ggml-cuda/mmvf.cu
 +++ b/ggml/src/ggml-cuda/mmvf.cu
-@@ -510,6 +510,78 @@
+@@ -509,6 +509,78 @@ void launch_mul_mat_vec_f_cuda(
      }
  }
  
@@ -88,7 +89,7 @@ diff --git a/ggml/src/ggml-cuda/mmvf.cu b/ggml/src/ggml-cuda/mmvf.cu
  template <typename T, typename type_acc>
  static void mul_mat_vec_f_cuda_switch_ncols_dst(
          const T * x, const float * y, const int32_t * ids, const ggml_cuda_mm_fusion_args_device fusion, float * dst,
-@@ -522,6 +594,11 @@
+@@ -521,6 +593,11 @@ static void mul_mat_vec_f_cuda_switch_ncols_dst(
  
      const bool has_ids = ids != nullptr;
  

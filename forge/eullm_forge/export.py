@@ -221,7 +221,8 @@ def export_gguf(config: ExportConfig) -> str:
     ]
     logger.info("  Running: %s", " ".join(convert_cmd))
 
-    result = subprocess.run(convert_cmd, capture_output=True, text=True)
+    result = subprocess.run(convert_cmd, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     if result.returncode != 0:
         raise RuntimeError(
             f"GGUF conversion failed:\n{result.stderr}"
@@ -256,7 +257,8 @@ def export_gguf(config: ExportConfig) -> str:
         ]
         logger.info("  Running: %s", " ".join(quantize_cmd))
 
-        result = subprocess.run(quantize_cmd, capture_output=True, text=True)
+        result = subprocess.run(quantize_cmd, capture_output=True, text=True,
+                                encoding="utf-8", errors="replace")
         if result.returncode != 0:
             raise RuntimeError(
                 f"Quantization failed:\n{result.stderr}"

@@ -9,10 +9,10 @@ GPUs, as if each of the hundreds of thousands of rows an expert tensor has per
 device were copied on its own. GGML_META_GATHER_ROWS=0 restores the 2D copy.
 
 diff --git a/ggml/src/ggml-backend-meta.cpp b/ggml/src/ggml-backend-meta.cpp
-index 8ed5f4e..ac6d08e 100644
+index fb35be35..e540419f 100644
 --- a/ggml/src/ggml-backend-meta.cpp
 +++ b/ggml/src/ggml-backend-meta.cpp
-@@ -1428,6 +1428,40 @@ static void ggml_backend_meta_buffer_memset_tensor(
+@@ -1444,6 +1444,40 @@ static void ggml_backend_meta_buffer_memset_tensor(
      }
  }
  
@@ -53,7 +53,7 @@ index 8ed5f4e..ac6d08e 100644
  static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
      const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(buffer);
      const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
-@@ -1512,7 +1546,7 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
+@@ -1528,7 +1562,7 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
                      continue;
                  }
                  const size_t simple_offset = i_start * chunk_size_j;

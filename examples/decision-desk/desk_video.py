@@ -39,6 +39,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -96,8 +97,22 @@ def timeline(emails, hold):
 def warm(d):
     """The models loaded before the first email, as the page does it, so
     that no load is in the video."""
-    print("loading the models…", flush=True)
-    d.warm_up()
+    try:
+        d.client.call("/api/version", timeout=5)
+    except desk.EuLLMError as e:
+        raise SystemExit(f"{e}\nStart it in another terminal: eullm serve") from None
+    # Desk.warm_up waits for the server forever, as a page should; here it
+    # runs beside a loop that says what is loading.
+    worker = threading.Thread(target=d.warm_up, daemon=True)
+    worker.start()
+    said = None
+    while worker.is_alive():
+        now = {k: d.warmup[k] for k in ("index", "decision", "chat")}
+        if now != said:
+            loading = [k for k, v in now.items() if v in ("waiting", "loading")]
+            print(f"loading the models: {', '.join(loading) or 'done'}", flush=True)
+            said = now
+        worker.join(1.0)
     if "failed" in (d.warmup["decision"], d.warmup["chat"]):
         raise SystemExit(f"a model did not load: {d.warmup['error']}")
     status = d.status()

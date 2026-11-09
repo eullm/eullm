@@ -13,6 +13,70 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.8.8 — 2026-11-05
+
+### Added
+- **`eullm --help` says how to start and what can be set.** Besides the commands it shows the ways to start a model (a catalog id, a Hugging Face repo, a file, `serve`), the options of `run` and `serve` used most with their defaults, and every setting read from the environment or `.env`. `eullm run --help` and `eullm serve --help` group their options (GPU and memory, MoE models, several GPUs, MTP, hybrid models, images and audio, more than one model, in the background), with one line each under `-h` and the whole explanation under `--help`, wrapped to the terminal's width, then examples and the same settings.
+
+### Fixed
+- **Settings written in `.env` are read**, as `.env.example` and the quick start show them. `EULLM_WEB_ALLOWED_DOMAINS`, `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`, `EULLM_ALLOW_MODEL_PATHS`, `HF_TOKEN`, `EULLM_DOWNLOAD_CONNECTIONS`, `EULLM_IMAGE_MAX_TOKENS`, `EULLM_IMAGE_MIN_TOKENS` and `RUST_LOG` were read from the environment only, so a line for them in `.env` was ignored without a word: a domain allowlist there left `--web` fetching from any public host, and a token there left a gated download anonymous. The environment still wins over `.env`, and the startup log says where the web settings, the model-path switch and the token came from.
+- **The help and the guides say what the commands do.** `eullm pull` takes a Hugging Face repo or a URL as well as a catalog id (its help sent you to an `eullm catalog` command that does not exist); `--threads` defaults to one thread per physical core, not to every CPU; the KV cache takes `q4_1`, `q5_0`, `q5_1` and `f32` too; `--keep-alive` applies to the decision model as well. The examples in the help of `rm`, `unload`, `update`, `finetune` and `forge` come one per line instead of run together. `--replace`, which the guides gave for a port already in use, is not implemented (it stops with an error that says so), and is out of the help and the guides until it is.
+
+### Changed
+- **`eullm import-ollama` is gone.** Models come from the catalog, from Hugging Face (`hf.co/OWNER/REPO`), from a URL, or from any folder of GGUF files (`EULLM_MODEL_LIBRARIES`, which uses an LM Studio or Hugging Face folder where it is). Models imported with it before keep working.
+
+### Performance
+- **A model loaded without mmap is read from its file in one pass**, the tensors in the order they lie on disk, instead of the order llama.cpp creates them (0.8.5 and earlier) or largest first (0.8.6 and 0.8.7). It matters where the engine reads a model whole rather than mapping it, as it does from a network file system: on LUMI-G's Lustre, read cold, Qwen3.8-27B Q8 loaded on one GPU in 44 s instead of 95-130, Qwen3-32B split by tensor over four in 31 s instead of 101-107, and Qwen3-235B Q8_0 over eight in 261 s instead of 650-690; Qwen3-235B Q4_K_M loaded no faster.
+
+## 0.8.7 — 2026-11-02
+
+### Fixed
+- **`eullm serve` starts when the chat UI's port is taken**, as 0.8.5 said it would: the UI is left off, the log says so, and the API is served. 0.8.5 and 0.8.6 exited instead ("port 11435 is already in use"), so on a machine running more than one server only the first started; `--no-ui` avoided it. `eullm run` still stops when its chat port is taken, and now names the option that moves it (`--ui-port`, not `--port`).
+
+## 0.8.6 — 2026-11-01
+
+### Added
+- **The chat UI has a sidebar and a Model hub.** The sidebar holds New chat, the pages (Chat, Model hub, Monitor, About) and the recent chats. **Chats are kept in this browser** and reopen as they were, with each answer's figures; attachments are not kept, and the model is told so. The **Model hub** lists the models on this machine (in memory, in the models folder, used where they are, and the EuLLM catalog not yet downloaded) with what each is, and buttons to chat with it, unload it, delete it from the models folder or download it; its **Discover** tab browses Hugging Face's GGUF repos by downloads, trend, date or likes, or by search, with each repo's quantizations, their size and whether they fit this machine. The download window it replaces is gone. On a phone the sidebar slides in from a menu button.
+- **`DELETE /api/delete`**, Ollama's endpoint: removes a model from the models folder; refuses a model in memory or a file used where it is. `/api/tags` says which models are which (`details.source`), and `/api/hf/search` takes a `sort`.
+- **An About page in the chat UI** (About, in the sidebar): the version, the backend and the llama.cpp it is built on, the commit, the machine (system, processor, memory, how long the engine has been running), every device llama.cpp can use with its memory, where models, model libraries and the audit trail are kept, and who may use the server (API keys required or not, the networks admitted without one). **Copy details** puts the version, build and hardware on the clipboard for a bug report. The same is `GET /api/about`.
+
+### Fixed
+- `/api/tags` said `Q4_K_M` for every model loaded from a file, whatever its quantization, and size 0; it now gives what the models folder or library knows of it, and no quantization rather than a wrong one.
+
+### Changed
+- **llama.cpp moves to b12032**, 107 commits newer. A MoE model held whole in VRAM reads prompts faster on NVIDIA GPUs, as the gate and up expert products and the step between them now run as one kernel: DeepSeek-Coder-V2-Lite reads 3% faster on an RTX 5070 Ti. A MoE whose experts do not all fit (the expert cache) waits on the bus rather than on that kernel and gains nothing: Qwen3.6-35B-A3B and Qwen3-Next-80B read and write as fast as on 0.8.5, to the same answers. Gemma 3n and Gemma 4 on the CPU take less memory (216 MiB less for gemma-4-E2B), loading reuses one buffer instead of one per weight, and three more architectures load: LiquidAI's LFM3 family (text, vision, audio), Limite and Mistral Large 4. FP8 (E4M3) GGUF files load too.
+
+## 0.8.5 — 2026-10-29
+
+### Added
+- **A Monitor page in the chat UI** (the pulse icon in the top bar): the models in memory and what each is doing, the speed of the answers being written and of the last prompt read, every request running and the last 50 answered (prompt and answer tokens, reading and writing speed, time to the first token, MTP drafts kept, how it ended), and the machine over the last two minutes: CPU, memory, the engine's disk reads, and for each GPU its load, VRAM, temperature, power and PCIe traffic (NVIDIA; AMD without PCIe traffic; other GPUs VRAM only). It is all kept in memory on the machine, nothing is saved or sent, and the machine is sampled only while the page is open. The same figures are `GET /api/monitor`. An AMD card is named from the system's PCI ID list, since consumer cards do not report their name to the driver.
+- **The chat shows the engine's own figures under each answer**: writing speed and answer tokens, the prompt tokens read and how fast, time to the first token, MTP drafts kept, the total time, and a warning when the answer was cut at the length limit, with a button that copies the answer without its reasoning. It counted the pieces the browser received before.
+- **The reasoning folds once the answer begins**, and says how long the model thought ("Thought for 12 s"); a click opens it again.
+- **A Parameters panel in the chat replaces the Settings window**: system prompt, reasoning, longest answer, and now Top P, Top K, Min P, repeat penalty and seed beside the temperature, applied from the next message and kept in the browser.
+- **The chat UI has the EuLLM icon** in the browser tab (`/favicon.ico`).
+
+### Changed
+- **`eullm serve` serves the chat UI too, as `eullm run` does**, on `--ui-port` (11435), behind the same API keys, IP allowlist and origins as the API; `--no-ui` turns it off. A UI port already taken does not stop the server: it is logged and the API is served anyway. `--ui`, which turned it on until now, is still accepted and does nothing. Docker images and compose start it the same way: publish port 11435 to reach it, or add `--no-ui`.
+
+## 0.8.0 — 2026-10-28
+
+### Added
+- **Model libraries: other programs' model folders used as they are.** `EULLM_MODEL_LIBRARIES` (in the environment or in `.env`, folders separated by `;`) names folders such as LM Studio's models folder or a Hugging Face cache. Every `.gguf` in them, through every subfolder, is listed by `eullm list`, `/api/tags` and `/v1/models` and runs by its name, and nothing in them is moved, renamed, added or deleted, so the program that made the folder keeps using it. `eullm rm` refuses such a model. A projector (`mmproj`) goes with the model in its folder instead of being offered as a model; a model split in parts is one model.
+
+### Changed
+- **llama.cpp moves to b11925**, 443 commits newer than the one 0.7.95 runs on. Eight more model architectures load: `beam`, `deepseek41`, `flint`, `kolibri1`, `maion-coder`, `muse-spark`, `sensenova_u1` and `vllm-decision2`. The expert cache (`--moe-cache`) keeps EuLLM's own eviction rather than the one llama.cpp moved to: replayed on routing modelled on LUMI's measurements, it finds no expert in VRAM once a step needs more experts than the cache holds (Qwen3-Coder-480B with 8 requests at once, Qwen3-235B with 32), where EuLLM's finds 60% and 73%.
+
+### Fixed
+- **`eullm import` no longer moves files, and the models folder is read at any depth.** In 0.7.95 it moved a `.gguf` lying in the models folder into a folder of its own, read one level of subfolders only, and listed projectors as models. Every `.gguf` in the models folder, at any depth, is now listed and runs where it is, with no command; `eullm import` only shows what was found and what was left out, and why. The model picker (`eullm` with no arguments) no longer offers projectors as models either.
+
+## 0.7.95 — 2026-10-27
+
+### Added
+- **`eullm import` registers models whose files are already in the models folder.** A GGUF copied in by hand, or a folder of models moved without their `manifest.json`, ran by name but did not appear in `eullm list` or `/api/tags`, so a client such as Open WebUI did not offer it, and the only way to get a manifest was to download the model again. `eullm import` writes the missing manifests of every model in the folder, or `eullm import NAME` of one; a `.gguf` lying directly in the folder is first moved into a directory of its own, and a split model counts as one model. Nothing is downloaded or copied, and models that already have a manifest are left as they are. `eullm list` now also names the loose `.gguf` files it does not list.
+
+### Fixed
+- **`EULLM_MODELS_DIR` and `EULLM_AUDIT_DIR` are read from `.env` too.** They were read only from the environment, although the quick-start guide listed them among the `.env` settings, so a line `EULLM_MODELS_DIR=/data/models` in `.env` was ignored and the models stayed in `~/.eullm/models`, with nothing saying so. The environment still wins over the file. `eullm list` and the server's startup log say where each folder was set.
+
 ## 0.7.94 — 2026-10-27
 
 ### Fixed

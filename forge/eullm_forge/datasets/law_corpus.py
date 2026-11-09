@@ -49,7 +49,7 @@ from .premise_gen import (
 )
 
 FORMS = ("testo", "indice", "rubrica", "termine", "pena", "procedibilita", "abrogato",
-         "inesistente")
+         "inesistente", "rubrica_inversa")
 STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 # What is asked unless a run names its styles. Not the case: applying a rule
 # to facts is where the teacher errs, and no check by program sees it. Of six
@@ -64,8 +64,6 @@ STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 # text is right; what elaborates brings the teacher's mistakes.
 DEFAULT_STYLES = ("parafrasi", "domande", "elementi")
 # Raised whenever check_rewrite changes: refusals of an older check are asked again.
-# 2 (2026-11-09): the numbers of the act's own name ("legge n. 241/1990",
-# "regolamento (UE) 2016/679") are allowed, as the request itself states them.
 CHECKS_VERSION = 2
 # Raised whenever a request changes, and written in every rewrite ("pv"), so the
 # rewrites of an older request can be told apart. 2 (2026-10-29): the
@@ -86,54 +84,53 @@ RUBRICA_BACK = [
     "«{h}» è la materia dell'art. {n} {of}.",
     "{In} l'articolo dedicato a «{h}» è il {n}.",
 ]
+# Heading first, number last, for `reverse` (program_rows): E1-mini learnt the
+# heading from the number but not the number from the heading (0-3% on the
+# closed book against 35-41% the other way, 06-11-2026), the reversal curse,
+# with one heading-first sentence an article.
+RUBRICA_REV = RUBRICA_BACK + [
+    "Chi cerca «{h}» {in_} lo trova all'art. {n}.",
+    "Per «{h}» l'articolo {of} da citare è il {n}.",
+    "{In}, «{h}»: art. {n}.",
+]
 
 
-# An EU act's name in its title: "REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO ...",
-# "REGOLAMENTO (CE) n. 1907/2006 ...", "DIRETTIVA (UE) 2019/1937 ...", and the
-# directives and decisions before 2015, "DIRETTIVA 2011/83/UE ...".
-_EU_KIND = r"(?i)\b(regolamento|direttiva|decisione)\b(?:\s+(?:di\s+esecuzione|delegat[oa]))?"
-_EU_NEW = re.compile(_EU_KIND + r"\s*\(((?:UE|CE|CEE|Euratom)(?:\s*,\s*Euratom)?)\)"
-                     r"\s*(?:n\.\s*)?(\d{1,4}/\d{1,4})\b")
-_EU_OLD = re.compile(r"(?i)\b(direttiva|decisione)\b(?:\s+(?:di\s+esecuzione|delegat[oa]))?"
-                     r"\s+(\d{2,4}/\d{1,4}/(?:UE|CE|CEE|Euratom))\b")
+_CELEX = re.compile(r"^eurlex_3(\d{4})([RLD])0*(\d+)")
+_EU_KIND = {"R": ("del regolamento", "nel regolamento", "regolamento"),
+            "L": ("della direttiva", "nella direttiva", "direttiva"),
+            "D": ("della decisione", "nella decisione", "decisione")}
 
 
-def eu_label(title: str) -> tuple[str, str] | None:
-    """("del regolamento (UE) 2016/679", "nel regolamento (UE) 2016/679"), or None."""
-    m = _EU_NEW.search(title)
-    if m:
-        kind, name = m.group(1).lower(), f"{m.group(1).lower()} ({m.group(2).upper()}) {m.group(3)}"
+def labels(code: str) -> tuple[str, str] | None:
+    """("del codice penale", "nel codice penale"): how a text names the code, or None.
+
+    The nine codes are `CODE_LABELS`'. An EU act (prepare_eurlex.py, code
+    ``eurlex_<CELEX>``) is named from its CELEX number as the Official
+    Journal cites it: a regulation of 2016 "(UE) 2016/679", one of 2012
+    "(UE) n. 1215/2012", one of 2003 "(CE) n. 1/2003"; a directive of 2011
+    "2011/83/UE", of 2019 "(UE) 2019/1937". Other kinds of act get None and
+    are left out, as before.
+    """
+    if code in CODE_LABELS:
+        return CODE_LABELS[code]
+    m = _CELEX.match(code)
+    if not m or m.group(2) not in _EU_KIND:
+        return None
+    year, kind, num = int(m.group(1)), m.group(2), int(m.group(3))
+    of, in_, _ = _EU_KIND[kind]
+    org = "UE" if year >= 2010 else "CE"
+    if year >= 2015:
+        ref = f"(UE) {year}/{num}"
+    elif kind == "R":
+        ref = f"({org}) n. {num}/{year}"
     else:
-        m = _EU_OLD.search(title)
-        if not m:
-            return None
-        kind, name = m.group(1).lower(), f"{m.group(1).lower()} {m.group(2).upper()}"
-    if kind == "regolamento":
-        return f"del {name}", f"nel {name}"
-    return f"della {name}", f"nella {name}"
-
-
-def register_eu_labels(records) -> int:
-    """Give every EU act of ``records`` (code ``eurlex_<CELEX>``) its name in
-    `CODE_LABELS`, from the title each of its records starts with, so that
-    `by_code`, the program rows and the teacher requests take it like a code.
-    An act whose title names no regulation, directive or decision is left out.
-    Returns how many acts were added."""
-    added = 0
-    for r in records:
-        code = r.get("code") or ""
-        if not code.startswith("eurlex_") or code in CODE_LABELS:
-            continue
-        label = eu_label((r.get("text") or "").split("\n", 1)[0])
-        if label:
-            CODE_LABELS[code] = label
-            added += 1
-    return added
+        ref = f"{year}/{num}/{org}"
+    return f"{of} {ref}", f"{in_} {ref}"
 
 
 def code_name(code: str) -> str:
     """"Codice penale", "Costituzione", "Legge n. 241/1990": the code as a title."""
-    of = CODE_LABELS[code][0]
+    of = labels(code)[0]
     name = re.sub(r"^(?:del|della|dello|dell['’])\s*", "", of)
     return name[:1].upper() + name[1:]
 
@@ -160,7 +157,7 @@ def by_code(articles: dict[tuple[str, str], Article]) -> dict[str, list[Article]
     """The articles of each code we have a label for, in the code's order."""
     out: dict[str, list[Article]] = defaultdict(list)
     for a in articles.values():
-        if a.code in CODE_LABELS:
+        if labels(a.code):
             out[a.code].append(a)
     return {c: sorted(v, key=lambda a: number_key(a.number)) for c, v in sorted(out.items())}
 
@@ -191,9 +188,14 @@ def excluded(paths: list[Path]) -> tuple[set[tuple[str, str]], set[tuple[str, st
 
 def program_rows(articles: dict[tuple[str, str], Article], *,
                  fakes: set[tuple[str, str]] = frozenset(), seed: int = 0,
-                 absent_share: float = 0.3) -> list[dict]:
-    """Every program-written form of every article: statements, never questions."""
+                 absent_share: float = 0.3, reverse: int = 0) -> list[dict]:
+    """Every program-written form of every article: statements, never questions.
+
+    ``reverse`` adds that many heading-first statements an article
+    (``rubrica_inversa``, from `RUBRICA_REV`), the number always last.
+    """
     rng = random.Random(seed)
+    rev_rng = random.Random(seed + 1)       # its own draws: the other rows stay as they were
     rows: list[dict] = []
 
     def add(form, code, number, text):
@@ -201,7 +203,7 @@ def program_rows(articles: dict[tuple[str, str], Article], *,
                      "forma": form, "source": "program", "text": text})
 
     for code, arts in by_code(articles).items():
-        of, in_ = CODE_LABELS[code]
+        of, in_ = labels(code)
         name = code_name(code)
         In = in_[:1].upper() + in_[1:]
         taken = {a.number for a in arts}
@@ -223,6 +225,11 @@ def program_rows(articles: dict[tuple[str, str], Article], *,
                     RUBRICA_FWD[i].format(n=a.number, of=of, h=h) + " "
                     + RUBRICA_BACK[(i + 1) % len(RUBRICA_BACK)].format(
                         n=a.number, of=of, h=h, In=In))
+                for k, t in enumerate(rev_rng.sample(RUBRICA_REV, min(reverse, len(RUBRICA_REV)))):
+                    rows.append({"id": f"rubrica_inversa|{code}|{a.number}|{k}", "code": code,
+                                 "articolo": a.number, "forma": "rubrica_inversa",
+                                 "source": "program",
+                                 "text": t.format(n=a.number, of=of, h=h, In=In, in_=in_)})
             # deadlines ("entro trenta giorni"), not the length of a penalty
             timed = [s for _, s in split_sentences(_plain(a.text)) if _deadlines(s)]
             if timed:
@@ -322,7 +329,7 @@ def rewritable(article: Article) -> bool:
 
 def rewrite_messages(article: Article, style: str) -> list[dict]:
     """The teacher request for one rewrite of one article."""
-    of = CODE_LABELS[article.code][0]
+    of = labels(article.code)[0]
     h = article.heading.strip(" .")
     head = f"Art. {article.number} {of}" + (f" ({h})" if h else "")
     task = TASKS[style].format(n=article.number, of=of)
@@ -355,8 +362,10 @@ def check_rewrite(article: Article, style: str, text: str) -> str | None:
     source = _plain(article.text)
     allowed = {d.replace(".", "").replace(",", "") for d in _DIGITS.findall(source)}
     allowed |= set(re.findall(r"\d+", own))
-    # the act's own name, which the request itself gives (n. 241/1990, 2016/679)
-    allowed |= set(re.findall(r"\d+", CODE_LABELS.get(article.code, ("",))[0]))
+    # The act's own name as the request gives it ("del regolamento (UE)
+    # 2016/679"): its numbers are not in the article's text, and every EU
+    # rewrite was refused for them (03-11-2026, 195,268 of 205,654).
+    allowed |= set(re.findall(r"\d+", (labels(article.code) or ("",))[0]))
     for d in _DIGITS.findall(text):
         d = d.replace(".", "").replace(",", "")
         if int(d) > 10 and d not in allowed:

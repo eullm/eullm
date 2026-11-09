@@ -40,20 +40,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eullm_forge.eval import load_eval_set  # noqa: E402
-from eullm_forge.eval.abstain import _CITE, _MORE, _key  # noqa: E402
-from eullm_forge.eval.retrieval import named_code  # noqa: E402
+from eullm_forge.rl.citation import citations  # noqa: E402
 
 NEAR = 3
-
-
-def citations(text: str, default_code: str | None) -> set[tuple[str | None, str]]:
-    """(code, article) of every article the text cites."""
-    out, code = set(), default_code
-    for m in _CITE.finditer(text or ""):
-        code = named_code(text[m.end():m.end() + 60]) or code
-        out.add((code, _key(m.group(1), m.group(2))))
-        out.update((code, _key(n, s)) for n, s in _MORE.findall(m.group(3)))
-    return out
 
 
 def question_articles(md: dict) -> set[tuple[str, str]]:

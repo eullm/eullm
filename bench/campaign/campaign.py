@@ -692,7 +692,7 @@ def hf_ref_to_id(ref: str) -> str:
 def load_specs(paths) -> list:
     specs = []
     for path in paths:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             specs.append((path, json.load(f)))
     return specs
 
@@ -813,15 +813,22 @@ def cmd_plan(args):
     q = Queue(args.queue)
     os.makedirs(os.path.join(args.queue, "specs"), exist_ok=True)
     specs = load_specs(args.specs)
-    for path, spec in specs:
-        points = expand(spec, args.round, args.engine_label)
+    expanded = [(path, spec, expand(spec, args.round, args.engine_label))
+                for path, spec in specs]
+    if args.group:
+        # A pattern has to name a group of one of the specs, not of each: with
+        # c01 and c02, `soak-node` is c01's and `moe-soak` c02's, and asking
+        # for both planned nothing at all (03-11-2026). A pattern no spec has
+        # is still a typo, and stops before anything is queued.
+        names = {p["group"] for _, _, points in expanded for p in points}
+        unmatched = [g for g in args.group if not fnmatch.filter(names, g)]
+        if unmatched:
+            print(f"no group matches {', '.join(unmatched)} in "
+                  f"{', '.join(path for path, _, _ in expanded)} "
+                  f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
+            return 2
+    for path, spec, points in expanded:
         if args.group:
-            names = {p["group"] for p in points}
-            unmatched = [g for g in args.group if not fnmatch.filter(names, g)]
-            if unmatched:
-                print(f"{path}: no group matches {', '.join(unmatched)} "
-                      f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
-                return 2
             points = [p for p in points
                       if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
         added = [p for p in points if q.add(p)]
@@ -998,8 +1005,16 @@ def stopped_lines(state: str, points: list, each: bool = False) -> list:
 
 
 def cmd_retry(args):
-    moved = Queue(args.queue).retry(args.group or "")
+    moved = Queue(args.queue).retry(args.group or "", args.engine_label, args.note)
     print(f"{len(moved)} failed points back in todo")
+    return 0
+
+
+def cmd_set_aside(args):
+    dest = args.to or os.path.join(args.queue, "dropped", dt.date.today().isoformat())
+    moved = Queue(args.queue).set_aside(dest, args.engine_label, tuple(args.group or ()),
+                                        args.round)
+    print(f"{len(moved)} waiting points set aside in {dest}")
     return 0
 
 
@@ -1021,6 +1036,7 @@ COLUMNS = (
     "dec_client_ms_p99", "dec_wait_ms_p50", "dec_decode_ms_p50", "dec_consistency",
     "extra_args", "trial", "vram_start_mib_max", "dec_together", "dec_same_choices",
     "dec_largest_shift", "dec_flipped", "env", "died", "stop_exit", "ended", "draft_accept_pct",
+    "engine_label",
 )
 
 
@@ -1104,7 +1120,7 @@ def result_rows(results: str) -> list:
     in `<campaign>/failed/`, are not results)."""
     rows = []
     for path in sorted(glob.glob(os.path.join(results, "*", "*.json"))):
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             r = json.load(f)
         if r.get("schema") == SCHEMA:
             rows.append(row_of(r))
@@ -1212,7 +1228,7 @@ def cmd_report(args):
         for job in jobs:
             for path in glob.glob(os.path.join(results, "*", "failed", f"*.{job}.json")):
                 try:
-                    with open(path) as f:
+                    with open(path, encoding="utf-8") as f:
                         r = json.load(f)
                 except (OSError, ValueError):
                     continue
@@ -1397,8 +1413,17 @@ def main(argv=None):
     p.add_argument("--each", action="store_true",
                    help="one line per failed or blocked point instead of one per group and cause")
     with_queue(sub.add_parser("unblock"))
+    p = with_queue(sub.add_parser("set-aside", help="move waiting points out of the queue"))
+    p.add_argument("--engine-label", help="only the points of this engine label")
+    p.add_argument("--round", help="only the points of this round")
+    p.add_argument("--group", action="append",
+                   help="only points whose id starts with this (repeatable)")
+    p.add_argument("--to", help="where they go (default: QUEUE/dropped/<today>)")
     p = with_queue(sub.add_parser("retry"))
     p.add_argument("--group", help="only points whose id starts with this, e.g. moe-671b")
+    p.add_argument("--engine-label", help="only the points of this engine label, e.g. v085")
+    p.add_argument("--note", help="only points whose last note holds this text, "
+                   "e.g. 'is already in use'")
 
     p = with_queue(sub.add_parser("report"))
     p.add_argument("--results")
@@ -1442,6 +1467,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     commands = {"plan": cmd_plan, "pulls": cmd_pulls, "f32s": cmd_f32s, "prefetch": cmd_prefetch,
                 "run": cmd_run, "status": cmd_status, "unblock": cmd_unblock, "retry": cmd_retry,
+                "set-aside": cmd_set_aside,
                 "collect": cmd_collect, "report": cmd_report, "compare": cmd_compare,
                 "walltime": cmd_walltime,
                 "budget": cmd_budget}

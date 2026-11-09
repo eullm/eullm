@@ -33,6 +33,7 @@ opens in the browser, and you can also type in the terminal. Any GGUF works:
 eullm run ./my-model.gguf          # a file you have
 eullm run                          # no model: pick one from a list
 eullm list                         # models already downloaded
+eullm import                       # what was found in the model folders, and what was left out
 ```
 
 While it runs, any Ollama or OpenAI client can use it at
@@ -48,7 +49,7 @@ eullm run ./my-model.gguf --daemon # loads the model and goes to the background
 
 With `serve`, the model a request names (`"model": "qwen3-8b"`) is loaded on
 the first request and swapped when another one is asked for. Models are
-looked up among the ones `eullm pull` downloaded.
+looked up among the ones `eullm list` shows.
 
 ## 3. The options you will actually use
 
@@ -63,9 +64,9 @@ options work for `run` and `serve`.
 | `--batch-size N` | 1 | How many requests are answered at the same time. **The context is split among them**: `-c 16384 --batch-size 4` gives each request 4096. Raise both together |
 | `-p`, `--port N` | 11434 | Port of the API (the same as Ollama's) |
 | `--ui-port N` | 11435 | Port of the browser chat |
-| `--no-ui` / `--ui` | | `run`: turn the browser chat off. `serve`: turn it on |
+| `--no-ui` | | Turn the browser chat off (`run` and `serve`; it is on by default for both) |
 | `--cli` | | `run`: chat in the terminal only, without opening the browser |
-| `-t`, `--threads N` | all cores | CPU threads |
+| `-t`, `--threads N` | one per physical core | CPU threads |
 | `--keep-alive 10m` | never | Unload the model after that long without requests, to free the GPU |
 
 ### GPU and memory
@@ -100,7 +101,8 @@ that do not fit in VRAM.
 | `--default-model NAME` | The model that answers requests that name none (`serve`) |
 | `--daemon` | Run in the background; the log goes to `~/.eullm/logs/eullm.log`, the PID to `/tmp/eullm.pid` |
 
-Every other option: `eullm run --help`.
+Every other option: `eullm run --help`, grouped by subject; `eullm --help`
+shows the ones above and the settings below.
 
 ## 4. Settings that are not options: the `.env` file
 
@@ -114,10 +116,14 @@ read them.
 | `EULLM_ALLOWED_IPS` | `192.168.1.0/24` | Who may connect besides this machine. **By default only this machine can**: set it to use EuLLM from another PC |
 | `EULLM_API_KEYS` | `myapp:8f3b1d9c2e7a4f60b5` | Require a key (`Authorization: Bearer 8f3b1d9c2e7a4f60b5`). Needed behind Docker |
 | `EULLM_ALLOWED_ORIGINS` | `https://chat.example.eu` | Web pages on other hosts allowed to call the API |
-| `EULLM_MODELS_DIR` | `/data/models` | Where downloaded models are kept (default `~/.eullm/models`) |
+| `EULLM_MODELS_DIR` | `/data/models` | Where `eullm pull` keeps models (default `~/.eullm/models`). Any `.gguf` in it, at any depth, is listed and runs |
+| `EULLM_MODEL_LIBRARIES` | `D:\LM Studio\models;E:\gguf` | Other programs' model folders, read in every subfolder and never changed: their models are listed and run by name |
 | `HF_TOKEN` | `hf_...` | For gated or private Hugging Face models |
 
 The startup log says which settings are in effect and where each came from.
+The other settings (the web fetch's limits, download connections, the log
+level...) are in `eullm --help` and the
+[engine reference](engine.md#settings-in-the-environment-or-env).
 
 ## 5. Startup scripts
 
@@ -210,7 +216,7 @@ started with: start it with the largest context you want to allow.
 | Very slow | Check the startup banner: how many layers went to the GPU. A model much larger than the VRAM runs mostly on the CPU |
 | Another PC cannot connect | Only this machine is allowed by default: set `EULLM_ALLOWED_IPS` |
 | `401` from a client | `EULLM_API_KEYS` is set: give the client the key |
-| `address already in use` | Something already uses port 11434 (Ollama?): `--port 11500`, or `--replace` to replace a running EuLLM |
+| `address already in use` | Something already uses port 11434 (Ollama?): `--port 11500`, or stop the program using it |
 
 ## Going further
 

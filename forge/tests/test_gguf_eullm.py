@@ -21,6 +21,24 @@ def test_the_server_serves_the_gguf_with_one_slot_a_question(tmp_path):
     assert cmd[cmd.index("--ctx-size") + 1] == str(8 * 8192)
 
 
+def _fake_engine(tmp_path, help_text):
+    exe = tmp_path / "eullm"
+    exe.write_text(f"#!/bin/sh\necho '{help_text}'\n")
+    exe.chmod(0o755)
+    return str(exe)
+
+
+def test_two_servers_on_a_node_open_no_chat_ui(tmp_path):
+    # 0.8.5 opens the chat UI on port 11435 for every `serve`: two on a node clash.
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"GGUF")
+    new = EullmServer(gguf, binary=_fake_engine(tmp_path, "--port --no-ui --ui-port"))
+    assert "--no-ui" in new.command()
+    (tmp_path / "old").mkdir()
+    old = EullmServer(gguf, binary=_fake_engine(tmp_path / "old", "--port --batch-size"))
+    assert "--no-ui" not in old.command()
+
+
 class _Engine(BaseHTTPRequestHandler):
     seen: list = []
 

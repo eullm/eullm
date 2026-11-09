@@ -11,7 +11,9 @@ else. LLAMA_MOE_CACHE_PIN=0 leaves them pageable. Experts loaded without mmap
 are in the backend's pinned host buffer already and are left alone. One line
 on stderr says what was pinned, or why not; a failure suggests loading
 without mmap, since some drivers refuse to pin a read-only file mapping
-("operation not supported" on the reference PC).
+("operation not supported" on the reference PC). The cache spans several
+GPUs since llama.cpp #30112; the pages are pinned once, through the backend of
+the first GPU that caches experts, which registers them as portable for all.
 
 Statistics (phase 1). LLAMA_MOE_CACHE_STATS=N prints to stderr, every N steps
 of up to 8 tokens that went through the cache, the time per step split into
@@ -21,13 +23,13 @@ share of experts found in VRAM; and, from one step in 8 that waits for its
 uploads, how long uploading takes and at what rate. The cache's totals at
 exit go to stderr as well while the statistics are on.
 
-EuLLM patch on llama.cpp b86d2f0 (master with PR #29887). Needs 0001 to pin.
+EuLLM patch on llama.cpp b11925. Needs 0001 to pin.
 
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 7292a1e57..16e5e51d7 100644
+index 6a343a76..34b9e6d0 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -6,10 +6,19 @@
+@@ -7,10 +7,19 @@
  #include "ggml-cpp.h"
  
  #include <algorithm>
@@ -46,8 +48,8 @@ index 7292a1e57..16e5e51d7 100644
 +
  namespace {
  
- // LRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
-@@ -148,6 +157,14 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
+ // SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
+@@ -183,6 +192,14 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
          ggml_backend_buffer_is_host(t->buffer);
  }
  
@@ -62,7 +64,7 @@ index 7292a1e57..16e5e51d7 100644
  }
  
  struct llama_moe_cache::impl {
-@@ -179,8 +196,45 @@ struct llama_moe_cache::impl {
+@@ -228,14 +245,61 @@ struct llama_moe_cache::impl {
          size_t bytes  = 0;
      };
  
@@ -105,10 +107,9 @@ index 7292a1e57..16e5e51d7 100644
 +    // one step in this many waits for its uploads, to time them
 +    static constexpr uint64_t sample_every = 8;
 +
-     ggml_backend_t backend;
      int32_t n_expert_used;
  
-@@ -188,6 +242,16 @@ struct llama_moe_cache::impl {
+     stats stats_small; // up to 8 tokens per ubatch
      stats stats_large;
      stats stats_copy;  // experts copied from the cache for large batches
  
@@ -122,21 +123,24 @@ index 7292a1e57..16e5e51d7 100644
 +    std::vector<pinned_range> pinned;
 +    void (*unpin_host_buffer)(void * buffer) = nullptr;
 +
+     std::vector<device> devices;
      std::vector<group> groups;
      std::vector<layer> layers;
-     std::unordered_map<const ggml_tensor *, binding> bindings; // host experts -> cached experts
-@@ -369,10 +433,161 @@ struct llama_moe_cache::impl {
-             LLAMA_LOG_INFO("%s: %2zu layers, %s: %5d slots (%.1f%%)\n", __func__,
-                 g.layers.size(), ggml_type_name(g.ref.back()->type), g.n_slots, 100.0*g.n_slots/(g.layers.size()*g.ref[0]->ne[2]));
+@@ -466,6 +530,13 @@ struct llama_moe_cache::impl {
+                 }
+             }
          }
 +
-+        if (!model.hparams.no_alloc) {
++        if (!no_alloc) {
 +            if (const char * env = getenv("LLAMA_MOE_CACHE_STATS")) {
 +                stats_every = std::max(0, atoi(env));
 +            }
-+            pin_experts(dev);
++            pin_experts();
 +        }
      }
+ 
+     ggml_backend_t backend(int32_t il) const {
+@@ -474,6 +545,163 @@ struct llama_moe_cache::impl {
  
      ~impl() {
          log_stats();
@@ -148,16 +152,29 @@ index 7292a1e57..16e5e51d7 100644
 +    }
 +
 +    // pin the host experts, so that the uploads run at the full bus speed instead of being staged by the driver
-+    void pin_experts(ggml_backend_dev_t dev) {
++    // the pages are pinned once, through the backend of the first device that caches experts: the CUDA backend
++    // registers them as portable, so every device of that backend uploads from them at the full speed
++    void pin_experts() {
++        ggml_backend_dev_t dev = nullptr;
++        for (const group & g : groups) {
++            if (g.n_slots > 0) {
++                dev = ggml_backend_get_device(devices[g.id].backend);
++                break;
++            }
++        }
++        if (dev == nullptr) {
++            return;
++        }
++
 +        // the pages of the experts the cache copies from; tensors that share a page share a range
 +        const uintptr_t page = llama_moe_cache_page_size();
-+        ggml_backend_buffer_type_t pinned_buft = ggml_backend_dev_host_buffer_type(dev);
 +        std::vector<std::pair<uintptr_t, uintptr_t>> ranges;
 +        size_t already = 0;
 +        for (const layer & l : layers) {
 +            if (l.ig < 0) {
 +                continue;
 +            }
++            ggml_backend_buffer_type_t pinned_buft = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(devices[groups[l.ig].id].backend));
 +            for (const ggml_tensor * w : l.experts) {
 +                if (pinned_buft != nullptr && ggml_backend_buffer_get_type(w->buffer) == pinned_buft) {
 +                    already += ggml_nbytes(w); // loaded without mmap into memory the backend pinned
@@ -287,9 +304,9 @@ index 7292a1e57..16e5e51d7 100644
      }
  
      ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const {
-@@ -436,6 +651,16 @@ struct llama_moe_cache::impl {
+@@ -540,6 +768,16 @@ struct llama_moe_cache::impl {
  
-         GGML_ASSERT(backend == this->backend);
+         GGML_ASSERT(backend == devices[g.id].backend);
  
 +        const int64_t t_start = stats_every > 0 ? ggml_time_us() : 0;
 +        if (stats_every > 0 && il <= cur.last_il) {
@@ -304,7 +321,7 @@ index 7292a1e57..16e5e51d7 100644
          // the get_rows that looks up the slots of the selected experts
          const int n_nodes = ggml_graph_n_nodes(graph);
          const ggml_tensor * lookup = nullptr;
-@@ -492,17 +717,43 @@ struct llama_moe_cache::impl {
+@@ -596,17 +834,43 @@ struct llama_moe_cache::impl {
          // the next copy synchronizes the backend before it changes the slot map again
          ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
  

@@ -153,3 +153,25 @@ def test_malformed_sacct_rows_are_ignored():
     ])
     jobs = qs.parse(raw, at("2026-09-01T02:00:00"))
     assert [j["id"] for j in jobs] == ["10"]
+
+
+def test_sacct_output_is_decoded_as_utf8(tmp_path, monkeypatch):
+    """A job's name is whatever its user submitted: sacct's output is read as
+    UTF-8, not with the host locale, so a non-ASCII name is kept as written."""
+    class Out:
+        stdout = ("1|citt\u00e0-job|COMPLETED|2026-09-08T20:50:00|2026-09-08T20:57:02"
+                  "|2026-09-09T21:00:06|86584|1\n")
+        stderr = ""
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(qs.subprocess, "run", run)
+    out = tmp_path / "queue.json"
+    assert qs.main(["--json", str(out)]) == 0
+    assert "citt\u00e0-job" in out.read_text(encoding="utf-8")
+    assert seen[0].get("encoding") == "utf-8"

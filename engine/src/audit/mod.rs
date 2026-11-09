@@ -268,7 +268,8 @@ impl AuditLogger {
     }
 
     /// Default audit log path: `$EULLM_AUDIT_DIR/audit.jsonl` when that
-    /// variable is set, otherwise `~/.eullm/audit/audit.jsonl`.
+    /// variable is set (see `configured_dir`), otherwise
+    /// `~/.eullm/audit/audit.jsonl`.
     ///
     /// Honouring the environment variable is what makes the audit trail
     /// survive a container's lifetime. `engine/Dockerfile` sets
@@ -279,11 +280,46 @@ impl AuditLogger {
     /// stayed empty. Mirrors how `EULLM_MODELS_DIR` is handled in
     /// `models::store::ModelStore::default_store`.
     fn default_path() -> PathBuf {
-        let audit_dir = std::env::var("EULLM_AUDIT_DIR").ok();
         let home = std::env::var("HOME")
             .or_else(|_| std::env::var("USERPROFILE"))
             .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-        Self::resolve_path(audit_dir.as_deref(), &home)
+        Self::resolve_path(Self::configured_dir().map(|(dir, _)| dir.as_str()), &home)
+    }
+
+    /// `EULLM_AUDIT_DIR` and where it was found: the process environment
+    /// first, a `.env` file in the working directory second, like every other
+    /// `EULLM_*` setting. The `.env` used to be ignored here although the
+    /// documentation listed the variable among the ones read from it.
+    ///
+    /// Read once per process: a logger is made for every audited request, and
+    /// each would otherwise read the `.env` again.
+    fn configured_dir() -> Option<&'static (String, String)> {
+        static DIR: std::sync::OnceLock<Option<(String, String)>> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let env_dir = std::env::var("EULLM_AUDIT_DIR").ok();
+            let file_contents = fs::read_to_string(".env").ok();
+            Self::resolve_dir(env_dir.as_deref(), file_contents.as_deref(), ".env")
+        })
+        .as_ref()
+    }
+
+    /// Pure resolution step behind `configured_dir`: the environment, then the
+    /// `.env` file contents, blank values counting as unset.
+    fn resolve_dir(
+        env_dir: Option<&str>,
+        file_contents: Option<&str>,
+        file_label: &str,
+    ) -> Option<(String, String)> {
+        if let Some(dir) = env_dir.map(str::trim).filter(|d| !d.is_empty()) {
+            return Some((dir.to_string(), "EULLM_AUDIT_DIR".to_string()));
+        }
+        let dir = crate::api::ip_allowlist::env_file_var(file_contents?, "EULLM_AUDIT_DIR")?;
+        Some((dir, format!("EULLM_AUDIT_DIR ({file_label})")))
+    }
+
+    /// Where the audit destination came from, for the startup log.
+    pub fn source() -> &'static str {
+        Self::configured_dir().map_or("default", |(_, source)| source.as_str())
     }
 
     /// Pure resolution step behind `default_path`, split out so the precedence
@@ -310,7 +346,7 @@ impl AuditLogger {
     /// read-only home directory into an outage. The strict posture is the
     /// operator's to choose, not ours to impose by default.
     pub fn is_explicitly_configured() -> bool {
-        std::env::var("EULLM_AUDIT_DIR").is_ok_and(|d| !d.trim().is_empty())
+        Self::configured_dir().is_some()
     }
 
     /// Verify the audit log's directory is writable, creating it if needed.
@@ -465,6 +501,28 @@ mod tests {
             AuditLogger::resolve_path(Some("   "), "/home/eullm"),
             expected
         );
+    }
+
+    #[test]
+    fn audit_dir_comes_from_the_environment_then_the_env_file() {
+        let file = "EULLM_AUDIT_DIR=/from/file\n";
+        assert_eq!(
+            AuditLogger::resolve_dir(Some("/from/env"), Some(file), ".env"),
+            Some(("/from/env".to_string(), "EULLM_AUDIT_DIR".to_string()))
+        );
+        // The `.env` line used to be ignored although it was documented.
+        assert_eq!(
+            AuditLogger::resolve_dir(Some(" "), Some(file), ".env"),
+            Some((
+                "/from/file".to_string(),
+                "EULLM_AUDIT_DIR (.env)".to_string()
+            ))
+        );
+        assert_eq!(
+            AuditLogger::resolve_dir(None, Some("EULLM_AUDIT_DIR=\n"), ".env"),
+            None
+        );
+        assert_eq!(AuditLogger::resolve_dir(None, None, ".env"), None);
     }
 
     #[test]
