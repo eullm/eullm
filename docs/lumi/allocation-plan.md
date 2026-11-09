@@ -958,6 +958,9 @@ behind them, by dependency (`afterany:23577117:23577125`), a chain of
 soaks of six to seven hours of DeepSeek-V4-Flash on four GCDs each, two to
 a node, about sixteen hours of one node, to 11-11 in the morning. GLM-5
 is prepared on 10-11 to follow.
+Submitted: the four soaks planned under `v088-long`; a chain of 4 jobs of 8
+hours from 23577660, after `afterany:23577117:23577125` as `squeue %E`
+shows it. Two jobs hold the four soaks; the two after them end at once.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
