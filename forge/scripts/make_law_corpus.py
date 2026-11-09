@@ -22,7 +22,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from eullm_forge.datasets.law_corpus import excluded, program_rows  # noqa: E402
+from eullm_forge.datasets.law_corpus import excluded, program_rows, register_eu_labels  # noqa: E402
 from eullm_forge.eval.norm_exam import articles_from_records  # noqa: E402
 
 
@@ -31,6 +31,7 @@ def load_articles(paths: list[Path]):
     for p in paths:
         with p.open(encoding="utf-8") as f:
             records += [json.loads(line) for line in f if line.strip()]
+    register_eu_labels(records)      # EU acts named like the codes (eurlex_<CELEX>)
     return articles_from_records(records)
 
 

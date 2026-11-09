@@ -64,7 +64,9 @@ STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
 # text is right; what elaborates brings the teacher's mistakes.
 DEFAULT_STYLES = ("parafrasi", "domande", "elementi")
 # Raised whenever check_rewrite changes: refusals of an older check are asked again.
-CHECKS_VERSION = 1
+# 2 (2026-11-09): the numbers of the act's own name ("legge n. 241/1990",
+# "regolamento (UE) 2016/679") are allowed, as the request itself states them.
+CHECKS_VERSION = 2
 # Raised whenever a request changes, and written in every rewrite ("pv"), so the
 # rewrites of an older request can be told apart. 2 (2026-10-29): the
 # explanation may not place the article in an institute the text does not
@@ -84,6 +86,49 @@ RUBRICA_BACK = [
     "«{h}» è la materia dell'art. {n} {of}.",
     "{In} l'articolo dedicato a «{h}» è il {n}.",
 ]
+
+
+# An EU act's name in its title: "REGOLAMENTO (UE) 2016/679 DEL PARLAMENTO ...",
+# "REGOLAMENTO (CE) n. 1907/2006 ...", "DIRETTIVA (UE) 2019/1937 ...", and the
+# directives and decisions before 2015, "DIRETTIVA 2011/83/UE ...".
+_EU_KIND = r"(?i)\b(regolamento|direttiva|decisione)\b(?:\s+(?:di\s+esecuzione|delegat[oa]))?"
+_EU_NEW = re.compile(_EU_KIND + r"\s*\(((?:UE|CE|CEE|Euratom)(?:\s*,\s*Euratom)?)\)"
+                     r"\s*(?:n\.\s*)?(\d{1,4}/\d{1,4})\b")
+_EU_OLD = re.compile(r"(?i)\b(direttiva|decisione)\b(?:\s+(?:di\s+esecuzione|delegat[oa]))?"
+                     r"\s+(\d{2,4}/\d{1,4}/(?:UE|CE|CEE|Euratom))\b")
+
+
+def eu_label(title: str) -> tuple[str, str] | None:
+    """("del regolamento (UE) 2016/679", "nel regolamento (UE) 2016/679"), or None."""
+    m = _EU_NEW.search(title)
+    if m:
+        kind, name = m.group(1).lower(), f"{m.group(1).lower()} ({m.group(2).upper()}) {m.group(3)}"
+    else:
+        m = _EU_OLD.search(title)
+        if not m:
+            return None
+        kind, name = m.group(1).lower(), f"{m.group(1).lower()} {m.group(2).upper()}"
+    if kind == "regolamento":
+        return f"del {name}", f"nel {name}"
+    return f"della {name}", f"nella {name}"
+
+
+def register_eu_labels(records) -> int:
+    """Give every EU act of ``records`` (code ``eurlex_<CELEX>``) its name in
+    `CODE_LABELS`, from the title each of its records starts with, so that
+    `by_code`, the program rows and the teacher requests take it like a code.
+    An act whose title names no regulation, directive or decision is left out.
+    Returns how many acts were added."""
+    added = 0
+    for r in records:
+        code = r.get("code") or ""
+        if not code.startswith("eurlex_") or code in CODE_LABELS:
+            continue
+        label = eu_label((r.get("text") or "").split("\n", 1)[0])
+        if label:
+            CODE_LABELS[code] = label
+            added += 1
+    return added
 
 
 def code_name(code: str) -> str:
@@ -310,6 +355,8 @@ def check_rewrite(article: Article, style: str, text: str) -> str | None:
     source = _plain(article.text)
     allowed = {d.replace(".", "").replace(",", "") for d in _DIGITS.findall(source)}
     allowed |= set(re.findall(r"\d+", own))
+    # the act's own name, which the request itself gives (n. 241/1990, 2016/679)
+    allowed |= set(re.findall(r"\d+", CODE_LABELS.get(article.code, ("",))[0]))
     for d in _DIGITS.findall(text):
         d = d.replace(".", "").replace(",", "")
         if int(d) > 10 and d not in allowed:
