@@ -936,6 +936,19 @@ job running from 11:38 (its successor 23439629 holds the last of them). The
 queue lasts to about 10-11-2026 in the morning: the next work goes in
 before then.
 
+09-11-2026, midday: `r-v088` ran far shorter than its chains (both empty by
+the morning, nothing running or waiting at 12:39), so the queue was empty
+again within the day. 2,664 node-hours left, 357 ahead of the straight line
+(14.2 days), the last 7 days at 36.2 a day. Queued at once, for about two
+days on two nodes: `c17-deepseek-v4`, DeepSeek-V4-Flash measured as a
+product model (one GCD with most experts in RAM, by the expert cache, by
+`--cpu-moe` and by the engine's own choice; 2, 4 and 8 GCDs; 1, 8 and 32
+requests; 300 gsm8k questions; a soak of two to three hours), 20 points,
+first; then the rest of 0.8.8's round (`c01`, `c03`, `c06`, `c08`, `c13`), so
+that 0.8.8 has a whole round as 0.8.7 does, without `soak-node`, which no
+4-hour job holds. From now on every submission says how long the queue
+lasts, and the next work is queued a day before it ends.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
