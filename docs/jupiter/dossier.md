@@ -535,7 +535,11 @@ JUPITER, named by its Slurm job id.
   the practical exam is 6 under (70 + 18 against 76 + 19). GRPO's prompts
   hold only 10 about rulings (premessa_sentenza 7, _vera 3) of 2,184. The
   4B takes rank 256 at lr 1e-4 without falling apart but gains only +9
-  on the measure.
+  on the measure. For the made-up rulings, a GRPO line on false premises:
+  `sbatch_premise_pairs.slurm` with `PP_GRPO_OUT` writes its pairs as GRPO
+  prompts (deadlines attributed to a made-up ruling, wrongly or rightly,
+  among the other premises), no article of any test set drawn, mixed with
+  Leonardo's prompts for two rounds from g9el-r3 (g9elp-r1, -r2).
 
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
@@ -1514,6 +1518,21 @@ figures below with the site's energy mix.
   leaves, every field of every line (`sweep_structured_pii.py --field '*'`,
   report only): a file with a hit is not sent. Into
   `$PROJECT/$USER/forge/caselaw/`, readable by the user alone.
+* **The check before the transfer (09-11-2026)** found 25 tax codes in 23
+  records of `legal_it/train.jsonl`, which the pseudonymisation had let
+  through; the other 18 files were clean, and nothing was sent. A copy was
+  corrected on Leonardo (`--apply`: each code replaced by
+  `[CODICE_FISCALE]`, the backup with the originals deleted at once),
+  checked again on every field (nothing found), and that copy is what
+  went. The original on Leonardo, on which the 30B's continued
+  pretraining of September was trained, still holds them: left to the
+  PI. The rejects files of the cards (nine, 9-27 KB) went with the rest
+  through a filter of ours in the wrong order without having been checked;
+  checked afterwards on every field, all nine clean, and deleted on
+  JUPITER since nothing needs them.
+* **On JUPITER (09-11-2026):** 56 files, 7.6 GB in `caselaw/` (cards 1.6
+  GB, datasets 3.9 GB, ruling summaries 1.3 GB, adapters 0.8 GB), the nine
+  rejects files deleted on arrival.
 * **Until the addendum was signed and returned** JUPITER held legislation (Normattiva,
   EUR-Lex: public), public benchmarks, synthetic pairs generated from them
   and ruling summaries that carry nothing of the case, and no court
