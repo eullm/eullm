@@ -323,6 +323,11 @@ def score_answer(answer: str, tipo: str, keywords: list[str] | None = None) -> f
     scored 0 whatever the model said would only teach it noise. An answer
     quoting a text cut short is not right, whatever else it says.
     """
+    if tipo.startswith("libero_"):
+        # Prompts with no texts (datasets.closed_prompts); imported here, as
+        # their checks live next to the closed-book suite's, which imports us.
+        from .closed_rewards import score_libero
+        return score_libero(answer, tipo, keywords)
     if quote_cut_short(answer):
         return 0.0
     if tipo == "premessa_termine":
