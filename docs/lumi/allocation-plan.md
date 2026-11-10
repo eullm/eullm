@@ -962,6 +962,36 @@ Submitted: the four soaks planned under `v088-long`; a chain of 4 jobs of 8
 hours from 23577660, after `afterany:23577117:23577125` as `squeue %E`
 shows it. Two jobs hold the four soaks; the two after them end at once.
 
+Where things stand on 10-11-2026, for the next session:
+
+- **In the queue**, to about 11-11 in the morning: the two chains of
+  `v088` (`c17` first, then `c01`, `c03`, `c06`, `c08`, `c13` of 0.8.8's
+  round), and behind both the `v088-long` chain of DeepSeek soaks
+  (23577660). Nothing is queued after it yet.
+- **Next, on 10-11: GLM-5.** Pick the model and quantization (GLM-5.1 or
+  5.2, unsloth's two-bit UD-IQ2_M, 220-240 GB, on four or eight GCDs), check
+  that b12032 loads its architecture (`glm-dsa` and `glm5-next` are in
+  `engine/src/llama_archs.rs`), pull it on a login node, write `c18` on
+  `c17`'s pattern, and queue it behind 23577660's chain by dependency
+  (`AFTER`), so the queue does not run dry on 11-11.
+- **To read**: `c17` (DeepSeek-V4-Flash: one GCD with experts in RAM, 2 to
+  8 GCDs, gsm8k, soaks) and the rest of 0.8.8's round against 0.8.7
+  (`campaign.py compare --round r-v088`); `r-v088`'s `c16` points, the
+  release's own check of patch `0014`.
+- **Waiting for a fix, not another try**: `ram-671b` (stops at three times
+  its estimate in every round) and `ram-prompt` (times out), set aside in
+  `r-v088`; `soak-node`, `moe-soak` and `moe-235b-soak-x2`, which need jobs
+  longer than 4 hours and go in a `-long` chain when they are wanted. The
+  twelve `rt-*` points of `c07` stopped on `v087` did not fail again on
+  `v088`.
+- **Rules learned this week**: always ahead of the straight line (`nodi`
+  prints the margin; 357 node-hours, 14.2 days, on 09-11); the next work is
+  queued a day before the queue ends, by dependency; nothing on `dev-g` or
+  `debug` (LUMI's policy of 05-11; the smoke job runs on `small-g`); a job
+  of ours never waits on `debug`; `squeue %E`, not the reason column, shows
+  a dependency; blocks for LUMI are run on LUMI (`fmarchet@uan18`), not on
+  Leonardo or JUPITER.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
