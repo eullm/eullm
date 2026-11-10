@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -35,8 +36,27 @@ def label_of(path: Path) -> str:
     return name.removeprefix("answers-")
 
 
+# An answer that points to texts it was not given: what a model trained to
+# answer from the retrieved statutes says when there are none ("il testo non
+# è tra quelli forniti", "non è presente nella raccolta"). The closed book
+# scores it wrong, rightly, but it is not the same mistake as a wrong article:
+# the continued pretraining with open-book replay (2026-11-10) scored 0% on
+# terms, which only this count can tell from not knowing them.
+NO_TEXT = re.compile(
+    r"(?i)\b(?:test[io]|document[io]|fonti|raccolta|estratt[io]|passagg[io]|brani)\b[^.\n]{0,40}?"
+    r"\b(?:fornit|disponibil|a (?:mia )?disposizione|riportat|indicat|allegat|present|citat)"
+    r"|\bnon (?:è|e'|sono|risulta(?:no)?) (?:present|riportat|contenut|inclus)"
+    r"|\bnon (?:ho|dispongo|mi è stato fornito)[^.\n]{0,30}?\b(?:test|document|fonti)")
+
+
+def points_to_texts(answer: str) -> bool:
+    """Whether the answer appeals to statute texts, given none."""
+    return bool(NO_TEXT.search(answer or ""))
+
+
 def summarize(items: dict[str, dict], answers: dict[str, str]) -> dict:
     by = defaultdict(Counter)
+    texts = Counter()
     sure_wrong = denied = real = 0
     for i, ans in answers.items():
         if i not in items:
@@ -44,6 +64,7 @@ def summarize(items: dict[str, dict], answers: dict[str, str]) -> dict:
         kind = items[i]["metadata"]["tipo"]
         grade, confident = score(items[i], ans)
         by[kind][grade] += 1
+        texts[kind] += points_to_texts(ans)
         sure_wrong += grade == "wrong" and confident
         if kind in ("esiste_vera", "rubrica_da_numero"):
             real += 1
@@ -51,7 +72,7 @@ def summarize(items: dict[str, dict], answers: dict[str, str]) -> dict:
     total = sum(sum(c.values()) for c in by.values())
     right = sum(c["right"] for c in by.values())
     return {"by": by, "n": total, "right": right, "sure_wrong": sure_wrong,
-            "denies_real": denied / real if real else 0.0}
+            "denies_real": denied / real if real else 0.0, "texts": texts}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,11 +80,16 @@ def main(argv: list[str] | None = None) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("suite", type=Path)
     ap.add_argument("answers", nargs="+", type=Path)
+    ap.add_argument("--texts", action="store_true",
+                    help="instead of the grades, the share of answers by kind that point to "
+                         "statute texts the question did not give (counts only)")
     args = ap.parse_args(argv)
 
     with args.suite.open(encoding="utf-8") as f:
         items = {d["id"]: d for d in map(json.loads, filter(str.strip, f))}
     kinds = [k for k in KINDS if any(it["metadata"]["tipo"] == k for it in items.values())]
+    if args.texts:
+        print("the kind columns: answers that point to statute texts not given, by kind")
     print(f"{'model':<30} {'right':>11} {'sure-wrong':>10} {'denies-real':>11}  "
           + " ".join(f"{SHORT[k]:>6}" for k in kinds))
     for path in args.answers:
@@ -77,7 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         for k in kinds:
             c = s["by"].get(k, Counter())
             n = sum(c.values())
-            cells.append(f"{100 * c['right'] / n:5.0f}%" if n else f"{'-':>6}")
+            num = s["texts"][k] if args.texts else c["right"]
+            cells.append(f"{100 * num / n:5.0f}%" if n else f"{'-':>6}")
         print(f"{label_of(path):<30} {s['right']:>4}/{s['n']:<4} "
               f"{100 * s['right'] / s['n']:3.0f}% {s['sure_wrong']:>9} "
               f"{100 * s['denies_real']:10.0f}%  " + " ".join(cells))
