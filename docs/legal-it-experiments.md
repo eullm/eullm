@@ -866,3 +866,48 @@ statute knowledge with no text (259, 36%) than any model measured,
 Flash-Next's 247 included**. The question it opens is E1 of the memory plan:
 the same continued pretraining *with replay* of the open-book data, to keep
 both.
+
+## 16. 2026-11-10: continued pretraining with open-book replay keeps the open book
+
+LoRA on the memory corpus (67 M tokens of the nine codes) mixed with
+open-book replay (`render_pairs_text.py`: the 20,572 open-book-v06 pairs in
+the model's own chat format, 28 M tokens, 29% of the mix), against the same
+LoRA without replay. Closed book (716, by program), open book (`norm-exam-v2`,
+231, judge, paired against the model the LoRA started from):
+
+| model | closed | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | sent? | open | paired |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
+| r2l | 215 | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 100% | 159 | — |
+| + LoRA, 3 ep, lr 1e-4 | 259 | 51% | 0% | 100% | 19% | 48% | 34% | 67% | 5% | 102 | 9:66, worse |
+| + LoRA, 1 ep | 225 | 50% | 1% | 100% | 13% | 33% | 21% | 58% | 10% | 129 | 10:40, worse |
+| + LoRA, 3 ep, lr 3e-5 | 167 | 13% | 14% | 27% | 15% | 53% | 26% | 58% | 10% | 150 | 10:19, p = 0.14 |
+| **+ LoRA + replay, 3 ep, lr 1e-4** | 167 | 0% | 37% | 6% | **22%** | **62%** | 0% | **67%** | 0% | **156** | **17:20, p = 0.74** |
+| + LoRA + replay, 1 ep | 184 | 6% | 44% | 13% | 10% | 48% | 5% | 75% | 75% | 143 | 14:30, worse |
+| jpn17 (Qwen3.5-4B) | 24 | 6% | 8% | 0% | 0% | 2% | 0% | 0% | 32% | 154 | — |
+| + LoRA, 1 ep | 192 | 15% | 0% | 79% | 7% | 43% | 15% | 50% | 8% | 129 | 8:33, worse |
+| + LoRA + replay, 1 ep | 161 | 0% | 26% | 1% | 14% | 50% | 0% | 58% | 98% | 152 | 18:20, p = 0.87 |
+| Qwen3.5-9B | 123 | 27%* | 18% | 51% | 6% | 7% | 8% | 25% | 18% | 133 | — |
+| + LoRA, 1 ep | 243 | 27% | 12% | 98% | 1% | 50% | 19% | 46% | 2% | (pending) | |
+| + LoRA + replay, 1 ep | 131 | 0% | 21% | 0% | 13% | 45% | 21% | 71% | 5% | 142 | 35:26, p = 0.31 |
+| Qwen3-30B-A3B | 166 | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 10% | 170 | — |
+| + LoRA (rank 16, experts too) + replay, 1 ep | 90 | 0% | 10% | 2% | 5% | 36% | 0% | 17% | 62% | 94 | 3:79, worse |
+
+(* the 9B's denies-real is the LoRA row's column; the base row read 5%.)
+
+**The replay keeps the open book**: on r2l 156 against 159 (no difference),
+on jpn17 152 against 154, on the 9B 142 against 133; without it every LoRA
+loses 25-57 answers. **And the knowledge stays in**: on r2l the heading from
+the number goes from 5% to 62%, penalties from 17% to 67%, the number from
+the heading from 3% to 22%, real articles recognised from 7% to 37%, and
+the "non esiste" reflex on real articles is gone (25% to 0%).
+
+**Not yet a verdict, for two columns.** With replay the terms fall to 0%
+and the made-up articles and rulings are almost never denied (6%, 0%). It
+may be the open-book behaviour the replay teaches (pointing to texts that
+were not given, which the closed book scores wrong), or a real loss of the
+trap behaviour GRPO had taught, as JUPITER found for its E1-mini
+(`docs/jupiter/dossier.md`, 06-11). `score_closed_book.py --texts` counts
+the answers that point to texts not given, by kind, without reading any.
+
+**On the MoE the recipe fails** (rank 16 on the fused experts, 1 epoch):
+94 open book against 170. Not pursued.
