@@ -886,13 +886,12 @@ LoRA without replay. Closed book (716, by program), open book (`norm-exam-v2`,
 | jpn17 (Qwen3.5-4B) | 24 | 6% | 8% | 0% | 0% | 2% | 0% | 0% | 32% | 154 | — |
 | + LoRA, 1 ep | 192 | 15% | 0% | 79% | 7% | 43% | 15% | 50% | 8% | 129 | 8:33, worse |
 | + LoRA + replay, 1 ep | 161 | 0% | 26% | 1% | 14% | 50% | 0% | 58% | 98% | 152 | 18:20, p = 0.87 |
-| Qwen3.5-9B | 123 | 27%* | 18% | 51% | 6% | 7% | 8% | 25% | 18% | 133 | — |
+| Qwen3.5-9B | 123 | 5% | 18% | 51% | 6% | 7% | 8% | 25% | 18% | 133 | — |
 | + LoRA, 1 ep | 243 | 27% | 12% | 98% | 1% | 50% | 19% | 46% | 2% | (pending) | |
 | + LoRA + replay, 1 ep | 131 | 0% | 21% | 0% | 13% | 45% | 21% | 71% | 5% | 142 | 35:26, p = 0.31 |
 | Qwen3-30B-A3B | 166 | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 10% | 170 | — |
 | + LoRA (rank 16, experts too) + replay, 1 ep | 90 | 0% | 10% | 2% | 5% | 36% | 0% | 17% | 62% | 94 | 3:79, worse |
 
-(* the 9B's denies-real is the LoRA row's column; the base row read 5%.)
 
 **The replay keeps the open book**: on r2l 156 against 159 (no difference),
 on jpn17 152 against 154, on the 9B 142 against 133; without it every LoRA
