@@ -541,6 +541,22 @@ JUPITER, named by its Slurm job id.
   among the other premises), no article of any test set drawn, mixed with
   Leonardo's prompts for two rounds from g9el-r3 (g9elp-r1, -r2).
 
+  Three more rounds on g9el and two on the premises (09-10 Nov): the
+  rewritten traps level off at 946-953 (g9el-r6 953, g9elp-r2 952), the
+  held-out exam and devbig stay above g9r-r2 (g9el-r5 205 + 1, g9elp-r1
+  449 + 6), LexIA 14-15, the closed book holds (g9el-r6 293 right, the
+  most yet); the practical exam stays 9 under and GSM8K 12 under. The
+  made-up rulings stay unrefused on the closed book (0-2%): the premise
+  prompts teach distrust of a ruling cited beside the texts, not what to
+  say with none. Hence prompts with no texts, graded by program
+  (`datasets/closed_prompts.py`, `rl/closed_rewards.py`): made-up rulings,
+  made-up and real articles in equal numbers, the article of a heading;
+  templates of their own, no evaluation article. The E1 run with the EU
+  acts had 201 M tokens of corpus, 13,600 steps, two 6-hour links short:
+  a third link resumes it (10-11-2026); E1 with the case-law summaries
+  (`principi.jsonl`, 765,875 rows, half paraphrases half questions) and
+  the nine codes is queued beside it.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
