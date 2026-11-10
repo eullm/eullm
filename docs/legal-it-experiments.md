@@ -908,5 +908,29 @@ trap behaviour GRPO had taught, as JUPITER found for its E1-mini
 (`docs/jupiter/dossier.md`, 06-11). `score_closed_book.py --texts` counts
 the answers that point to texts not given, by kind, without reading any.
 
+**The count answers half of it** (`--texts`, share of answers pointing to
+statute texts not given, by kind):
+
+| model | esist | falso | n<-rub | rub<-n | termi | pena | abrog | sent? |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| r2l | 74% | 68% | 41% | 1% | 10% | 4% | 16% | 0% |
+| + LoRA, no replay | 1% | 1% | 0% | 0% | 1% | 0% | 0% | 0% |
+| + LoRA + replay | 34% | 50% | 0% | 3% | **100%** | 25% | 85% | 0% |
+| jpn17 + LoRA + replay | 50% | 80% | 3% | 13% | 95% | 17% | 100% | 98% |
+| 9B + LoRA + replay | 66% | 99% | 36% | 16% | 51% | 4% | 100% | 2% |
+
+* **The terms are not lost, they are not said**: every deadline question
+  to r2l + replay is answered by asking for the text (100%), what the
+  replay teaches and what the product wants. Whether the model knows the
+  deadlines the closed book cannot tell; the open book, where it has the
+  text, keeps its score.
+* **The made-up articles**: half the answers point to the texts, which the
+  closed book rightly does not count as denying the article exists.
+* **The made-up rulings are a real loss**: r2l + replay points to texts in
+  none of them and denies none, so it confirms them, the trap behaviour
+  GRPO taught and continued pretraining wore away, as on JUPITER. The next
+  step is the same as there: a GRPO round on top (`r2l-replay-g1`,
+  2026-11-10).
+
 **On the MoE the recipe fails** (rank 16 on the fused experts, 1 epoch):
 94 open book against 170. Not pursued.
