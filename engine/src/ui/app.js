@@ -596,6 +596,54 @@
       `<div class="think-body">${escapeHtml(trimmed)}</div></details>`;
   }
 
+  // The reasoning blocks renderContent puts at the start of a message.
+  function leadingReasoning(root) {
+    const out = [];
+    for (const node of root.childNodes) {
+      if (node.nodeType !== Node.ELEMENT_NODE || !node.matches("details.think")) break;
+      out.push(node);
+    }
+    return out;
+  }
+
+  // Puts `fresh`'s render of a streaming message into `contentEl`, updating
+  // the reasoning boxes already there in place rather than replacing them.
+  // Every piece, and every tick of the reasoning's clock, renders the message
+  // again, and a new box starts at its top: once a long reasoning overflowed
+  // its 420 px, a reader scrolling in it was thrown back there several times a
+  // second, a turn of the wheel over it was lost halfway through its
+  // animation, and the box never showed the newest lines (reported on a 122B
+  // model on Windows, 11-11-2026). A box keeps its place, and one left at its
+  // end follows the newest line, as the page does.
+  function repaintKeepingReasoning(contentEl, fresh) {
+    const olds = leadingReasoning(contentEl);
+    const news = leadingReasoning(fresh);
+    if (!olds.length || olds.length !== news.length) {
+      contentEl.replaceChildren(...fresh.childNodes);
+      for (const b of contentEl.querySelectorAll(".think-body")) b.scrollTop = b.scrollHeight;
+      return;
+    }
+    news.forEach((n, i) => {
+      const o = olds[i];
+      if (o.className !== n.className) o.className = n.className;
+      if (o.open !== n.open) o.open = n.open;
+      const label = n.querySelector("summary").textContent;
+      const summary = o.querySelector("summary");
+      if (summary.textContent !== label) summary.textContent = label;
+      const ob = o.querySelector(".think-body");
+      const text = n.querySelector(".think-body").textContent;
+      if (ob.textContent !== text) {
+        const atEnd = ob.scrollHeight - ob.scrollTop - ob.clientHeight < 8;
+        ob.textContent = text;
+        if (atEnd) ob.scrollTop = ob.scrollHeight;
+      }
+      n.remove();
+    });
+    const last = olds[olds.length - 1];
+    while (last.nextSibling) last.nextSibling.remove();
+    contentEl.append(...fresh.childNodes);
+  }
+
   function renderContent(text, think = {}) {
     // 1a. Pull out Gemma 4 channel-thought blocks, then Qwen3 <think> blocks.
     // Gemma 4 12B emits  `<|channel>thought\n[reasoning]<channel|>[final]`
@@ -956,7 +1004,9 @@
       let full = withThinking(thinkingText, assistantText);
       // An answer cut off mid-reasoning shows its reasoning as finished.
       if (ended && thinking(full)) full += /<think>(?![\s\S]*<\/think>)/.test(full) ? "</think>" : "<channel|>";
-      contentEl.innerHTML = renderContent(full, { open: thinkOpen, seconds: thinkSeconds() });
+      const fresh = document.createElement("div");
+      fresh.innerHTML = renderContent(full, { open: thinkOpen, seconds: thinkSeconds() });
+      repaintKeepingReasoning(contentEl, fresh);
     };
     msg.addEventListener("click", (e) => {
       const summary = e.target.closest("summary");
