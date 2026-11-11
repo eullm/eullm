@@ -33,6 +33,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--exclude", nargs="*", type=Path, default=[])
     ap.add_argument("--per-code", type=int, default=60, help="prompts of each article kind a code")
     ap.add_argument("--rulings", type=int, default=600, help="made-up rulings asked about")
+    ap.add_argument("--real-factor", type=int, default=1,
+                    help="real articles asked about for each made-up one")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args(argv)
@@ -50,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         asked |= {(c, n.lower()) for c, n in excluded_articles(items)}
     rows = closed_prompts(articles_from_records(records), per_code=args.per_code,
                           rulings=args.rulings, rng=random.Random(args.seed),
-                          excluded=asked, fakes=fakes)
+                          excluded=asked, fakes=fakes, real_factor=args.real_factor)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as f:
         for r in rows:
