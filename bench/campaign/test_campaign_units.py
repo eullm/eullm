@@ -1073,3 +1073,21 @@ def test_sacct_is_read_as_utf8(monkeypatch):
     [job] = budget.read_sacct("2026-09-02")
     assert job["name"] == "citt\u00e0-job"
     assert seen[0].get("encoding") == "utf-8"
+
+
+def test_command_output_is_read_as_utf8(monkeypatch):
+    """sh() reads squeue/git/engine output as UTF-8: a path or a name in
+    non-ASCII text is kept, not mojibake'd or a decode failure."""
+    class Out:
+        stdout = "citt\u00e0\n"
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    assert campaign.sh(["git"]) == "citt\u00e0\n"
+    assert seen[0].get("encoding") == "utf-8"
