@@ -228,12 +228,18 @@ pub fn chat_parse(
     }
 }
 
-/// The Rope type that's used within the model.
+/// The RoPE type that's used within the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RopeType {
+    /// Normal RoPE.
     Norm,
+    /// Neox-style dimension interleave.
     NeoX,
+    /// multi-section rotary embedding (MRoPE).
     MRope,
+    /// Interleaved MRoPE.
+    IMRope,
+    /// Vision RoPE.
     Vision,
 }
 
@@ -456,6 +462,7 @@ impl LlamaModel {
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_NORM => Some(RopeType::Norm),
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_NEOX => Some(RopeType::NeoX),
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_MROPE => Some(RopeType::MRope),
+            llama_cpp_sys_2::LLAMA_ROPE_TYPE_IMROPE => Some(RopeType::IMRope),
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_VISION => Some(RopeType::Vision),
             rope_type => {
                 tracing::error!(rope_type = rope_type, "Unexpected rope type from llama.cpp");

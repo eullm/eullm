@@ -1,3 +1,10 @@
+# Brought to utilityai/llama-cpp-rs 0.1.161 @ e7af607 (2026-11-03) on
+# 2026-11-11, with llama.cpp b12283, by porting its changes since 0.1.159:
+# `RopeType::IMRope`. Its `with_tensor_split` and the MTP wrapper's own
+# `common_batch` were here already (EuLLM's, ahead of upstream). Its build.rs
+# changes are left out: WebAssembly/WebGPU, Android and PowerPC builds, none
+# of which EuLLM makes.
+#
 # Vendored at utilityai/llama-cpp-rs 0.1.159 @ 3cfdd72 (2026-10-06), replacing
 # the 0.1.156 vendoring at 63e5497 (2026-09-22), the 0.1.154 one at 09fc815d
 # (2026-08-18) and, before that, the
@@ -115,7 +122,7 @@
 [package]
 name = "llama-cpp-2"
 description = "llama.cpp bindings for Rust"
-version = "0.1.159"
+version = "0.1.161"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/utilityai/llama-cpp-rs"
@@ -124,7 +131,7 @@ repository = "https://github.com/utilityai/llama-cpp-rs"
 
 [dependencies]
 enumflags2 = "0.7.12"
-llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.159" }
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.161" }
 # EuLLM vendoring: this crate lives under the workspace root (so Cargo treats
 # it as a member) but the EuLLM root defines no [workspace.dependencies]; the
 # upstream `{ workspace = true }` inheritance is de-inlined to upstream's exact
@@ -176,7 +183,7 @@ dynamic-backends = ["llama-cpp-sys-2/dynamic-backends"]
 
 
 [target.'cfg(all(target_os = "macos", any(target_arch = "aarch64", target_arch = "arm64")))'.dependencies]
-llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.159", features = [
+llama-cpp-sys-2 = { path = "../llama-cpp-sys-2", version = "0.1.161", features = [
     "metal",
 ] }
 

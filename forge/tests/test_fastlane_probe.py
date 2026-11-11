@@ -104,3 +104,22 @@ def _write(tmp_path):
     path = tmp_path / "manifest.tsv"
     path.write_text(MANIFEST, encoding="utf-8")
     return path
+
+
+def test_scheduler_output_is_read_as_utf8(monkeypatch):
+    """sacct/squeue print job names as their users wrote them: read the
+    output as UTF-8, not with the host locale, so a non-ASCII name is kept."""
+    class Out:
+        stdout = "citt\u00e0-job|COMPLETED\n"
+        stderr = ""
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(flp.subprocess, "run", run)
+    assert flp.run(["sacct"]) == "citt\u00e0-job|COMPLETED\n"
+    assert seen[0].get("encoding") == "utf-8"

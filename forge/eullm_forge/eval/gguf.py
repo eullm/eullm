@@ -45,7 +45,7 @@ def _has_flag(binary: str, command: str, flag: str) -> bool:
     """Whether ``binary command --help`` lists ``flag``."""
     try:
         out = subprocess.run([binary, command, "--help"], capture_output=True, text=True,
-                             timeout=60)
+                             timeout=60, encoding="utf-8", errors="replace")
     except (OSError, subprocess.SubprocessError):
         return False
     return flag in out.stdout + out.stderr
