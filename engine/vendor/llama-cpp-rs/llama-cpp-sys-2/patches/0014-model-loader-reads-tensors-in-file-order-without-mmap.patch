@@ -23,10 +23,10 @@ EuLLM patch on llama.cpp b12032, after 0012 (which changes the same
 function).
 
 diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
-index 6eeebb2c5..e773f8134 100644
+index b3c5ebb74..fbd807e64 100644
 --- a/src/llama-model-loader.cpp
 +++ b/src/llama-model-loader.cpp
-@@ -1788,16 +1788,20 @@ bool llama_model_loader::load_all_data(
+@@ -1870,16 +1870,20 @@ bool llama_model_loader::load_all_data(
          tensors.push_back(cur);
      }
  
@@ -56,7 +56,7 @@ index 6eeebb2c5..e773f8134 100644
          });
      }
  
-@@ -1948,8 +1952,8 @@ bool llama_model_loader::load_all_data(
+@@ -2030,8 +2034,8 @@ bool llama_model_loader::load_all_data(
                      const size_t read_size      = (pad + n_size + align - 1) & ~(align - 1);
                      const size_t buf_size       = read_size + align - 1;
  

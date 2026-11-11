@@ -13,10 +13,10 @@ model mmap'd read-only be pinned.
 EuLLM patch on llama.cpp b11925. Used by 0002.
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index aba21524..558ba7c2 100644
+index 848565460..1f08962d0 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -5457,6 +5457,32 @@ void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
+@@ -5843,6 +5843,32 @@ void ggml_backend_cuda_unregister_host_buffer(void * buffer) {
      }
  }
  
@@ -49,7 +49,7 @@ index aba21524..558ba7c2 100644
  
  // backend device
  
-@@ -6293,6 +6319,12 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6690,6 +6716,12 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_unregister_host_buffer") == 0) {
          return (void *)ggml_backend_cuda_unregister_host_buffer;
      }

@@ -1,0 +1,329 @@
+llama : MoE cache - ClassLRU among the stale slots, the pass rule when a pass overflows
+
+Upstream replaced its SLRU with ClassLRU (#31233, b12283): every expert's uses
+decayed with a half-life of 128 tokens (its CRF) rank it in one of eight
+classes, one LRU list each, and a miss takes, among the least recently used
+slot of each list, the one with the largest age/2^class. The decayed counts
+make it better than the SLRU everywhere, and better than EuLLM's former 0008
+(the pass and decaying counts, on the SLRU) where a step's experts fit. Where
+a step wants more experts than there are slots it still evicts slots used
+within the pass: the oldest slot of a high class can score below a recent slot
+of class 0, the one holding an expert the next layers are about to select
+again, since the layers come in the same order every step. Replayed through
+bench/moe_cache_sim (EuLLM) on routing calibrated to LUMI-G it found 65.9% of
+the experts in VRAM for Qwen3-235B with 32 sequences where the former 0008
+found 73.1%, and 0% for Qwen3-Coder-480B with 32 where it found 21.1%.
+
+This patch keeps ClassLRU and adds the pass to it. The victim is ClassLRU's,
+chosen among the stale slots only, those whose expert was not selected during
+the last pass over the layers of the group. When every slot was used within
+the last pass, the miss takes, among the slots used earlier in this pass, the
+one with the lowest decayed CRF (the most recently used before this layer's
+own if there is none), whose expert is selected again a whole pass later at
+the earliest. A recency list of all the slots and the plan of each slot's last
+use say which are stale and which were used in this pass. While a pass fits,
+a stale slot always exists and the victim is ClassLRU's. Replayed: ClassLRU's
+hits where a step fits, and at or above the former 0008 where it overflows
+(235B with 32: 73.2%; 480B with 8: 46.8%, with 32: 21.8%), over ten more
+settings of the routing at most 0.17 points below it, once.
+LLAMA_MOE_CACHE_EVICT=classlru evicts by ClassLRU alone, to compare.
+
+Upstream now writes LLAMA_MOE_CACHE_TRACE itself ("MCT1", every group of
+layers), which bench/moe_cache_sim reads; the former 0008's own trace
+("MOEC", the first group only) is gone.
+
+Statistics: LLAMA_MOE_CACHE_STATS=N counts every step that went through the
+cache (32 tokens or fewer), not only those of up to 8, and says which share
+of the copies went into a slot used within the pass; the totals at exit count
+those misses too.
+
+EuLLM patch on llama.cpp b12283, after 0002 (which adds the statistics).
+
+diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
+index 0bc46954e..632a24787 100644
+--- a/src/llama-moe-cache.cpp
++++ b/src/llama-moe-cache.cpp
+@@ -28,10 +28,36 @@ namespace {
+ // CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of N tokens, retained across evictions
+ // class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
+ // victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
++//
++// EuLLM (patch 0008): the layers come in the same order every step, so when a step selects more experts than there
++// are slots, a recently used slot holds an expert one of the next layers is about to select again. ClassLRU can
++// still evict it: the oldest slot of a high class may score below a recent slot of class 0. Replayed through
++// bench/moe_cache_sim (EuLLM) it found 0% of the experts in VRAM for Qwen3-Coder-480B with 32 sequences. So the
++// victim above is chosen among the stale slots only, those whose expert was not selected during the last pass
++// over the layers of the group; when every slot was used within the last pass, the miss takes, among the slots
++// used earlier in this pass, the one with the lowest decayed CRF (the most recently used before this layer's own
++// if there is none), whose expert is selected again a whole pass later at the earliest. While the experts of a
++// pass fit, a stale slot always exists and the victim is ClassLRU's. Replayed on routing calibrated to LUMI-G:
++// ClassLRU's hits where a step fits, 73.2% instead of 65.9% for Qwen3-235B with 32 sequences, 46.8% instead of
++// 28.9% for the 480B with 8 and 21.8% instead of 0% with 32. LLAMA_MOE_CACHE_EVICT=classlru for ClassLRU alone.
+ struct moe_cache_lru {
+     static constexpr int   n_class  = 8; // floor(log2(1/(1 - 2^(-1/crf_half_life)))) = 7, class of CRF_max for half-life of 128
+     static constexpr float crf_half_life = 128.0f; // tokens
+ 
++    // EuLLM: the pass, and the order in which all the slots were last used
++    bool     classlru_only = false;
++    uint64_t pass_len   = 0;          // plans in a pass over the layers of the group
++    uint64_t t          = 0;          // plans so far
++    uint64_t pass_start = 0;          // plan that began the current pass
++    int32_t  last_il    = INT32_MAX;
++    int32_t  first      = -1;         // the first slot the current plan() used
++    size_t   n_full     = 0;          // misses of the current plan() that took a slot used within the last pass
++    std::vector<uint64_t> last_t;     // [n_slots] plan of the last use
++    std::vector<int32_t>  rprev;      // [n_slots] recency list of all the slots, the head is the least recently used
++    std::vector<int32_t>  rnext;      // [n_slots]
++    int32_t rhead = -1;
++    int32_t rtail = -1;
++
+     int32_t n_expert = 0;
+     int32_t n_slots  = 0;
+     int32_t empty    = 0; // slot of the experts that are not cached
+@@ -59,8 +85,22 @@ struct moe_cache_lru {
+     std::vector<int32_t> misses;
+     std::vector<uint64_t> token_zero; // [n_tokens] zero slots used by each token
+ 
+-    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots) {
++    void init(int32_t n_layer, int32_t n_expert, int32_t n_slots, int32_t n_group_layers, bool classlru_only) {
+         GGML_ASSERT(n_class == (int) std::log2(1.0f/(1.0f - std::exp2(-1.0f/crf_half_life))) + 1);
++        this->classlru_only = classlru_only;
++        pass_len   = (uint64_t) n_group_layers;
++        t          = 0;
++        pass_start = 0;
++        last_il    = INT32_MAX;
++        last_t.assign(n_slots, 0);
++        rprev.resize(n_slots);
++        rnext.resize(n_slots);
++        for (int32_t s = 0; s < n_slots; ++s) {
++            rprev[s] = s - 1;
++            rnext[s] = s + 1 < n_slots ? s + 1 : -1;
++        }
++        rhead = 0;
++        rtail = n_slots - 1;
+         this->n_expert = n_expert;
+         this->n_slots  = n_slots;
+         this->empty    = n_slots;
+@@ -155,7 +195,71 @@ struct moe_cache_lru {
+         return -1;
+     }
+ 
+-    int32_t victim(int32_t il) const {
++    // EuLLM: slot s was used by the current plan()
++    void used(int32_t s) {
++        last_t[s] = t;
++        if (first < 0) {
++            first = s;
++        }
++        if (s == rtail) {
++            return;
++        }
++        if (rprev[s] >= 0) {
++            rnext[rprev[s]] = rnext[s];
++        } else {
++            rhead = rnext[s];
++        }
++        rprev[rnext[s]] = rprev[s];
++        rprev[s] = rtail;
++        rnext[s] = -1;
++        rnext[rtail] = s;
++        rtail = s;
++    }
++
++    bool stale(int32_t s) const {
++        return t - last_t[s] >= pass_len;
++    }
++
++    // EuLLM: ClassLRU's victim among the stale slots; else, the pass wants more experts than the slots
++    int32_t victim(int32_t il) {
++        if (classlru_only) {
++            return victim_classlru(il, false);
++        }
++        const int32_t s = victim_classlru(il, true);
++        if (s >= 0) {
++            return s;
++        }
++        n_full++;
++        // this layer's slots are the last of the recency list, from first to the tail; the slots used earlier in
++        // this pass precede them
++        int32_t v = first >= 0 ? rprev[first] : rtail;
++        while (v >= 0 && is_selected(il, key_of[v])) {
++            v = rprev[v];
++        }
++        if (v < 0) {
++            return victim_classlru(il, false);
++        }
++        if (key_of[v] >= 0 && last_t[v] >= pass_start) {
++            float best = decayed_crf(key_layer(key_of[v]), key_of[v]);
++            for (int32_t c = rprev[v]; c >= 0 && last_t[c] >= pass_start; c = rprev[c]) {
++                if (key_of[c] < 0) {
++                    return c;
++                }
++                if (is_selected(il, key_of[c])) {
++                    continue;
++                }
++                const float crf_c = decayed_crf(key_layer(key_of[c]), key_of[c]);
++                if (crf_c < best) {
++                    best = crf_c;
++                    v    = c;
++                }
++            }
++        }
++        return v;
++    }
++
++    // with only_stale, -1 when no list's candidate is stale (EuLLM)
++    int32_t victim_classlru(int32_t il, bool only_stale) const {
+         int32_t res = -1;
+         double res_score = -1.0;
+         for (int c = 0; c < n_class; ++c) {
+@@ -167,6 +271,9 @@ struct moe_cache_lru {
+             if (key < 0) {
+                 return s; // unused slot
+             }
++            if (only_stale && !stale(s)) {
++                continue;
++            }
+             const int64_t age   = clock[key_layer(key)] - last_use[key];
+             const double  score = std::ldexp((double) age, -c); // age/2^class
+             if (score > res_score) {
+@@ -174,7 +281,7 @@ struct moe_cache_lru {
+                 res_score = score;
+             }
+         }
+-        if (res < 0) {
++        if (res < 0 && !only_stale) {
+             GGML_ABORT("no MoE cache victim");
+         }
+         return res;
+@@ -196,6 +303,15 @@ struct moe_cache_lru {
+         cpu.clear();
+         n_hit = 0;
+ 
++        // EuLLM: the pass
++        ++t;
++        if (il <= last_il) {
++            pass_start = t;
++        }
++        last_il = il;
++        first   = -1;
++        n_full  = 0;
++
+         if (++seen_gen == 0) {
+             std::fill(seen.begin(), seen.end(), 0);
+             seen_gen = 1;
+@@ -221,6 +337,7 @@ struct moe_cache_lru {
+             use(il, key);
+             if (slots[e] < n_slots) {
+                 move(slots[e], class_of(key));
++                used(slots[e]);
+                 n_hit++;
+             } else {
+                 misses.push_back(e);
+@@ -285,6 +402,7 @@ struct moe_cache_lru {
+             key_of[s] = key;
+             slots[e]  = s;
+             move(s, class_of(key));
++            used(s);
+             fills.push_back({ e, s });
+         }
+         clock[il] += n_tokens;
+@@ -377,6 +495,7 @@ struct llama_moe_cache::impl {
+         size_t misses = 0;
+         size_t cpu    = 0; // misses computed on the CPU
+         size_t bytes  = 0;
++        size_t full   = 0; // EuLLM: misses that took a slot used within the last pass
+     };
+ 
+     // one step, from its first layer's copy to the first layer's copy of the next
+@@ -424,7 +543,7 @@ struct llama_moe_cache::impl {
+     stats stats_large;
+     stats stats_copy;  // experts copied from the cache for large batches
+ 
+-    // LLAMA_MOE_CACHE_STATS=N: every N steps of up to 8 tokens, print to stderr where they went
++    // LLAMA_MOE_CACHE_STATS=N: every N steps that went through the cache, print to stderr where they went
+     int32_t     stats_every = 0;
+     uint64_t    n_begun     = 0;
+     step_timing cur;
+@@ -511,6 +630,14 @@ struct llama_moe_cache::impl {
+         // with misses on the CPU, the n_zero slots after the cached ones stay zero: the device computes these misses as zero
+         // one extra slot at the end, CUDA MMQ can read past the last expert
+         n_zero = cpu_share > 0.0f ? std::min<int32_t>(n_expert_used, 64) : 0;
++
++        // EuLLM (patch 0008): LLAMA_MOE_CACHE_EVICT=classlru evicts by ClassLRU alone, to compare
++        const char * evict_env = getenv("LLAMA_MOE_CACHE_EVICT");
++        const bool classlru_only = evict_env != nullptr && strcmp(evict_env, "classlru") == 0;
++        LLAMA_LOG_INFO("%s: eviction: %s\n", __func__, classlru_only
++            ? "ClassLRU (LLAMA_MOE_CACHE_EVICT=classlru)"
++            : "ClassLRU among the slots unused for a pass; when a pass wants more experts than the slots, the lowest "
++              "decayed count among the slots used earlier in the pass");
+         auto alloc_size = [&](const group & g, int32_t n_slots) {
+             const size_t alignment = ggml_backend_buft_get_alignment(devices[g.id].buft);
+             size_t res = 0;
+@@ -574,7 +701,7 @@ struct llama_moe_cache::impl {
+                 g.n_slots = 0;
+                 continue;
+             }
+-            g.lru.init(model.layers.size(), n_expert, g.n_slots);
++            g.lru.init(model.layers.size(), n_expert, g.n_slots, (int32_t) g.layers.size(), classlru_only);
+             n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
+             n_tensors_host  += g.layers.size()*(n_zero > 0 ? 3 : 1); // slot maps and CPU map
+         }
+@@ -863,8 +990,9 @@ struct llama_moe_cache::impl {
+ 
+     // count the step that began at cur.t_begin and ends at t, and report every stats_every steps
+     void end_step(int64_t t) {
+-        // only steps of up to 8 tokens that went through the cache, and not a pause between requests
+-        if (cur.n_layers == 0 || cur.n_ids > (int64_t) 8*n_expert_used || t - cur.t_begin > 1000000) {
++        // only steps that went through the cache, and not a pause between requests (a step of 32 tokens that copies
++        // every expert takes up to a few seconds)
++        if (cur.n_layers == 0 || t - cur.t_begin > 10000000) {
+             return;
+         }
+ 
+@@ -874,6 +1002,7 @@ struct llama_moe_cache::impl {
+         win.st.hits   += cur.st.hits;
+         win.st.misses += cur.st.misses;
+         win.st.bytes  += cur.st.bytes;
++        win.st.full   += cur.st.full;
+         if (cur.sampled) {
+             win.n_sampled++;
+             win.copy_us    += cur.copy_us;
+@@ -903,6 +1032,10 @@ struct llama_moe_cache::impl {
+         }
+         const size_t n = win.st.hits + win.st.misses;
+         line += format("; %.1f MiB/step copied, %.1f%% of the experts in VRAM", win.st.bytes/1048576.0/n_steps, n > 0 ? 100.0*win.st.hits/n : 0.0);
++        if (win.st.full > 0) {
++            line += format(", %.1f%% of the copies into a slot used within the pass (more experts than slots)",
++                100.0*win.st.full/win.st.misses);
++        }
+         if (win.n_sampled > 0 && win.copy_us > 0) {
+             line += format("; copying takes %.1f ms/step (%.1f GB/s)", win.copy_us/1e3/win.n_sampled, win.copy_bytes/1e3/win.copy_us);
+         }
+@@ -1105,6 +1238,7 @@ struct llama_moe_cache::impl {
+         st.misses += fills.size() + cpu.size();
+         st.cpu    += cpu.size();
+         st.bytes  += bytes;
++        st.full   += g.lru.n_full;
+ 
+         // the next copy synchronizes the backend before it changes the slot map again
+         ggml_backend_tensor_set_async(backend, dst, l.slot_map->data, 0, ggml_nbytes(l.slot_map));
+@@ -1128,6 +1262,7 @@ struct llama_moe_cache::impl {
+             cur.st.hits   += n_hit;
+             cur.st.misses += fills.size();
+             cur.st.bytes  += bytes;
++            cur.st.full   += g.lru.n_full;
+             cur.t_hook = t_end;
+         }
+ 
+@@ -1140,8 +1275,8 @@ struct llama_moe_cache::impl {
+             if (n == 0) {
+                 return;
+             }
+-            const std::string line = format("llama_moe_cache: %s: hits = %zu, misses = %zu (%zu on the CPU), hit rate = %.2f%%, uploaded = %.2f MiB\n",
+-                name, st.hits, st.misses, st.cpu, 100.0*st.hits/n, st.bytes/1024.0/1024.0);
++            const std::string line = format("llama_moe_cache: %s: hits = %zu, misses = %zu (%zu on the CPU), hit rate = %.2f%%, uploaded = %.2f MiB, "
++                "misses into a slot used within the pass = %zu\n", name, st.hits, st.misses, st.cpu, 100.0*st.hits/n, st.bytes/1024.0/1024.0, st.full);
+             LLAMA_LOG_INFO("%s", line.c_str());
+             if (stats_every > 0) {
+                 fprintf(stderr, "%s", line.c_str());
