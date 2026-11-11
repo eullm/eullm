@@ -580,7 +580,13 @@ JUPITER, named by its Slurm job id.
   16, as g9r-r2's bf16), the open book above it; the memory at lr 1e-4 is
   a third lower than g9el's at 3e-4. Next: the no-text prompts with two
   real articles for each made-up one, on g9pr-r2; and the case-law
-  summaries with the stronger recipe (lr 2e-4).
+  summaries with the stronger recipe (lr 2e-4). The first no-text file
+  for them asked for two real articles a made-up one, but the real ones
+  run short once the evaluation articles are left out (404 against 540
+  made up, and 600 made-up rulings): 1,140 prompts paying for a refusal
+  against 617 paying for an answer. Remade with 30 made-up articles a code
+  and 150 rulings; g9prc-r1 had already started on the first file and
+  keeps it, g9prc-r2, g9prl-r1 and -r2 read the new one when they start.
 
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
