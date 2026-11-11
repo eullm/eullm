@@ -117,7 +117,8 @@ def now_iso(t=None) -> str:
 
 def sh(cmd, timeout=60) -> str:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                             encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return out.stdout if out.returncode == 0 else ""
