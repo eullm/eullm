@@ -203,6 +203,25 @@ def split_reasoning(text: str) -> tuple[str, str, bool]:
     return text, "", True
 
 
+def switch_off_ple(model) -> int:
+    """Make every n-gram (PLE) layer of a Qwen3.8-Flash-Next add nothing.
+
+    The decoder layer adds the PLE layer's output to its hidden states
+    (``hidden_states + self.ple(...)``); a forward hook that returns zeros
+    leaves the rest of the model exactly as it is, so the same exam asked with
+    and without it measures what the 51 B parameters of hashed n-gram tables
+    contribute. Returns how many layers were switched off.
+    """
+    import torch
+
+    n = 0
+    for _, module in model.named_modules():
+        if type(module).__name__.endswith("PLELayer"):
+            module.register_forward_hook(lambda _m, _i, out: torch.zeros_like(out))
+            n += 1
+    return n
+
+
 def chat_prompt(tok, content: str, think: bool = False, system: str | None = None) -> str:
     """One user turn in the model's chat format, with thinking switched off.
 
@@ -331,6 +350,9 @@ def main() -> int:
                     help="with --gguf: questions decoded together")
     ap.add_argument("--server-ctx", type=int, default=16384,
                     help="with --gguf: context tokens per question (prompt + answer)")
+    ap.add_argument("--ple-off", action="store_true",
+                    help="switch off a Qwen3.8-Flash-Next's native n-gram tables (its PLE "
+                         "layers add nothing), to measure what they bring")
     ap.add_argument("--ngram-memory", type=Path,
                     help="graft this n-gram memory (forge/scripts/ngram_train.py, "
                          "<out>/memory) onto the model before answering")
@@ -358,8 +380,8 @@ def main() -> int:
         ap.error("--retrieval-cache holds document embeddings: give --embedder")
     if args.gate and not args.norms:
         ap.error("--gate judges the retrieved texts: give --norms")
-    if (args.ngram_memory or args.adapter) and args.gguf:
-        ap.error("--ngram-memory and --adapter graft onto the HF model: not with --gguf")
+    if (args.ngram_memory or args.adapter or args.ple_off) and args.gguf:
+        ap.error("--ngram-memory, --adapter and --ple-off change the HF model: not with --gguf")
 
     from transformers import AutoTokenizer
 
@@ -440,6 +462,11 @@ def main() -> int:
             from peft import PeftModel
             model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
             print(f"[eval] LoRA adapter {args.adapter} merged", flush=True)
+        if args.ple_off:
+            n = switch_off_ple(model)
+            if not n:
+                raise SystemExit("[eval] --ple-off: the model has no n-gram (PLE) layer")
+            print(f"[eval] n-gram tables switched off: {n} PLE layer(s) add nothing", flush=True)
         if args.ngram_memory:
             from eullm_forge.memory import NGramMemory, attach, decoder_layers
             memory = NGramMemory.load(args.ngram_memory)
