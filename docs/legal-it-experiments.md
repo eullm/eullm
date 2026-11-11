@@ -934,3 +934,18 @@ statute texts not given, by kind):
 
 **On the MoE the recipe fails** (rank 16 on the fused experts, 1 epoch):
 94 open book against 170. Not pursued.
+
+**The GRPO round on top (`r2l-replay-g1`, judge-reward prompts, 750 steps).**
+Closed book 188/716: penalties 88% (r2l 17%), heading from number 62%,
+deadlines answered again (12%); but made-up rulings denied 2% and made-up
+articles 4% (r2l 100% and 59%): a judge-reward round does not bring the
+traps back, the premise rounds did. Devbig (472, Q4, hybrid retrieval):
+426 against r2l's 449 (6:29, worse), the loss mostly on deadlines (0:9).
+Read, the nine deadline items: every number the new model states is in the
+article, but it names **one** deadline of an article that has several, often
+the first in the text (10 days for the declaration where the item wants the
+5 days of the certificate, 24 hours for the notice where it wants the
+judge's 20 days, art. 396's term where art. 397 has its own two days); r2l
+names more of them. Three of the nine give the right number under the
+wrong condition. Not a loss of knowledge, a narrower answer: the next round
+pays every deadline the article states.
