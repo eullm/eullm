@@ -159,23 +159,35 @@ The cache's hits are the same in both (92.3% of the experts in VRAM, then
 up through the foundation"), both coherent: upstream's kernels moved the
 numbers.
 
-`bench/prefetch_check.sh` (33,200-token prompt, `--moe-prefetch` 0 and 4),
-before the fix to `0004`:
+`bench/prefetch_check.sh` (33,200-token prompt, `--moe-prefetch` 0 and 4,
+each setting asked twice, greedy), with `0004` fixed (below):
 
-| model | binary | prefetch | reading | writing | from the cache's slots |
-|---|---|---:|---:|---:|---:|
-| Qwen3-Next-80B-A3B Q4_K_M | 0.8.8 | 0 | 1,696.9 | 107.4 | |
-| | 0.8.8 | 4 | 1,460.3 | 99.0 | 20% |
-| | b12283 | 0 | 1,792.0 | 112.9 | |
-| | b12283 | 4 | 3,764.8 | 103.7 | 100% |
-| Qwen3.8-Flash-Next IQ2_XS | 0.8.8 | 0 | 1,160.7 | 70.1 | |
-| | 0.8.8 | 4 | 1,773.9 | 67.9 | 23% |
-| | b12283 | 0 | 1,251.5 | 76.2 | |
-| | b12283 | 4 | 2,239.0 | 73.1 | 100% |
+| model | binary | prefetch | reading | writing | from the cache's slots | answer |
+|---|---|---:|---:|---:|---:|---|
+| Qwen3-Next-80B-A3B Q4_K_M | 0.8.8 | 0 | 1,696.9 | 107.4 | | `9e584b3b` |
+| | 0.8.8 | 4 | 1,460.3 | 99.0 | 20% | `9e584b3b` |
+| | b12283 | 0 | 1,788.7 | 112.8 | | `98260681` |
+| | b12283 | 4 | 1,449.2 | 102.3 | 20% | `98260681` |
+| Qwen3.8-Flash-Next IQ2_XS | 0.8.8 | 0 | 1,160.7 | 70.1 | | `e23bd058` |
+| | 0.8.8 | 4 | 1,773.9 | 67.9 | 23% | `b2941bfb` |
+| | b12283 | 0 | 1,241.2 | 75.9 | | `b2941bfb` |
+| | b12283 | 4 | 1,794.2 | 73.6 | 23% | `b2941bfb` |
 
-The 100% was the bug: `0004` took every expert of the map for a cached one,
-copied the uncached ones from past the end of the cache's banks instead of
-over the bus, and so read fast and answered wrong (on Qwen3-Next, two
-different answers to the same request). Fixed in `0004`; the b12283 rows
-with the prefetch are to be measured again. Without the prefetch, b12283
-reads 6-8% faster and writes 5-9% faster than 0.8.8.
+b12283 writes 3-8% faster than 0.8.8, and reads 5-7% faster without the
+prefetch and as fast with it. Every b12283 setting answers the same, and on
+Flash-Next with the answer of October's rounds (`b2941bfb`), which 0.8.8 gave
+only with the prefetch.
+
+On Qwen3-Next the prefetch reads 19% slower than no prefetch (14% on 0.8.8):
+its four slots take 1.75 GB from the expert cache (8.50 GB against 10.25 GB),
+and at Q4_K_M a micro-batch's copy does not cover the GPU's computing as it
+does at IQ2_XS. Not this bump's doing; a reason to look at when `--moe-prefetch`
+should switch itself off.
+
+The first round, before the fix, read 3,764.8 (Qwen3-Next) and 2,239.0
+(Flash-Next) tokens/s with the prefetch and said 100% from the cache's slots:
+`0004` took every expert of upstream's map for a cached one (an uncached
+expert reads slot `n_slots` or later since #30966, no longer -1), copied the
+uncached ones from past the end of the cache's banks instead of over the bus,
+and answered wrong (on Qwen3-Next, two answers to the same request). The
+lookup now turns those slots into -1.
