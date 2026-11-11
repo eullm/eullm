@@ -63,3 +63,11 @@ def test_articles_real_and_made_up_and_the_number_of_a_heading():
     assert score_answer("Gli artt. 640, 641, 642 e 643 c.p.", "libero_numero", ["640"]) == 0.0
     # Through TRL's reward function, as grpo_train calls it.
     assert answer_reward(["L'art. 610-bis non esiste."], ["libero_esiste_falsa"], [[]]) == [1.0]
+
+
+def test_real_factor_asks_more_real_articles():
+    one = closed_prompts(ARTS, per_code=3, rulings=0, rng=random.Random(1))
+    two = closed_prompts(ARTS, per_code=3, rulings=0, rng=random.Random(1), real_factor=2)
+    def real(rows):
+        return sum(r["tipo"] == "libero_esiste_vera" for r in rows)
+    assert real(two) == 2 * real(one) == 6

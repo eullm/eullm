@@ -557,6 +557,31 @@ JUPITER, named by its Slurm job id.
   (`principi.jsonl`, 765,875 rows, half paraphrases half questions) and
   the nine codes is queued beside it.
 
+  **10-11 Nov, three lines** (Q4 through the engine; "measure" as above):
+
+  | | measure | made-up ruling refused | real denied | held-out | devbig | practical | practical held-out | rewritten traps | LexIA | GSM8K / ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | g9r-r2 | 2.7% | 90% | 51% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 975 | 12 | 353 / 326 |
+  | g9el-r6 | 33.0% | 0% | 15% | 202 + 2 | 441 + 7 | 67 + 17 | 40 + 9 | 953 | 14 | 341 / 339 |
+  | g9elc-r2 (no-text prompts) | 25.7% | **88%** | 27% | 201 + 1 | 435 + 8 | 65 + 15 | 39 + 13 | 963 | 11 | 341 / 344 |
+  | e1-g9-eu (EU acts) | 8.3% | 0% | 39% | 189 + 7 | | 68 + 16 | 41 + 11 | 931 | 15 | 325 / 365 |
+  | g9eu-r1 | 7.3% | 2% | 42% | 194 + 5 | 434 + 14 | 67 + 18 | 43 + 9 | 894 | 15 | 330 / 364 |
+  | e1-g9-pr (case-law summaries) | 20.0% | 0% | 17% | 199 + 3 | 407 + 20 | 64 + 18 | 39 + 7 | 943 | 12 | 355 / 346 |
+  | g9pr-r1 | 21.3% | 5% | 12% | 201 + 1 | 435 + 13 | **74 + 17** | 39 + 8 | 963 | 12 | **353** / 354 |
+  | g9pr-r2 | 19.0% | 0% | 8% | 202 + 2 | 436 + 10 | **76 + 12** | 40 + 8 | 948 | 10 | 347 / 349 |
+
+  The prompts with no texts bring the made-up rulings back (0 to 88%),
+  with the rewritten traps up 10, but they teach denial: real articles
+  denied 15 to 27%, recognised 40 to 20%. The EU acts dilute the nine
+  codes (measure 8% against 21% for the same recipe on the codes alone)
+  and cost 23 GSM8K questions: closed for now. The case-law summaries keep
+  the general abilities (GSM8K 353, as g9r-r2) and bring the practical
+  exam back to the candidate's level (76 + 12 against 76 + 19; bf16 81 +
+  16, as g9r-r2's bf16), the open book above it; the memory at lr 1e-4 is
+  a third lower than g9el's at 3e-4. Next: the no-text prompts with two
+  real articles for each made-up one, on g9pr-r2; and the case-law
+  summaries with the stronger recipe (lr 2e-4).
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at

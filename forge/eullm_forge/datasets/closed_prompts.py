@@ -58,8 +58,13 @@ def _row(kind, code, number, question, keywords=()):
 
 def closed_prompts(articles: dict, *, per_code: int, rulings: int, rng: random.Random,
                    excluded: set[tuple[str, str]] = frozenset(),
-                   fakes: set[tuple[str, str]] = frozenset()) -> list[dict]:
+                   fakes: set[tuple[str, str]] = frozenset(),
+                   real_factor: int = 1) -> list[dict]:
     """``per_code`` prompts of each article kind for every code, and ``rulings`` made up.
+
+    ``real_factor`` times as many real articles as made-up ones: with one to
+    one, g9elc-r2 refused the made-up rulings again (0 to 88%) but called
+    real articles nonexistent twice as often (15 to 27%, 11-11-2026).
 
     ``excluded``: (code, article) an evaluation set asks about, never drawn;
     ``fakes``: (code, number) the suite asks about as made up, never used.
@@ -76,7 +81,7 @@ def closed_prompts(articles: dict, *, per_code: int, rulings: int, rng: random.R
         live = [a for a in pool if not _repealed_sentence(a)
                 and (code, a.number.lower()) not in excluded]
         named = [a for a in live if _concept(a.heading)]
-        for a in rng.sample(named, min(per_code, len(named))):
+        for a in rng.sample(named, min(per_code * real_factor, len(named))):
             rows.append(_row("libero_esiste_vera", code, a.number,
                              rng.choice(Q_ARTICOLO).format(n=a.number, of=of), [a.heading]))
         counts = defaultdict(int)
