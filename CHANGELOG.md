@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.8.9 — 2026-11-11
 
 ### Changed
 - **llama.cpp moves to b12283**, 251 commits newer. The expert cache (`--moe-cache`) is upstream's rewritten one: its new eviction (ClassLRU) ranks experts by how often and how recently they are used, and EuLLM adds to it the rule it had: when a step wants more experts than the cache holds, the experts the next layers are about to use stay. Replayed on routing measured on LUMI, the same hits where a step fits and up to 22 points more where it does not (Qwen3-Coder-480B with 32 requests: 21.8% of the experts found in VRAM instead of 0%); `LLAMA_MOE_CACHE_EVICT=classlru` uses upstream's eviction alone. Also from upstream: Gemma 4 E2B/E4B read prompts faster, a unified KV cache (`--kv-unified`) reads only each request's own cells, and five more architectures load: Kimi-K3.1-Pro, Metis-1.6, Clover, Ripple and Xing4. On an RTX 5070 Ti against 0.8.8: prompts read 5-20% faster (DeepSeek-Coder-V2-Lite, held whole in VRAM, +10.6%; Qwen3.6-35B-A3B with its expert cache +20%), answers written 1-8% faster, and Qwen3.5-9B with `--mtp 2` keeps 68% of its drafts instead of 61% and writes 6% faster.

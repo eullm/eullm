@@ -2559,15 +2559,13 @@ jobs:
 
             LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: a complete `eullm --help`, and `.env` settings that were ignored
+            ### This release: llama.cpp b12283, and the chat's reasoning box scrolls while a model thinks
 
-            **`eullm --help` says how to start and what can be set**: the ways to start a model, the options of `run` and `serve` used most with their defaults, and every setting read from the environment or `.env`. `eullm run --help` and `eullm serve --help` group their options by subject, one line each under `-h`, the whole explanation under `--help`.
+            **llama.cpp moves to b12283**, 251 commits newer. On an RTX 5070 Ti against 0.8.8, prompts read 5-20% faster (+10.6% on DeepSeek-Coder-V2-Lite held whole in VRAM, +20% on Qwen3.6-35B-A3B with its expert cache) and answers are written 1-8% faster; with `--mtp 2` Qwen3.5-9B keeps 68% of its drafts instead of 61% and writes 6% faster. The expert cache (`--moe-cache`) is upstream's rewritten one, with its new eviction plus EuLLM's rule for steps that want more experts than the cache holds. Five more architectures load: Kimi-K3.1-Pro, Metis-1.6, Clover, Ripple and Xing4.
 
-            **Settings written in `.env` are read.** `EULLM_WEB_ALLOWED_DOMAINS`, `EULLM_WEB_ALLOW_HTTP`, `EULLM_WEB_ALLOW_PRIVATE_HOSTS`, `EULLM_ALLOW_MODEL_PATHS`, `HF_TOKEN`, `EULLM_DOWNLOAD_CONNECTIONS`, `EULLM_IMAGE_MAX_TOKENS`, `EULLM_IMAGE_MIN_TOKENS` and `RUST_LOG` were read from the environment only, so a line for them in `.env` was ignored: a domain allowlist there left `--web` fetching from any public host. If you set any of them in `.env`, it now takes effect.
+            **The chat's reasoning box can be scrolled while a model is still thinking.** Each new token rebuilt it from its top, so once a long reasoning overflowed it, scrolling inside it was thrown back, the mouse wheel over it seemed to do nothing, and it never showed the newest lines. It now keeps where you left it, and follows the newest line while left at its end.
 
-            **`eullm import-ollama` is gone.** Models come from the catalog, Hugging Face (`hf.co/OWNER/REPO`), a URL, or any folder of GGUF files (`EULLM_MODEL_LIBRARIES`). Models imported with it before keep working.
-
-            Everything else is 0.8.7: llama.cpp b12032, and the chat's sidebar, Model hub and About page.
+            Everything else is 0.8.8.
 
             ### Quick install
 
