@@ -193,7 +193,8 @@ def render(rows: list[dict], final: bool, now: datetime) -> str:
 
 def run(cmd: list[str]) -> str:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=120).stdout
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120,
+                              encoding="utf-8", errors="replace").stdout
     except (OSError, subprocess.SubprocessError) as exc:
         print(f"[flp] {' '.join(cmd[:2])} failed: {exc}", file=sys.stderr)
         return ""
