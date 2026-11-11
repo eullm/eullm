@@ -1075,6 +1075,24 @@ def test_sacct_is_read_as_utf8(monkeypatch):
     assert seen[0].get("encoding") == "utf-8"
 
 
+def test_command_output_is_read_as_utf8(monkeypatch):
+    """sh() reads squeue/git/engine output as UTF-8: a path or a name in
+    non-ASCII text is kept, not mojibake'd or a decode failure."""
+    class Out:
+        stdout = "citt\u00e0\n"
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    assert campaign.sh(["git"]) == "citt\u00e0\n"
+    assert seen[0].get("encoding") == "utf-8"
+
+
 def test_no_ui_help_is_read_as_utf8(monkeypatch):
     """`serve --help` decides whether --no-ui is passed: read it as UTF-8,
     not with the host locale, so it is never a decode failure at start-up."""
@@ -1082,13 +1100,6 @@ def test_no_ui_help_is_read_as_utf8(monkeypatch):
 
     class Out:
         stdout = "usage: eullm serve [--no-ui] \u2014 citt\u00e0\n"
-
-def test_command_output_is_read_as_utf8(monkeypatch):
-    """sh() reads squeue/git/engine output as UTF-8: a path or a name in
-    non-ASCII text is kept, not mojibake'd or a decode failure."""
-    class Out:
-        stdout = "citt\u00e0\n"
-
         returncode = 0
 
     seen = []
@@ -1100,8 +1111,4 @@ def test_command_output_is_read_as_utf8(monkeypatch):
     monkeypatch.setattr(point.subprocess, "run", run)
     monkeypatch.setattr(point, "_NO_UI", {})
     assert point.no_ui_args("/bin/eullm") == ["--no-ui"]
-
-    monkeypatch.setattr(campaign.subprocess, "run", run)
-    assert campaign.sh(["git"]) == "citt\u00e0\n"
-
     assert seen[0].get("encoding") == "utf-8"
