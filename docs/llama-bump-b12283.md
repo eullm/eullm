@@ -224,6 +224,12 @@ that the three-token check's kernel and the one-token kernel round
 differently, not a state restored wrong: that would part early, or go on
 wrong.
 
+LUMI-G, 11 November: `tools/lumi/build_engine.sh` built this branch (0.8.9,
+`487f9185`) against ROCm 6.3.4 on a login node, `0011` and `0013`'s HIP sides
+included, with gfx90a device code and RCCL linked; the smoke job (one GCD of
+an MI250X, job 23648639) loaded Qwen3-8B whole in 5.1 s and wrote a coherent
+answer at 87.8 tokens/s, the GCD's memory in use going from 11 MB to 5.9 GB.
+
 Nothing measured on the reference PC holds the merge back. The HIP sides of
 `0011` and `0013` are compiled by the release workflow's ROCm build, which
 the Actions tab runs alone on this branch (Run workflow, `job: rocm`)
