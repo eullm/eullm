@@ -233,7 +233,7 @@ diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
 index ef8bb2ac6..0bc46954e 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -983,6 +983,28 @@ struct llama_moe_cache::impl {
+@@ -983,6 +983,29 @@ struct llama_moe_cache::impl {
          return n;
      }
  
@@ -250,10 +250,11 @@ index ef8bb2ac6..0bc46954e 100644
 +        if (slots == nullptr || src->ne[2] != g.lru.n_expert) {
 +            return false;
 +        }
++        // since b12283 (#30966) an expert the cache does not hold reads slot n_slots or later, not -1
 +        bool any = false;
 +        for (int32_t e = 0; e < g.lru.n_expert; ++e) {
-+            slot_of[e] = slots[e];
-+            any = any || slots[e] >= 0;
++            slot_of[e] = slots[e] < g.n_slots ? slots[e] : -1;
++            any = any || slot_of[e] >= 0;
 +        }
 +        *bank = g.banks[b.ip];
 +        return any;
@@ -262,7 +263,7 @@ index ef8bb2ac6..0bc46954e 100644
      bool copy(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph) {
          const auto it = layer_of.find(src);
          if (it == layer_of.end()) {
-@@ -1175,3 +1197,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
+@@ -1175,3 +1198,7 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_moe_cache::memory_breakdown()
      }
      return res;
  }

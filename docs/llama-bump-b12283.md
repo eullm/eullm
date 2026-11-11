@@ -82,7 +82,7 @@ the rest, by what it changes for EuLLM.
 | `0001`, `0005`, `0006`, `0010`-`0014` | apply as they were |
 | `0002` pinning and statistics | **regenerated** over the new cache: the destructor closes upstream's trace as well, and the totals at exit keep upstream's count of misses computed on the CPU |
 | `0003` prefetch on a second stream | **regenerated**: upstream copies a split's host weights in a second pass over its inputs, after its own prefetch of the next split's small inputs (#30966); the staged lookup moved into that pass, a weight the split does not read is not copied (#31419), and `moe_prefetch_slots` follows upstream's new `moe_cache_cpu_share` |
-| `0004` prefetch from the cache | the member the cache's lookup reads is `lru`, no longer `slru` |
+| `0004` prefetch from the cache | the member the cache's lookup reads is `lru`, no longer `slru`; an expert the cache does not hold reads slot `n_slots` or later in upstream's map now (#30966), no longer -1, and the lookup turns that into -1 (section 4) |
 | `0008` eviction | **rewritten** as `0008-moe-cache-classlru-among-stale-slots`: ClassLRU's victim among the slots unused for a whole pass, and the former rule (lowest decayed count among the slots used earlier in the pass) when every slot was used within it. `LLAMA_MOE_CACHE_EVICT=classlru` for ClassLRU alone; `=lru` and `=pass` are gone |
 
 `0008`, replayed through `bench/moe_cache_sim` on the routing calibrated to
@@ -140,3 +140,42 @@ smoke job, Qwen3-235B's cache at 8 and 32 requests with both evictions, and
 a soak with the pool's flush (`0011`). The traces of 16-10-2026, replayed
 through the simulator with the new policy, would confirm section 2 on real
 routing.
+
+## 5. Measured on the reference PC (11 November)
+
+RTX 5070 Ti 16 GB, the 0.8.8 release binary (`eullm-linux-x64-cuda-13.1`)
+against this branch built there.
+
+Qwen3.6-35B-A3B with its expert cache, a 16K-token prompt,
+`LLAMA_MOE_CACHE_STATS=64`, two runs each:
+
+| binary | writing, tokens/s | reading, tokens/s |
+|---|---:|---:|
+| 0.8.8 | 143.9, 144.0 | 5,670, 5,630 |
+| b12283 | 146.8, 147.6 | 6,846, 6,734 |
+
+The cache's hits are the same in both (92.3% of the experts in VRAM, then
+99.1%). The answers part mid-sentence ("shockwave up the" against "shockwave
+up through the foundation"), both coherent: upstream's kernels moved the
+numbers.
+
+`bench/prefetch_check.sh` (33,200-token prompt, `--moe-prefetch` 0 and 4),
+before the fix to `0004`:
+
+| model | binary | prefetch | reading | writing | from the cache's slots |
+|---|---|---:|---:|---:|---:|
+| Qwen3-Next-80B-A3B Q4_K_M | 0.8.8 | 0 | 1,696.9 | 107.4 | |
+| | 0.8.8 | 4 | 1,460.3 | 99.0 | 20% |
+| | b12283 | 0 | 1,792.0 | 112.9 | |
+| | b12283 | 4 | 3,764.8 | 103.7 | 100% |
+| Qwen3.8-Flash-Next IQ2_XS | 0.8.8 | 0 | 1,160.7 | 70.1 | |
+| | 0.8.8 | 4 | 1,773.9 | 67.9 | 23% |
+| | b12283 | 0 | 1,251.5 | 76.2 | |
+| | b12283 | 4 | 2,239.0 | 73.1 | 100% |
+
+The 100% was the bug: `0004` took every expert of the map for a cached one,
+copied the uncached ones from past the end of the cache's banks instead of
+over the bus, and so read fast and answered wrong (on Qwen3-Next, two
+different answers to the same request). Fixed in `0004`; the b12283 rows
+with the prefetch are to be measured again. Without the prefetch, b12283
+reads 6-8% faster and writes 5-9% faster than 0.8.8.
