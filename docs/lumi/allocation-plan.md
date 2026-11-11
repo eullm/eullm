@@ -992,6 +992,28 @@ Where things stand on 10-11-2026, for the next session:
   a dependency; blocks for LUMI are run on LUMI (`fmarchet@uan18`), not on
   Leonardo or JUPITER.
 
+11-11-2026, morning: the queue ran dry, as feared. Nothing was queued on
+10-11 (no session that day), and the DeepSeek soaks' chain ended in the
+night. Two lines of work go in at once:
+
+- **Now, on one node**: the soaks no 4-hour job holds, on 0.8.8 under
+  `v088-long` in 8-hour jobs: `soak-node` (Qwen3-8B, Qwen3-32B and
+  Qwen3.6-35B-A3B, eight replicas at 256 requests, six hours and more),
+  `moe-soak` (DeepSeek-V3.1, Qwen3-Coder-480B, Qwen3-235B Q8_0 on eight
+  GCDs, four hours and more) and `moe-235b-soak-x2`: seven points, one per
+  job, about two and a half days.
+- **After a 200 GB pull, on a second node**: `c18-glm5`, GLM-5.3-Flash
+  (321B, 18B active, `glm5-next`, MIT; unsloth's UD-Q4_K_XL), on `c17`'s
+  pattern, on its text-only twin since the repo carries a vision projector:
+  one GCD with experts in RAM three ways, 2/4/8 GCDs at 1/8/32 requests,
+  0/16K/30K tokens of prompt on eight GCDs, 300 gsm8k questions, a soak of
+  two to three hours; 23 points, about a day. The GLM-5.3 family is on
+  Hugging Face beside it (GLM-5, 5.1, 5.2, 5.3 at 220 GB and more at two
+  bits); Flash is the one that fits as DeepSeek-V4-Flash does.
+
+Two nodes to about 12-11, one to about 14-11: the next work is queued by
+12-11 in the evening.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
