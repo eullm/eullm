@@ -191,3 +191,40 @@ expert reads slot `n_slots` or later since #30966, no longer -1), copied the
 uncached ones from past the end of the cache's banks instead of over the bus,
 and answered wrong (on Qwen3-Next, two answers to the same request). The
 lookup now turns those slots into -1.
+
+DeepSeek-Coder-V2-Lite Q4_K_M held whole in VRAM (`CTX=10240
+PROMPT_TOKENS=8000 MOE_CACHE=off SETTINGS=0 bench/prefetch_check.sh`; at the
+script's 40,960 tokens its KV cache, 16 heads of 192+128 values over 27
+layers, does not fit beside the model on either binary):
+
+| binary | reading | writing | answer, two runs |
+|---|---:|---:|---|
+| 0.8.8 | 5,733.1 | 265.7 | `ea6c5d76` both |
+| b12283 | 6,339.0 | 268.9 | `592ef83a` both |
+
+Reading +10.6%, against b12032's +3.1% over 0.8.5: #31047's MoE layout for
+MMQ, on a model whose experts all sit in VRAM. Writing level.
+
+Qwen3.5-9B MTP Q4_K_M (`MTP_SETTINGS="0 2" bench/mtp_sweep.sh`):
+
+| binary | `--mtp` | story | code | drafts kept | answers, story/code |
+|---|---:|---:|---:|---:|---|
+| 0.8.8 | 0 | 127.9 | 127.4 | | `1083b386`/`7210b8f2` |
+| 0.8.8 | 2 | 172.9 | 215.0 | 61% | `1083b386`/`7210b8f2` |
+| b12283 | 0 | 128.4 | 128.3 | | `e58b246d`/`bbc626da` |
+| b12283 | 2 | 183.5 | 228.1 | 68% | `e58b246d`/`d24be5ff` |
+
+With drafts b12283 keeps 68% of them against 61% and writes 6% faster
+(#31927, #30141). Its code answer with `--mtp 2` parts from the one without
+at byte 595 of 1,041 (line 22), on the wording of a comment ("Try parsing
+with time component first" against "Try parsing with time first"); both go
+on as valid Python (one falls back to `strptime`, the other to
+`fromisoformat`), and the server's log has no error or rollback. A near tie
+that the three-token check's kernel and the one-token kernel round
+differently, not a state restored wrong: that would part early, or go on
+wrong.
+
+Nothing measured on the reference PC holds the merge back. The HIP sides of
+`0011` and `0013` are compiled by the release workflow's ROCm build, which
+the Actions tab runs alone on this branch (Run workflow, `job: rocm`)
+without making a release.
