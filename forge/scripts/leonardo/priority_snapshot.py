@@ -49,7 +49,8 @@ def run(cmd: list[str]) -> tuple[str, str]:
     raised: a snapshot with three of four sections is worth keeping, and the
     fourth being absent is itself a fact about the day."""
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=60,
+                           encoding="utf-8", errors="replace")
     except (OSError, subprocess.SubprocessError) as exc:
         return "", f"{type(exc).__name__}: {exc}"
     if p.returncode != 0:
