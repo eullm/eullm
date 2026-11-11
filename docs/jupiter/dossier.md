@@ -588,6 +588,20 @@ JUPITER, named by its Slurm job id.
   and 150 rulings; g9prc-r1 had already started on the first file and
   keeps it, g9prc-r2, g9prl-r1 and -r2 read the new one when they start.
 
+  **11-11:** g9prc-r2 (two rounds of the mix on g9pr-r2, the second on the
+  rebalanced file) is the best all round so far: held-out 204 + 1 (the
+  highest), devbig 437 + 10, practical 78 + 13 (bf16 81 + 17), GSM8K /
+  ARC-C 356 / 359 (above g9r-r2's 353 / 326), the closed book 17% on the
+  measure; made-up rulings refused 38% (0 before the mix), real articles
+  denied 30%; still under g9r-r2 on the rewritten traps (954 against 975)
+  and LexIA (10 against 12). The case-law summaries at lr 2e-4 (e1-g9-prl,
+  g9prl-r1/-r2) are worse than at 1e-4 everywhere but LexIA (17): held-out
+  187-190, devbig 400-403, the closed book lower, GSM8K 335; closed.
+  The no-text prompts keep raising the denial of real articles (8% on
+  g9pr-r2, 30-47% after them): the made-up articles (libero_esiste_falsa,
+  and the 1,353 premessa_inesistente of the premise file) outnumber what
+  pays for an answer.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
