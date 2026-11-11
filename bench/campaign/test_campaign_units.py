@@ -1073,3 +1073,24 @@ def test_sacct_is_read_as_utf8(monkeypatch):
     [job] = budget.read_sacct("2026-09-02")
     assert job["name"] == "citt\u00e0-job"
     assert seen[0].get("encoding") == "utf-8"
+
+
+def test_no_ui_help_is_read_as_utf8(monkeypatch):
+    """`serve --help` decides whether --no-ui is passed: read it as UTF-8,
+    not with the host locale, so it is never a decode failure at start-up."""
+    import point
+
+    class Out:
+        stdout = "usage: eullm serve [--no-ui] \u2014 citt\u00e0\n"
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(point.subprocess, "run", run)
+    monkeypatch.setattr(point, "_NO_UI", {})
+    assert point.no_ui_args("/bin/eullm") == ["--no-ui"]
+    assert seen[0].get("encoding") == "utf-8"

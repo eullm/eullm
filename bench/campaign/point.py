@@ -272,7 +272,8 @@ def no_ui_args(engine: str) -> list:
         if engine not in _NO_UI:
             try:
                 out = subprocess.run([engine, "serve", "--help"], capture_output=True,
-                                     text=True, timeout=60).stdout
+                                     text=True, timeout=60, encoding="utf-8",
+                                     errors="replace").stdout
             except (OSError, subprocess.SubprocessError):
                 out = ""
             _NO_UI[engine] = "--no-ui" in out
