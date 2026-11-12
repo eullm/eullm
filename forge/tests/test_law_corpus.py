@@ -220,3 +220,27 @@ def test_reverse_states_the_heading_first_and_the_number_last():
     for t in furto:
         assert t.index("«Furto»") < t.rindex("624") and "{" not in t
     assert not any(r["articolo"] == "594" for r in rev if r["forma"] == "rubrica_inversa")
+
+
+def test_an_article_is_read_as_its_commi_and_restated_comma_by_comma():
+    from eullm_forge.datasets.law_corpus import check_rewrite, commi, rewrite_messages
+    from eullm_forge.eval.norm_exam import Article
+
+    a = Article("codice_civile", "2861", "Art. 2861.\n\n(Dichiarazione del terzo).\n\n"
+                "La dichiarazione deve essere fatta non oltre dieci giorni dal pignoramento.\n"
+                "Il terzo indica:\na) i beni posseduti;\nb) i crediti.\n\n"
+                "Il certificato e' notificato entro cinque giorni dalla sua data.")
+    parts = commi(a)
+    assert len(parts) == 3
+    assert parts[1].startswith("Il terzo indica:") and "b) i crediti" in parts[1]
+    msg = rewrite_messages(a, "struttura")[1]["content"]
+    assert "[1] La dichiarazione" in msg and "[3] Il certificato" in msg
+    assert "ha 3 commi" in msg
+    good = ("L'art. 2861 del codice civile si compone di 3 commi.\n"
+            "Comma 1: la dichiarazione va fatta entro dieci giorni dal pignoramento.\n"
+            "Comma 2: il terzo indica i beni che possiede e i crediti.\n"
+            "Comma 3: il certificato si notifica entro cinque giorni dalla sua data.")
+    assert check_rewrite(a, "struttura", good) is None
+    two = good.rsplit("\n", 1)[0]
+    assert check_rewrite(a, "struttura", two) in ("commi", "lost_deadline")
+    assert check_rewrite(a, "struttura", good.replace("cinque", "quindici")) is not None
