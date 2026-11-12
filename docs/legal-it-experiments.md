@@ -949,3 +949,28 @@ judge's 20 days, art. 396's term where art. 397 has its own two days); r2l
 names more of them. Three of the nine give the right number under the
 wrong condition. Not a loss of knowledge, a narrower answer: the next round
 pays every deadline the article states.
+
+## 17. 2026-11-12: Flash-Next with its n-gram tables switched off
+
+The question line A could not answer on our own models: in a model trained
+with hashed n-gram tables from the start, what do they hold of Italian law?
+Qwen3.8-Flash-Next (UD-Q4_K_XL GGUF, 1000 new tokens, the closed book), as
+it is and with its one PLE layer switched off (`blk.1.ple_value.weight`
+zeroed, `gguf_zero_tensors.py`: the layer then adds exactly nothing):
+
+| | right | sure-wrong | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | proc | abrog | sent? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| tables on | 247 (34%) | 407 | 17% | 24% | 91% | 22% | 21% | 23% | 29% | 0% | 12% | 42% |
+| tables off | 227 (32%) | 432 | 24% | 16% | 93% | 19% | 18% | 19% | 21% | 8% | 14% | 28% |
+| r2l, for scale | 215 (30%) | 360 | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 88% | 45% | 100% |
+
+**The tables hold some of it, not most.** Switched off, every knowledge
+column falls (real articles recognised 24% to 16%, penalties 29% to 21%,
+number from heading 22% to 19%, heading from number 21% to 18%, terms 23%
+to 19%) and real articles are denied more (17% to 24%): 20 answers of 716
+in all. Without them Flash-Next still knows several times what any 8-30B
+model does (heading from number 18% against at most 10%), so its lead
+comes mostly from the rest of a 180B model. It agrees with A2-mini on
+r2l: an n-gram table adds a little knowledge; a LoRA of the same size
+adds more. (A per-kind difference of three points is two or three items;
+the paired count is what says how much of the 20 is noise.)
