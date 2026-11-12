@@ -974,3 +974,16 @@ comes mostly from the rest of a 180B model. It agrees with A2-mini on
 r2l: an n-gram table adds a little knowledge; a LoRA of the same size
 adds more. (A per-kind difference of three points is two or three items;
 the paired count is what says how much of the 20 is noise.)
+
+## 18. 2026-11-12: the premise round does not bring the traps back; double replay loses the open book
+
+* **`r2l-replay-g2`** (GRPO from `r2l-replay-g1` on r2q's prompts:
+  premise7 ×5, premise6 ×2, practical): closed book 166/716, made-up
+  rulings denied 0% and made-up articles 7% (r2l 100% and 59%), penalties
+  92%; devbig 8:28 against r2l (worse, p < 0.001), 8:32 without the note.
+  The prompts were filtered for r2l (questions it answered both ways), not
+  for this model, and on the closed book the trap is asked with no text,
+  which the premise rounds never showed. r2l stays the released 8B.
+* **Double replay** (`lora-replay2x`, the open-book pairs twice, 45% of the
+  tokens, 3 epochs): open book 7:95 against r2l, worse than no replay at
+  all; to be read in its answers before anything is concluded from it.
