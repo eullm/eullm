@@ -134,3 +134,13 @@ un'architettura che llama.cpp oggi non ha.
    righe distinte legge ogni testa e con quanti n-gram diversi le divide: è
    il numero che dice quante righe servono davvero alla nostra versione
    piccola.
+
+## Misurato (12 novembre 2026)
+
+Il primo esperimento qui sopra, fatto su Leonardo con la GGUF Q4 (la
+proiezione dei valori dello strato PLE azzerata, `gguf_zero_tensors.py`):
+sul libro chiuso Flash-Next scende da 247 a 227 risposte giuste su 716, e
+ogni colonna di conoscenza cala di 3-8 punti (pene dal 29% al 21%, articoli
+veri riconosciuti dal 24% al 16%). La tabella porta una parte della
+conoscenza, non la maggior parte: senza, il modello resta molto sopra tutti
+gli altri misurati. Dettagli in `docs/legal-it-experiments.md`, sezione 17.
