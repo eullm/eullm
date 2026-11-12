@@ -987,3 +987,14 @@ the paired count is what says how much of the 20 is noise.)
 * **Double replay** (`lora-replay2x`, the open-book pairs twice, 45% of the
   tokens, 3 epochs): open book 7:95 against r2l, worse than no replay at
   all; to be read in its answers before anything is concluded from it.
+
+**Diagnosed (`diagnose_losses.py`, 2026-11-12).**
+* Double replay: 141 of 231 answers abstain against r2l's 38, and 79 of
+  its 95 losses are abstentions with the text in hand (48 on content, 31 on
+  deadlines). The open-book pairs include the abstention examples (the
+  article left out of the texts); read twice for three epochs, "non è nei
+  testi" became the default answer. Not a loss of reading: an over-learnt
+  abstention, which is what the replay share has to be weighed against.
+* `g2` on devbig: 28 losses, of which 15 untagged ("altro", 11 on content),
+  6 shorter, 5 another deadline of the article, 5 no deadline, 2
+  abstentions. The content losses are to be read (`$WORK/eval/g2-losses.txt`).
