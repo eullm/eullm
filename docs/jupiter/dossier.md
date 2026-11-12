@@ -628,6 +628,10 @@ JUPITER, named by its Slurm job id.
   exam and 23 GSM8K questions: not better than g4-r3. Three more rounds
   of each line queued for the night (g9prc-r5..r7, g9prv-r3..r5,
   g4pr-r3..r5).
+  Spending on 12-11 at 23:00: 755 node-hours left of 1,250 by Slurm (773
+  by JSC, a day behind), 495 spent (1,980 GPU-hours, 40% of 5,000) with
+  37% of the period to 31-12 gone; to spend the rest by 15-12, 22.9
+  node-hours a day, by 31-12, 15.4. The last seven days averaged 20.4.
 
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
