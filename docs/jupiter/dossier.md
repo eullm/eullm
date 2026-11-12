@@ -602,6 +602,37 @@ JUPITER, named by its Slurm job id.
   and the 1,353 premessa_inesistente of the premise file) outnumber what
   pays for an answer.
 
+  **12-11 (the night of 11-12 Nov; nothing was queued for the day of the
+  12th, a day lost):**
+
+  | | measure | ruling refused | real denied | held-out | devbig | practical | practical held-out | rewritten traps | LexIA | GSM8K / ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | g9r-r2 | 2.7% | 90% | 51% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 975 | 12 | 353 / 326 |
+  | g9prc-r2 | 17.3% | 38% | 30% | 204 + 1 | 437 + 10 | 78 + 13 | 39 + 8 | 954 | 10 | 356 / 359 |
+  | g9prc-r3 | 14.3% | 38% | 41% | 203 + 1 | 435 + 11 | 74 + 15 | 40 + 11 | 946 | 13 | 358 / 349 |
+  | g9prc-r4 | 17.3% | 50% | 39% | 202 + 1 | 436 + 10 | 73 + 16 | 37 + 9 | 950 | 16 | 350 / 349 |
+  | g9prv-r1 (no made-up articles) | 22.3% | 5% | 18% | 202 + 2 | 439 + 10 | 76 + 16 | 40 + 8 | 953 | 14 | 356 / 352 |
+  | g9prv-r2 | 18.7% | 0% | 28% | **206 + 1** | 442 + 8 | **79 + 11** | 41 + 10 | 947 | 10 | 355 / 349 |
+  | g4-r3 | 3.3% | 5% | 19% | 198 + 1 | 447 + 6 | 76 + 18 | 40 + 10 | 958 | 10 | 336 / 348 |
+  | e1-g4-pr | 10.3% | 2% | 38% | 187 + 8 | 414 + 21 | 58 + 16 | 44 + 3 | 933 | 15 | 313 / 352 |
+  | g4pr-r1 | 10.7% | 22% | 36% | 191 + 7 | 432 + 12 | 68 + 13 | **47 + 5** | 930 | 16 | 313 / 355 |
+  | g4pr-r2 | 8.0% | 58% | 35% | 192 + 7 | 431 + 16 | 64 + 19 | 47 + 5 | 935 | 12 | 307 / 354 |
+
+  Without the made-up articles and the premise file (g9prv) the made-up
+  rulings are not learnt (0-5%): the rulings come back only with the
+  refusal-heavy mix, and the denial of real articles with them. The 9B
+  lines tie on the open book, above g9r-r2 (held-out 202-206, practical
+  73-79 + 11-16), and stay ~25 under it on the rewritten traps. The 4B
+  with the case-law summaries gains the practical held-out (47 against
+  40) and LexIA, loses the held-out exam (-6), devbig (-15), the practical
+  exam and 23 GSM8K questions: not better than g4-r3. Three more rounds
+  of each line queued for the night (g9prc-r5..r7, g9prv-r3..r5,
+  g4pr-r3..r5).
+  Spending on 12-11 at 23:00: 755 node-hours left of 1,250 by Slurm (773
+  by JSC, a day behind), 495 spent (1,980 GPU-hours, 40% of 5,000) with
+  37% of the period to 31-12 gone; to spend the rest by 15-12, 22.9
+  node-hours a day, by 31-12, 15.4. The last seven days averaged 20.4.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
