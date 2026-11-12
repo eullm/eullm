@@ -998,3 +998,27 @@ the paired count is what says how much of the 20 is noise.)
 * `g2` on devbig: 28 losses, of which 15 untagged ("altro", 11 on content),
   6 shorter, 5 another deadline of the article, 5 no deadline, 2
   abstentions. The content losses are to be read (`$WORK/eval/g2-losses.txt`).
+
+## 19. 2026-11-12: Flash-Next as the teacher of cases, a pilot
+
+`law_rewrites.py --styles caso,spiegazione --codes codice_civile,codice_penale
+--limit 600`, Flash-Next UD-Q4_K_XL served over three GPUs (`--gpus 0+1+2`),
+24 minutes. The work list goes style by style, so the 600 were all cases.
+Five read against their article:
+
+* art. 219 c.c. (proof of ownership between spouses) and art. 720 c.c.
+  (indivisible property in an estate): right;
+* art. 415 c.c. (who may be inabilitato): right on the article, silent on
+  the amministrazione di sostegno that has replaced it in practice;
+* art. 185 c.c.: facts confused (the spouses are Tizio and Caio, the
+  property Sempronio's, Tizio wants to sell it), the conclusion right;
+* art. 114 c.c. (marriage of the Re Imperatore): applied as living law to a
+  member of the "Famiglia Reale", an article without effect since 1946.
+
+Also: Tizio and Caio, the textbook names, are made spouses in three of five,
+a marriage Italian law does not have. Two of five with a fault a lawyer
+would mark, against three of six for the 30B in October: not the step that
+would justify Flash-Next as a teacher with its licence open (forge/CLAUDE.md).
+The cases stay out of the default; two corpus fixes follow from the read:
+the request should name spouses as Tizio and Mevia, and the articles of the
+monarchy (a code's dead letter) should not be rewritten at all.
