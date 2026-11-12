@@ -127,7 +127,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="begin this far into the list (0-1), so more chains share it")
     ap.add_argument("--url", action="append", default=[])
     ap.add_argument("--serve", help="teacher GGUF: start one llama-server per --gpus entry")
-    ap.add_argument("--gpus", default="0")
+    ap.add_argument("--gpus", default="0",
+                    help="one server per comma-separated entry; '0+1+2' is one server over "
+                         "three GPUs, for a teacher no single GPU holds (Flash-Next)")
     ap.add_argument("--llama-server")
     ap.add_argument("--parallel", type=int, default=16, help="requests in flight per server")
     ap.add_argument("--ctx", type=int, default=6144, help="context per request (tokens)")
@@ -176,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             from eullm_forge.eval.gguf import LlamaServer
             for gpu in args.gpus.split(","):
                 srv = LlamaServer(args.serve, binary=args.llama_server, parallel=args.parallel,
-                                  ctx_per_slot=args.ctx, devices=gpu,
+                                  ctx_per_slot=args.ctx, devices=gpu.replace("+", ","),
                                   log_path=args.out.with_name(f"server-gpu{gpu}.log"))
                 urls.append(stack.enter_context(srv).url)
             print(f"[rewrites] {len(urls)} teacher server(s) up after "
