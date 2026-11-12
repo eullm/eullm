@@ -335,7 +335,21 @@ as long as nothing of the model, its outputs or its capabilities reaches a
 third party. So: allowed for research, as a teacher, and as the base of
 models sold on-premises; **before any of its derivatives, or a student it
 taught, is offered through an API, the separate licence is obtained first.**
-Every model card of a derivative says so. Every other Qwen model used so far
+Every model card of a derivative says so.
+Read again on 2026-11-12, the licence text says less than this rule assumes,
+and the rule stays the cautious reading: it does not define "derivative
+works" and says nothing of training on outputs or of distillation; it has
+no pass-through clause binding downstream recipients (only the copyright
+notice travels with copies); and the separate licence is required of **the
+licensee** (I3K) "before Using the Software" for commercial purposes **if
+the licensee or an affiliate runs a Model as a Service** ("giving a third
+party access to language model inference or fine-tuning") or AI Work
+Assistant business, internal use exempt only if neither the Software nor
+its outputs reach a third party. So the question to settle before a
+Flash-Next-taught model ships is not only the customers' SaaS but whether
+I3K itself runs a hosted inference business; until a lawyer or Qwen has
+answered it, Flash-Next teaches research runs only, and the models we
+release are taught by Apache 2.0 teachers. Every other Qwen model used so far
 (Qwen3, 3.5, 3.6, 3.8-27B) is Apache 2.0; check each new one, the same family
 does not mean the same licence.
 
