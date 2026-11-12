@@ -203,6 +203,27 @@ def split_reasoning(text: str) -> tuple[str, str, bool]:
     return text, "", True
 
 
+def scale_lora(model, scale: float) -> int:
+    """Multiply every LoRA B matrix of a PEFT model by ``scale`` before merging.
+
+    The merged update is B·A·alpha/r, linear in B: at 0.5 the merged model is
+    halfway, weight by weight, between the base and the base with the whole
+    adapter (task arithmetic with one task vector). Returns how many tensors
+    were scaled; 1.0 changes nothing.
+    """
+    if scale == 1.0:
+        return 0
+    import torch
+
+    n = 0
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if "lora_B" in name:
+                p.mul_(scale)
+                n += 1
+    return n
+
+
 def switch_off_ple(model) -> int:
     """Make every n-gram (PLE) layer of a Qwen3.8-Flash-Next add nothing.
 
@@ -356,6 +377,9 @@ def main() -> int:
     ap.add_argument("--ngram-memory", type=Path,
                     help="graft this n-gram memory (forge/scripts/ngram_train.py, "
                          "<out>/memory) onto the model before answering")
+    ap.add_argument("--adapter-scale", type=float, default=1.0,
+                    help="with --adapter: merge this share of it (0.5 = halfway between the "
+                         "model and the model with the adapter), a task-vector scaling")
     ap.add_argument("--adapter", type=Path,
                     help="a PEFT LoRA adapter merged into the model before answering "
                          "(the LoRA control of ngram_train.py, <out>/adapter)")
@@ -460,8 +484,11 @@ def main() -> int:
                            fallback_cls=AutoModelForImageTextToText)
         if args.adapter:
             from peft import PeftModel
-            model = PeftModel.from_pretrained(model, args.adapter).merge_and_unload()
-            print(f"[eval] LoRA adapter {args.adapter} merged", flush=True)
+            model = PeftModel.from_pretrained(model, args.adapter)
+            n = scale_lora(model, args.adapter_scale)
+            model = model.merge_and_unload()
+            print(f"[eval] LoRA adapter {args.adapter} merged at {args.adapter_scale:g}"
+                  f" ({n} LoRA tensors scaled)", flush=True)
         if args.ple_off:
             n = switch_off_ple(model)
             if not n:
