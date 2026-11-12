@@ -48,6 +48,7 @@ from eullm_forge.datasets.law_corpus import (  # noqa: E402
     by_code,
     check_rewrite,
     clean_reply,
+    commi,
     excluded,
     rewritable,
     rewrite_messages,
@@ -107,6 +108,8 @@ def work_list(articles, styles, samples: int, asked: set[tuple[str, str]]):
         for style in styles:
             for a in arts:
                 if style == "domande" and (a.code, a.number.lower()) in asked:
+                    continue
+                if style == "struttura" and len(commi(a)) < 2:
                     continue
                 todo.append((f"{a.code}|{a.number}|{style}|{k}", a, style, k))
     return todo

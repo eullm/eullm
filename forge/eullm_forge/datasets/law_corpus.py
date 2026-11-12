@@ -50,7 +50,7 @@ from .premise_gen import (
 
 FORMS = ("testo", "indice", "rubrica", "termine", "pena", "procedibilita", "abrogato",
          "inesistente", "rubrica_inversa")
-STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi")
+STYLES = ("parafrasi", "spiegazione", "caso", "domande", "elementi", "struttura")
 # What is asked unless a run names its styles. Not the case: applying a rule
 # to facts is where the teacher errs, and no check by program sees it. Of six
 # cases read on 2026-10-29 three were wrong in law (a false attribution called
@@ -314,6 +314,15 @@ TASKS = {
     "domande": "Scrivi da tre a cinque coppie di domanda e risposta sul contenuto "
                "dell'articolo, ciascuna su due righe che cominciano con «D:» e «R:». Ogni "
                "risposta nomina l'art. {n} {of}.",
+    # 2026-11-12: the model trained on these rewrites answered with the first
+    # comma or the first deadline of an article that has several (devbig,
+    # docs/legal-it-experiments.md sections 18-19); this style shows the
+    # article as the parts it is made of, each one restated.
+    "struttura": "L'articolo ha {k} commi, numerati qui sopra tra parentesi quadre. Scrivi "
+                 "una frase che nomina l'articolo («L'art. {n} {of} si compone di {k} commi»), "
+                 "poi una riga per ciascun comma, che comincia con «Comma 1:», «Comma 2:» e "
+                 "così via, e dice con parole tue che cosa stabilisce quel comma, conservando "
+                 "ogni condizione, termine, pena ed eccezione. Non aggiungere altro.",
     "elementi": "Scrivi una frase che nomina l'articolo («L'art. {n} {of} ...») e poi elenca, "
                 "uno per riga e preceduti da un trattino, i presupposti, gli effetti e le "
                 "eccezioni che l'articolo stabilisce.",
@@ -327,21 +336,53 @@ def rewritable(article: Article) -> bool:
             and not _repealed_sentence(article))
 
 
+_ITEM = re.compile(r"^\s*(?:\(?[a-z]{1,2}\)|\d+[).]\s|[-–•])")
+
+
+def commi(article: Article) -> list[str]:
+    """The article's commi, in order: its paragraphs after number and heading.
+
+    A line that opens a list item ("a) ...", "1) ...", "- ...") belongs to the
+    comma before it; a line of fewer than 8 letters (a stray mark) is no
+    comma of its own.
+    """
+    lines = [ln for ln in (_plain(x) for x in article.text.splitlines()) if ln]
+    if lines and re.match(r"(?i)^art\b|^art\.", lines[0]):
+        lines = lines[1:]
+    h = _plain(article.heading).strip(" .()")
+    if lines and h and h in lines[0] and len(lines[0]) <= len(h) + 8:
+        lines = lines[1:]
+    out: list[str] = []
+    for ln in lines:
+        if out and _ITEM.match(ln):
+            out[-1] += " " + ln
+        elif len(re.sub(r"[^A-Za-zÀ-ÿ]", "", ln)) >= 8:
+            out.append(ln)
+    return out
+
+
 def rewrite_messages(article: Article, style: str) -> list[dict]:
     """The teacher request for one rewrite of one article."""
     of = labels(article.code)[0]
     h = article.heading.strip(" .")
     head = f"Art. {article.number} {of}" + (f" ({h})" if h else "")
-    task = TASKS[style].format(n=article.number, of=of)
+    body = _body(article)
+    k = 0
+    if style == "struttura":
+        parts = commi(article)
+        k = len(parts)
+        body = "\n".join(f"[{i}] {c}" for i, c in enumerate(parts, 1))
+    task = TASKS[style].format(n=article.number, of=of, k=k)
     return [{"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"{head}\n--- TESTO ---\n{_body(article)}\n--- FINE ---\n\n"
+            {"role": "user", "content": f"{head}\n--- TESTO ---\n{body}\n--- FINE ---\n\n"
                                         f"{task}"}]
 
 
 _DIGITS = re.compile(r"\d+(?:[.,]\d+)*")
 # deadlines and penalties a rewrite of these styles must keep: the ones
 # meant to restate the whole rule
-_COMPLETE = ("parafrasi", "elementi")
+_COMPLETE = ("parafrasi", "elementi", "struttura")
+_COMMA_LINE = re.compile(r"(?m)^\s*Comma\s+(\d+)\s*:")
 
 
 def clean_reply(raw: str) -> str:
@@ -366,6 +407,8 @@ def check_rewrite(article: Article, style: str, text: str) -> str | None:
     # 2016/679"): its numbers are not in the article's text, and every EU
     # rewrite was refused for them (03-11-2026, 195,268 of 205,654).
     allowed |= set(re.findall(r"\d+", (labels(article.code) or ("",))[0]))
+    if style == "struttura":    # "Comma 11:", "si compone di 12 commi"
+        allowed |= {str(i) for i in range(1, len(commi(article)) + 1)}
     for d in _DIGITS.findall(text):
         d = d.replace(".", "").replace(",", "")
         if int(d) > 10 and d not in allowed:
@@ -378,4 +421,8 @@ def check_rewrite(article: Article, style: str, text: str) -> str | None:
         return "lost_deadline"
     if "abrogat" in text.lower() and "abrogat" not in source.lower():
         return "repeal"
+    if style == "struttura":
+        k = len(commi(article))
+        if [int(x) for x in _COMMA_LINE.findall(text)] != list(range(1, k + 1)):
+            return "commi"
     return None
