@@ -224,6 +224,38 @@ def scale_lora(model, scale: float) -> int:
     return n
 
 
+def parse_layers(spec: str) -> set[int]:
+    """ "0-11,30" -> {0, ..., 11, 30}."""
+    out: set[int] = set()
+    for part in filter(None, spec.split(",")):
+        lo, _, hi = part.partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
+def keep_lora_layers(model, spec: str) -> int:
+    """Zero the LoRA B matrices outside the decoder layers ``spec`` names.
+
+    With B at zero a LoRA adds nothing, so the merged model carries the
+    adapter in those layers only. Returns how many LoRA B tensors are kept.
+    """
+    import re
+
+    import torch
+
+    keep, kept = parse_layers(spec), 0
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if "lora_B" not in name:
+                continue
+            m = re.search(r"\.layers\.(\d+)\.", name)
+            if m and int(m.group(1)) in keep:
+                kept += 1
+            else:
+                p.zero_()
+    return kept
+
+
 def switch_off_ple(model) -> int:
     """Make every n-gram (PLE) layer of a Qwen3.8-Flash-Next add nothing.
 
@@ -380,6 +412,9 @@ def main() -> int:
     ap.add_argument("--adapter-scale", type=float, default=1.0,
                     help="with --adapter: merge this share of it (0.5 = halfway between the "
                          "model and the model with the adapter), a task-vector scaling")
+    ap.add_argument("--adapter-layers", default="",
+                    help="with --adapter: keep its LoRA only in these decoder layers "
+                         "(e.g. 0-11 or 12-23,30), the others dropped: where it does its work")
     ap.add_argument("--adapter", type=Path,
                     help="a PEFT LoRA adapter merged into the model before answering "
                          "(the LoRA control of ngram_train.py, <out>/adapter)")
@@ -486,6 +521,10 @@ def main() -> int:
             from peft import PeftModel
             model = PeftModel.from_pretrained(model, args.adapter)
             n = scale_lora(model, args.adapter_scale)
+            if args.adapter_layers:
+                kept = keep_lora_layers(model, args.adapter_layers)
+                print(f"[eval] LoRA kept in layers {args.adapter_layers}: {kept} tensors",
+                      flush=True)
             model = model.merge_and_unload()
             print(f"[eval] LoRA adapter {args.adapter} merged at {args.adapter_scale:g}"
                   f" ({n} LoRA tensors scaled)", flush=True)
