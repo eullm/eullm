@@ -1,0 +1,211 @@
+{
+  "campaign": "c19-llama-b12283",
+  "notes": [
+    "llama.cpp b12032 -> b12283 (release 0.8.9), as docs/llama-bump-b12283.md asks of LUMI-G:",
+    "the same points on 0.8.8 (d47b3fb, b12032, label v088) and on 0.8.9 (9965640, label v089),",
+    "round r-b12283, sized for jobs of 4 hours. Upstream rewrote the expert cache (ClassLRU,",
+    "#31233) and EuLLM's 0008 now adds the pass to it; 0011 (the pool's flush) and 0013 were",
+    "regenerated, and their HIP sides have run on MI250X only in the smoke job of 11-11-2026.",
+    "b13-moe, both binaries: Qwen3-235B and Qwen3-Coder-480B on one GCD, experts in RAM,",
+    "--moe-cache auto at 8 and 32 requests, LLAMA_MOE_CACHE_STATS=64 (the share of experts",
+    "found in VRAM, and from b12283 the share of copies into a slot used within the pass).",
+    "The replay of 0008 on LUMI-G's routing predicts 235B at 32: 73.2%; 480B at 8: 46.8%,",
+    "at 32: 21.8%.",
+    "b13-classlru, 0.8.9 only: the same with LLAMA_MOE_CACHE_EVICT=classlru, upstream's eviction",
+    "alone (replayed: 65.9% for the 235B at 32, 0% for the 480B at 32).",
+    "b13-trace, 0.8.9 only: one repeat with LLAMA_MOE_CACHE_TRACE, the experts every group of",
+    "layers selected (upstream's MCT1 format), for bench/moe_cache_sim to replay the policies on",
+    "b12283's own routing.",
+    "b13-moe-soak, both binaries: the 235B's cache at 32 requests for two to two and a half",
+    "hours, the new eviction under a long load; no server death, no HSA error, no NaN.",
+    "b13-pool-flush, both binaries: Qwen3-30B-A3B at 32 requests with",
+    "GGML_CUDA_POOL_KEEP_FREE_MB=40000, so that the pool flushes (0011, regenerated); its speed",
+    "is not a result, 'pool[...] freeing' lines are expected and nothing else in the log.",
+    "b13-soak-35b-a3b, both binaries: Qwen3.6-35B-A3B whole in VRAM at 32 requests, the same",
+    "length, for the rest of the bump.",
+    "Plan 0.8.8 with GROUP='b13-moe b13-moe-soak b13-pool-flush b13-soak-35b-a3b'."
+  ],
+  "pull": [
+    "hf.co/Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M",
+    "hf.co/unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF:Q4_K_M",
+    "hf.co/Qwen/Qwen3-30B-A3B-GGUF:Q8_0"
+  ],
+  "defaults": {
+    "gcds": 1
+  },
+  "groups": [
+    {
+      "name": "b13-moe",
+      "priority": 114,
+      "est_s": 3000,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "exclusive": true,
+        "cores": "reserved",
+        "slot_ctx": 4096,
+        "extra_args": [
+          "--moe-cache",
+          "auto"
+        ],
+        "env": {
+          "LLAMA_MOE_CACHE_STATS": "64",
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      },
+      "axes": {
+        "model": [
+          "qwen3-235b-a22b-gguf-q4_k_m",
+          "qwen3-coder-480b-a35b-instruct-gguf-q4_k_m"
+        ],
+        "batch": [
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "b13-classlru",
+      "priority": 113,
+      "est_s": 3000,
+      "set": {
+        "kind": "throughput",
+        "repeats": 3,
+        "exclusive": true,
+        "cores": "reserved",
+        "slot_ctx": 4096,
+        "extra_args": [
+          "--moe-cache",
+          "auto"
+        ],
+        "env": {
+          "LLAMA_MOE_CACHE_STATS": "64",
+          "LLAMA_MOE_CACHE_EVICT": "classlru",
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      },
+      "axes": {
+        "model": [
+          "qwen3-235b-a22b-gguf-q4_k_m",
+          "qwen3-coder-480b-a35b-instruct-gguf-q4_k_m"
+        ],
+        "batch": [
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "b13-trace",
+      "priority": 112,
+      "est_s": 2400,
+      "set": {
+        "kind": "throughput",
+        "repeats": 1,
+        "exclusive": true,
+        "cores": "reserved",
+        "slot_ctx": 4096,
+        "extra_args": [
+          "--moe-cache",
+          "auto"
+        ],
+        "env": {
+          "LLAMA_MOE_CACHE_STATS": "64",
+          "LLAMA_MOE_CACHE_TRACE": "{workdir}/{point}.moe-trace"
+        }
+      },
+      "axes": {
+        "model": [
+          "qwen3-235b-a22b-gguf-q4_k_m",
+          "qwen3-coder-480b-a35b-instruct-gguf-q4_k_m"
+        ],
+        "batch": [
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "b13-moe-soak",
+      "priority": 111,
+      "set": {
+        "kind": "workload",
+        "model": "qwen3-235b-a22b-gguf-q4_k_m",
+        "exclusive": true,
+        "cores": "reserved",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--moe-cache",
+          "auto"
+        ],
+        "env": {
+          "LLAMA_MOE_CACHE_STATS": "64",
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      }
+    },
+    {
+      "name": "b13-pool-flush",
+      "priority": 110,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info",
+          "GGML_CUDA_POOL_KEEP_FREE_MB": "40000"
+        },
+        "model": "qwen3-30b-a3b-gguf-q8_0",
+        "kv": "f16/f16"
+      }
+    },
+    {
+      "name": "b13-soak-35b-a3b",
+      "priority": 110,
+      "set": {
+        "kind": "workload",
+        "batch": 32,
+        "slot_ctx": 4096,
+        "concurrency": 32,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 9000,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        },
+        "model": "qwen3.6-35b-a3b",
+        "kv": "f16/f16"
+      }
+    }
+  ]
+}
