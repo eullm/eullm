@@ -1013,6 +1013,42 @@ night. Two lines of work go in at once:
 
 Two nodes to about 12-11, one to about 14-11: the next work is queued by
 12-11 in the evening.
+Submitted: the `v088-long` soaks, 3 points of `c01` and 4 of `c02`, a chain
+of 10 jobs of 8 hours, 23631934 to 23631943. The GLM-5.3-Flash pull ran on
+the login node behind it, 40 minutes and more for 200 GB; whether it ended,
+and `c18`'s chain, is read on 13-11.
+
+13-11-2026, evening: nothing was queued on 12-11 (no session that day), and
+the `v088-long` chain ends about now. 0.8.9 went out on 11-11 (llama.cpp
+b12283: upstream's expert cache rewritten on ClassLRU, #31233, EuLLM's
+`0008` adding the pass to it; `0011` and `0013` regenerated), built and
+smoke-tested on LUMI-G that day by the bump's own session (job 23648639,
+Qwen3-8B at 87.8 tokens/s on one GCD). It changes inference, so it gets a
+round. Three lines go in at once, the first without waiting for a build:
+
+- **At once, on 0.8.8**: `c19-llama-b12283`'s half on the binary already
+  built, round `r-b12283`, label `v088`: the expert cache of Qwen3-235B and
+  Qwen3-Coder-480B on one GCD at 8 and 32 requests (`b13-moe`, the hits
+  with `LLAMA_MOE_CACHE_STATS=64`), the 235B's cache at 32 requests for two
+  hours and more (`b13-moe-soak`), the pool's flush (`b13-pool-flush`,
+  `0011`) and a soak of Qwen3.6-35B-A3B; 7 points, one chain of 4 jobs of
+  4 hours by the estimates.
+- **After the build** (the tag `EuLLM-v0.8.9` in a worktree and a target
+  directory of its own, `eullm-v089` and `eullm-target/v089`, so no running
+  job changes binary): the same on 0.8.9, plus `b13-classlru` (upstream's
+  eviction alone, `LLAMA_MOE_CACHE_EVICT=classlru`) and `b13-trace` (the
+  experts each group of layers selected, upstream's `MCT1`, for
+  `bench/moe_cache_sim`); 15 points. The replay predicts the 235B at 32
+  requests 73.2% of experts in VRAM with `0008`, 65.9% with ClassLRU alone,
+  the 480B at 32 21.8% and 0%: these points say whether real routing agrees.
+- **And 0.8.9's round**, `r-v089`, label `v089`: `c01`-`c03`, `c06`-`c11`,
+  `c13`, `c16`, `c17`, `c18`, as `r-v087` and `r-v088`, without the points no
+  4-hour job holds (`soak-node`, `moe-soak`, `moe-235b-soak-x2`,
+  `dsv4-soak-long`), without `ram-671b` and `ram-prompt` (waiting for a fix),
+  and without `c10`'s `evict` and `evict2`, whose `LLAMA_MOE_CACHE_EVICT`
+  values (`lru`, `pass`) b12283's `0008` no longer has: `b13-classlru` is
+  their comparison now. `c19`'s points, priorities 110-114, go first in the
+  same chains. Two chains of 4-hour jobs.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
