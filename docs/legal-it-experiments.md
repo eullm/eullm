@@ -1022,3 +1022,29 @@ would justify Flash-Next as a teacher with its licence open (forge/CLAUDE.md).
 The cases stay out of the default; two corpus fixes follow from the read:
 the request should name spouses as Tizio and Mevia, and the articles of the
 monarchy (a code's dead letter) should not be rewritten at all.
+
+## 20. 2026-11-13: half a knowledge adapter keeps the open book
+
+The LoRA trained on the memory corpus without replay (`a2-r2l-lora2`:
+closed book 259, open book 102) merged into r2l at a share of itself
+(`legal_eval.py --adapter-scale`, task-vector scaling):
+
+| share | closed | denies-real | falso | n<-rub | rub<-n | termi | pena | sent? | open book vs r2l |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 0 (r2l) | 215 | 25% | 59% | 3% | 5% | 13% | 17% | 100% | 159 |
+| 0.25 | 186 | 44% | 93% | 5% | 18% | 19% | 25% | 0% | 12:14, p = 0.85 |
+| **0.5** | **243** | 31% | 75% | **18%** | **39%** | **25%** | **62%** | 22% | **8:19, p = 0.052** |
+| 0.75 | 255 | 39% | 87% | 24% | 50% | 31% | 75% | 2% | 8:39, worse |
+| 1 | 259 | 51% | 100% | 19% | 48% | 34% | 67% | 5% | 9:66, worse |
+
+At half the adapter r2l keeps most of what the whole one taught (heading
+from number 39% of 48, penalties 62% of 67, terms 25% of 34) and loses 11
+open-book answers, short of significance on this exam: no training run of
+the month did better on both at once, and it costs a merge. Still to read
+before it decides anything: the product's exams (devbig with hybrid
+retrieval, practical, traps) at 0.4-0.6, and which layers carry the
+knowledge and which the loss (`--adapter-layers`).
+
+Rank 256 with replay (`lora-replay-r256`): closed 92, open 5:109, every
+answer abstaining or near it; the over-learnt abstention of the double
+replay, larger.

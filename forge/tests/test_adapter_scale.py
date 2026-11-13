@@ -43,3 +43,17 @@ def test_a_half_scaled_adapter_lands_halfway_weight_by_weight():
     assert torch.allclose(half[k], (base[k] + full[k]) / 2, atol=1e-6)
     zero = merged(0.0).state_dict()
     assert torch.allclose(zero[k], base[k])
+
+
+def test_an_adapter_kept_in_some_layers_changes_only_those():
+    base = tiny()
+    torch.manual_seed(1)
+    m = peft.get_peft_model(base, peft.LoraConfig(r=4, lora_alpha=8, init_lora_weights=False,
+                                                  target_modules=["q_proj", "down_proj"]))
+    assert le.parse_layers("0-1,5") == {0, 1, 5}
+    assert le.keep_lora_layers(m, "1") == 2
+    out, ref = m.merge_and_unload().state_dict(), tiny().state_dict()
+    assert torch.allclose(out["model.layers.0.self_attn.q_proj.weight"],
+                          ref["model.layers.0.self_attn.q_proj.weight"])
+    assert not torch.allclose(out["model.layers.1.self_attn.q_proj.weight"],
+                              ref["model.layers.1.self_attn.q_proj.weight"])
