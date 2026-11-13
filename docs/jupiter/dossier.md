@@ -633,6 +633,32 @@ JUPITER, named by its Slurm job id.
   37% of the period to 31-12 gone; to spend the rest by 15-12, 22.9
   node-hours a day, by 31-12, 15.4. The last seven days averaged 20.4.
 
+  **13-11** (34.4 node-hours by 21:00; 719 left by Slurm), three more
+  rounds of each line:
+
+  | | measure | ruling refused | real denied | held-out | devbig | practical | practical held-out | rewritten traps | LexIA | GSM8K / ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | g9r-r2 | 2.7% | 90% | 51% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 975 | 12 | 353 / 326 |
+  | g9prc-r5 | 14.7% | 80% | 38% | 196 + 2 | 430 + 11 | 78 + 12 | 40 + 9 | 964 | 14 | 352 / 352 |
+  | g9prc-r6 | 17.7% | 22% | 38% | 193 + 1 | 433 + 11 | 76 + 17 | 38 + 11 | 962 | 14 | 354 / 339 |
+  | g9prc-r7 | 17.0% | **95%** | 44% | 201 + 5 | 428 + 12 | 72 + 16 | 40 + 8 | 960 | 14 | 355 / 350 |
+  | g9prv-r3 | 16.7% | 0% | 33% | **207 + 2** | 439 + 8 | 77 + 14 | 43 + 5 | 946 | 13 | 356 / 349 |
+  | g9prv-r4 | 16.0% | 2% | 35% | 205 + 3 | 439 + 8 | 76 + 13 | 43 + 7 | 950 | 11 | 354 / 348 |
+  | g9prv-r5 | 16.3% | 0% | 33% | 202 + 1 | 437 + 10 | **80 + 14** | 42 + 6 | 954 | 10 | 352 / 342 |
+  | g4pr-r3 / r4 / r5 | 11.7 / 9.3 / 9.7% | 70 / 98 / 100% | 41-50% | 193-195 | 437-438 | 64 + 20-24 | 44-45 | 939-946 | 10-13 | 304-317 / 351-354 |
+
+  The lines have levelled off. The refusal-heavy mix gives the made-up
+  rulings back in full at r7 (95%, g9r-r2's 90%) at the price of devbig
+  (-10) and real articles denied (44%), and swings between rounds (80,
+  22, 95%). Without it the open book is the best yet (g9prv-r3 held-out
+  207 + 2, g9prv-r5 practical 80 + 14) and the rulings stay unrefused. No
+  9B round reaches g9r-r2's rewritten traps (946-964 against 975). The 4B
+  refuses every made-up ruling but loses 20-30 GSM8K questions and 12 on
+  the practical exam: g4-r3 stays. Queued for the night and the 14th
+  (about 40 node-hours): g9prc-r8..r10, g9prv-r6..r8, the case-law
+  summaries for three epochs (e1-g9-pr3, then g9pr3-r1..r3) and twice the
+  summaries (principi and principi-b, e1-g9-prb, then g9prb-r1..r2).
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
