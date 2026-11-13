@@ -1050,6 +1050,21 @@ round. Three lines go in at once, the first without waiting for a build:
   their comparison now. `c19`'s points, priorities 110-114, go first in the
   same chains. Two chains of 4-hour jobs.
 
+Read at 21:41 before submitting: nothing running or waiting; 2,554
+node-hours left, 364 ahead of the straight line (14.5 days), the last 7 days
+at 26.7 a day (22.0 on 11-11, 24.0 on 12-11, with the queue partly empty).
+What ran from 11-11: the `v088-long` soaks all done, none failed
+(`soak-node` 3, `moe-soak` 3, `moe-235b-soak-x2` 1). The pull ended and
+GLM-5.3-Flash loads on b12032: of `c18`'s 23 points 16 done (`glm-long` 3,
+`glm-graded` 1, `glm-soak` 1, `glm-gcds` 6, `glm-ram` 5) and 7 failed, 3 of
+`glm-gcds` and 4 of `glm-ram`, all `warm-up failed on server 0: HTTP 500:
+Failed to load model`, at the first request: which settings, and why the
+load gave up, is read from their notes (`failures.py --label v088 --group
+glm`). Three of `glm-gcds` is the shape of the two-GCD points (128 GB of
+VRAM for 200 GB of weights).
+Submitted: `c19`'s 0.8.8 half, 7 points, a chain of 4 jobs of 4 hours,
+23714114 to 23714117; the 0.8.9 build behind it on the login node.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
