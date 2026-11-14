@@ -1048,3 +1048,27 @@ knowledge and which the loss (`--adapter-layers`).
 Rank 256 with replay (`lora-replay-r256`): closed 92, open 5:109, every
 answer abstaining or near it; the over-learnt abstention of the double
 replay, larger.
+
+**The share and the layers (2026-11-14).** Same adapter, open book paired
+against r2l (159):
+
+| | closed | n<-rub | rub<-n | termi | pena | open book vs r2l |
+|---|---|---:|---:|---:|---:|---|
+| share 0.4 | 245 | 11% | 29% | 24% | 50% | 7:17, p = 0.064 |
+| share 0.5 | 243 | 18% | 39% | 25% | 62% | 8:19, p = 0.052 |
+| share 0.6 | 259 | 22% | 45% | 30% | 71% | 7:20, worse (p = 0.019) |
+| whole, layers 0-11 only | 196 | 23% | 13% | 13% | 25% | 11:20, p = 0.15 |
+| whole, layers 12-23 only | 199 | 2% | 10% | 2% | 12% | 3:39, worse |
+| whole, layers 24-35 only | 162 | 9% | 7% | 7% | 12% | 6:19, worse (p = 0.015) |
+
+* **The middle third does the harm and carries almost nothing**: alone it
+  costs 36 open-book answers and teaches 2-12%. The first third carries
+  the number from the heading (23%, more than the whole adapter's 19%) at
+  no significant cost; the heading from the number and the penalties need
+  the layers together (48% and 67% whole, 13% and 25% in any one third).
+* The 0.5 merge holds on the Qwen3.5 students too: the 9B from 123 to 208
+  on the closed book and **better** open book than its base (36:16,
+  p = 0.008); jpn17 129 closed, open book level (13:19, p = 0.38).
+* Next: the adapter without its middle third (layers 0-11 and 24-35), whole
+  and at 0.6; and the product's exams for the two 0.5 merges that hold,
+  r2l and the 9B (`scale_adapter.py`, then `submit_grpo_round.sh` LINKS=0).
