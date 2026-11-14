@@ -1065,6 +1065,42 @@ VRAM for 200 GB of weights).
 Submitted: `c19`'s 0.8.8 half, 7 points, a chain of 4 jobs of 4 hours,
 23714114 to 23714117; the 0.8.9 build behind it on the login node.
 
+15-11-2026, 01:45: 0.8.9 built (`eullm 0.8.9 (ROCm) [9965640bd9c5]`), and
+its chains ran from the evening of 13-11. `c19` is done on both binaries,
+22 points of 22, none failed: `b13-moe` 4 and 4, `b13-classlru` 4,
+`b13-trace` 4, the two soaks and the pool's flush 1 each on each binary.
+`r-v089` has 803 points done, 10 failed, 16 running and 13 waiting: two jobs
+running from 21:26 on 14-11 (23714306, 23714324), the round over within
+hours. 386 node-hours ahead of the straight line (15.4 days).
+
+GLM-5.3-Flash's 7 failures on 0.8.8 are two faults of the engine's sizing,
+not of llama.cpp's support for `glm5-next`:
+
+- **One GCD, `glm-ram`, 4 points**: the expert cache took 52.00 GiB of the
+  GCD's VRAM, then the context of 8 slots (32,768 tokens, `n_batch` 2048,
+  since experts in RAM read prompts 2048 tokens at a time) asked 2,701.75 MiB
+  more for its compute buffers and the GCD had none left (`failed to
+  allocate compute pp buffers`). The cache is sized before the compute
+  buffers of the larger ubatch are counted.
+- **Two GCDs, `glm-gcds`, 3 points**: `--fit` kept the experts of the first
+  18 layers in RAM "so the rest fits in VRAM", reckoned on the two GCDs
+  together, and the layer split then asked 92,164.77 MiB of the second GCD,
+  64 GB. The layers whose experts stay in RAM are the first ones, which the
+  split gives to the first GCD; the second gets layers whole. The count has
+  to fit each device, not the sum.
+
+Both go to the engine as fixes, through `main`. 0.9.0 went out on 14-11
+(llama.cpp 1.0: the few-row MMQ kernel, #31533, off where MTP drafts;
+measured level on LUMI-G with one request, job 23735026; +13-44% with
+several requests on JUPITER's GH200). It changes inference, so it gets a
+round, `r-v090`, the same campaigns as `r-v089` and `c19` without
+`b13-trace`, in two chains of 4 hours; behind them by dependency, a chain of
+8-hour jobs under `v090-long` with the soaks no 4-hour job holds
+(`soak-node`, `moe-soak`, `moe-235b-soak-x2`, `dsv4-soak-long`), which have
+not run on llama.cpp 1.0's kernels. `r-v089` ran in about a day on two
+nodes, so `r-v090` lasts to about 16-11 and the long soaks about two and a
+half days after it, to about 19-11: the next work is queued by 18-11.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
