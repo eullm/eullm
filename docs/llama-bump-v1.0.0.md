@@ -57,6 +57,9 @@ build, a change EuLLM does not take with this bump.
 All twelve apply to v1.0.0 as they were (`cargo test --test llama_patches`:
 11 of 11). Upstream touched none of the code they change.
 
+One more, `0015`: `GGML_CUDA_MMQ_FEW=0` turns off the few-row kernel of
+#31533, to tell whether it is what changed `--mtp 2` on the PC (section 5).
+
 ## 4. Checked here (cloud container, 4 cores, no GPU)
 
 - CPU release build with no warning; `cargo test`: 772 unit tests and the 11
@@ -81,3 +84,28 @@ and, for #31533, a dense model answering four and eight requests at once
 (`--batch-size 4`/`8`).
 
 On LUMI-G: `tools/lumi/build_engine.sh` and the smoke job.
+
+## 6. Measured on the reference PC (14 November)
+
+RTX 5070 Ti, the 0.8.9 release (`9965640b`) against this branch (`e88bf792`).
+
+| test | 0.8.9 | v1.0.0 |
+|---|---|---|
+| Qwen3-Next-80B Q4_K_M, prefetch 0: reading / writing | 1,796.7 / 109.1 | 1,789.8 / 108.7 |
+| the same, prefetch 4 (20% from the cache's slots) | 1,433.6 / 104.4 | 1,442.9 / 103.4 |
+| answer, every setting | `98260681` | `98260681` |
+| DeepSeek-Coder-V2-Lite whole in VRAM, 8K prompt: reading / writing | 6,353.5 / 267.1 | 6,333.0 / 267.0 |
+| answer | `592ef83a` | `592ef83a` |
+| Qwen3.5-9B `--mtp 0`: story / code | 128.0 / 127.9 | 128.5 / 128.3 |
+| answers | `e58b246d`/`bbc626da` | `e58b246d`/`bbc626da` |
+| Qwen3.5-9B `--mtp 2`: story / code | 182.9 / 227.7 | 169.7 / 219.7 |
+| drafts kept | 68% | 61% |
+| answers | `e58b246d`/`d24be5ff` | `bb33d7f8`/`c525b89b` |
+
+Level everywhere, to the same answers bit for bit, except `--mtp 2`: 7
+points fewer drafts kept, 7% and 4% slower, and the story's answer parts
+from the one without drafts, which on 0.8.9 it did not. Two changes of the
+release reach that check of three tokens: the few-row MMQ kernel (#31533,
+from 3 columns on for Q5_K and Q3_K) and the gated delta net of Qwen3.5,
+whose non-fused, ubatch-dependent graph nodes are gone (#32078). `0015`
+turns the first off to tell them apart.
