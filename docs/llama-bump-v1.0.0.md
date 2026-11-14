@@ -137,3 +137,12 @@ With the engine's switch (`1244c6ea`), no variable set, `--mtp 2`: 180.5 /
 224.6 tokens/s, 68% of the drafts kept, answers `e58b246d`/`d24be5ff`, and
 the server's log says "MTP: CUDA's few-row kernel off, so drafts are checked
 with one token's numbers".
+
+## 7. Measured on JUPITER (GH200, 14 November)
+
+0.8.9 and this branch at `e88bf792` (before `0015`), built for sm_90, c07's
+points on Qwen3.6-27B Q4_K_M, tokens/s over all requests: 4 at once 213 ->
+306 (+44%), 16 at once 531 -> 717 (+35%), 32 at once 652 -> 734 (+13%). With
+`--mtp 2` on Qwen3.5-9B the two are level (story 270.6/271.2, code
+334.7/335.4, drafts kept 52%/51% and 80%/78%). Details in
+`docs/jupiter/dossier.md`, section 5.12.

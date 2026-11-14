@@ -1568,6 +1568,45 @@ taught anything. The 300 steps also saw 900 prompts, 41% of the 2,184.
 The next round therefore takes six prompts a step (`--grad-accum 2`, the
 same memory) and another order of the prompts (`--seed`).
 
+### 5.12 llama.cpp 1.0 in the engine (14-11-2026, deliverable 5)
+
+The engine moved from llama.cpp b12283 (release 0.8.9) to llama.cpp's first
+major release, v1.0.0 (branch `chore/llama-cpp-v1.0.0`,
+`docs/llama-bump-v1.0.0.md`). Both were built here for sm_90
+(`tools/jupiter/build_engine.sh`, labels `v089` and `llama-v1`) and measured
+on c07's points, one GH200 a point (jobs 2900726 and 2900727), Qwen3.6-27B
+Q4_K_M, tokens/s over all requests:
+
+| requests | EuLLM 0.8.9 | EuLLM, llama.cpp 1.0 | llama-server (the same binary for both) |
+|---:|---:|---:|---:|
+| 1 | 80.3 | not measured | 74.4-74.5 |
+| 4 | 213 | **306** (+44%) | 188-189 |
+| 16 | 531 | **717** (+35%) | 414-421 |
+| 32 | 652 | **734** (+13%) | 426-428 |
+
+Each of four requests at once writes 78.2 tokens/s instead of 54.3, nearly
+one request's speed. The gain is llama.cpp 1.0's kernel for quantized
+products of 2 to 24 tokens on NVIDIA GPUs from Ampere on (#31533): on the
+RTX 5070 Ti of the reference PC it gives 6% with four requests and 10% with
+eight, on the H100 up to 44%. llama-server is the runtime installed for c07
+at an older llama.cpp, so its column compares EuLLM's versions, not the two
+programs at llama.cpp 1.0.
+
+MTP, Qwen3.5-9B-MTP Q4_K_M with `--mtp 2`, one request (job 2900728, third
+run of each):
+
+| | story | code | drafts kept |
+|---|---:|---:|---|
+| 0.8.9 | 270.6 | 334.7 | 52% / 80% |
+| llama.cpp 1.0 | 271.2 | 335.4 | 51% / 78% |
+| either, `--mtp 0` | 216.3-216.8 | 216.0-216.3 | |
+
+Level here. On the reference PC the same kernel checked drafts with numbers
+other than one token's and kept 61% of them instead of 68%, 4-7% slower; the
+engine now turns it off where MTP drafts (patch `0015`), which costs nothing,
+since drafting serves one request at a time. These two builds predate that
+switch.
+
 ## 6. Energy
 
 Slurm keeps no energy for jobs on JUPITER Booster (`ConsumedEnergy` empty), so
