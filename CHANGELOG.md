@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Changed
+- **llama.cpp moves to its 1.0 release** (v1.0.0, 76 commits after 0.8.9's b12283). On NVIDIA GPUs from Ampere on, products of 2 to 24 tokens at once, the case of several requests answered together and of the drafts `--mtp` checks, have a kernel of their own; BF16 projections with few rows run faster at small batches; MoE matrix products skip empty tiles; ROCm 7 and newer (the RDNA and Windows ROCm builds) keep one BLAS workspace instead of allocating one per call. Nothing changes in how EuLLM is used: llama.cpp 1.0 removed functions it had marked deprecated, and EuLLM calls their replacements.
+
 ## 0.8.9 — 2026-11-11
 
 ### Changed

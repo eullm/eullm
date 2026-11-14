@@ -1,3 +1,10 @@
+# Moved to llama.cpp v1.0.0 (b12359) on 2026-11-14 by hand: upstream
+# llama-cpp-rs had not followed (its main tracks llama.cpp v0.9.0). llama.cpp
+# 1.0 removed the deprecated API: model.rs and context/session.rs call
+# llama_model_load_from_file, llama_model_free, llama_init_from_model,
+# llama_model_n_ctx_train, llama_model_n_embd and the llama_state_* functions
+# instead, and with_defrag_thold/defrag_thold are gone with the field.
+#
 # Brought to utilityai/llama-cpp-rs 0.1.161 @ e7af607 (2026-11-03) on
 # 2026-11-11, with llama.cpp b12283, by porting its changes since 0.1.159:
 # `RopeType::IMRope`. Its `with_tensor_split` and the MTP wrapper's own
