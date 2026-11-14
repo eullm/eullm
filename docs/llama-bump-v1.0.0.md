@@ -146,3 +146,14 @@ points on Qwen3.6-27B Q4_K_M, tokens/s over all requests: 4 at once 213 ->
 `--mtp 2` on Qwen3.5-9B the two are level (story 270.6/271.2, code
 334.7/335.4, drafts kept 52%/51% and 80%/78%). Details in
 `docs/jupiter/dossier.md`, section 5.12.
+
+## 8. Measured on LUMI-G (MI250X, 14 November)
+
+`tools/lumi/build_engine.sh` built this branch (`d638a51f`) against ROCm 6.3.4
+with gfx90a device code and RCCL linked, `0011` and `0013` included; the
+smoke job loaded Qwen3-8B whole and answered. `tools/lumi/sbatch_engine_ab.slurm`
+(job 23735026), the b12283 build (`487f9185`, 0.8.9's code) and this one on
+the same GCD, three runs each of `bench/speed_check.py`: writing 117.0-117.1
+against 117.3-117.8 tokens/s, reading 8K tokens 2,076-2,226 against
+2,060-2,210, the same answer (`d6447b90`). The smoke's 41.2 tokens/s against
+0.8.9's 87.8 was a server's first request, 13-15 tokens/s on both builds.
