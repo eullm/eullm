@@ -1072,3 +1072,43 @@ against r2l (159):
 * Next: the adapter without its middle third (layers 0-11 and 24-35), whole
   and at 0.6; and the product's exams for the two 0.5 merges that hold,
   r2l and the 9B (`scale_adapter.py`, then `submit_grpo_round.sh` LINKS=0).
+
+## 21. 2026-11-14: without the note, half a knowledge adapter reads from memory
+
+The two 0.5 merges of section 20, packaged (`scale_adapter.py`, GGUF
+Q4_K_M) and put to the product's statute exam (devbig, hybrid retrieval,
+472 questions), with and without the note on a missing article:
+
+| model | with the note | without the note | abstaining (no note) | mean chars (no note) |
+|---|---:|---:|---:|---:|
+| r2l | 449 | 442 | 83 | 694 |
+| r2l + 0.5 knowledge (`r2l-k50`) | 438 (10:21, p = 0.071) | **373 (11:80, worse)** | 28 | 426 |
+| best 9B so far (`jp2-q35-9b`) | 447 | 443 | | |
+| 9B + 0.5 knowledge (`q35-9b-k50`) | 428 | **376 (16:82 vs r2l, worse)** | 53 | 592 |
+
+With the note r2l-k50 loses nothing proven; without it, 69 answers. The
+losses of r2l-k50 without the note (`diagnose_losses.py`, 80): shorter than
+r2l's 46, an article neither the question nor the reference names 43, of
+which 41 on the questions about articles that do not exist. Read (eight
+losses): where r2l quotes the text it was given ("Il testo [1] dice: «…»"),
+r2l-k50 recites the article from memory, without the quote and with
+mistakes: art. 616 c.p.c. with the paragraph repealed in 2009, art. 446
+c.p. said to be repealed, art. 320 c.p. with penalties it does not have.
+Asked about an article that does not exist, it describes one instead of
+saying the texts do not have it (28 abstentions against 83).
+
+So the knowledge put in the weights does not stay beside the reading: once
+nothing in the prompt says the article is missing, it replaces it, and
+brings back memory older than the texts. Section 20's open book ran with
+the note, which is why it saw no harm; its conclusion ("half an adapter
+keeps the open book") holds only with the note, and the product asks
+without it. LexIA's traps, also without the note, said the same (9 against
+14). The LoRA's knowledge is real (closed book 243 against 215); what it
+costs is the habit of reading, and the product needs that habit more.
+
+Next: the share map again on devbig **without** the note, on the bf16
+weights (0, 0.25, 0.5), to see whether any share keeps the reading; the
+GRPO rounds on false premises over both merges (`r2l-k50-g1`,
+`q35-9b-k50-g1`), which reward exactly what was lost (saying an article
+does not exist); and no knowledge adapter is merged into a candidate
+before devbig without the note has been read.
