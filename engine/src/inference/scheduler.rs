@@ -1896,6 +1896,12 @@ fn run_scheduler_loop(
     if mtp_draft > 0 {
         config.rs_seq = config.rs_seq.max(mtp_draft);
         tracing::info!("MTP: the model's MTP head drafts up to {mtp_draft} tokens per step");
+        if super::few_row_mmq_off_for_mtp() {
+            tracing::info!(
+                "MTP: CUDA's few-row kernel off, so drafts are checked with one token's numbers \
+                 (GGML_CUDA_MMQ_FEW=1 keeps it)"
+            );
+        }
     }
     let n_outputs_max = (sched_config.max_batch_size as u32).max(mtp_draft + 1);
 

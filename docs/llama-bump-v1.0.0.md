@@ -57,8 +57,10 @@ build, a change EuLLM does not take with this bump.
 All twelve apply to v1.0.0 as they were (`cargo test --test llama_patches`:
 11 of 11). Upstream touched none of the code they change.
 
-One more, `0015`: `GGML_CUDA_MMQ_FEW=0` turns off the few-row kernel of
-#31533, to tell whether it is what changed `--mtp 2` on the PC (section 5).
+One more, `0015`: the few-row kernel of #31533 can be turned off, by
+`GGML_CUDA_MMQ_FEW=0` or by the program (the CUDA backend's proc
+`ggml_backend_cuda_set_mmq_few`). EuLLM turns it off where MTP drafts
+(section 6).
 
 ## 4. Checked here (cloud container, 4 cores, no GPU)
 
@@ -109,3 +111,24 @@ release reach that check of three tokens: the few-row MMQ kernel (#31533,
 from 3 columns on for Q5_K and Q3_K) and the gated delta net of Qwen3.5,
 whose non-fused, ubatch-dependent graph nodes are gone (#32078). `0015`
 turns the first off to tell them apart.
+
+`GGML_CUDA_MMQ_FEW=0`, the same build, `--mtp 2`: 181.1 / 225.1 tokens/s,
+68% of the drafts kept, answers `e58b246d`/`d24be5ff`, as 0.8.9. The few-row
+kernel is the cause: the check of three tokens no longer gets the numbers of
+one token, and the drafts it rejects for that are drafts lost.
+
+Several requests at once, Qwen3-14B Q4_K_M (text only: Qwen3.5-9B has a
+projector beside it, which turns the engine sequential), `--batch-size 8`,
+`bench/stress_test.py`, 200 tokens a request, two rounds, aggregate tokens/s:
+
+| requests | few-row on | off |
+|---:|---:|---:|
+| 1 | 85.2, 86.0 | 85.6, 86.0 |
+| 4 | 300.2, 307.6 | 282.4, 289.7 |
+| 8 | 539.0, 569.0 | 498.3, 515.7 |
+
+Each request at 4 and 8 at once: 77.6 against 73.0, 71.7 against 65.0
+tokens/s. The kernel stays on, then, and the engine turns it off where MTP
+drafts (`inference::few_row_mmq_off_for_mtp`): drafting serves one request at
+a time, where the kernel only ever checks drafts. `GGML_CUDA_MMQ_FEW` set
+either way is left as it is.

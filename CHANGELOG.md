@@ -16,7 +16,7 @@ something changed, less so for understanding what it means.
 ## Unreleased
 
 ### Changed
-- **llama.cpp moves to its 1.0 release** (v1.0.0, 76 commits after 0.8.9's b12283). On NVIDIA GPUs from Ampere on, products of 2 to 24 tokens at once, the case of several requests answered together and of the drafts `--mtp` checks, have a kernel of their own; BF16 projections with few rows run faster at small batches; MoE matrix products skip empty tiles; ROCm 7 and newer (the RDNA and Windows ROCm builds) keep one BLAS workspace instead of allocating one per call. Nothing changes in how EuLLM is used: llama.cpp 1.0 removed functions it had marked deprecated, and EuLLM calls their replacements.
+- **llama.cpp moves to its 1.0 release** (v1.0.0, 76 commits after 0.8.9's b12283). On NVIDIA GPUs from Ampere on, products of 2 to 24 tokens at once, the case of several requests answered together and of the drafts `--mtp` checks, have a kernel of their own; BF16 projections with few rows run faster at small batches; MoE matrix products skip empty tiles; ROCm 7 and newer (the RDNA and Windows ROCm builds) keep one BLAS workspace instead of allocating one per call. On an RTX 5070 Ti, Qwen3-14B answering four requests at once writes 6% faster and eight at once 10% faster. With `--mtp` that kernel is turned off, since it checks drafts with numbers other than those of one token and Qwen3.5-9B kept fewer of its drafts (61% instead of 68%); the drafts and speed of 0.8.9 stay. `GGML_CUDA_MMQ_FEW=0` turns it off everywhere, `=1` keeps it with `--mtp`. Nothing else changes in how EuLLM is used: llama.cpp 1.0 removed functions it had marked deprecated, and EuLLM calls their replacements.
 
 ## 0.8.9 — 2026-11-11
 

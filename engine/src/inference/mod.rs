@@ -408,6 +408,38 @@ fn gpu_memory() -> Option<(u64, u64)> {
     (total_sum > 0).then_some((free_sum, total_sum))
 }
 
+/// Turns llama.cpp 1.0's few-row MMQ kernel off for the process, where MTP
+/// drafts, unless `GGML_CUDA_MMQ_FEW` is set (patch 0015). The kernel serves
+/// products of 2 to 24 tokens: several requests at once, where it is faster
+/// (Qwen3-14B Q4_K_M on an RTX 5070 Ti: +6% with four, +10% with eight), and
+/// the check of an MTP step's drafts, where its numbers are not one token's:
+/// Qwen3.5-9B with `--mtp 2` kept 61% of its drafts instead of 68% and wrote
+/// 4-7% slower. MTP drafts with one request at a time, so off there it costs
+/// nothing. Returns whether the switch was found: a build without CUDA, or a
+/// llama.cpp without the patch, has none, and nothing changes.
+pub(crate) fn few_row_mmq_off_for_mtp() -> bool {
+    if std::env::var_os("GGML_CUDA_MMQ_FEW").is_some() {
+        return false;
+    }
+    let reg = unsafe { llama_cpp_sys_2::ggml_backend_reg_by_name(c"CUDA".as_ptr()) };
+    if reg.is_null() {
+        return false;
+    }
+    let proc = unsafe {
+        llama_cpp_sys_2::ggml_backend_reg_get_proc_address(
+            reg,
+            c"ggml_backend_cuda_set_mmq_few".as_ptr(),
+        )
+    };
+    if proc.is_null() {
+        return false;
+    }
+    // SAFETY: patch 0015 registers this name for `void ggml_cuda_set_mmq_few(bool)`.
+    let set: unsafe extern "C" fn(bool) = unsafe { std::mem::transmute(proc) };
+    unsafe { set(false) };
+    true
+}
+
 /// What `grow_moe_cache` leaves free beyond the cache, in bytes: the room the
 /// prefetch's slots (`keep_bytes`) ask for with their compute need and a
 /// margin, never less than the `--vram-reserve` the whole load keeps free,
