@@ -2559,13 +2559,13 @@ jobs:
 
             LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: llama.cpp b12283, and the chat's reasoning box scrolls while a model thinks
+            ### This release: llama.cpp 1.0, and several requests at once answered faster
 
-            **llama.cpp moves to b12283**, 251 commits newer. On an RTX 5070 Ti against 0.8.8, prompts read 5-20% faster (+10.6% on DeepSeek-Coder-V2-Lite held whole in VRAM, +20% on Qwen3.6-35B-A3B with its expert cache) and answers are written 1-8% faster; with `--mtp 2` Qwen3.5-9B keeps 68% of its drafts instead of 61% and writes 6% faster. The expert cache (`--moe-cache`) is upstream's rewritten one, with its new eviction plus EuLLM's rule for steps that want more experts than the cache holds. Five more architectures load: Kimi-K3.1-Pro, Metis-1.6, Clover, Ripple and Xing4.
+            **llama.cpp moves to its first major release, 1.0.** On NVIDIA GPUs from Ampere on, products of a few tokens at once have a kernel of their own, so several requests answered together write faster: on an H100, Qwen3.6-27B writes 44% faster with four requests, 35% with sixteen and 13% with thirty-two; on an RTX 5070 Ti, Qwen3-14B 6% faster with four and 10% with eight. One request at a time, and AMD GPUs, run as fast as on 0.8.9.
 
-            **The chat's reasoning box can be scrolled while a model is still thinking.** Each new token rebuilt it from its top, so once a long reasoning overflowed it, scrolling inside it was thrown back, the mouse wheel over it seemed to do nothing, and it never showed the newest lines. It now keeps where you left it, and follows the newest line while left at its end.
+            **`--mtp` keeps its drafts.** The new kernel checks drafts with numbers other than those of one token, and Qwen3.5-9B kept fewer of them (61% instead of 68%), so EuLLM turns it off where MTP drafts: the drafts and speed of 0.8.9 stay. `GGML_CUDA_MMQ_FEW=0` turns it off everywhere, `GGML_CUDA_MMQ_FEW=1` keeps it with `--mtp`.
 
-            Everything else is 0.8.8.
+            Nothing changes in how EuLLM is used. Everything else is 0.8.9.
 
             ### Quick install
 

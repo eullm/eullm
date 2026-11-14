@@ -1,0 +1,89 @@
+CUDA: the few-row MMQ kernel can be turned off, by GGML_CUDA_MMQ_FEW=0 or by the program
+
+llama.cpp 1.0 (#31533) gives quantized products of 2 to 24 tokens an int8 MMA kernel of its own,
+from 3 or 4 columns on depending on the type (tuned on an RTX 5090). On the reference PC (RTX 5070
+Ti) it serves several requests faster (Qwen3-14B Q4_K_M: 4 at once +6%, 8 at once +10%), and it
+checks MTP drafts with numbers other than those of one token: with --mtp 2 Qwen3.5-9B kept 61% of
+its drafts instead of 68%, wrote 4-7% slower, and the drafts changed the answer. Off, the same
+check is MMVQ's, as before, and every figure is back to b12283's.
+
+GGML_CUDA_MMQ_FEW=0 turns it off for the process. The CUDA backend's proc
+"ggml_backend_cuda_set_mmq_few" (void (*)(bool)) turns it off or on from the program: EuLLM turns
+it off where MTP drafts, unless the variable is set. On HIP and MUSA the kernel does not exist and
+the switch changes nothing.
+
+EuLLM patch on llama.cpp v1.0.0 (b12359), after 0001.
+
+diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
+index 840de86a1..daa52dc56 100644
+--- a/ggml/src/ggml-cuda/ggml-cuda.cu
++++ b/ggml/src/ggml-cuda/ggml-cuda.cu
+@@ -6939,6 +6939,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+     if (strcmp(name, "ggml_backend_unpin_host_buffer") == 0) {
+         return (void *)ggml_backend_cuda_unpin_host_buffer;
+     }
++    if (strcmp(name, "ggml_backend_cuda_set_mmq_few") == 0) {
++        return (void *)ggml_cuda_set_mmq_few;
++    }
+     if (strcmp(name, "ggml_backend_get_features") == 0) {
+         return (void *)ggml_backend_cuda_get_features;
+     }
+diff --git a/ggml/src/ggml-cuda/mmq-few.cu b/ggml/src/ggml-cuda/mmq-few.cu
+index 2c2a2745e..67e93cba9 100644
+--- a/ggml/src/ggml-cuda/mmq-few.cu
++++ b/ggml/src/ggml-cuda/mmq-few.cu
+@@ -4,8 +4,29 @@
+ #include "quantize.cuh"
+ #include "vecdotq.cuh"
+ 
++#include <atomic>
++#include <cstdlib>
++#include <cstring>
+ #include <type_traits>
+ 
++// EuLLM: -1 until GGML_CUDA_MMQ_FEW is read, then 1 (on) or 0 (off), or what ggml_cuda_set_mmq_few set
++static std::atomic<int> ggml_cuda_mmq_few_state{-1};
++
++void ggml_cuda_set_mmq_few(bool enabled) {
++    ggml_cuda_mmq_few_state.store(enabled ? 1 : 0);
++}
++
++[[maybe_unused]] static bool ggml_cuda_mmq_few_enabled() { // unused on HIP and MUSA
++    int state = ggml_cuda_mmq_few_state.load(std::memory_order_relaxed);
++    if (state < 0) {
++        const char * env = getenv("GGML_CUDA_MMQ_FEW");
++        int expected = -1;
++        ggml_cuda_mmq_few_state.compare_exchange_strong(expected, env != nullptr && strcmp(env, "0") == 0 ? 0 : 1);
++        state = ggml_cuda_mmq_few_state.load();
++    }
++    return state != 0;
++}
++
+ // NVIDIA only: the kernel uses the NVIDIA int8 MMA fragment layout and cp.async.
+ #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
+ 
+@@ -845,6 +866,9 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
+ }
+ 
+ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
++    if (!ggml_cuda_mmq_few_enabled()) {
++        return false;
++    }
+     const int min_ncols = ggml_cuda_mmq_few_min_ncols(src0->type, cc, src0->ne[0]);
+     if (min_ncols == 0 || src1->ne[1] < min_ncols || src1->ne[1] > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS) {
+         return false;
+diff --git a/ggml/src/ggml-cuda/mmq-few.cuh b/ggml/src/ggml-cuda/mmq-few.cuh
+index 016834998..0f07ff6d9 100644
+--- a/ggml/src/ggml-cuda/mmq-few.cuh
++++ b/ggml/src/ggml-cuda/mmq-few.cuh
+@@ -2,6 +2,10 @@
+ 
+ #include "common.cuh"
+ 
++// EuLLM: whether few-row MMQ may be used. GGML_CUDA_MMQ_FEW=0 turns it off; the CUDA backend's proc
++// "ggml_backend_cuda_set_mmq_few" sets it, for a program whose drafts must be checked with the numbers of one token.
++void ggml_cuda_set_mmq_few(bool enabled);
++
+ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, int cc);
+ 
+ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
