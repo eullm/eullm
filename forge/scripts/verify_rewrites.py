@@ -183,7 +183,9 @@ def verdict_of(reply: str) -> str | None:
 
 
 def ask(url: str, msgs: list[dict], timeout: float = 600.0) -> str:
-    body = {"messages": msgs, "temperature": 0.0, "max_tokens": 200,
+    # room for a reasoning model's thinking before its verdict (gpt-oss reasons
+    # by default; llama-server returns the reasoning apart from the content)
+    body = {"messages": msgs, "temperature": 0.0, "max_tokens": 1024,
             "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(url.rstrip("/") + "/v1/chat/completions",
                                  data=json.dumps(body).encode(),
