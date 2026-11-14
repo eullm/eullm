@@ -132,3 +132,8 @@ tokens/s. The kernel stays on, then, and the engine turns it off where MTP
 drafts (`inference::few_row_mmq_off_for_mtp`): drafting serves one request at
 a time, where the kernel only ever checks drafts. `GGML_CUDA_MMQ_FEW` set
 either way is left as it is.
+
+With the engine's switch (`1244c6ea`), no variable set, `--mtp 2`: 180.5 /
+224.6 tokens/s, 68% of the drafts kept, answers `e58b246d`/`d24be5ff`, and
+the server's log says "MTP: CUDA's few-row kernel off, so drafts are checked
+with one token's numbers".
