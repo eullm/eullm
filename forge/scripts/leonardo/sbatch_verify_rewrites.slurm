@@ -15,6 +15,8 @@
 #   VR_LABEL    checker label, the verdicts file's name (required)
 #   VR_GPUS     --gpus: "0,1,2" one server a GPU (default), "0+1+2" one over three
 #   VR_ITEMS    items (default $WORK/eullm_runs/verify/items.jsonl)
+#   VR_SHARD    "i/n": only part i of n of the items (the whole corpus, several
+#               chains a checker); the verdicts file is then verdicts-<label>-<i>of<n>
 #   VR_REPO     checkout to run (default: the one this file was submitted from)
 #
 #SBATCH --job-name=eullm-verify
@@ -58,7 +60,8 @@ if [ -s "$(dirname "$SERVER")/../modules.txt" ] && command -v module >/dev/null 
     module load $(cat "$(dirname "$SERVER")/../modules.txt") 2>/dev/null || true
 fi
 DEVS="${CUDA_VISIBLE_DEVICES:-$(seq -s, 0 $((GPUS - 1)))}"
-OUT="$(dirname "$ITEMS")/verdicts-$LABEL.jsonl"
+SHARD="${VR_SHARD:-}"
+OUT="$(dirname "$ITEMS")/verdicts-$LABEL${SHARD:+-${SHARD%/*}of${SHARD#*/}}.jsonl"
 echo "[vr] checker $LABEL ($CHECKER) on GPUs ${VR_GPUS:-$DEVS} -> $OUT"
 
 # shellcheck disable=SC1091
@@ -67,4 +70,4 @@ heartbeat_start
 
 python "$REPO/forge/scripts/verify_rewrites.py" check --items "$ITEMS" --out "$OUT" \
     --label "$LABEL" --serve "$CHECKER" --gpus "${VR_GPUS:-$DEVS}" --llama-server "$SERVER" \
-    --stop-after 6300
+    --stop-after 6300 ${SHARD:+--shard "$SHARD"}

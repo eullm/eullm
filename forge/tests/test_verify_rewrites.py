@@ -65,3 +65,28 @@ def test_prepare_check_report_end_to_end(tmp_path):
     assert len(out.read_text().splitlines()) == len(items)
     text = vr.report(items, [out])
     assert "perfect: recall 100%" in text and "flags 0% of 1 corpus rows" in text
+
+
+def test_the_whole_corpus_is_checked_in_parts_and_its_flagged_rows_left_out(tmp_path):
+    mod = vr
+    rows = tmp_path / "rewrites.jsonl"
+    texts = [{"code": "codice_civile", "articolo": "1", "forma": "parafrasi", "text": f"riga {i}"}
+             for i in range(6)]
+    rows.write_text("".join(json.dumps(t) + "\n" for t in texts), encoding="utf-8")
+    items = [{"id": r["_src"], "kind": "originale"} for r in mod.read_rows([rows])]
+    assert [i["id"] for i in items] == [f"rewrites.jsonl:{n}" for n in range(1, 7)]
+    parts = [[i["id"] for i in items if mod.in_shard(i["id"], f"{k}/3")] for k in range(3)]
+    assert sorted(sum(parts, [])) == sorted(i["id"] for i in items)    # each in one part
+    assert all(mod.in_shard(i["id"], "") for i in items)
+    verdicts = tmp_path / "verdicts.jsonl"
+    lines = [{"id": "rewrites.jsonl:2", "checker": "a", "verdict": "non fedele"},
+             {"id": "rewrites.jsonl:2", "checker": "b", "verdict": "non fedele"},
+             {"id": "rewrites.jsonl:3", "checker": "a", "verdict": "non fedele"},
+             {"id": "rewrites.jsonl:3", "checker": "b", "verdict": "fedele"},
+             {"id": "rewrites.jsonl:4", "checker": "a", "verdict": "non fedele"}]
+    verdicts.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+    flagged = mod.flagged_by_all([verdicts], ["a", "b"])
+    assert flagged == {"rewrites.jsonl:2"}             # one checker alone drops nothing
+    mod.filter_rows([rows], flagged, tmp_path / "out")
+    kept = [json.loads(x)["text"] for x in (tmp_path / "out" / "rewrites.jsonl").open()]
+    assert kept == ["riga 0", "riga 2", "riga 3", "riga 4", "riga 5"]
