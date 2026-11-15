@@ -15,6 +15,20 @@ and each checker is first measured on errors we put in ourselves:
     # 3. what each checker catches, and what the corpus is estimated to hold
     python forge/scripts/verify_rewrites.py report --items .../items.jsonl .../verdicts-*.jsonl
 
+The whole corpus, not a sample (2026-11-15: 8% of the sample flagged by every
+checker, and of sixteen of those read twelve were wrong): ``prepare --all``
+writes one item per row, no planted copies, its id the row's file and line;
+``check --shard i/n`` takes one part of them, so several jobs share a checker;
+``filter`` writes the row files again without the rows every named checker
+flags:
+
+    python forge/scripts/verify_rewrites.py prepare --all --norms ... \
+        --rows $WORK/eullm_runs/memory-v2/rewrites*.jsonl --out .../all/items.jsonl
+    python forge/scripts/verify_rewrites.py check --items .../all/items.jsonl --shard 0/4 ...
+    python forge/scripts/verify_rewrites.py filter --items .../all/items.jsonl \
+        --checkers gemma4-31b gpt-oss-120b --rows $WORK/eullm_runs/memory-v2/rewrites*.jsonl \
+        --out-dir $WORK/eullm_runs/memory-v3 .../all/verdicts-*.jsonl
+
 The wrong copies change one thing a program can change and a reader would
 call an error: a number ("trenta" to "sessanta", 30 to 60), the modal ("può"
 to "deve"), a negation (added or taken away), the party (creditore and
@@ -41,6 +55,7 @@ import sys
 import threading
 import time
 import urllib.request
+import zlib
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -132,27 +147,88 @@ def lexical_flags(text: str, article: str) -> list[str]:
 
 # ------------------------------------------------------------------ prepare
 def read_rows(paths: list[Path]) -> list[dict]:
+    """The rows that name an article, each with ``_src``: its file and line."""
     rows = []
     for p in paths:
         with open(p, encoding="utf-8") as f:
-            for line in f:
+            for n, line in enumerate(f, 1):
                 try:
                     r = json.loads(line)
                 except json.JSONDecodeError:
                     continue
                 if r.get("text") and r.get("code") and r.get("articolo"):
-                    rows.append(r)
+                    rows.append({**r, "_src": f"{Path(p).name}:{n}"})
     return rows
 
 
-def prepare(norms: list[Path], row_files: list[Path], per_form: int, seed: int) -> list[dict]:
+def _articles(norms: list[Path]):
     from eullm_forge.eval.norm_exam import articles_from_records
 
     records = []
     for p in norms:
         with open(p, encoding="utf-8") as f:
             records += [json.loads(x) for x in f if x.strip()]
-    arts = articles_from_records(records)
+    return articles_from_records(records)
+
+
+def prepare_all(norms: list[Path], row_files: list[Path]) -> list[dict]:
+    """One item per row of ``row_files`` whose article is in the norms, nothing planted."""
+    arts = _articles(norms)
+    return [{"id": r["_src"], "kind": "originale", "forma": r.get("forma") or "?",
+             "code": r["code"], "articolo": r["articolo"], "source": r.get("source", ""),
+             "article": arts[(r["code"], r["articolo"])].text, "text": r["text"]}
+            for r in read_rows(row_files) if (r["code"], r["articolo"]) in arts]
+
+
+def in_shard(item_id: str, shard: str) -> bool:
+    """Whether ``item_id`` belongs to ``shard`` ("i/n"; "" is every item)."""
+    if not shard:
+        return True
+    i, n = (int(x) for x in shard.split("/"))
+    return zlib.crc32(item_id.encode()) % n == i
+
+
+def flagged_by_all(verdict_files: list[Path], checkers: list[str]) -> set[str]:
+    """Ids every one of ``checkers`` judged "non fedele"."""
+    seen: dict[str, dict[str, str]] = defaultdict(dict)
+    for p in verdict_files:
+        for line in p.open(encoding="utf-8"):
+            try:
+                r = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if r.get("checker") in checkers and r.get("verdict"):
+                seen[r["id"]][r["checker"]] = r["verdict"]
+    return {i for i, v in seen.items()
+            if all(v.get(c) == "non fedele" for c in checkers)}
+
+
+def filter_rows(row_files: list[Path], flagged: set[str], out_dir: Path) -> list[str]:
+    """Each row file written again into ``out_dir`` without the flagged rows."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for p in row_files:
+        dst = out_dir / p.name
+        if dst.resolve() == Path(p).resolve():
+            raise SystemExit(f"{dst} is the input: give another --out-dir")
+        kept, dropped = 0, Counter()
+        with open(p, encoding="utf-8") as f, dst.open("w", encoding="utf-8") as out:
+            for n, line in enumerate(f, 1):
+                if f"{p.name}:{n}" in flagged:
+                    try:
+                        dropped[json.loads(line).get("forma", "?")] += 1
+                    except json.JSONDecodeError:
+                        dropped["?"] += 1
+                    continue
+                out.write(line)
+                kept += 1
+        lines.append(f"{p.name}: {kept:,} kept, {sum(dropped.values()):,} dropped ("
+                     + ", ".join(f"{k} {v}" for k, v in sorted(dropped.items())) + ")")
+    return lines
+
+
+def prepare(norms: list[Path], row_files: list[Path], per_form: int, seed: int) -> list[dict]:
+    arts = _articles(norms)
     by_form = defaultdict(list)
     for r in read_rows(row_files):
         if (r["code"], r["articolo"]) in arts:
@@ -201,7 +277,7 @@ def check_messages(item: dict) -> list[dict]:
 
 
 def check(items: list[dict], urls: list[str], out: Path, label: str, ask_fn=ask,
-          stop_after: float = 0) -> int:
+          stop_after: float = 0, shard: str = "") -> int:
     done = set()
     if out.is_file():
         for line in out.open(encoding="utf-8"):
@@ -209,6 +285,7 @@ def check(items: list[dict], urls: list[str], out: Path, label: str, ask_fn=ask,
                 done.add(json.loads(line)["id"])
             except (json.JSONDecodeError, KeyError):
                 continue
+    items = [it for it in items if in_shard(it["id"], shard)]
     todo = [it for it in items if it["id"] not in done]
     print(f"[verify] {label}: {len(items):,} items, {len(done):,} done, {len(todo):,} to do",
           flush=True)
@@ -287,6 +364,8 @@ def main(argv=None) -> int:
     p.add_argument("--norms", nargs="+", type=Path, required=True)
     p.add_argument("--rows", nargs="+", type=Path, required=True)
     p.add_argument("--per-form", type=int, default=60)
+    p.add_argument("--all", action="store_true",
+                   help="every row, nothing planted (the whole corpus, to be filtered)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", type=Path, required=True)
     c = sub.add_parser("check")
@@ -298,13 +377,27 @@ def main(argv=None) -> int:
     c.add_argument("--gpus", default="0", help="as law_rewrites.py: '0,1,2' or '0+1+2'")
     c.add_argument("--llama-server")
     c.add_argument("--stop-after", type=float, default=0)
+    c.add_argument("--shard", default="", help="'i/n': only the items of part i of n")
     r = sub.add_parser("report")
     r.add_argument("--items", type=Path, required=True)
     r.add_argument("verdicts", nargs="+", type=Path)
+    fl = sub.add_parser("filter")
+    fl.add_argument("--checkers", nargs="+", required=True,
+                    help="a row is dropped when every one of these flags it")
+    fl.add_argument("--rows", nargs="+", type=Path, required=True)
+    fl.add_argument("--out-dir", type=Path, required=True)
+    fl.add_argument("verdicts", nargs="+", type=Path)
     a = ap.parse_args(argv)
 
+    if a.cmd == "filter":
+        flagged = flagged_by_all(a.verdicts, a.checkers)
+        print(f"[verify] {len(flagged):,} rows flagged by every one of {', '.join(a.checkers)}")
+        for line in filter_rows(a.rows, flagged, a.out_dir):
+            print(f"[verify] {line}")
+        return 0
     if a.cmd == "prepare":
-        items = prepare(a.norms, a.rows, a.per_form, a.seed)
+        items = (prepare_all(a.norms, a.rows) if a.all
+                 else prepare(a.norms, a.rows, a.per_form, a.seed))
         a.out.parent.mkdir(parents=True, exist_ok=True)
         with a.out.open("w", encoding="utf-8") as f:
             for it in items:
@@ -329,7 +422,7 @@ def main(argv=None) -> int:
                                   devices=gpu.replace("+", ","),
                                   log_path=a.out.with_name(f"server-{a.label}-gpu{gpu}.log"))
                 urls.append(stack.enter_context(srv).url)
-        return check(items, urls, a.out, a.label, stop_after=a.stop_after)
+        return check(items, urls, a.out, a.label, stop_after=a.stop_after, shard=a.shard)
 
 
 if __name__ == "__main__":
