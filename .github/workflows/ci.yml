@@ -261,7 +261,8 @@ jobs:
   # Text read or written by Python names its encoding. Without it `open()`,
   # `Path.read_text` and `subprocess` with `text=True` take the host's locale,
   # and a job name, a path or a model's text in UTF-8 is garbled or fails to
-  # decode wherever the locale is not UTF-8. On 2026-11-15 the 125 places
+  # decode wherever the locale is not UTF-8. Gabriele (Gabriele06-local)
+  # found the bug and fixed it script by script; on 2026-11-15 the 125 places
   # left were fixed at once and this job started refusing new ones. Ruff's
   # PLW1514 (a preview rule: without --preview it checks nothing
   # and passes) covers open() and read_text/write_text in .py files;

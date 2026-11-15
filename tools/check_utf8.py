@@ -14,6 +14,8 @@ decode, wherever the locale is not UTF-8. Ruff's PLW1514 checks the first in
 * every one of the three in the Python that shell scripts and Slurm jobs
   carry: here-documents (`python - <<'PY' ... PY`) and `python3 -c '...'`.
 
+The bug was found by Gabriele (Gabriele06-local on GitHub), whose fixes of
+it, script by script, showed how widespread it was and led to this check.
 It prints each place and exits 1 when there is one.
 """
 
