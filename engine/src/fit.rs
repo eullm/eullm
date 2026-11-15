@@ -1617,7 +1617,7 @@ pub fn moe_out_share(usable: f64, fixed_cost: f64, expert_bytes: u64) -> f64 {
 /// Below this an automatic cache holds too few experts per layer to be worth
 /// the copies, and the usual sizing, which keeps whole layers of experts on
 /// the GPU, applies instead.
-const MOE_CACHE_MIN_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MOE_CACHE_MIN_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The step a cache is sized in, so that a few megabytes more or less of free
 /// VRAM between two loads do not change the size the log reports.
