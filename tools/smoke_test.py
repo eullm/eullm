@@ -214,7 +214,7 @@ class Engine:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=env,
-            text=True,
+            text=True, encoding="utf-8",
             bufsize=1,
         )
         threading.Thread(target=self._drain, daemon=True).start()
@@ -324,7 +324,7 @@ def describe_env(binary: Path) -> dict:
     # CPU model, best effort per platform.
     try:
         if Path("/proc/cpuinfo").exists():
-            txt = Path("/proc/cpuinfo").read_text()
+            txt = Path("/proc/cpuinfo").read_text(encoding="utf-8")
             for key in ("model name", "Model", "Hardware", "cpu model"):
                 m = re.search(rf"^{key}\s*:\s*(.+)$", txt, re.M)
                 if m:
@@ -333,7 +333,7 @@ def describe_env(binary: Path) -> dict:
         elif shutil.which("sysctl"):
             env["cpu_model"] = subprocess.run(
                 ["sysctl", "-n", "machdep.cpu.brand_string"],
-                capture_output=True, text=True,
+                capture_output=True, text=True, encoding="utf-8",
             ).stdout.strip()
     except Exception:
         pass
@@ -343,7 +343,7 @@ def describe_env(binary: Path) -> dict:
             env["nvidia_smi"] = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total,memory.free,driver_version",
                  "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", timeout=30,
             ).stdout.strip()
         except Exception:
             pass
@@ -357,7 +357,7 @@ def check_binary(rep: Report, binary: Path, expect_version: str | None) -> str:
     """Version string and build variant. Returns the raw `-V` output."""
     try:
         out = subprocess.run(
-            [str(binary), "-V"], capture_output=True, text=True, timeout=60
+            [str(binary), "-V"], capture_output=True, text=True, encoding="utf-8", timeout=60
         ).stdout.strip()
     except Exception as e:
         rep.add("binary runs (`-V`)", False, str(e))
@@ -1207,7 +1207,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 r = subprocess.run(
                     [str(binary), "pull", model],
-                    env={**os.environ, **env}, capture_output=True, text=True, timeout=7200,
+                    env={**os.environ, **env}, capture_output=True, text=True, encoding="utf-8", timeout=7200,
                 )
                 tail = (r.stdout or r.stderr).strip().splitlines()
                 rep.add(f"pull {model}", r.returncode == 0, tail[-1][:120] if tail else "")

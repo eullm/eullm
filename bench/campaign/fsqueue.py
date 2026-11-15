@@ -28,13 +28,13 @@ ORPHAN_GRACE_S = 600
 
 def _write(path: str, data: dict) -> None:
     tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
 
 
 def _read(path: str) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

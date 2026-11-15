@@ -313,7 +313,7 @@ def main():
         print(f"{method:<15} {cells}")
 
     if args.json:
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "url": args.url,

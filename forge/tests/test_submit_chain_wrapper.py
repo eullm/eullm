@@ -24,7 +24,7 @@ SUITE = Path(__file__).resolve().parent / "test_submit_chain.sh"
 def test_submit_chain_dependency_wiring():
     result = subprocess.run(
         ["bash", str(SUITE)],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
     )
     # The suite prints one line per check; surface all of it on failure so the
     # report names which dependency came out wrong.

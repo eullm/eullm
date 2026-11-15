@@ -54,5 +54,5 @@ def test_the_reaping_loop_replaces_the_interrupted_waits_143(tmp_path):
         + m.group(0) + "\n"
         'exit "$STATUS"\n')
     p = subprocess.run([_bash(), str(wrapper), str(tmp_path / "runner.sh")],
-                       capture_output=True, text=True, timeout=15)
+                       capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert p.returncode == 0, p.stdout + p.stderr

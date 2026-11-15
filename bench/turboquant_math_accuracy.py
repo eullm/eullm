@@ -412,7 +412,7 @@ async def collect(args):
                     "partial": True,
                     "results": results,
                 }
-                with open(args.output, "w") as _f:
+                with open(args.output, "w", encoding="utf-8") as _f:
                     json.dump(_partial, _f, indent=2)
 
     total_pass = sum(1 for r in results if r["passed"])
@@ -515,7 +515,7 @@ async def collect(args):
         "results": results,
     }
     if args.output:
-        with open(args.output, "w") as f:
+        with open(args.output, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2)
         print(f"\n  Saved: {args.output}")
 
@@ -525,7 +525,7 @@ async def collect(args):
 def compare(args):
     data = []
     for f in args.files:
-        with open(f) as fh:
+        with open(f, encoding="utf-8") as fh:
             data.append(json.load(fh))
 
     print(f"\n{'='*65}")

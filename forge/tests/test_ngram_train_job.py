@@ -52,7 +52,7 @@ def job(tmp_path):
 
     def run(**extra):
         r = subprocess.run(["bash", str(SCRIPT)], cwd=tmp_path, env={**env, **extra},
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
         asked = calls.read_text().splitlines() if calls.exists() else []
         calls.unlink(missing_ok=True)
         return r, asked

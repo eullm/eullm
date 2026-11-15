@@ -18,7 +18,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -60,7 +60,7 @@ echo "$n"
 def test_a_round_is_queued_in_order_and_once(tmp_path):
     env, runs, log, queue = _setup(tmp_path)
     run = ["bash", str(SCRIPT), "e1-x", str(runs / "start")]
-    p = subprocess.run(run, env=env, capture_output=True, text=True, timeout=60)
+    p = subprocess.run(run, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     jobs = log.read_text().splitlines()
     link1, link2, vert, closed, open_, reg = jobs
@@ -76,7 +76,7 @@ def test_a_round_is_queued_in_order_and_once(tmp_path):
     assert p.stdout.strip().splitlines()[-1] == "OPEN 104"
 
     queue.write_text("101\n")
-    p = subprocess.run(run, env=env, capture_output=True, text=True, timeout=60)
+    p = subprocess.run(run, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0 and "already queued" in p.stdout
     assert len(log.read_text().splitlines()) == 6
 
@@ -85,7 +85,7 @@ def test_a_model_made_elsewhere_is_measured_without_training(tmp_path):
     env, runs, log, _ = _setup(tmp_path)
     env.update({"MR_LINKS": "0", "MR_SFT": str(runs / "grpo"), "MR_AFTER": "555"})
     p = subprocess.run(["bash", str(SCRIPT), "g9e-r2", str(runs / "grpo" / "g9e-r2" / "merged")],
-                       env=env, capture_output=True, text=True, timeout=60)
+                       env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     vert, closed, open_, reg = log.read_text().splitlines()
     assert "--dependency=afterany:555" in vert and "ARMS=g9e-r2" in vert

@@ -398,7 +398,7 @@ def sample():
     while time.time() < stop:
         try:
             out = subprocess.run(["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                                 capture_output=True, text=True, timeout=10).stdout.split()
+                                 capture_output=True, text=True, encoding="utf-8", timeout=10).stdout.split()
             if out:
                 vram.append((round(time.time() - started), int(out[0])))
         except (OSError, subprocess.SubprocessError, ValueError):
@@ -409,7 +409,7 @@ for t in threads:
     t.start()
 for t in threads:
     t.join()
-with open(series, "w") as f:
+with open(series, "w", encoding="utf-8") as f:
     f.write("seconds,mib\n" + "".join(f"{s},{m}\n" for s, m in vram))
 settled = vram[12:] or vram
 low = min(settled, key=lambda v: v[1]) if settled else None

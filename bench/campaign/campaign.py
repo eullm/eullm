@@ -147,7 +147,7 @@ def orphan_servers(ps_text: str, keep_pgids, job: str, cgroup_of) -> list:
 
 def read_cgroup(pid: int) -> str:
     try:
-        with open(f"/proc/{pid}/cgroup") as f:
+        with open(f"/proc/{pid}/cgroup", encoding="utf-8") as f:
             return f.read()
     except OSError:
         return ""
@@ -218,7 +218,7 @@ def runtime_info(backend: str) -> dict:
     if backend == "rocm":
         root = os.environ.get("ROCM_PATH", "/opt/rocm")
         try:
-            with open(os.path.join(root, ".info", "version")) as f:
+            with open(os.path.join(root, ".info", "version"), encoding="utf-8") as f:
                 return {"rocm": f.read().strip()}
         except OSError:
             return {"rocm": None}
@@ -444,7 +444,7 @@ class Runner:
             sub = "" if state == "done" else "failed"
             out = os.path.join(self.results, p["campaign"], sub, f"{p['id']}.{self.job}.json")
             os.makedirs(os.path.dirname(out), exist_ok=True)
-            with open(out, "w") as f:
+            with open(out, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=1)
             if state == "done":
                 print("BENCH_RESULT " + json.dumps(result, separators=(",", ":")), flush=True)
@@ -670,7 +670,8 @@ class Runner:
             "engine": self.engine,
             "bench_rev": self.revision,
         }
-        with open(os.path.join(self.results, f"{self.job}.summary.json"), "w") as f:
+        path = os.path.join(self.results, f"{self.job}.summary.json")
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=1)
         print("JOB_SUMMARY " + json.dumps(doc, separators=(",", ":")), flush=True)
 
@@ -838,7 +839,7 @@ def cmd_plan(args):
             name = name.replace(".json", f".{args.round}.json")
         if args.engine_label:
             name = name.replace(".json", f".{args.engine_label}.json")
-        with open(os.path.join(args.queue, "specs", name), "w") as f:
+        with open(os.path.join(args.queue, "specs", name), "w", encoding="utf-8") as f:
             json.dump(spec, f, indent=1)
         label = f" for jobs labelled {args.engine_label}" if args.engine_label else ""
         print(f"{path}{f' (round {args.round})' if args.round else ''}{label}: "
@@ -906,7 +907,7 @@ def prefetch_finetune(name, out_dir) -> str:
     url, sha256 = FINETUNE_SETS[name]
     docs = gsm8k_train_text(ab_data.checked(fetch(url), sha256, url))
     path = os.path.join(out_dir, f"{name}.jsonl")
-    with open(path + ".tmp", "w") as f:
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
         for text in docs:
             f.write(json.dumps({"text": text}) + "\n")
     os.replace(path + ".tmp", path)
@@ -934,7 +935,7 @@ def cmd_prefetch(args):
             failed.append(f"{name}: {type(e).__name__}: {e}")
             continue
         path = os.path.join(out_dir, f"{name}.jsonl")
-        with open(path + ".tmp", "w") as f:
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
             for item in data.items:
                 row = {"id": item.id, "answer": item.answer, "grader": item.grader}
                 row.update({"prompt": item.prompt} if item.prompt is not None
@@ -1132,7 +1133,7 @@ def cmd_collect(args):
     results = args.results or os.path.join(args.queue, "results")
     rows = result_rows(results)
     out = args.out or os.path.join(results, "summary.csv")
-    with open(out, "w", newline="") as f:
+    with open(out, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
@@ -1268,7 +1269,8 @@ def cmd_budget(args):
     rec = budget.recovery(args.budget_node_hours, start, end, pace["behind_node_hours"], burn)
     billed = None
     if getattr(args, "allocations", None):
-        with (sys.stdin if args.allocations == "-" else open(args.allocations)) as f:
+        allocations = args.allocations
+        with (sys.stdin if allocations == "-" else open(allocations, encoding="utf-8")) as f:
             billed = budget.parse_allocations(f.read(), args.account)
     if args.json:
         out = None

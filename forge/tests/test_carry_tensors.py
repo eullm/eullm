@@ -105,5 +105,5 @@ def test_the_script_runs_on_its_own(tmp_path):
     merged.mkdir()
     _write(merged / "model.safetensors", {"model.layers.0.w": b"\x09\x09" * 4})
     out = subprocess.run([sys.executable, str(SCRIPT), str(base), str(merged)],
-                         capture_output=True, text=True, check=True).stdout
+                         capture_output=True, text=True, encoding="utf-8", check=True).stdout
     assert "2 tensors carried" in out

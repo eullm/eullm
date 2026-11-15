@@ -235,7 +235,7 @@ def finetune(argv):
     }
     with open(flag(argv, "--output"), "wb") as f:
         f.write(b"GGUF")
-    with open(flag(argv, "--report"), "w") as f:
+    with open(flag(argv, "--report"), "w", encoding="utf-8") as f:
         json.dump(report, f)
     print("FINETUNE_RESULT " + json.dumps(report))
     return 0

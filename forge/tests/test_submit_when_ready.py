@@ -33,7 +33,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
@@ -62,11 +62,11 @@ def cluster(tmp_path):
         now = {**env, **({"QUEUED": os.environ["QUEUED"]} if "QUEUED" in os.environ else {})}
         run = subprocess.run(["bash", str(home / "submit_when_ready.sh"), *args, "--",
                               "sbatch_stage3.slurm", "2"],
-                             cwd=tmp_path, env=now, capture_output=True, text=True, timeout=60)
+                             cwd=tmp_path, env=now, capture_output=True, text=True, encoding="utf-8", timeout=60)
         chain = Path(f"{calls}.chain")
         queued = Path(f"{calls}.sbatch")
-        return (run, chain.read_text() if chain.exists() else "",
-                queued.read_text() if queued.exists() else "")
+        return (run, chain.read_text(encoding="utf-8") if chain.exists() else "",
+                queued.read_text(encoding="utf-8") if queued.exists() else "")
 
     return watch
 
@@ -83,7 +83,7 @@ def _generate_until_done(tmp_path: Path) -> Path:
     norms = tmp_path / "legislazione_x.chunks.jsonl"
     norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
     out = tmp_path / "openbook-pairs.jsonl"
-    with open(tmp_path / "openbook-pairs.jsonl.rejected.jsonl", "w") as f:
+    with open(tmp_path / "openbook-pairs.jsonl.rejected.jsonl", "w", encoding="utf-8") as f:
         for j in make_openbook_jobs(NormIndex(RECORDS), 10, seed=0):
             if j.kind == "grounded":
                 f.write(json.dumps({"key": j.key, "reason": "x"}) + "\n")

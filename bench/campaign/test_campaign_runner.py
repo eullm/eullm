@@ -66,7 +66,7 @@ def test_runner_drains_a_campaign(tmp_path, engine, capsys):
     spec_path.write_text(json.dumps(SPEC))
     assert campaign.main(["plan", str(spec_path), "--queue", qdir]) == 0
     os.makedirs(os.path.join(qdir, "sets"), exist_ok=True)
-    with open(os.path.join(qdir, "sets", "tiny.jsonl"), "w") as f:
+    with open(os.path.join(qdir, "sets", "tiny.jsonl"), "w", encoding="utf-8") as f:
         for i in range(5):
             f.write(json.dumps({"id": f"t{i}", "answer": "4" if i < 4 else "5",
                                 "grader": "number",
@@ -109,14 +109,16 @@ def test_runner_drains_a_campaign(tmp_path, engine, capsys):
     assert work["requests"] == 5 and work["failed"] == 0
     answers = os.path.join(qdir, "results", "c-e2e",
                            f"{by_group['load'][0]['point']}.{runner.job}.answers.jsonl")
-    assert len(open(answers).read().splitlines()) == 5
+    assert len(open(answers, encoding="utf-8").read().splitlines()) == 5
 
-    summary = json.load(open(os.path.join(qdir, "results", f"{runner.job}.summary.json")))
+    summary_path = os.path.join(qdir, "results", f"{runner.job}.summary.json")
+    summary = json.load(open(summary_path, encoding="utf-8"))
     assert summary["points"]["done"] == 8 and summary["points"]["blocked"] == 1
     assert set(summary["assigned_fraction"]) == {"0", "1", "2", "3"}
 
     assert campaign.main(["collect", "--queue", qdir]) == 0
-    rows = list(csv.DictReader(open(os.path.join(qdir, "results", "summary.csv"))))
+    csv_path = os.path.join(qdir, "results", "summary.csv")
+    rows = list(csv.DictReader(open(csv_path, encoding="utf-8")))
     assert len(rows) == 8 and {r["kind"] for r in rows} == {"throughput", "workload"}
     assert {r["outcome"] for r in rows} == {"measured", "does-not-fit"}
     # What the engine was asked to do is in the row: the --load-threads of a
@@ -191,7 +193,7 @@ def test_stop_releases_the_running_points(tmp_path, engine):
     p = expand(spec)[0]
     q.add(p)
     os.makedirs(os.path.join(qdir, "sets"))
-    with open(os.path.join(qdir, "sets", "tiny.jsonl"), "w") as f:
+    with open(os.path.join(qdir, "sets", "tiny.jsonl"), "w", encoding="utf-8") as f:
         f.write(json.dumps({"id": "t0", "answer": "4", "grader": "number",
                             "messages": [{"role": "user", "content": "2+2?"}]}) + "\n")
     r = campaign.Runner(run_args(qdir, engine, port_base=free_port_base(),
@@ -370,7 +372,8 @@ def test_finetune_points_train_block_and_record_the_boundary(tmp_path, engine, c
     assert [p.name for p in (qdir / "results").rglob("*.gguf")] == [f"{kept}.gguf"]
 
     assert campaign.main(["collect", "--queue", str(qdir)]) == 0
-    rows = {r["point"]: r for r in csv.DictReader(open(qdir / "results" / "summary.csv"))}
+    csv_path = qdir / "results" / "summary.csv"
+    rows = {r["point"]: r for r in csv.DictReader(open(csv_path, encoding="utf-8"))}
     row = rows[trained["point"]]
     assert row["kind"] == "finetune" and row["ft_ctx"] == "256" and row["optimizer"] == "adamw"
     assert float(row["ft_loss_before"]) == 1.9
@@ -442,7 +445,7 @@ def test_decision_points_queue_behind_one_worker_and_answer_the_same(tmp_path, e
                                     "questions_changed_rate": 0.0}
     assert by[("rep", 4)]["params"]["replicas"] == 2
     assert campaign.main(["collect", "--queue", str(qdir)]) == 0
-    rows = list(csv.DictReader(open(qdir / "results" / "summary.csv")))
+    rows = list(csv.DictReader(open(qdir / "results" / "summary.csv", encoding="utf-8")))
     assert {r["kind"] for r in rows} == {"decision"} and all(r["dec_per_s"] for r in rows)
 
 
@@ -470,7 +473,7 @@ def test_llama_server_and_ollama_are_measured_like_the_engine(tmp_path, engine, 
     spec_path.write_text(json.dumps(spec))
     assert campaign.main(["plan", str(spec_path), "--queue", str(qdir)]) == 0
     (qdir / "sets").mkdir()
-    with open(qdir / "sets" / "tiny.jsonl", "w") as f:
+    with open(qdir / "sets" / "tiny.jsonl", "w", encoding="utf-8") as f:
         for i in range(4):
             f.write(json.dumps({"id": f"t{i}", "answer": "4", "grader": "number",
                                 "messages": [{"role": "user", "content": "2+2?"}]}) + "\n")
@@ -730,7 +733,7 @@ def test_an_early_server_death_survives_the_failed_point(tmp_path, engine, monke
 
     sets = tmp_path / "sets"
     sets.mkdir()
-    with open(sets / "ten.jsonl", "w") as f:
+    with open(sets / "ten.jsonl", "w", encoding="utf-8") as f:
         for k in range(10):
             f.write(json.dumps({"id": f"t{k}", "answer": "4", "grader": "number",
                                 "messages": [{"role": "user", "content": f"{k}+4-{k}?"}]}) + "\n")
@@ -753,7 +756,7 @@ def test_a_server_that_dies_during_a_workload_is_recorded(tmp_path, engine, monk
 
     sets = tmp_path / "sets"
     sets.mkdir()
-    with open(sets / "ten.jsonl", "w") as f:
+    with open(sets / "ten.jsonl", "w", encoding="utf-8") as f:
         for k in range(10):
             f.write(json.dumps({"id": f"t{k}", "answer": "4", "grader": "number",
                                 "messages": [{"role": "user", "content": f"{k}+4-{k}?"}]}) + "\n")

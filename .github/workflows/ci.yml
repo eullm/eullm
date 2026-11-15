@@ -258,6 +258,34 @@ jobs:
       - name: cargo deny
         run: cargo-deny --log-level warn --manifest-path ./Cargo.toml --all-features check advisories bans licenses sources
 
+  # Text read or written by Python names its encoding. Without it `open()`,
+  # `Path.read_text` and `subprocess` with `text=True` take the host's locale,
+  # and a job name, a path or a model's text in UTF-8 is garbled or fails to
+  # decode wherever the locale is not UTF-8. Gabriele (Gabriele06-local)
+  # found the bug and fixed it script by script; on 2026-11-15 the 125 places
+  # left were fixed at once and this job started refusing new ones. Ruff's
+  # PLW1514 (a preview rule: without --preview it checks nothing
+  # and passes) covers open() and read_text/write_text in .py files;
+  # tools/check_utf8.py covers subprocess and the Python inside shell scripts
+  # and Slurm jobs. Every Python folder, not only the four the lint jobs see.
+  utf8:
+    name: Text read and written as UTF-8
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        # No submodules: the vendored llama.cpp is not ours to check.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install ruff==0.17.5 pytest==9.2.0
+      - name: open() and read_text/write_text in .py files (ruff PLW1514)
+        run: ruff check --isolated --preview --select PLW1514 --exclude engine/vendor .
+      - name: subprocess with text=True, and the Python of shell scripts
+        run: python3 tools/check_utf8.py
+      - name: The check's own tests
+        run: pytest -q tools/test_check_utf8.py
+
   # ── Engine ───────────────────────────────────────────────────────────
   engine:
     name: Engine (build + test)

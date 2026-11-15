@@ -38,7 +38,7 @@ def write_job(queue: Path, job: str) -> None:
         f"[{iso(T0 + 6 * 3600)}] done     long-control-14b-bbbbbbbbbb after 21600s",
     ]
     (queue / "logs" / f"eullm-campaign-{job}.out").write_text("\n".join(out) + "\n")
-    with open(queue / "results" / f"{job}.node.jsonl", "w") as f:
+    with open(queue / "results" / f"{job}.node.jsonl", "w", encoding="utf-8") as f:
         for i in range(0, 6 * 3600 + 1, 60):
             t = T0 + i
             # Device 0 climbs 2 GiB an hour from 52 and its server dies at the

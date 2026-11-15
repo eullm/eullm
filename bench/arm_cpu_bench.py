@@ -87,7 +87,7 @@ class PowerSampler:
         if not self.sysfs_path:
             return False
         try:
-            with open(self.sysfs_path) as f:
+            with open(self.sysfs_path, encoding="utf-8") as f:
                 f.read()
             return True
         except OSError:
@@ -96,7 +96,7 @@ class PowerSampler:
     async def _run(self):
         while not self._stop:
             try:
-                with open(self.sysfs_path) as f:
+                with open(self.sysfs_path, encoding="utf-8") as f:
                     raw = float(f.read().strip())
                 self.samples.append(raw * self.scale_to_watts)
             except (OSError, ValueError):
@@ -256,7 +256,7 @@ async def main_async(args):
             "decode_tok_s_avg": avg_decode_tok_s,
             "power_watts_avg": avg_watts,
         }
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"\nWrote {args.json}")
 

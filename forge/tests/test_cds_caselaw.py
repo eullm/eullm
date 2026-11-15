@@ -244,7 +244,7 @@ def test_the_cards_job_serves_one_teacher_per_gpu(tmp_path):
     env.pop("SLURM_JOB_ID", None)
     script = repo / "forge" / "scripts" / "leonardo" / "sbatch_cds_schede.slurm"
     r = subprocess.run(["bash", str(script)], cwd=tmp_path, env=env, capture_output=True,
-                       text=True, timeout=60)
+                       text=True, encoding="utf-8", timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
     args = (tmp_path / "args").read_text().split()
     assert args[args.index("--gpus") + 1] == "1,2,3"
@@ -254,7 +254,7 @@ def test_the_cards_job_serves_one_teacher_per_gpu(tmp_path):
     (tmp_path / "args").unlink()
     r = subprocess.run(["bash", str(script)], cwd=tmp_path,
                        env={**env, "CS_TEACHER": str(tmp_path / "none.gguf")},
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert r.returncode == 1 and "no teacher GGUF" in r.stderr and not (tmp_path / "args").exists()
 
 

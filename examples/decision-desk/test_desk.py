@@ -253,7 +253,7 @@ class WithFake(unittest.TestCase):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.audit_file = os.path.join(folder.name, "audit.jsonl")
-        Path(self.audit_file).write_text("")
+        Path(self.audit_file).write_text("", encoding="utf-8")
         self.fake = FakeEuLLM(self.audit_file)
         self.addCleanup(self.fake.server.server_close)
         self.addCleanup(self.fake.server.shutdown)

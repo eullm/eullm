@@ -878,7 +878,7 @@ def run_workload(p: dict, servers: list, ctx: Context, answers_path=None) -> tup
     )
 
     if answers_path:
-        with open(answers_path, "w") as f:
+        with open(answers_path, "w", encoding="utf-8") as f:
             for r in sorted((r for r in ok if r["pass"] == 0), key=lambda r: r["i"]):
                 f.write(json.dumps({k: r[k] for k in ("item", "set", "correct", "text",
                                                        "ttft_ms", "total_ms", "eval")}))

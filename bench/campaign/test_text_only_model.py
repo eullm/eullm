@@ -26,7 +26,7 @@ def run(store, *ids):
                SBATCH_ACCOUNT="project_test", CAMPAIGN_DIR=str(store.parent / "campaign"))
     env.pop("EULLM_REPO", None)
     return subprocess.run(["bash", str(SCRIPT), *ids], env=env, capture_output=True,
-                          text=True, timeout=60)
+                          text=True, encoding="utf-8", timeout=60)
 
 
 def test_the_twin_has_the_weights_and_no_projector(tmp_path):

@@ -81,7 +81,7 @@ def test_each_model_is_asked_in_turn_and_the_env_is_put_back(tmp_path):
         ["bash", str(SCRIPT), str(engine), str(items), str(out),
          f"a={models / 'a.gguf'}", f"broken={models / 'broken.gguf'}",
          f"b={models / 'b.gguf'}|--moe-cache auto", f"missing={models / 'none.gguf'}"],
-        env=env, capture_output=True, text=True, timeout=300)
+        env=env, capture_output=True, text=True, encoding="utf-8", timeout=300)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
     started = [json.loads(ln) for ln in (tmp_path / "started.jsonl").read_text().splitlines()]
@@ -97,5 +97,5 @@ def test_each_model_is_asked_in_turn_and_the_env_is_put_back(tmp_path):
         "AUTH__JWT_SECRET=x\nEULLM__MODEL_OVERRIDE=/old.gguf\n"
     again = subprocess.run(["bash", str(SCRIPT), str(engine), str(items), str(out),
                             f"a={models / 'a.gguf'}"],
-                           env=env, capture_output=True, text=True, timeout=120)
+                           env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert "a: already answered, skipped" in again.stdout

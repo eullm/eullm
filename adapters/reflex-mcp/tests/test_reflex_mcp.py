@@ -748,6 +748,7 @@ class CommandTest(unittest.IsolatedAsyncioTestCase):
                 env={**inherited(), **environment(EULLM_URL=eullm.url)},
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding="utf-8",
             )
             try:
                 deadline = time.monotonic() + 30

@@ -58,7 +58,7 @@ def test_nodi_prints_the_week_and_the_pace_to_the_plans_end(tmp_path):
                PY=sys.executable, CAMPAIGN_DIR=str(tmp_path / "campaign"))
     env.pop("EULLM_REPO", None)
     p = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True,
-                       timeout=60)
+                       encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     out = p.stdout
     assert f"{day.date()}  {day.strftime('%a %d-%m'):<14}   24.0  {'#' * 24}" in out

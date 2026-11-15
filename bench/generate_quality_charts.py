@@ -40,7 +40,7 @@ def load_arms(pattern: str) -> dict:
     """Load every quality_*.json matching the pattern. Returns {label: data}."""
     arms = {}
     for path in sorted(glob.glob(pattern)):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         label = data.get("label", os.path.basename(path))
         arms[label.upper()] = data
