@@ -1182,6 +1182,15 @@ penalty, procedibility and repeal columns partly measured agreement with
 them, and is to be written again before those columns decide anything. The
 teacher's mistakes are where section 13 placed them, in the styles that
 elaborate (case, explanation); `recheck_rewrites.py` applies today's
-`check_rewrite` to the rewrites already kept. Next: the corpus rebuilt
+`check_rewrite` to the rewrites already kept. Rebuilt with the fixes (`memory-v2`,
+2026-11-15), the program's rows changed: repeals 539 to 375 (164 articles
+in force had been called repealed), penalties 252 to 219, procedibility 55
+to 46, headings 3,865 to 3,988 and deadlines 523 to 551 (the articles
+wrongly repealed now get theirs); `struttura` rewrites 3,167 to 2,728 (436
+had the commi counted with the heading); the other 245,000 rewrites pass the
+program's check as before, which does not see an error of law. Checker
+speed on the sample: Gemma 4 31B 1,900 rows an hour on one GPU, GPT-OSS-120B
+1,470 on three, Qwen3-30B-A3B 6,900 on one; the whole corpus (239,836 rows)
+is about 130 GPU-hours for Gemma and 490 for GPT-OSS. Next: the corpus rebuilt
 (`memory-v2`), the rows every checker flags left out, and the closed-book
 of the two g1 rounds.
