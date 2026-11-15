@@ -1194,3 +1194,34 @@ speed on the sample: Gemma 4 31B 1,900 rows an hour on one GPU, GPT-OSS-120B
 is about 130 GPU-hours for Gemma and 490 for GPT-OSS. Next: the corpus rebuilt
 (`memory-v2`), the rows every checker flags left out, and the closed-book
 of the two g1 rounds.
+
+**The closed book of the g1 rounds** (2026-11-15), without the 42 items the
+old functions drew wrongly (`score_closed_book.py --norms`: 32 repeals, 9
+procedibility, 1 penalty; 674 left):
+
+| | right | sure-wrong | denies real | made-up articles | n<-rub | rub<-n | terms | made-up rulings |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| r2l | 196 | 343 | 25% | 59% | 3% | 5% | 13% | 100% |
+| r2l, half the knowledge | 234 | 386 | 31% | 75% | 18% | 39% | 25% | 22% |
+| **r2l-k50-g1** | **271** | 376 | **43%** | 94% | 16% | 41% | 22% | **8%** |
+| q35-9b-k50-g1 | 203 | 439 | 48% | 100% | 0% | 21% | 13% | 5% |
+
+The knowledge survives the round, and the round adds the false premises it
+trains. Two things it costs: real articles denied more often (43% against
+25%), and made-up rulings: asked about one with no texts, r2l says it cannot
+verify it every time, the merge in 22%, g1 in 8%, the others describing a
+ruling that does not exist. The knowledge adapter broke it and the premise
+round did not mend it; it is the likeliest reason the traps did not come
+back. (The procedibility column now holds "querela" items only.)
+
+**Its practical losses** (23, `diagnose_losses.py`): other 15, shorter 5,
+an article not given 3. Read (eight): every answer of g1 states the rule
+without the text it was given, where r2l cites it ("[1]") and quotes it
+("Il testo [1] dice: «…»"); answering from memory it takes one article where
+the question needs two (artt. 1743-1744, 2081-2082, 110-111 cod. consumo),
+cites a neighbour (art. 134 for 136 c.c.) or mixes two (artt. 379 and 648,
+386 and 387 c.p.). The quoting r2l learnt is what the knowledge took and
+the premise round, which rewards the verdict and not the quote, did not give
+back. Next: distil r2l's way of answering back into g1 on open-book prompts
+only (`opd_train.py`, r2l as the teacher of the same vocabulary), which
+leaves the closed book, where the knowledge is, out of what is taught.
