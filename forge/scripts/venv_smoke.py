@@ -58,7 +58,8 @@ def check(name: str, required: bool = True):
 def gpu() -> str:
     import torch
     smi = subprocess.run(["nvidia-smi", "--query-gpu=driver_version,name,memory.total",
-                          "--format=csv,noheader"], capture_output=True, text=True).stdout.strip()
+                          "--format=csv,noheader"], capture_output=True, text=True,
+                         encoding="utf-8", errors="replace").stdout.strip()
     assert torch.cuda.is_available(), "torch.cuda.is_available() is False"
     a = torch.randn(8192, 8192, device="cuda", dtype=torch.bfloat16)
     # Warm up first: the first products pay cuBLAS's start-up, and timed
