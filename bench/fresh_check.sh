@@ -90,7 +90,7 @@ import sys
 
 pat = re.compile(r"steps of 1\.0 tokens: ([\d.]+) ms/step = ([\d.]+) ms to the routers of \d+ layers"
                  r" \+ ([\d.]+) ms in the cache \+ (-?[\d.]+) ms after; [\d.]+ MiB/step copied, ([\d.]+)% of the experts")
-rows = [tuple(map(float, m.groups())) for m in map(pat.search, open(sys.argv[1], errors="replace")) if m]
+rows = [tuple(map(float, m.groups())) for m in map(pat.search, open(sys.argv[1], encoding="utf-8", errors="replace")) if m]
 if not rows:
     print("-")
 else:
@@ -145,7 +145,7 @@ for setting in $SETTINGS; do
         if (m) printf "%.0f%%", s / m; else print "-"}' "$OUT/busy-$p.csv" 2>/dev/null)
     answer=$(python3 -I -c 'import json, sys
 try:
-    n = json.load(open(sys.argv[1]))["usage"]["completion_tokens"]
+    n = json.load(open(sys.argv[1], encoding="utf-8"))["usage"]["completion_tokens"]
     print(f"{n / (float(sys.argv[3]) - float(sys.argv[2])):.1f}")
 except Exception:
     print("?")' "$OUT/answer-$p.json" "$t0" "$t1")
