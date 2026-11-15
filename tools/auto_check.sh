@@ -297,7 +297,7 @@ for pair in $PAIRS; do
         # The lowest share of answers identical to the chosen model's alone,
         # over the sets and concurrencies of the end-to-end stage.
         same=$(python3 -c 'import json,sys
-rows=json.load(open(sys.argv[1])).get("end_to_end",[])
+rows=json.load(open(sys.argv[1], encoding="utf-8")).get("end_to_end",[])
 v=[r["metrics"]["same_answer"] for r in rows if r["metrics"]["same_answer"] is not None]
 print(f"{min(v):.3f}" if v else "none")' "$OUT/3-$tag.json" 2> /dev/null)
         what="3 autobench $small/$large with $(basename "$decision" .gguf)"
@@ -427,7 +427,7 @@ down
 soak=$(python3 - "$OUT/4.json" "$OUT/audit-4/audit.jsonl" "$OUT/4.log" \
     "$((swaps1 - swaps0))" "$((evictions1 - evictions0))" << 'PY'
 import json, re, sys
-report = json.load(open(sys.argv[1]))
+report = json.load(open(sys.argv[1], encoding="utf-8"))
 swaps, evictions = int(sys.argv[4]), int(sys.argv[5])
 done = report["done"]
 problems = []
@@ -443,12 +443,12 @@ if lo is not None and hi > lo * 1.05:
         f"{report['vram_last_minute']} in the last, with {swaps} models unloaded meanwhile")
 elif swaps:
     problems.append(f"{swaps} models unloaded while every model fit, {evictions} of them to make room")
-log = re.sub(r"\x1b\[[0-9;]*m", "", open(sys.argv[3], errors="replace").read())
+log = re.sub(r"\x1b\[[0-9;]*m", "", open(sys.argv[3], encoding="utf-8", errors="replace").read())
 if re.search(r"GGML_ASSERT|out of memory|failed to allocate", log, re.I):
     problems.append("an out-of-memory or GGML_ASSERT in the log")
 counts, bad = {}, 0
 try:
-    for line in open(sys.argv[2]):
+    for line in open(sys.argv[2], encoding="utf-8", errors="replace"):
         try:
             entry = json.loads(line)
         except ValueError:
