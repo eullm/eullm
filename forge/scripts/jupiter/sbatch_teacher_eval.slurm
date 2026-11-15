@@ -99,9 +99,9 @@ if [ "${EVAL_DEQUANTIZE:-1}" = 1 ] && grep -q '"quant_method": "fp8"' "$(stage_s
     rm -f "$view/config.json"
     python - "$src/config.json" "$view/config.json" <<'PY'
 import json, sys
-c = json.load(open(sys.argv[1]))
+c = json.load(open(sys.argv[1], encoding="utf-8"))
 c["quantization_config"]["dequantize"] = True
-json.dump(c, open(sys.argv[2], "w"), indent=2)
+json.dump(c, open(sys.argv[2], "w", encoding="utf-8"), indent=2)
 PY
     WEIGHTS="$view"
     echo "  FP8 weights dequantized to BF16 on loading (EVAL_DEQUANTIZE=0 keeps FP8, which needs the kernels package)"
