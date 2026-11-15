@@ -42,6 +42,7 @@ from ..rl.rewards import mentioned_deadlines
 from .premise_gen import (
     SUFFIXES,
     _repealed_sentence,
+    defines_offence,
     penalty_of,
     procedibility_of,
     say,
@@ -239,14 +240,18 @@ def program_rows(articles: dict[tuple[str, str], Article], *,
                     + (f" ({h})" if h else "") + ": "
                     + "; ".join(say(n, u) for u, n in terms)
                     + ". " + " ".join(_plain(s) for s in timed))
-            pena = penalty_of(a.text)
+            # penalty and procedibility only of an article that punishes:
+            # art. 158 c.p. (prescription) and 282-bis c.p.p. (a precautionary
+            # measure) were called offences "procedibili" (2026-11-15)
+            offence = defines_offence(a.text)
+            pena = penalty_of(a.text) if offence else None
             if pena:
                 kind, lo, lo_unit, hi, unit, sentence, comma = pena
                 add("pena", code, a.number,
                     f"Il reato dell'art. {a.number} {of}" + (f" ({h})" if h else "")
                     + f"{comma} è punito con la {kind} da {say(lo, lo_unit)} "
                     f"a {say(hi, unit)}. {_plain(sentence)}")
-            proc = procedibility_of(a.text)
+            proc = procedibility_of(a.text) if offence else None
             if proc:
                 regime, sentence = proc
                 how = "a querela della persona offesa" if regime == "querela" else "d'ufficio"
@@ -351,6 +356,11 @@ def commi(article: Article) -> list[str]:
         lines = lines[1:]
     h = _plain(article.heading).strip(" .()")
     if lines and h and h in lines[0] and len(lines[0]) <= len(h) + 8:
+        lines = lines[1:]
+    # a heading the parser did not take, alone on its line in brackets: it
+    # was "Comma 1" of art. 2481-ter c.c., three commi where there are two
+    # (2026-11-15)
+    if lines and re.fullmatch(r"\(\(?[^()]{2,120}\)\)?\.?", lines[0]):
         lines = lines[1:]
     out: list[str] = []
     for ln in lines:

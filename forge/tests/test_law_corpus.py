@@ -244,3 +244,71 @@ def test_an_article_is_read_as_its_commi_and_restated_comma_by_comma():
     two = good.rsplit("\n", 1)[0]
     assert check_rewrite(a, "struttura", two) in ("commi", "lost_deadline")
     assert check_rewrite(a, "struttura", good.replace("cinque", "quindici")) is not None
+
+
+def test_what_the_checkers_found_wrong_is_no_longer_stated():
+    # 2026-11-15: rows of the memory corpus every checker called unfaithful,
+    # written by program from the article texts below
+    records = [
+        rec("600", "Riduzione o mantenimento in schiavitu' o in servitu'",
+            "Chiunque esercita su una persona poteri corrispondenti a quelli del diritto di "
+            "proprieta' e' punito con la reclusione da otto a venti anni.\n"
+            "COMMA ABROGATO DALLA L. 2 LUGLIO 2010, N. 108."),
+        rec("617-quater", "Intercettazione di comunicazioni informatiche",
+            "Chiunque fraudolentemente intercetta comunicazioni relative a un sistema "
+            "informatico e' punito con la reclusione da un anno e sei mesi a cinque anni.\n"
+            "3) NUMERO ABROGATO DALLA L. 28 GIUGNO 2024, N. 90."),
+        rec("507", "Boicottaggio", "Chiunque, per uno degli scopi indicati, induce una o piu' "
+            "persone a non stipulare patti di lavoro e' punito con la reclusione fino a tre "
+            "anni. Se concorrono fatti di violenza o di minaccia, si applica la reclusione "
+            "da due a sei anni."),
+        rec("600-septies", "Confisca", "Nel caso di condanna per i delitti previsti dalla "
+            "presente sezione e' sempre ordinata la confisca dei beni. La condanna alla "
+            "reclusione da tre a cinque anni importa l'interdizione dai pubblici uffici per "
+            "la durata di anni cinque."),
+        rec("158", "Decorrenza del termine della prescrizione", "Il termine della "
+            "prescrizione decorre dal giorno della consumazione. Nei reati punibili a "
+            "querela, istanza o richiesta, il termine decorre dal giorno del commesso reato."),
+        rec("282-bis", "Allontanamento dalla casa familiare", "Con il provvedimento il "
+            "giudice prescrive all'imputato di lasciare la casa familiare. Qualora si proceda "
+            "per uno dei delitti previsti dall'articolo 570, limitatamente alle ipotesi "
+            "procedibili d'ufficio o comunque aggravate, la misura puo' essere disposta."),
+    ]
+    rows = program_rows(articles_from_records(records))
+    forms = {(r["forma"], r["articolo"]) for r in rows}
+    assert ("abrogato", "600") not in forms and ("testo", "600") in forms
+    assert ("abrogato", "617-quater") not in forms and ("testo", "617-quater") in forms
+    assert ("pena", "600") in forms                 # its base range, beside "è punito"
+    assert ("pena", "507") not in forms             # the only range is the aggravated one
+    assert ("pena", "600-septies") not in forms     # names the penalty of others
+    assert ("procedibilita", "158") not in forms    # offences punishable on complaint in general
+    assert ("procedibilita", "282-bis") not in forms
+    index = next(r["text"] for r in rows if r["forma"] == "indice")
+    assert "(abrogato)" not in index
+
+
+def test_a_heading_line_the_parser_missed_is_no_comma():
+    from eullm_forge.datasets.law_corpus import commi
+    from eullm_forge.eval.norm_exam import Article
+    a = Article("codice_civile", "2481-ter", "Art. 2481-ter.\n(Passaggio di riserve a "
+                "capitale)\nLa societa' puo' aumentare il capitale imputando ad esso le "
+                "riserve.\nIn tal caso la quota di partecipazione di ciascun socio resta "
+                "immutata.")
+    assert len(commi(a)) == 2
+
+
+def test_old_rewrites_are_checked_again_by_the_current_check(tmp_path):
+    mod = load("recheck_rewrites")
+    arts = articles()
+    good = ("L'art. 624 del codice penale punisce con la reclusione da sei mesi a tre anni "
+            "chi si impossessa della cosa mobile altrui; il delitto e' punibile a querela "
+            "della persona offesa.")
+    bad = good.replace("624", "625").replace("sei mesi a tre anni", "sei mesi a 11 anni")
+    rows = [{"code": "codice_penale", "articolo": "624", "forma": "parafrasi", "text": good},
+            {"code": "codice_penale", "articolo": "624", "forma": "parafrasi",
+             "text": good + " Si veda anche l'art. 99."},
+            {"code": "codice_penale", "articolo": "999", "forma": "parafrasi", "text": bad}]
+    kept, dropped = mod.recheck(rows, arts)
+    assert [r["text"] for r in kept] == [good]
+    assert dropped[("parafrasi", "other_article")] == 1
+    assert dropped[("parafrasi", "no_article")] == 1
