@@ -10,6 +10,13 @@ model more than an honest "I do not know"; and how often it says a REAL
 article does not exist ("denies-real"): on 2026-10-27 r2q denied 91% of the
 made-up articles and recognised none of the real ones, a reflex the made-up
 column alone reads as knowledge. Counts only, never a question.
+
+``--norms`` leaves out the penalty, procedibility and repeal items whose
+article no longer gives that answer: the suite was drawn by the functions
+that, until 2026-11-15, called an article with one comma repealed "not in
+force" (art. 600 c.p.), took an aggravated range for the base penalty (art.
+507 c.p.) and a general mention for the article's procedibility (art. 158
+c.p.). Those items asked models to repeat our mistakes.
 """
 
 from __future__ import annotations
@@ -54,6 +61,47 @@ def points_to_texts(answer: str) -> bool:
     return bool(NO_TEXT.search(answer or ""))
 
 
+def stale_items(items: dict[str, dict], norms: list[Path]) -> set[str]:
+    """Ids of penalty, procedibility and repeal items the current functions no
+    longer draw from their article, or draw with another answer."""
+    from eullm_forge.datasets.premise_gen import (
+        _repealed_sentence,
+        defines_offence,
+        penalty_of,
+        procedibility_of,
+    )
+    from eullm_forge.eval.norm_exam import articles_from_records
+
+    records = []
+    for p in norms:
+        with p.open(encoding="utf-8") as f:
+            records += [json.loads(x) for x in f if x.strip()]
+    arts = articles_from_records(records)
+    out = set()
+    for i, it in items.items():
+        m = it["metadata"]
+        kind = m["tipo"]
+        if kind not in ("pena", "procedibilita", "abrogato"):
+            continue
+        a = arts.get((m["code"], m["articolo"]))
+        if a is None:
+            out.add(i)
+        elif kind == "abrogato":
+            if not _repealed_sentence(a):
+                out.add(i)
+        elif not defines_offence(a.text):
+            out.add(i)
+        elif kind == "pena":
+            p = penalty_of(a.text)
+            if not p or list(m.get("high", [])) != [p[3], p[4]]:
+                out.add(i)
+        else:
+            r = procedibility_of(a.text)
+            if not r or it.get("keywords") != [r[0]]:
+                out.add(i)
+    return out
+
+
 def summarize(items: dict[str, dict], answers: dict[str, str]) -> dict:
     by = defaultdict(Counter)
     texts = Counter()
@@ -83,10 +131,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--texts", action="store_true",
                     help="instead of the grades, the share of answers by kind that point to "
                          "statute texts the question did not give (counts only)")
+    ap.add_argument("--norms", nargs="+", type=Path,
+                    help="leave out the items the current functions no longer draw")
     args = ap.parse_args(argv)
 
     with args.suite.open(encoding="utf-8") as f:
         items = {d["id"]: d for d in map(json.loads, filter(str.strip, f))}
+    if args.norms:
+        stale = stale_items(items, args.norms)
+        left = Counter(items[i]["metadata"]["tipo"] for i in stale)
+        print(f"left out: {len(stale)} items no longer drawn ("
+              + ", ".join(f"{k} {n}" for k, n in sorted(left.items())) + ")")
+        items = {i: it for i, it in items.items() if i not in stale}
     kinds = [k for k in KINDS if any(it["metadata"]["tipo"] == k for it in items.values())]
     if args.texts:
         print("the kind columns: answers that point to statute texts not given, by kind")
