@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Fixed
+- **A large MoE model with its experts in RAM loads where the expert cache left too little VRAM for the rest of the context.** `--moe-cache auto`, and the cache EuLLM turns on by itself, sized the cache before counting all that the context needs beside it: with several requests (`--batch-size` 8 or 32) and a wide model, the context then failed to load with "out of memory" and the server stopped. The cache now gives way: it shrinks to the largest size with which the context loads, still leaving room for the first request, and the log says by how much. Found with GLM-5.3-Flash on one 64 GB GPU of LUMI-G, where a 52 GiB cache left no room for the 2.7 GB the context asked; a cache size given in MiB is still used as given.
+
 ## 0.9.0 — 2026-11-14
 
 ### Changed

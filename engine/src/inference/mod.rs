@@ -459,9 +459,43 @@ fn grow_kept_bytes(keep_bytes: u64, vram_reserve: u64) -> u64 {
     }
 }
 
+/// The largest size, a whole number of `step`s from `min` up to below
+/// `failed`, for which `fits` holds, by bisection; `None` when not even the
+/// smallest does. `fits` is taken to hold for every size below one it holds
+/// for, as a context with a smaller cache does.
+fn largest_fitting(min: u64, failed: u64, step: u64, fits: impl Fn(u64) -> bool) -> Option<u64> {
+    if step == 0 {
+        return None;
+    }
+    let (mut lo, mut hi) = (min.div_ceil(step), failed / step);
+    if lo >= hi || !fits(lo * step) {
+        return None;
+    }
+    // `lo` fits, `hi` does not.
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if fits(mid * step) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    Some(lo * step)
+}
+
 /// Grow the expert cache of `--moe-cache auto` into the VRAM the plan left
 /// over, and return the size to load with (the planned one when there is
 /// nothing to gain).
+///
+/// The other way too: when the context cannot be made with the planned
+/// cache, the cache shrinks to the largest size with which it can, still
+/// leaving what the prefetch and the first request need. The plan charges
+/// the larger micro-batch's compute buffer at a rate measured on
+/// Qwen3.8-Flash-Next (`fit::ubatch_reserve_bytes`, 0.75 MiB a token), and a
+/// wider model asks more: GLM-5.3-Flash with 8 slots asked 2,701.75 MiB at
+/// 2,048 tokens beside a 52 GiB cache on a 64 GB GCD of LUMI-G, and the load
+/// failed (11-11-2026). The cache is a parameter of the context, not of the
+/// model, so only the context is made again.
 ///
 /// The plan charges the compute buffer of the larger micro-batch from a flat
 /// figure measured at a long context (`fit::ubatch_reserve_bytes`), and at
@@ -500,13 +534,29 @@ pub(crate) fn grow_moe_cache(
         drop(ctx);
         memory
     };
-    let Some((free, _)) = measure(planned) else {
-        return planned;
-    };
     // Never less than the reserve the whole load is sized to leave. Without
     // prefetch slots nothing is made after this context, and that reserve
     // (plus the margin) is all that is kept.
     let kept = grow_kept_bytes(grow.keep_bytes, config.vram_reserve);
+    let Some((free, _)) = measure(planned) else {
+        let fits = |bytes: u64| {
+            measure(bytes).is_some_and(|(free_after, _)| free_after >= kept.saturating_sub(MARGIN))
+        };
+        return match largest_fitting(crate::fit::MOE_CACHE_MIN_BYTES, planned, STEP, fits) {
+            Some(smaller) => {
+                tracing::warn!(
+                    "--moe-cache auto: no context fits beside the planned {:.2} GiB cache, the \
+                     cache goes down to {:.2} GiB",
+                    (planned as f64) / f64::from(1u32 << 30),
+                    (smaller as f64) / f64::from(1u32 << 30),
+                );
+                smaller
+            }
+            // Not even the smallest cache: the load fails as it would have,
+            // with the context's own error.
+            None => planned,
+        };
+    };
     let extra = free.saturating_sub(kept) / STEP * STEP;
     let target = (planned + extra).min(grow.max_bytes / STEP * STEP);
     if target <= planned {
@@ -3334,6 +3384,40 @@ mod tests {
         // (8% of the card and the margin before 0.7.80).
         assert_eq!(grow_kept_bytes(0, GIB), GIB + 256 * MIB);
         assert_eq!(grow_kept_bytes(0, 4 * GIB), 4 * GIB + 256 * MIB);
+    }
+
+    /// A cache the context cannot be made beside comes down to the largest
+    /// size it can, in the planner's steps, and never below the smallest.
+    #[test]
+    fn a_cache_too_large_for_its_context_comes_down_to_the_largest_that_fits() {
+        const STEP: u64 = 256 * MIB;
+        let min = crate::fit::MOE_CACHE_MIN_BYTES;
+        let probes = std::cell::Cell::new(0);
+        // GLM-5.3-Flash on one GCD: 52 GiB planned, 2.75 GiB too much.
+        let fits = |bytes: u64| {
+            probes.set(probes.get() + 1);
+            bytes <= 49 * GIB + 256 * MIB
+        };
+        assert_eq!(
+            largest_fitting(min, 52 * GIB, STEP, fits),
+            Some(49 * GIB + 256 * MIB)
+        );
+        // Bisection: a handful of contexts made, not one per step.
+        assert!(probes.get() <= 9, "{} probes", probes.get());
+        // Only the smallest fits.
+        assert_eq!(
+            largest_fitting(min, 52 * GIB, STEP, |b| b <= min),
+            Some(min)
+        );
+        // Not even the smallest: the planned size stays and the load fails.
+        assert_eq!(largest_fitting(min, 52 * GIB, STEP, |_| false), None);
+        // Nothing between the smallest and the planned size.
+        assert_eq!(largest_fitting(min, min, STEP, |_| true), None);
+        // The step below the planned size, when everything below fits.
+        assert_eq!(
+            largest_fitting(min, 52 * GIB, STEP, |b| b < 52 * GIB),
+            Some(52 * GIB - STEP)
+        );
     }
 
     /// Sizing, the context probe and the companion check read one number.

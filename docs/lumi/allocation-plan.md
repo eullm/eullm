@@ -1100,6 +1100,25 @@ round, `r-v090`, the same campaigns as `r-v089` and `c19` without
 not run on llama.cpp 1.0's kernels. `r-v089` ran in about a day on two
 nodes, so `r-v090` lasts to about 16-11 and the long soaks about two and a
 half days after it, to about 19-11: the next work is queued by 18-11.
+Submitted: `eullm 0.9.0 (ROCm) [a9ee8e2cd330]`; two chains of 16 jobs of 4
+hours ending in 23746425 and 23746441, and the `v090-long` chain of 13 jobs
+of 8 hours, 23746442 to 23746454, after both.
+
+15-11-2026, 16:09: `r-v089` is over, 832 points done and 10 failed;
+`r-v090` has 424 done, 2 running, 428 waiting and 10 failed (23746413 and
+23746429 running from 13:42). 2,467 node-hours left, 407 ahead of the
+straight line (16.2 days), the last 7 days at 33.7 a day. The 10 failures
+are the same in both rounds: GLM-5.3-Flash's 7 (above) and 3 more of
+`c17`'s `dsv4-gcds`, DeepSeek-V4-Flash on two GCDs (145 GiB for 128 GB),
+the shape of the second fault. On 0.9.0 the cache of `glm-ram` with 32
+slots failed in the allocation of the cache itself (52,700 MiB, beside a
+context of 131,072 tokens), the first fault by another door.
+The first fault is fixed on this branch (`grow_moe_cache`: when the context
+cannot be made beside the planned cache, the cache shrinks, by bisection,
+to the largest with which it can); it reaches LUMI with the next release.
+The second, a split across GPUs that sizes `--n-cpu-moe` on their sum, is
+proposed: `--fit` computing a `--tensor-split` that gives each GPU what it
+holds.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
