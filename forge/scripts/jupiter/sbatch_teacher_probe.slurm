@@ -101,13 +101,14 @@ import csv, sys
 from datetime import datetime
 
 samples = []
-for row in csv.reader(open(sys.argv[1])):
+for row in csv.reader(open(sys.argv[1], encoding="utf-8")):
     try:
         t = datetime.strptime(row[0].strip(), "%Y/%m/%d %H:%M:%S.%f").timestamp()
         samples.append((t, float(row[2])))
     except (ValueError, IndexError):
         continue
-phases = [(int(l.split()[0]), l.split(maxsplit=1)[1].strip()) for l in open(sys.argv[2])]
+phases = [(int(l.split()[0]), l.split(maxsplit=1)[1].strip())
+          for l in open(sys.argv[2], encoding="utf-8")]
 for (start, name), (end, _) in zip(phases, phases[1:]):
     ws = [w for t, w in samples if start <= t < end]  # one sample per GPU per second
     print(f"  {name:<46} {(end - start) / 60:5.1f} min  {sum(ws) / 3600:7.1f} Wh"
