@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
@@ -70,7 +70,7 @@ exec sleep 30
 
     def run(**extra):
         return subprocess.run(["bash", str(SCRIPT)], cwd=tmp_path, env={**env, **extra},
-                              capture_output=True, text=True, timeout=60)
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
 
     return run, rec, judge
 

@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -59,7 +59,7 @@ def _setup(tmp_path):
 
 
 def _run(env):
-    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True,
+    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, encoding="utf-8",
                           timeout=60)
 
 

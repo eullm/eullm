@@ -53,7 +53,7 @@ def lumi(tmp_path):
 
     def submit(*args, **extra):
         p = subprocess.run(["bash", str(SCRIPT), *args], env=dict(env, **extra),
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert p.returncode == 0, p.stdout + p.stderr
         return p.stdout, log.read_text().splitlines() if log.exists() else []
 

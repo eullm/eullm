@@ -115,7 +115,7 @@ def test_answers_come_back_in_order_with_their_endings(server_bin, tmp_path):
         [[7, 1, 2], [3, 4], [7, 5], [8, 6, 6, 6]])                # token ids, as tokenized
     assert all(r["temperature"] == 0 and r["cache_prompt"] is False and r["n_predict"] == 3
                and r["return_tokens"] is True for r in sent)
-    argv = json.loads(Path(str(record) + ".argv").read_text())
+    argv = json.loads(Path(str(record) + ".argv").read_text(encoding="utf-8"))
     assert argv[argv.index("-np") + 1] == "3" and argv[argv.index("-c") + 1] == "3000"
     assert argv[argv.index("-m") + 1] == str(gguf)
 
@@ -193,7 +193,7 @@ def test_legal_eval_answers_the_exam_with_the_gguf(server_bin, tmp_path):
     r = subprocess.run([sys.executable, str(script), str(model_dir), "--items", str(items),
                         "--gguf", str(gguf), "--llama-server", str(binary), "--quiet",
                         "--answers", str(answers), "--label", "x-q4"],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     rows = [json.loads(line) for line in answers.read_text().splitlines()]
     assert [row["id"] for row in rows] == ["q0", "q1"]

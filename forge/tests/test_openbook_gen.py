@@ -204,7 +204,7 @@ def test_the_done_marker_appears_only_when_no_job_is_left(tmp_path):
     args = ["--norms", str(norms), "--no-exam", "--out", str(out), "--limit", "10"]
     jobs = make_openbook_jobs(NormIndex(RECORDS), 10, seed=0)
     # every grounded job already answered by an earlier link
-    with open(out.with_name("o.jsonl.rejected.jsonl"), "w") as f:
+    with open(out.with_name("o.jsonl.rejected.jsonl"), "w", encoding="utf-8") as f:
         for j in jobs:
             if j.kind == "grounded":
                 f.write(json.dumps({"key": j.key, "reason": "x"}) + "\n")

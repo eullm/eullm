@@ -174,7 +174,7 @@ class NodeSampler:
         with self._lock:
             self.samples.append((t, reading))
         if self.log_path:
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"t": round(t, 1), "d": reading}, separators=(",", ":")))
                 f.write("\n")
 

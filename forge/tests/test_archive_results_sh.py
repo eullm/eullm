@@ -52,7 +52,7 @@ def _env(tmp_path: Path, *, tar_dir: Path | None = None) -> dict[str, str]:
 
 
 def _run(env: dict[str, str]):
-    return subprocess.run([_bash(), str(SCRIPT)], env=env, capture_output=True, text=True)
+    return subprocess.run([_bash(), str(SCRIPT)], env=env, capture_output=True, text=True, encoding="utf-8")
 
 
 def test_a_failed_tar_keeps_the_previous_archive(tmp_path):

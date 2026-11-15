@@ -43,7 +43,7 @@ def run(tmp_path):
 
     def go(body: str, **env):
         script = f'source "{HEARTBEAT}"\nheartbeat_start\n{body}\n'
-        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=30,
                            env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}",
                                 "SLURM_JOB_ID": "101", "HEARTBEAT_INTERVAL": "1", **env})
         cancelled = tmp_path / "cancelled"

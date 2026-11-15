@@ -397,12 +397,12 @@ def test_shipped_campaigns_expand():
     import campaign
 
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-    with open(os.path.join(root, "catalog", "v1", "catalog.json")) as f:
+    with open(os.path.join(root, "catalog", "v1", "catalog.json"), encoding="utf-8") as f:
         catalog = {m["id"] for m in json.load(f)["models"]}
     paths = sorted(glob.glob(os.path.join(root, "tools", "lumi", "campaigns", "*.json")))
     assert paths
     for path in paths:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             spec = json.load(f)
         points = expand(spec)
         assert points, path
@@ -951,7 +951,8 @@ def test_a_job_is_timed_from_how_long_its_points_took_before(tmp_path, capsys):
     os.makedirs(os.path.join(queue, "results", "c-time"))
     for p in expand(spec, "r-old"):
         params = {k: v for k, v in p.items() if k not in campaign.PARAM_SKIP}
-        with open(os.path.join(queue, "results", "c-time", f"{p['id']}.1.json"), "w") as f:
+        path = os.path.join(queue, "results", "c-time", f"{p['id']}.1.json")
+        with open(path, "w", encoding="utf-8") as f:
             json.dump({"schema": campaign.SCHEMA, "campaign": "c-time", "group": "g",
                        "params": dict(params, engine_label="old", duration_s=0),
                        "elapsed_s": 600}, f)

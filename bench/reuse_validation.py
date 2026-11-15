@@ -148,7 +148,7 @@ async def stream_generate(
 def grep_reused_lines(log_path, since_offset):
     """Read lines appended to `log_path` since `since_offset` and pull out
     every "reused N from cache" count, in order."""
-    with open(log_path, "r", errors="replace") as f:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         f.seek(since_offset)
         new_content = f.read()
     return [int(m) for m in re.findall(r"reused (\d+) from cache", new_content)]

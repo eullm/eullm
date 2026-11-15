@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -63,7 +63,7 @@ esac
 
 def _run(env, *args):
     return subprocess.run(["bash", str(SCRIPT), *args], env=env, capture_output=True,
-                          text=True, timeout=30)
+                          text=True, encoding="utf-8", timeout=30)
 
 
 def test_the_round_is_queued_whole_and_in_order(tmp_path):

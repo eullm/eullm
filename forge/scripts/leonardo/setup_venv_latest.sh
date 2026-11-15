@@ -64,7 +64,7 @@ try:
     lines.append(f"triton=={md.version('triton')}")
 except md.PackageNotFoundError:
     pass
-open(sys.argv[1], "w").write("\n".join(lines) + "\n")
+open(sys.argv[1], "w", encoding="utf-8").write("\n".join(lines) + "\n")
 print("  held:", ", ".join(lines))
 PY
 

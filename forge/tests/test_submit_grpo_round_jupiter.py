@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -81,7 +81,7 @@ echo "$n"
 
 def _run(env, runs):
     return subprocess.run(["bash", str(SCRIPT), "r1", str(runs / "start-model"), "2", "200"],
-                          env=env, capture_output=True, text=True, timeout=60)
+                          env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
 
 
 def test_the_round_is_queued_in_order_and_once(tmp_path):
@@ -131,7 +131,7 @@ def test_a_round_waits_for_the_one_that_writes_its_start(tmp_path):
     env["GRPO_AFTER"] = "777"
     start = runs / "grpo" / "r2" / "merged"
     p = subprocess.run(["bash", str(SCRIPT), "r3", str(start), "2", "200"],
-                       env=env, capture_output=True, text=True, timeout=60)
+                       env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     jobs = log.read_text().splitlines()
     link1, link2, ev, judge = jobs           # no smoke test, START not asked
@@ -147,7 +147,7 @@ def test_prompts_a_queued_job_writes_are_filtered_by_the_first_link(tmp_path):
     later = tmp_path / "later.jsonl"            # written by the job the round waits for
     env["GRPO_PROMPTS"] = str(later)
     p = subprocess.run(["bash", str(SCRIPT), "r4", str(runs / "start-model"), "1", "50"],
-                       env=env, capture_output=True, text=True, timeout=60)
+                       env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
     out = runs / "grpo" / "r4"
     assert not (out / "prompts.jsonl").exists()

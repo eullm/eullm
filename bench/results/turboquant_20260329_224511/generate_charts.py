@@ -32,7 +32,7 @@ FILES = {
 data = {}
 for label, path in FILES.items():
     if os.path.exists(path):
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             data[label] = json.load(f)
 
 if not data:

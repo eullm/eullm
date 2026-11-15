@@ -26,7 +26,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
@@ -63,7 +63,7 @@ def stage(tmp_path, monkeypatch):
 
 def _run(hf: Path, out: Path) -> str:
     proc = subprocess.run(["bash", str(SCRIPT), str(hf), str(out)],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     return proc.stdout + proc.stderr
 

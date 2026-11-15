@@ -28,7 +28,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
@@ -59,13 +59,13 @@ def _run(stage_dir: Path, *extra: str):
          "--chunks", "4",
          "--base-ppl-cache", str(stage_dir / "base-ppl.txt"),
          *extra],
-        capture_output=True, text=True)
+        capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stderr
     return proc.stdout + proc.stderr
 
 
 def _measured(calls: Path) -> list[str]:
-    return calls.read_text().splitlines() if calls.exists() else []
+    return calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
 
 
 def test_a_rewritten_base_is_measured_again_not_recalled(stage):

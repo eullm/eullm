@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -53,7 +53,7 @@ printf '%s' '{queued}'
 
 def _run(env, *args):
     return subprocess.run(["bash", str(SCRIPT), *args], env=env, capture_output=True,
-                          text=True, timeout=30)
+                          text=True, encoding="utf-8", timeout=30)
 
 
 def test_the_gate_is_trained_in_order_then_the_round_examined_through_it(tmp_path):
