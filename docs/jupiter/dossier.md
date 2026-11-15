@@ -659,6 +659,26 @@ JUPITER, named by its Slurm job id.
   summaries for three epochs (e1-g9-pr3, then g9pr3-r1..r3) and twice the
   summaries (principi and principi-b, e1-g9-prb, then g9prb-r1..r2).
 
+  **14-11** (58.8 node-hours; the queue ran out that night and the 15th
+  stood idle until 15:50):
+
+  | | measure | ruling refused | real denied | made-up article denied | held-out | devbig | practical | practical held-out | rewritten traps | LexIA | GSM8K / ARC-E / ARC-C |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | g9r-r2 | 2.7% | 90% | 51% | 100% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 975 | 12 | 353 / 361 / 326 |
+  | g9prv-r8 | 18.7% | 0% | 33% | 96% | **207 + 1** | 438 + 8 | **80 + 12** | 42 + 10 | 953 | 15 | **359** / 366 / 343 |
+  | g9prc-r10 | 16.7% | 40% | 27% | 91% | 201 + 1 | 439 + 7 | 77 + 18 | 42 + 8 | 957 | 11 | 357 / 371 / 356 |
+  | e1-g9-pr3 (3 epochs) | 22.0% | 2% | 6% | 61% | 198 + 5 | 436 + 15 | 59 + 24 | 39 + 9 | 908 | 15 | 343 / 367 / 336 |
+  | g9pr3-r3 | 18.7% | 10% | 9% | 56% | 199 + 2 | **445 + 6** | 60 + 19 | 41 + 7 | 954 | 12 | |
+  | e1-g9-prb (two files) | 13.7% | 5% | 24% | 87% | 181 + 5 | 416 + 25 | 66 + 18 | 42 + 7 | 929 | 16 | 355 / **309 / 276** |
+  | g9prb-r2 | 15.7% | 15% | 27% | 90% | 195 + 3 | 426 + 20 | 67 + 16 | 44 + 8 | 933 | 14 | |
+
+  More case law does not help: a third epoch on the summaries costs the
+  practical exam 16-20 questions and teaches the model to take made-up
+  articles for real (61% denied, against 96%); twice the summaries costs
+  ARC (309 / 276) and the open book. The summaries' best dose is one file,
+  two epochs, at lr 1e-4 (e1-g9-pr). g9prv-r8 is the best 9B on the open
+  book yet (held-out 207 + 1, practical 80 + 12, GSM8K 359).
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
