@@ -1112,3 +1112,76 @@ GRPO rounds on false premises over both merges (`r2l-k50-g1`,
 `q35-9b-k50-g1`), which reward exactly what was lost (saying an article
 does not exist); and no knowledge adapter is merged into a candidate
 before devbig without the note has been read.
+
+## 22. 2026-11-15: GRPO gives the reading back; the corpus is checked, and part of it is wrong
+
+**The premise rounds over the 0.5 merges** (`r2l-k50-g1`, `q35-9b-k50-g1`:
+750 steps of GRPO on false-premise prompts, judge as reward), against r2l:
+
+| | devbig, note | devbig, no note | LexIA traps (36) | practical (145) |
+|---|---|---|---:|---|
+| r2l | 449 | 442 | 14 | 87 (+1 partial) |
+| r2l-k50 | 10:21 | 11:80, worse | 9 | 68, 8:27, worse |
+| **r2l-k50-g1** | 16:12, +4 | **22:13, +9** | 10 | 72 (+12 partial), 8:23 (p = 0.011; lenient 12:16, p = 0.57) |
+| q35-9b-k50 | 11:32, worse | 16:82, worse | 11 | 64, worse |
+| q35-9b-k50-g1 | 11:23 (p = 0.058) | 19:30 (p = 0.15) | 16 | 75, 11:22 (p = 0.058) |
+
+The habit of reading the texts that the knowledge took away (section 21)
+comes back with 750 steps on false premises: without the note r2l-k50-g1
+is level with r2l, from 69 answers behind. Not yet a candidate: the
+practical exam is still behind on the strict count (its answers are
+shorter: 534 characters against 765), the traps did not recover (10 against
+14, not significant either way), and whether the knowledge survived the
+round is not measured yet (its closed book).
+
+**The share without the note** (bf16, devbig, hybrid retrieval, against
+the same weights at share 0): 0.25 is level (440 against 443, 14:17), 0.5
+is not (382, 14:75). On the closed book 0.25 gained nothing and 0.4 most
+(section 20), so the shares 0.3-0.4 and the first third of the layers
+decide whether a merge alone can keep both.
+
+**The corpus, checked** (`verify_rewrites.py`, 60 rows a form, 715 rows,
+1,573 copies with a planted error):
+
+| checker | planted errors found | modal | negation | number | party | corpus rows flagged |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3.8-Flash-Next | 96% | 86% | 97% | 98% | 100% | 34% |
+| Gemma 4 31B | 93% | 78% | 95% | 98% | 98% | 31% |
+| GPT-OSS-120B | 90% | 72% | 92% | 98% | 93% | 32% |
+| Qwen3-30B-A3B | 78% | 31% | 84% | 97% | 85% | 12% |
+
+The article's own text is flagged 0-1 times in 60 and the heading
+statements 0-4: the checkers do not flag at random. 57 rows of 715 (8%) are
+flagged by all four. Sixteen of them read, by where the mistake comes from:
+
+* **our program, 6**: a comma or a numbered item repealed taken for the
+  whole article (art. 600 and 617-quater c.p. "non più in vigore"); the
+  only penalty range of an article taken for its base penalty when it is the
+  aggravated one (art. 507 c.p., "da 2 a 6 anni" for "fino a tre anni") or
+  another's (art. 600-septies, confiscation); the procedibility of offences
+  named in general taken for the article's (art. 158 c.p., the
+  prescription; art. 282-bis c.p.p., a precautionary measure);
+* **the teacher, wrong in law, 6**: a case that gives the treasure away
+  against the code (art. 988 c.c.), conditions that must all hold listed
+  as alternatives (art. 1948 c.c.), the State's law said to govern the
+  State where art. 114 Cost. says Rome, a two-thirds majority the
+  Constitution does not have (art. 78), a restriction added to a comma
+  (art. 78 cod. consumo), three commi where there are two (art. 2481-ter);
+* **added, not wrong, 2**: explanations that give purposes and effects the
+  text does not state (art. 2199 c.c., 417 c.p.);
+* **by design, 2**: questions whose answer is only the article's number
+  (`domande`).
+
+The program's mistakes are fixed at their source (`premise_gen`:
+`_repealed_sentence` leaves a repealed part alone, `penalty_of` takes only
+a range in the first sentence beside the word that punishes,
+`procedibility_of` skips offences named in general, `defines_offence` gates
+both), which the closed-book suite and the premise prompts share: **the
+closed-book suite in use was written with the same mistakes**, so its
+penalty, procedibility and repeal columns partly measured agreement with
+them, and is to be written again before those columns decide anything. The
+teacher's mistakes are where section 13 placed them, in the styles that
+elaborate (case, explanation); `recheck_rewrites.py` applies today's
+`check_rewrite` to the rewrites already kept. Next: the corpus rebuilt
+(`memory-v2`), the rows every checker flags left out, and the closed-book
+of the two g1 rounds.

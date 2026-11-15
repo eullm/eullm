@@ -343,6 +343,27 @@ _QUERELA = re.compile(r"\b(?:si procede|punibil[ei]|procedibil[ei]|perseguibil[e
 _UFFICIO = re.compile(r"\b(?:si procede|procedibil[ei]|perseguibil[ei])\b[^.;]{0,40}?"
                       r"\bd['’]ufficio\b", re.IGNORECASE)
 _ANY_UFFICIO = re.compile(r"\bd['’]ufficio\b", re.IGNORECASE)
+# "nei reati punibili a querela" (art. 158 c.p., on the prescription), "le
+# ipotesi procedibili d'ufficio" (art. 282-bis c.p.p., a precautionary
+# measure): the procedibility of other offences, named in general. Read as
+# the article's own, both became "the offence of art. N is procedibile ..."
+# in the memory corpus, found by the checkers on 2026-11-15.
+_GENERIC = re.compile(r"\b(?:reati|delitti|contravvenzioni|ipotesi|casi|fattispecie)"
+                      r"(?:\s+\w+){0,2}\s+$", re.IGNORECASE)
+# An article that defines an offence says it punishes: "è punito", "è
+# punibile". Not one that names penalties of others (art. 600-septies c.p.,
+# confiscation, "la condanna alla reclusione da tre a cinque anni importa
+# l'interdizione"), nor a general or procedural one.
+_PUNISHES = re.compile(r"\b(?:è|e'|sono)\s+punit[oaie]\b|\b(?:è|e')\s+punibile\b",
+                       re.IGNORECASE)
+_PUNISH_WORD = re.compile(r"\bpunit[oaie]\b|\bpunibil[ei]\b|\bpena\b|\bsi applica\b",
+                          re.IGNORECASE)
+
+
+def defines_offence(text: str) -> bool:
+    """Whether the article punishes a conduct ("è punito"), the only kind whose
+    penalty and procedibility a statement may call "the offence's"."""
+    return bool(_PUNISHES.search(_flat(text.replace("((", " ").replace("))", " "))))
 
 
 def _opening(flat: str) -> str:
@@ -367,9 +388,15 @@ def penalty_of(text: str):
     if not found:
         return None
     m, comma = found[0], ""
+    opening = _opening(flat)
+    # The range must be the base offence's, in the first sentence beside the
+    # word that punishes. One range alone is not enough: art. 507 c.p. punishes
+    # "fino a tre anni" and states its only range, "da due a sei anni", for the
+    # aggravated form, and the corpus called that the penalty (2026-11-15).
+    if m.group(0) not in opening or not _PUNISH_WORD.search(opening):
+        return None
     if len(found) > 1:
-        opening = _opening(flat)
-        if len(_PENA.findall(opening)) != 1 or m.group(0) not in opening:
+        if len(_PENA.findall(opening)) != 1:
             return None
         comma = ", al primo comma,"
     lo, hi = number_of(m.group(2).lower()), number_of(m.group(4).lower())
@@ -407,7 +434,12 @@ def offence_name(text: str) -> str | None:
 def procedibility_of(text: str):
     """("querela" | "d'ufficio", sentence) of an article that states exactly one, or None."""
     flat = _flat(text.replace("((", " ").replace("))", " "))
-    q, u = _QUERELA.search(flat), _UFFICIO.search(flat)
+
+    def own(pattern):   # the first mention that is not about offences in general
+        return next((m for m in pattern.finditer(flat)
+                     if not _GENERIC.search(flat[max(0, m.start() - 60):m.start()])), None)
+
+    q, u = own(_QUERELA), own(_UFFICIO)
     if bool(q) == bool(u) or (q and _ANY_UFFICIO.search(flat)) or (u and "querel" in flat.lower()):
         return None
     m = q or u
@@ -472,6 +504,16 @@ def _abrogato_answer(fmt: str, n: str, of: str, pos: int, quote: str) -> str:
             "l'argomento, posso cercare la norma oggi in vigore.")
 
 
+# A part of the article repealed, the rest in force: Normattiva's "COMMA
+# ABROGATO DALLA L. 2 LUGLIO 2010, N. 108" in art. 600 c.p., "3) NUMERO
+# ABROGATO DALLA L. 28 GIUGNO 2024, N. 90" in art. 617-quater. The corpus
+# said both articles were no longer in force (2026-11-15).
+_PART_REPEALED = re.compile(
+    r"\b(?:comm[ai]|numer[oi]|letter[ae]|period[oi]|parol[ae]|capovers[oi]|alinea|punt[oi])\b"
+    r"(?:\s+[\w'’-]+){0,3}?\s+(?:(?:è|e'|sono)\s+stat[oaie]\s+|(?:è|e'|sono)\s+)?abrogat",
+    re.IGNORECASE)
+
+
 def _repealed_sentence(article) -> str:
     """The sentence that says THIS article is repealed, or "".
 
@@ -488,7 +530,7 @@ def _repealed_sentence(article) -> str:
         re.IGNORECASE,
     )
     for _, s in split_sentences(article.text):
-        if pattern.search(s):
+        if pattern.search(s) and not _PART_REPEALED.search(s):
             return s
     if article.heading.strip("()[] ").lower() in ("abrogato", "abrogata"):
         return next((s for _, s in split_sentences(article.text)
@@ -627,7 +669,8 @@ def build_pairs(index, *, per_code: int, rng: random.Random, fmt: str = "steps",
                 name = offence_name(a.text)
                 return name if name in unique and rng.random() < named_share else None
 
-            punished = [(a, p) for a in live if (p := penalty_of(a.text))]
+            punished = [(a, p) for a in live
+                        if defines_offence(a.text) and (p := penalty_of(a.text))]
             for a, (pena, lo, lo_unit, hi, unit, sentence, comma) in rng.sample(
                     punished, min(per_code, len(punished))):
                 pool_hi = [m for m in USUAL.get(unit, []) if m != hi
@@ -685,7 +728,8 @@ def build_pairs(index, *, per_code: int, rng: random.Random, fmt: str = "steps",
                     output=_numero_answer(fmt, fake, a.number, of, name, pos, quote, penalty),
                     keywords=[a.number, _deadline_keyword(hi, unit)]))
 
-            stated = [(a, p) for a in live if (p := procedibility_of(a.text))]
+            stated = [(a, p) for a in live
+                      if defines_offence(a.text) and (p := procedibility_of(a.text))]
             for a, (how, sentence) in rng.sample(stated, min(per_code, len(stated))):
                 said, false_qs, true_qs = PROC[how]
                 quote = quote_span(sentence, anchor="querela" if how == "querela" else "ufficio")
