@@ -1120,6 +1120,25 @@ The second, a split across GPUs that sizes `--n-cpu-moe` on their sum, is
 proposed: `--fit` computing a `--tensor-split` that gives each GPU what it
 holds.
 
+16-11-2026, 21:40: `r-v090` is over for `v090`, 842 points done and 11
+failed: the 10 above and one more, `ram-480b`, Qwen3-Coder-480B on one GCD,
+every request of its first repeat timed out (15-11 22:03). The `v090-long`
+chain runs (23746443 from 16:45, 11 jobs behind it): `dsv4-soak-long` 2
+done and 2 running, `soak-node` 3, `moe-soak` 3 and `moe-235b-soak-x2` 1
+waiting, about two days more, to 19-11. 2,422 node-hours left, 420 ahead of
+the straight line (16.7 days), the last 7 days at 33.7 a day.
+`compare --round r-v090`, 0.9.0 against 0.8.9: 842 configurations, median
+1.00 (0.22-1.50), 41 below 0.95. llama.cpp 1.0's new kernel is NVIDIA's
+(JUPITER's +13-44%), and on MI250X the round is level, as the bump's own
+measurement on one GCD said. Below it: experts computed by the CPU,
+`--cpu-moe` at 8 requests, GLM-5.3-Flash 0.9 -> 0.2 tokens/s (0.22) and
+DeepSeek-V4-Flash 1.7 -> 1.4 (0.82); the 235B's cache at 32 requests 0.93;
+Qwen3-32B split by tensor 0.96. The whole list of the 41, and whether
+`--cpu-moe` lost on the other models too, is read next. The cache fix of
+15-11 is on `main` (6cb3d6d): built tonight in its own worktree
+(`eullm-main1116`, `eullm-target/main1116`), to run GLM's failed points on it
+before the next release.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
