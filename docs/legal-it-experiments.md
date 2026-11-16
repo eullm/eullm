@@ -1225,3 +1225,30 @@ the premise round, which rewards the verdict and not the quote, did not give
 back. Next: distil r2l's way of answering back into g1 on open-book prompts
 only (`opd_train.py`, r2l as the teacher of the same vocabulary), which
 leaves the closed book, where the knowledge is, out of what is taught.
+
+## 23. 2026-11-16: r2l teaches its way of answering back; the share's edge is 0.35
+
+**On-policy distillation from r2l** (`r2l-k50-g1-opd`: student r2l-k50-g1,
+teacher r2l, 300 steps on the 2,948 open-book prompts of the premise round,
+nothing closed-book), against r2l:
+
+| | devbig, note | devbig, no note | practical | LexIA traps | closed book (674) |
+|---|---|---|---|---:|---:|
+| r2l | 449 | 442 | 87 (765 chars) | 14 | 196 |
+| r2l-k50-g1 | 16:12 | 22:13 | 72, 8:23 (p = 0.011) | 10 | 271 |
+| **r2l-k50-g1-opd** | 10:10 | 12:10 | **81**, 4:10 (p = 0.18; 811 chars) | 11 | 227 |
+
+The practical loss closes (its answers are as long as r2l's again) and
+nothing of the product is significantly behind r2l; the closed book keeps a
+part of the knowledge (heading from number 32%, terms 20%, penalty 30%,
+against r2l's 5%, 13%, 17%) and loses the rest (number from heading 3%,
+from 16%). Its real-article existence column is 0% and made-up rulings 0%:
+to be read (`--texts`) before it means anything, since a model taught to
+answer from the texts given may answer "not among the texts" with none.
+
+**The share without the note** (bf16, devbig, against share 0, 443):
+0.25 14:17, 0.3 16:16, 0.35 19:24 (p = 0.54), **0.4 16:47, worse**, 0.5
+14:75, the first third of the layers alone 14:55, worse. The reading holds
+up to 0.35 and breaks by 0.4; the layer split that looked harmless with the
+note is not. Next: the closed book at 0.3 and 0.35, and r2l + 0.35 packaged
+for the product's exams: a merge alone, no training after it.
