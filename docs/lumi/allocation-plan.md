@@ -1148,7 +1148,9 @@ The 41 below 0.95, by group's slowest configuration, fall in three kinds:
 - **Experts computed by the CPU** at 8-16 requests, in every model where it
   was measured: gpt-oss-120b `--cpu-moe` at 16, 4.2 -> 3.3 tokens/s (0.79);
   DeepSeek-V4-Flash at 8, 1.7 -> 1.4 (0.82); GLM-5.3-Flash at 8, 0.9 -> 0.2
-  (0.22). One direction in three models, beyond the noise.
+  (0.22). One direction in three models, which noise does not explain as
+  readily; but each figure is one point of each round, on another node and
+  day: a suspicion, not a measured regression, until the A/B below.
 - **The split by tensor across GCDs**: `rccl-235b` 0.94 as the group's
   median (marked), its slowest at four GCDs and one request 24.4 -> 19.5
   (0.80); `rccl-120b` 0.79, `rccl-batch` 0.88, `rccl-internal` 0.88,
