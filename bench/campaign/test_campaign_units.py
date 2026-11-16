@@ -899,6 +899,34 @@ def test_a_throughput_point_is_read_by_its_decode_speed_first():
     assert "c01 / soak: 1 compared, tok/s new/old 1.02" in text
 
 
+def test_two_binaries_in_one_round_are_compared_side_by_side(tmp_path, capsys, monkeypatch):
+    """An A/B (16-11-2026, --cpu-moe on 0.8.9 and 0.9.0): the new label's
+    rows against the base label's in the same round, whichever ran first,
+    and not against the round before them."""
+    import report
+
+    rows = [
+        _measured("ram", "g", "r-v089", "2026-11-13T00:00:00", 0.9, engine_label="v089"),
+        _measured("ram", "g", "r-ab", "2026-11-17T02:00:00", 0.25, engine_label="v090"),
+        # The base ran later than the new rows: still their reference.
+        _measured("ram", "g", "r-ab", "2026-11-17T05:00:00", 0.8, engine_label="v089"),
+        _measured("ram", "h", "r-ab", "2026-11-17T01:00:00", 2.0, engine_label="v090"),
+        _measured("ram", "h", "r-ab", "2026-11-17T00:00:00", 2.0, engine_label="v089"),
+        # A third binary in the same round is neither.
+        _measured("ram", "g", "r-ab", "2026-11-17T03:00:00", 9.0, engine_label="v090c"),
+    ]
+    text = report.compare(rows, lambda r: r["round"] == "r-ab" and r["engine_label"] == "v090",
+                          is_old=lambda r: r["round"] == "r-ab" and r["engine_label"] == "v089")
+    line = next(line for line in text.splitlines() if "c01 / ram" in line)
+    assert "2 compared" in line and "slowest g 0.31 (0.8 -> 0.25, r-ab)" in line
+
+    # The same through the command line.
+    monkeypatch.setattr(campaign, "result_rows", lambda results: rows)
+    assert campaign.main(["compare", "--queue", str(tmp_path), "--round", "r-ab",
+                          "--label", "v090", "--base-label", "v089"]) == 0
+    assert "slowest g 0.31 (0.8 -> 0.25, r-ab)" in capsys.readouterr().out
+
+
 def test_a_job_is_compared_with_what_came_before_it_only():
     """A job's rows against measurements that ended before them: a later
     round of the same configuration is not its 'before'."""

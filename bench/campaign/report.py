@@ -182,7 +182,7 @@ def _avg(rows, column):
     return sum(nums) / len(nums) if nums else None
 
 
-def compare(rows, is_new, threshold=0.95) -> str:
+def compare(rows, is_new, threshold=0.95, is_old=None) -> str:
     """Every configuration measured by the rows `is_new` picks against its
     last earlier measurement: the mean of each of its headline metrics
     (decode and tokens/s for throughput, tokens/s for workloads,
@@ -191,7 +191,11 @@ def compare(rows, is_new, threshold=0.95) -> str:
     ratio of the first metric and its range, the other metrics' medians, and
     the slowest configuration by name; a group whose median is below
     `threshold` is marked. Configurations measured for the first time are
-    counted, not compared."""
+    counted, not compared.
+
+    With `is_old`, the new rows are compared with the rows it picks instead,
+    whenever these ended: two binaries measured in the same round, their
+    points interleaved in time, as an A/B rather than a before and after."""
     new, old = defaultdict(list), defaultdict(list)
     for r in rows:
         if r.get("outcome") != "measured" or r.get("kind") not in HEADLINE:
@@ -199,12 +203,16 @@ def compare(rows, is_new, threshold=0.95) -> str:
         if all(_number(r.get(c)) is None for c, _ in HEADLINE[r["kind"]]):
             continue
         key = tuple(r.get(k) for k in CONFIG)
-        (new if is_new(r) else old)[key].append(r)
+        if is_new(r):
+            new[key].append(r)
+        elif is_old is None or is_old(r):
+            old[key].append(r)
     groups = defaultdict(list)
     first = defaultdict(int)
     for key, rs in new.items():
         latest = max((r.get("ended") or "" for r in rs), default="")
-        before = [r for r in old.get(key, []) if not latest or (r.get("ended") or "") < latest]
+        before = [r for r in old.get(key, [])
+                  if is_old is not None or not latest or (r.get("ended") or "") < latest]
         if not before:
             first[(key[0], key[1])] += 1
             continue

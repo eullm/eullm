@@ -1210,8 +1210,20 @@ def cmd_compare(args):
     campaigns = set(args.campaign or [])
     rows = [r for r in result_rows(results)
             if not campaigns or r.get("campaign") in campaigns]
-    print(report.compare(rows, lambda r: r.get("round") in rounds
-                         or str(r.get("job")) in jobs, args.threshold))
+
+    def picked(r):
+        return r.get("round") in rounds or str(r.get("job")) in jobs
+
+    def labelled(r, label):
+        return label is None or (r.get("engine_label") or "") == label
+
+    is_old = None
+    if args.base_label:
+        # An A/B: two binaries in the same rounds or jobs, whenever each ran.
+        def is_old(r):
+            return picked(r) and labelled(r, args.base_label)
+    print(report.compare(rows, lambda r: picked(r) and labelled(r, args.label),
+                         args.threshold, is_old))
     return 0
 
 
@@ -1453,6 +1465,10 @@ def main(argv=None):
     p.add_argument("--campaign", action="append", help="only this campaign (repeatable)")
     p.add_argument("--threshold", type=float, default=0.95,
                    help="a group whose median new/old ratio is below this is marked [!!]")
+    p.add_argument("--label", help="only the new rows of this engine label")
+    p.add_argument("--base-label",
+                   help="an A/B: against the rows of this engine label in the same rounds "
+                        "or jobs, whenever they ran, not the measurements before them")
     p = with_queue(sub.add_parser("collect"))
     p.add_argument("--results")
     p.add_argument("--out")
