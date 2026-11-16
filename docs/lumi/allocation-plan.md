@@ -1138,6 +1138,34 @@ Qwen3-32B split by tensor 0.96. The whole list of the 41, and whether
 15-11 is on `main` (6cb3d6d): built tonight in its own worktree
 (`eullm-main1116`, `eullm-target/main1116`), to run GLM's failed points on it
 before the next release.
+Read the same evening: `build exit: 0`, `eullm 0.9.0 (ROCm) [6cb3d6dd6de0]`.
+The 41 below 0.95, by group's slowest configuration, fall in three kinds:
+
+- **Noise**, by the yardstick of the runtimes that did not change: `c07`'s
+  llama-server and Ollama, the same binaries in both rounds, came out at
+  0.89-0.92. Single configurations at 0.88-0.93 elsewhere (Mistral-Small-24B,
+  gpt-oss-20b, `--mtp 3`, the decision points, the 235B's cache) are that.
+- **Experts computed by the CPU** at 8-16 requests, in every model where it
+  was measured: gpt-oss-120b `--cpu-moe` at 16, 4.2 -> 3.3 tokens/s (0.79);
+  DeepSeek-V4-Flash at 8, 1.7 -> 1.4 (0.82); GLM-5.3-Flash at 8, 0.9 -> 0.2
+  (0.22). One direction in three models, beyond the noise.
+- **The split by tensor across GCDs**: `rccl-235b` 0.94 as the group's
+  median (marked), its slowest at four GCDs and one request 24.4 -> 19.5
+  (0.80); `rccl-120b` 0.79, `rccl-batch` 0.88, `rccl-internal` 0.88,
+  `rccl-tensor` 0.89, `place-480b` by tensor 0.90.
+
+And `ram-480b`'s failure came with no server log, only the three timeouts.
+Both kinds are measured again as an A/B: the same groups (`glm-ram`,
+`dsv4-ram`, `ram-gpt-oss-120b`, `rccl-235b`, `rccl-120b`, 37 points) on 0.8.9
+and 0.9.0 side by side, round `r-ab090`, one chain each, started together so
+that both see the same days; `campaign.py compare --round r-ab090 --label
+v090 --base-label v089` reads one against the other whichever ran first
+(new: `compare` took only the measurements before the new ones). With them,
+`ram-480b`'s failed point again on 0.9.0, and the cache fix on `main1116`,
+label `v090c`, round `r-cachefix`: `glm-ram` (its four cache points failed
+on every binary so far) and `c19`'s `b13-moe` (the cache where it already
+loaded: the fix must not change it). Up to 21 node-hours a label by the
+estimates, 9 for `v090c`; behind the long soaks nothing yet.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
