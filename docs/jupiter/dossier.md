@@ -679,6 +679,28 @@ JUPITER, named by its Slurm job id.
   two epochs, at lr 1e-4 (e1-g9-pr). g9prv-r8 is the best 9B on the open
   book yet (held-out 207 + 1, practical 80 + 12, GSM8K 359).
 
+  **16-11, how much is noise.** The g9prv recipe run again from g9pr-r2
+  with two other seeds (g9prw, seed 43, six rounds; g9prx, seed 44, three),
+  beside g9prv's eight. Across these 17 rounds of one recipe: held-out
+  202-207, devbig 436-442, practical 71-80, practical held-out 38-43,
+  rewritten traps 946-962, LexIA 10-14, closed book 213-234 right. So a
+  difference of up to ~5 on the held-out exam, ~9 on the practical exam
+  and ~15 on the rewritten traps between two rounds is within what the
+  seed alone does, and several comparisons above were read too finely.
+  What stands beyond it, against g9r-r2: the held-out exam +5 to +10, the
+  closed book (real articles denied 27-43% against 51%, rubric from number
+  29-42% against 5%), GSM8K and ARC level or better; the rewritten traps
+  13-29 under (975), the made-up rulings 0-10% refused (90%).
+  The made-up rulings alone (g9prs: g9prv-r3 plus 600 no-text ruling
+  prompts, no made-up articles, no premise file; six rounds) are not
+  learnt: 0-10% refused. They came back only with the refusal-heavy mix
+  (g9prc), whose 1,353 article-absent premise prompts are the likeliest
+  cause of the real articles denied.
+  **Candidate 9B: g9prv-r8**, a round of the recipe the three seeds agree
+  on, the best on the practical exam and GSM8K among them.
+  On 16-11 login node jpbl-s01-03 had /e unmounted (no home), as
+  jpbl-s01-01 on 30-10; no job was affected.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
