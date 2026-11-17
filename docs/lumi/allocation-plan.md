@@ -1169,6 +1169,34 @@ on every binary so far) and `c19`'s `b13-moe` (the cache where it already
 loaded: the fix must not change it). Up to 21 node-hours a label by the
 estimates, 9 for `v090c`; behind the long soaks nothing yet.
 
+17-11-2026, 09:40: all of it ran in the night. 2,400 node-hours left, 430
+ahead of the straight line (17.1 days), the last 7 days at 34.2 a day.
+
+- **The A/B says there is no regression.** `compare --round r-ab090 --label
+  v090 --base-label v089`, 0.9.0 against 0.8.9 measured the same night: 33
+  configurations, median 1.00. The split by tensor is level (`rccl-120b`
+  1.01, 0.98-1.11; `rccl-235b` 1.01, 0.97-1.04), and so is gpt-oss-120b
+  with the CPU computing its experts (`ram-gpt-oss-120b` 1.00, its slowest
+  0.91). GLM-5.3-Flash's `--cpu-moe` at 8 requests, 0.9 -> 0.2 tokens/s
+  between the rounds, came out 4.5 times faster on 0.9.0 this time: the same
+  configuration swings between 0.2 and 0.9 tokens/s whichever binary runs
+  it, which is a fact about that configuration, not about llama.cpp 1.0.
+  DeepSeek-V4-Flash's `dsv4-ram` 0.95 (0.80-1.00), its slowest `--cpu-moe`
+  at 32 requests, 0.5 -> 0.4 tokens/s, at the resolution of the figure. The
+  drops `r-v090` showed were days and nodes, not the binary: an A/B in one
+  round is the test for a release, a comparison across rounds the alarm.
+- **The cache fix works.** On `main1116` (label `v090c`), `glm-ram`'s nine
+  points all done, the four with the expert cache for the first time on any
+  binary (on 0.8.8, 0.8.9 and 0.9.0 they failed every time); the log says
+  "no context fits beside the planned 52.00 GiB cache, the cache goes down
+  to 50.00 GiB" at 8 requests, and 51.50 to 44.50 GiB at 32. `b13-moe`,
+  where the cache already loaded, unchanged (4 compared, 1.00, 0.93-1.00).
+- `ram-480b`'s point failed again on 0.9.0 (8 done, 1 failed): its log is
+  read next.
+- The long soaks: `dsv4-soak-long` 4 done, `moe-235b-soak-x2` 1 done,
+  `moe-soak` 1 running and 2 waiting, `soak-node` 3 waiting, one a job of 8
+  hours (23746445 running from 07:54, 9 behind it): to about 19-11 midday.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
