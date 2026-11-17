@@ -1252,3 +1252,14 @@ answer from the texts given may answer "not among the texts" with none.
 up to 0.35 and breaks by 0.4; the layer split that looked harmless with the
 note is not. Next: the closed book at 0.3 and 0.35, and r2l + 0.35 packaged
 for the product's exams: a merge alone, no training after it.
+
+**r2l + 0.35, packaged (Q4_K_M), 2026-11-17**: devbig with the note 11:12,
+**without it 15:56, worse** (bf16 at the same share: 19:24); practical
+5:14 (p = 0.064), traps 4:7. Closed book: 0.3 226, 0.35 243, 0.4 233 (r2l
+196). The share that holds in bf16 does not hold once quantized: 0.35 is
+the edge, and the quantization's noise is enough to cross it. A merge alone
+has no margin; the candidate stays the distilled one (`r2l-k50-g1-opd`).
+
+**The verified corpus, a preview** (116,456 rewrites checked by Gemma 4
+31B and GPT-OSS-120B, 2026-11-17): flagged by both 19%; paraphrase 4%,
+elements 11%, questions 14%, case 42%, explanation 77%.
