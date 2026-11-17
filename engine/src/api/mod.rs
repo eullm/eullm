@@ -682,6 +682,34 @@ impl AppState {
                 .or(self.n_ubatch)
                 .unwrap_or(crate::inference::DEFAULT_N_UBATCH);
             let load_n_batch = crate::inference::batch_for_ubatch(self.n_batch, load_n_ubatch);
+            // Several GPUs, and the experts of the first layers in RAM: a split
+            // that gives each GPU what it holds, not llama.cpp's split by count
+            // of layers (`fit::balance_moe_split`). Only where the user split
+            // nothing, and for this load only: the server keeps the user's flags.
+            let (n_cpu_moe, gpu_split) = match &plan {
+                Some(plan)
+                    if self.gpu_split.is_default()
+                        && matches!(plan.basis, crate::fit::OffloadBasis::MoeExperts { .. }) =>
+                {
+                    match self.balanced_split(&sizing, n_cpu_moe, load_n_ubatch).await {
+                        Some(split) => {
+                            tracing::info!(
+                                "{}",
+                                crate::fit::describe_balanced_split(&split, n_cpu_moe)
+                            );
+                            (
+                                split.n_cpu_moe,
+                                crate::gpu_split::GpuSplit {
+                                    mode: crate::gpu_split::SplitMode::default(),
+                                    tensor_split: split.tensor_split,
+                                },
+                            )
+                        }
+                        None => (n_cpu_moe, self.gpu_split.clone()),
+                    }
+                }
+                _ => (n_cpu_moe, self.gpu_split.clone()),
+            };
             if cache_n_ubatch.is_some() {
                 tracing::info!(
                     "experts in RAM: reading prompts {load_n_ubatch} tokens at a time (--n-ubatch), \
@@ -763,7 +791,7 @@ impl AppState {
                 moe_prefetch_slots,
                 load_threads: self.load_threads,
                 kv_unified: self.kv_unified,
-                gpu_split: self.gpu_split.clone(),
+                gpu_split,
             };
             if mmproj_path.is_some() {
                 tracing::info!("{}", mmproj_placement.describe());
@@ -1157,6 +1185,41 @@ impl AppState {
     /// less what the free figure does not show yet: the reserved companions'
     /// requests, and the context every sequential resident creates per
     /// request.
+    /// `fit::balance_moe_split` for this load, on the GPUs as they are now,
+    /// the first less what companions and resident models will need, as
+    /// `size_load` counts it. `None` with one GPU, or no split that holds.
+    async fn balanced_split(
+        &self,
+        sizing: &Sizing<'_>,
+        n_cpu_moe: u32,
+        n_ubatch: u32,
+    ) -> Option<crate::fit::BalancedSplit> {
+        let (info, layout) = (sizing.info?, sizing.layout?);
+        let reserve_bytes = self
+            .reserved_embedding_bytes()
+            .await
+            .saturating_add(self.reserved_decision_bytes().await)
+            .saturating_add(self.models.read().await.unallocated_reserve())
+            .saturating_add(sizing.mtp_reserve);
+        let mut free: Vec<u64> = crate::fit::device_vram()
+            .into_iter()
+            .map(|(free, _)| free)
+            .collect();
+        if let Some(first) = free.first_mut() {
+            *first = first.saturating_sub(reserve_bytes);
+        }
+        crate::fit::balance_moe_split(
+            layout,
+            info,
+            sizing.ctx_size,
+            sizing.kv_bpe_k,
+            sizing.kv_bpe_v,
+            n_cpu_moe,
+            &free,
+            crate::fit::per_device_reserve(self.vram_reserve, n_ubatch),
+        )
+    }
+
     async fn size_load(&self, sizing: &Sizing<'_>) -> crate::fit::OffloadPlan {
         // Counted below as reserved; the context the decision model keeps
         // between requests must not show up as used as well.

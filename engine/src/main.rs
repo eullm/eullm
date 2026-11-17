@@ -3135,6 +3135,7 @@ async fn cmd_run(
     let mut n_batch = n_batch;
     let mut n_ubatch = n_ubatch.unwrap_or(inference::DEFAULT_N_UBATCH);
     let mut no_mmap = no_mmap;
+    let mut gpu_split = gpu_split;
     // What the user actually asked for, before --fit specializes the mut
     // bindings above to the LAUNCH model. The API server must inherit these
     // originals: with --fit it re-sizes each model it loads against them,
@@ -3619,6 +3620,31 @@ async fn cmd_run(
                                  {larger} prompt tokens instead of {}.",
                                 inference::DEFAULT_N_UBATCH
                             );
+                        }
+                        // Several GPUs: a split that gives each GPU what it
+                        // holds (`fit::balance_moe_split`), where the user split
+                        // nothing.
+                        if gpu_split.is_default()
+                            && let Some(split) = fit::run_balance_moe_split(
+                                &gguf_path,
+                                ctx_size,
+                                kv_bpe_k,
+                                kv_bpe_v,
+                                computed,
+                                n_ubatch,
+                                sizing_reserve,
+                                vram_reserve,
+                            )
+                        {
+                            println!(
+                                "[EULLM] {}.",
+                                fit::describe_balanced_split(&split, computed)
+                            );
+                            n_cpu_moe = split.n_cpu_moe;
+                            gpu_split = gpu_split::GpuSplit {
+                                mode: gpu_split::SplitMode::default(),
+                                tensor_split: split.tensor_split,
+                            };
                         }
                         let (read_in, why) = fit::plan_read_into_memory(
                             no_mmap,
