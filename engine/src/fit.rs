@@ -438,6 +438,11 @@ pub fn read_gguf_info(path: &Path) -> Option<GgufInfo> {
 pub struct MoeLayout {
     /// Bytes of every tensor that is not part of any layer's expert set.
     pub non_expert_bytes: u64,
+    /// The part of `non_expert_bytes` in each transformer block (attention,
+    /// norms, routers, shared experts), indexed as `expert_bytes_per_layer`;
+    /// the rest is the input and output layers. Empty when not read: a
+    /// split across GPUs then spreads `non_expert_bytes` evenly.
+    pub non_expert_bytes_per_layer: Vec<u64>,
     /// Expert-tensor bytes for each transformer block, indexed by layer
     /// number parsed from the tensor name (`blk.<i>...`). A dense
     /// (non-MoE) model has every entry `0`.
@@ -570,6 +575,7 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
         // whole model, which then looked dense to `--fit`.
         return Some(MoeLayout {
             non_expert_bytes: 0,
+            non_expert_bytes_per_layer: vec![0u64; n_layers as usize],
             expert_bytes_per_layer: vec![0u64; n_layers as usize],
             largest_expert_tensor_bytes: 0,
         });
@@ -579,6 +585,7 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
     tensors.sort_by_key(|(_, offset)| *offset);
 
     let mut non_expert_bytes: u64 = 0;
+    let mut non_expert_bytes_per_layer = vec![0u64; n_layers as usize];
     let mut expert_bytes_per_layer = vec![0u64; n_layers as usize];
     let mut largest_expert_tensor_bytes: u64 = 0;
 
@@ -598,12 +605,17 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
             // carries a 28.8 GB one per layer (`per_layer_token_embd`), which
             // counted as VRAM left no room for the expert cache at all.
             _ if is_host_only_tensor_name(name) => {}
+            (false, Some(layer)) if (layer as usize) < non_expert_bytes_per_layer.len() => {
+                non_expert_bytes_per_layer[layer as usize] += size;
+                non_expert_bytes += size;
+            }
             _ => non_expert_bytes += size,
         }
     }
 
     Some(MoeLayout {
         non_expert_bytes,
+        non_expert_bytes_per_layer,
         expert_bytes_per_layer,
         largest_expert_tensor_bytes,
     })
@@ -676,6 +688,13 @@ pub fn read_model_moe_layout(path: &Path, n_layers: u32) -> Option<MoeLayout> {
             None => layout,
             Some(mut t) => {
                 t.non_expert_bytes += layout.non_expert_bytes;
+                for (sum, part_bytes) in t
+                    .non_expert_bytes_per_layer
+                    .iter_mut()
+                    .zip(layout.non_expert_bytes_per_layer)
+                {
+                    *sum += part_bytes;
+                }
                 for (sum, part_bytes) in t
                     .expert_bytes_per_layer
                     .iter_mut()
@@ -776,6 +795,267 @@ pub fn vram_bytes() -> Option<(u64, u64)> {
         return None;
     }
     Some((free_total, total_total))
+}
+
+/// Free and total VRAM of each GPU, in bytes, in the order llama.cpp numbers
+/// the devices a model is split across: what [`vram_bytes`] sums. Empty
+/// before `llama_backend_init`, or without a GPU.
+pub fn device_vram() -> Vec<(u64, u64)> {
+    use llama_cpp_sys_2::{
+        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
+        ggml_backend_dev_memory, ggml_backend_dev_type,
+    };
+
+    let mut devices = Vec::new();
+    // SAFETY: as in `vram_bytes`.
+    unsafe {
+        for i in 0..ggml_backend_dev_count() {
+            let dev = ggml_backend_dev_get(i);
+            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
+                continue;
+            }
+            let mut free: usize = 0;
+            let mut total: usize = 0;
+            ggml_backend_dev_memory(dev, &mut free as *mut usize, &mut total as *mut usize);
+            devices.push((free as u64, total as u64));
+        }
+    }
+    devices
+}
+
+/// Where the layers of a MoE model go across several GPUs when the experts of
+/// its first layers stay in RAM: see [`balance_moe_split`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct BalancedSplit {
+    /// The proportions for llama.cpp's `tensor_split`, one a GPU, that give
+    /// each GPU exactly `layers` of them, the output layer to the last.
+    pub tensor_split: Vec<f32>,
+    /// The transformer blocks each GPU gets, in order.
+    pub layers: Vec<u32>,
+    /// The layers whose experts stay in RAM: the plan's, or more when the
+    /// GPUs could not hold it even split this way.
+    pub n_cpu_moe: u32,
+}
+
+/// Split a MoE model whose first `n_cpu_moe` layers keep their experts in RAM
+/// across GPUs whose free VRAM is `free_per_device`, so that each GPU holds
+/// what it can, and not as llama.cpp does by default: by count of layers,
+/// in proportion to free VRAM.
+///
+/// `--fit` counts the experts it keeps on the GPU against the VRAM of all the
+/// GPUs together. The layers whose experts stay in RAM are the first, which
+/// llama.cpp's split by count gives the first GPU; the last GPU gets layers
+/// whole. GLM-5.3-Flash on two GCDs of LUMI-G: the experts of 18 layers in
+/// RAM, and 92,164.77 MiB asked of the second GCD, 64 GB (11-11-2026);
+/// DeepSeek-V4-Flash the same. Here every block is weighed (its tensors
+/// other than experts, its share of the KV cache, its experts when on the
+/// GPU), and the blocks are cut into runs whose bytes follow each GPU's free
+/// VRAM less `per_device_reserve`, the output layer and the other tensors
+/// outside the blocks counted on the last GPU. If no such cut holds, the
+/// experts of one more layer go to RAM, and so on.
+///
+/// `None` with fewer than two GPUs, a model without experts, or where no
+/// number of layers in RAM makes a split hold; the load then goes as before.
+#[allow(clippy::too_many_arguments)]
+pub fn balance_moe_split(
+    layout: &MoeLayout,
+    info: &GgufInfo,
+    ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+    n_cpu_moe: u32,
+    free_per_device: &[u64],
+    per_device_reserve: u64,
+) -> Option<BalancedSplit> {
+    let n = layout.expert_bytes_per_layer.len();
+    if free_per_device.len() < 2 || n == 0 || !layout.is_moe() {
+        return None;
+    }
+    let budgets: Vec<f64> = free_per_device
+        .iter()
+        .map(|&free| free.saturating_sub(per_device_reserve) as f64)
+        .collect();
+    let total_kv = kv_cache_bytes(
+        Some(info),
+        ctx_size,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+    );
+    let kv_per_layer = total_kv as f64 / n as f64;
+    let (non_expert, outside): (Vec<f64>, f64) = if layout.non_expert_bytes_per_layer.len() == n {
+        let in_blocks: u64 = layout.non_expert_bytes_per_layer.iter().sum();
+        (
+            layout
+                .non_expert_bytes_per_layer
+                .iter()
+                .map(|&b| b as f64)
+                .collect(),
+            layout.non_expert_bytes.saturating_sub(in_blocks) as f64,
+        )
+    } else {
+        (vec![layout.non_expert_bytes as f64 / n as f64; n], 0.0)
+    };
+    for in_ram in n_cpu_moe..=n as u32 {
+        let weights: Vec<f64> = (0..n)
+            .map(|l| {
+                let experts = if (l as u32) < in_ram {
+                    0.0
+                } else {
+                    layout.expert_bytes_per_layer[l] as f64
+                };
+                non_expert[l] + kv_per_layer + experts
+            })
+            .collect();
+        if let Some(layers) = split_layers(&weights, outside, &budgets) {
+            return Some(BalancedSplit {
+                tensor_split: tensor_split_for(&layers),
+                layers,
+                n_cpu_moe: in_ram,
+            });
+        }
+    }
+    None
+}
+
+/// Cut `weights`, one a block, into a run of blocks per GPU that each GPU's
+/// `budgets` holds, the last also holding `outside`: first in proportion to
+/// the budgets, which leaves every GPU the same share of room to spare, else
+/// filling each GPU in turn. `None` when neither holds, or a GPU would get no
+/// block.
+fn split_layers(weights: &[f64], outside: f64, budgets: &[f64]) -> Option<Vec<u32>> {
+    let (n, d) = (weights.len(), budgets.len());
+    let total: f64 = weights.iter().sum::<f64>() + outside;
+    let room: f64 = budgets.iter().sum();
+    if d == 0 || total > room {
+        return None;
+    }
+    let holds = |counts: &[u32]| {
+        let mut start = 0usize;
+        counts.iter().enumerate().all(|(dev, &count)| {
+            let end = start + count as usize;
+            let mut bytes: f64 = weights[start..end].iter().sum();
+            if dev == d - 1 {
+                bytes += outside;
+            }
+            start = end;
+            count > 0 && bytes <= budgets[dev]
+        })
+    };
+    // In proportion: each cut where the running sum of bytes is nearest the
+    // GPUs' running share of the total.
+    let mut counts = vec![0u32; d];
+    let (mut i, mut sum, mut target) = (0usize, 0.0f64, 0.0f64);
+    for (dev, budget) in budgets.iter().enumerate().take(d - 1) {
+        target += total * budget / room;
+        let start = i;
+        while i < n && sum + weights[i] / 2.0 <= target {
+            sum += weights[i];
+            i += 1;
+        }
+        counts[dev] = (i - start) as u32;
+    }
+    counts[d - 1] = (n - i) as u32;
+    if holds(&counts) {
+        return Some(counts);
+    }
+    // Each GPU filled in turn, the last taking the rest.
+    let mut counts = vec![0u32; d];
+    let mut i = 0usize;
+    for (dev, budget) in budgets.iter().enumerate().take(d - 1) {
+        let (start, mut used) = (i, 0.0f64);
+        while i < n && used + weights[i] <= *budget {
+            used += weights[i];
+            i += 1;
+        }
+        counts[dev] = (i - start) as u32;
+    }
+    counts[d - 1] = (n - i) as u32;
+    holds(&counts).then_some(counts)
+}
+
+/// llama.cpp's `tensor_split` for these counts of blocks. It sends block `il`
+/// of `n` to the first GPU whose running share of the proportions is above
+/// `il / (n + 1)` (the output layer is the `n + 1`-th), so the proportions
+/// are the counts, the output layer added to the last GPU, with the first
+/// less half a block and the last more: every cut falls half a block from
+/// any block, never on one, where rounding could move it.
+fn tensor_split_for(counts: &[u32]) -> Vec<f32> {
+    let mut split: Vec<f32> = counts.iter().map(|&c| c as f32).collect();
+    if let (Some(first), true) = (split.first_mut(), counts.len() > 1) {
+        *first -= 0.5;
+    }
+    if let Some(last) = split.last_mut() {
+        *last += if counts.len() > 1 { 1.5 } else { 1.0 };
+    }
+    split
+}
+
+/// [`balance_moe_split`] for the model at `model_path` on the GPUs as they are
+/// now, the first less `reserve_bytes` (what companions and resident models
+/// will need), each less `vram_reserve`, the compute buffer and what a
+/// micro-batch of `n_ubatch` adds to it.
+#[allow(clippy::too_many_arguments)]
+pub fn run_balance_moe_split(
+    model_path: &Path,
+    ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+    n_cpu_moe: u32,
+    n_ubatch: u32,
+    reserve_bytes: u64,
+    vram_reserve: u64,
+) -> Option<BalancedSplit> {
+    let info = read_gguf_info(model_path)?;
+    let layout = read_model_moe_layout(model_path, info.n_layers)?;
+    let mut free: Vec<u64> = device_vram().into_iter().map(|(free, _)| free).collect();
+    if let Some(first) = free.first_mut() {
+        *first = first.saturating_sub(reserve_bytes);
+    }
+    balance_moe_split(
+        &layout,
+        &info,
+        ctx_size,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+        n_cpu_moe,
+        &free,
+        per_device_reserve(vram_reserve, n_ubatch),
+    )
+}
+
+/// What each GPU of a split keeps free beside its share of the model: the
+/// reserve, and its own compute buffer, which every GPU of a split has.
+pub fn per_device_reserve(vram_reserve: u64, n_ubatch: u32) -> u64 {
+    vram_reserve + COMPUTE_BUFFER_RESERVE_BYTES as u64 + ubatch_reserve_bytes(n_ubatch)
+}
+
+/// The line the load log gets for a balanced split.
+pub fn describe_balanced_split(split: &BalancedSplit, planned_n_cpu_moe: u32) -> String {
+    let layers = split
+        .layers
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    let more = if split.n_cpu_moe > planned_n_cpu_moe {
+        format!(
+            "; the experts of {} layers in RAM instead of {planned_n_cpu_moe}, for each GPU to hold its share",
+            split.n_cpu_moe
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "--fit: {} GPUs, layers {layers}: more to the GPU(s) holding the layers whose experts \
+         are in RAM, so that each holds its share (--tensor-split {}){more}",
+        split.layers.len(),
+        split
+            .tensor_split
+            .iter()
+            .map(|x| format!("{x}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 /// The outcome of a fit computation.
@@ -3789,6 +4069,7 @@ mod plan_offload_tests {
             non_expert_bytes: 2 * GIB,
             expert_bytes_per_layer: vec![400 * MIB; 48],
             largest_expert_tensor_bytes: 150 * MIB,
+            ..Default::default()
         };
         (attention(48, 4), layout, 2 * GIB + 48 * 400 * MIB)
     }
@@ -5617,6 +5898,8 @@ mod moe_layout_tests {
         let layout = parse_gguf_moe_layout(&data, file_size, 2).expect("parses");
         assert!(layout.is_moe());
         assert_eq!(layout.non_expert_bytes, 1000 + 100 + 100 + 50);
+        // Each block's own, the embeddings and the output norm outside them.
+        assert_eq!(layout.non_expert_bytes_per_layer, vec![100, 100]);
         assert_eq!(layout.expert_bytes_per_layer, vec![9000, 12000]);
         assert_eq!(
             layout.expert_bytes_per_layer.iter().sum::<u64>(),
@@ -6085,5 +6368,204 @@ mod download_verdict_tests {
             classify_download(tiny, Some((600 * 1024 * 1024, 700 * 1024 * 1024)), None, DEFAULT_VRAM_RESERVE_BYTES),
             RunVerdict::Fits
         );
+    }
+}
+
+#[cfg(test)]
+mod balanced_split_tests {
+    use super::*;
+
+    const GB: u64 = 1_000_000_000;
+
+    fn info(n_layers: u32) -> GgufInfo {
+        GgufInfo {
+            n_layers,
+            n_embd: None,
+            n_head: None,
+            n_head_kv: None,
+            key_length: None,
+            value_length: None,
+            full_attention_interval: None,
+            architecture: None,
+            nextn_layers: None,
+            context_length: None,
+        }
+    }
+
+    /// 40 blocks of 0.5 GB of attention and 3 GB of experts, 1 GB outside
+    /// them: a MoE model of 141 GB, for two 64 GB GPUs.
+    fn layout() -> MoeLayout {
+        MoeLayout {
+            non_expert_bytes: 21 * GB,
+            non_expert_bytes_per_layer: vec![GB / 2; 40],
+            expert_bytes_per_layer: vec![3 * GB; 40],
+            largest_expert_tensor_bytes: GB,
+        }
+    }
+
+    /// The GPU llama.cpp gives each block, and the output layer last, for a
+    /// `tensor_split`, as `llama_model::load_tensors` computes it in f32.
+    fn llama_devices(split: &[f32], n_layers: usize) -> Vec<usize> {
+        let mut cum = Vec::with_capacity(split.len());
+        let mut sum = 0.0f32;
+        for &s in split {
+            sum += s;
+            cum.push(sum);
+        }
+        for c in &mut cum {
+            *c /= sum;
+        }
+        (0..=n_layers)
+            .map(|il| {
+                let x = il as f32 / (n_layers + 1) as f32;
+                cum.iter().position(|&c| c > x).unwrap_or(split.len())
+            })
+            .collect()
+    }
+
+    /// Blocks a GPU gets: the count of each device in `llama_devices`, the
+    /// output layer left out.
+    fn counts(devices: &[usize], n_gpus: usize) -> Vec<u32> {
+        let mut c = vec![0u32; n_gpus];
+        for &d in &devices[..devices.len() - 1] {
+            c[d] += 1;
+        }
+        c
+    }
+
+    /// GLM-5.3-Flash on two GCDs (11-11-2026), in small: the experts of the
+    /// first layers in RAM, counted against both GPUs together, and llama.cpp
+    /// giving each GPU half the blocks overflowed the second. The balanced
+    /// split gives the first GPU more blocks, and each holds its share.
+    #[test]
+    fn the_gpus_holding_light_blocks_take_more_of_them() {
+        let (layout, info) = (layout(), info(40));
+        // 67 GB free each, 2 GB kept: 65 GB a GPU. On the sum, 35 blocks of
+        // experts stay: those of the first 5 in RAM.
+        let free = [67 * GB, 67 * GB];
+        let reserve = 2 * GB;
+        // llama.cpp by count: blocks 0-20 to the first, 21-39 and the output
+        // to the second, 19 * 3.5 + 1 = 67.5 GB for 65.
+        let by_count = llama_devices(&[1.0, 1.0], 40);
+        let second: f64 = (0..40)
+            .filter(|&l| by_count[l] == 1)
+            .map(|l| if l < 5 { 0.5 } else { 3.5 })
+            .sum::<f64>()
+            + 1.0;
+        assert!(second > 65.0, "{second}");
+
+        let split = balance_moe_split(&layout, &info, 4096, 2.0, 2.0, 5, &free, reserve).unwrap();
+        assert_eq!(split.n_cpu_moe, 5);
+        assert_eq!(split.layers, vec![22, 18]);
+        // llama.cpp sends exactly those blocks, and the output layer to the last.
+        let devices = llama_devices(&split.tensor_split, 40);
+        assert_eq!(counts(&devices, 2), split.layers);
+        assert_eq!(devices[40], 1);
+        let line = describe_balanced_split(&split, 5);
+        assert!(
+            line.contains("layers 22/18") && !line.contains("instead of"),
+            "{line}"
+        );
+    }
+
+    /// Each GPU keeps its own compute buffer and reserve, which the sum did
+    /// not count: where no cut holds, the experts of one more layer go to RAM.
+    #[test]
+    fn where_no_cut_holds_one_more_layer_of_experts_goes_to_ram() {
+        let (layout, info) = (layout(), info(40));
+        let split = balance_moe_split(
+            &layout,
+            &info,
+            4096,
+            2.0,
+            2.0,
+            6,
+            &[64 * GB, 64 * GB],
+            2 * GB,
+        )
+        .unwrap();
+        assert_eq!(split.n_cpu_moe, 7);
+        assert_eq!(split.layers, vec![23, 17]);
+        assert_eq!(
+            counts(&llama_devices(&split.tensor_split, 40), 2),
+            split.layers
+        );
+        assert!(describe_balanced_split(&split, 6).contains("7 layers in RAM instead of 6"));
+    }
+
+    /// The proportions land each block where meant for any counts, also on
+    /// eight GPUs, with no cut on a block for f32 to round across.
+    #[test]
+    fn the_proportions_give_llama_cpp_exactly_the_counts() {
+        for layers in [
+            vec![1u32, 1],
+            vec![30, 49],
+            vec![60, 18],
+            vec![10, 10, 10, 10, 10, 10, 10, 11],
+            vec![20, 9, 9, 9, 9, 9, 9, 4],
+        ] {
+            let n: u32 = layers.iter().sum();
+            let devices = llama_devices(&tensor_split_for(&layers), n as usize);
+            assert_eq!(counts(&devices, layers.len()), layers);
+            assert_eq!(
+                devices[n as usize],
+                layers.len() - 1,
+                "the output layer to the last"
+            );
+        }
+    }
+
+    /// Nothing to balance: one GPU, a dense model, or a model the GPUs cannot
+    /// hold however many experts go to RAM.
+    #[test]
+    fn one_gpu_a_dense_model_or_too_little_vram_split_nothing() {
+        let (layout, info) = (layout(), info(40));
+        assert_eq!(
+            balance_moe_split(&layout, &info, 4096, 2.0, 2.0, 5, &[66 * GB], GB),
+            None
+        );
+        let dense = MoeLayout {
+            non_expert_bytes: 100 * GB,
+            expert_bytes_per_layer: vec![0; 40],
+            ..Default::default()
+        };
+        assert_eq!(
+            balance_moe_split(&dense, &info, 4096, 2.0, 2.0, 0, &[66 * GB, 66 * GB], GB),
+            None
+        );
+        // 21 GB of attention and the rest for 2 * 8 GB.
+        assert_eq!(
+            balance_moe_split(
+                &layout,
+                &info,
+                4096,
+                2.0,
+                2.0,
+                5,
+                &[10 * GB, 10 * GB],
+                2 * GB
+            ),
+            None
+        );
+    }
+
+    /// A layout read before blocks were weighed spreads the tensors outside
+    /// the experts evenly, and still balances.
+    #[test]
+    fn without_per_block_weights_the_rest_is_spread_evenly() {
+        let mut layout = layout();
+        layout.non_expert_bytes_per_layer.clear();
+        let split = balance_moe_split(
+            &layout,
+            &info(40),
+            4096,
+            2.0,
+            2.0,
+            5,
+            &[66 * GB, 66 * GB],
+            2 * GB,
+        )
+        .unwrap();
+        assert!(split.layers[0] > split.layers[1], "{:?}", split.layers);
     }
 }

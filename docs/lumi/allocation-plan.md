@@ -1197,6 +1197,18 @@ ahead of the straight line (17.1 days), the last 7 days at 34.2 a day.
   `moe-soak` 1 running and 2 waiting, `soak-node` 3 waiting, one a job of 8
   hours (23746445 running from 07:54, 9 behind it): to about 19-11 midday.
 
+The second fault fixed the same day, on this branch (`fit::balance_moe_split`):
+with several GPUs and the experts of the first layers in RAM, `--fit` weighs
+every block (its tensors other than experts, its share of the KV cache, its
+experts when they stay on the GPU) and cuts the blocks into a run per GPU
+whose bytes follow each GPU's free VRAM, less its own reserve and compute
+buffer; the cut goes to llama.cpp as `--tensor-split`, its proportions half a
+block from any block so that f32 rounding cannot move one (tested against
+llama.cpp's own assignment, up to eight GPUs). Where no cut holds, the
+experts of one more layer go to RAM. Only where the user split nothing, and
+for that load. To run on LUMI: `glm-gcds` and `dsv4-gcds` at two GCDs, the
+seven points that failed on every binary.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
