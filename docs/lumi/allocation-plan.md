@@ -1208,6 +1208,14 @@ llama.cpp's own assignment, up to eight GPUs). Where no cut holds, the
 experts of one more layer go to RAM. Only where the user split nothing, and
 for that load. To run on LUMI: `glm-gcds` and `dsv4-gcds` at two GCDs, the
 seven points that failed on every binary.
+Submitted at 12:05: this branch built in its own worktree (`eullm-split1117`,
+`eullm-target/split1117`, `build exit: 0`, `eullm 0.9.0 (ROCm)
+[4c2c0a4c0fee]`), label `v090s`, round `r-splitfix`: `c17`'s `dsv4-gcds` and
+`c18`'s `glm-gcds`, 9 points each (two, four and eight GCDs at 1, 8 and 32
+requests: the two-GCD points are the test, the others must not change), a
+chain of 2 jobs of 4 hours, 23812860 and 23812861. The same split for dense
+models (each GPU's own reserve and compute buffer, the output layer on the
+last) waits for this result.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
