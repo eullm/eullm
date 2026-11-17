@@ -30,7 +30,8 @@ from collections import defaultdict
 from pathlib import Path
 
 # a teacher's directory name in the pilot -> its label as a checker
-SELF = {"gemma": "gemma4-31b", "gptoss": "gpt-oss-120b", "flashnext": "flashnext"}
+SELF = {"gemma": "gemma4-31b", "gptoss": "gpt-oss-120b", "flashnext": "flashnext",
+        "qwen38": "qwen38-27b"}     # Qwen3.8-27B: a teacher only, judged by all three
 BASE = "qwen30b"
 
 
