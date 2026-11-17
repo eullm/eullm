@@ -347,9 +347,19 @@ party access to language model inference or fine-tuning") or AI Work
 Assistant business, internal use exempt only if neither the Software nor
 its outputs reach a third party. So the question to settle before a
 Flash-Next-taught model ships is not only the customers' SaaS but whether
-I3K itself runs a hosted inference business; until a lawyer or Qwen has
-answered it, Flash-Next teaches research runs only, and the models we
-release are taught by Apache 2.0 teachers. Every other Qwen model used so far
+I3K itself runs a hosted inference business. **The PI's answer
+(2026-11-17):** Flash-Next itself will never be served to third parties,
+but the verticals may be, by I3K, one day. Read with the clause above, that
+is the case it names: a licensee that runs a Model as a Service needs the
+separate licence before using Flash-Next commercially, whatever model it
+serves. So Flash-Next may teach, check and be measured now (the PI's
+decision of 11-04 stands); **before a vertical it taught, or any model,
+is served to third parties by I3K, the separate licence is obtained from
+Qwen**, or that vertical is rebuilt from Apache 2.0 teachers alone. Every
+corpus row and every pair keeps its teacher (`law_rewrites.py` writes
+`teacher` in each row), so a corpus without Flash-Next's rows can be
+rebuilt at any time; nothing taught by Flash-Next is mixed in without that
+label. Every other Qwen model used so far
 (Qwen3, 3.5, 3.6, 3.8-27B) is Apache 2.0; check each new one, the same family
 does not mean the same licence.
 
