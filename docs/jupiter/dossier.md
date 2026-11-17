@@ -701,6 +701,18 @@ JUPITER, named by its Slurm job id.
   On 16-11 login node jpbl-s01-03 had /e unmounted (no home), as
   jpbl-s01-01 on 30-10; no job was affected.
 
+  **17-11, the premise file was the cause of the denials.** From g9prv-r8,
+  Leonardo's prompts with the no-text prompts (made-up rulings, made-up
+  and real articles) and without the premise file (g9prm, five rounds so
+  far): made-up rulings refused 48-65% (0% for g9prv-r8), real articles
+  denied 16-32% (33%), closed book 238-264 right (230, the most yet),
+  practical exam 80-83 + 11-13 (the highest yet), the trap test 384-386,
+  LexIA 13-16. The same with seed 43 (g9prn, six rounds) refuses the
+  rulings 20-52% and denies real articles 38-47%: the denials swing with
+  the seed more than anything else measured, and the rulings come back in
+  both. From g9prc-r10 with the mix without made-up articles (g9prcv),
+  the rulings fade (28% to 8-18%) as the denials ease (26-29%).
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
