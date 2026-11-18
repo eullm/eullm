@@ -93,7 +93,7 @@ function Install-EuLLM {
         # download artifact directory in front of it ("<hash>  <dir>/<file>")
         # and this has to keep reading those too.
         $listed = @{}
-        foreach ($line in Get-Content $sums) {
+        foreach ($line in Get-Content $sums -Encoding UTF8) {
             $parts = $line -split '\s+', 2
             if ($parts.Count -eq 2) { $listed[($parts[1] -split '/')[-1]] = $parts[0] }
         }
