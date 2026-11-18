@@ -430,7 +430,7 @@ _ALLCAPS_WHITELIST = frozenset(
         "TELEMATICA", "TELEMATICO",
         # Common Italian agencies / public entities
         "AGENZIA", "ENTRATE", "RISCOSSIONE", "EQUITALIA", "INPS", "INAIL",
-        "ENEL", "RAI", "POSTE", "ITALIANE", "FERROVIE", "STATO", "MINISTERO",
+        "ENEL", "RAI", "POSTE", "ITALIANE", "FERROVIE", "STATO",
         "COMUNE", "PROVINCIA", "REGIONE",
         # Company forms and frequent company-name tokens
         "SPA", "SRL", "SNC", "SAS", "SCARL", "SCRL", "SPAF", "GROUP", "HOLDING",
@@ -439,11 +439,11 @@ _ALLCAPS_WHITELIST = frozenset(
         # Frequent legal / procedural all-caps phrases that are NOT names
         "ONERE", "PROVA", "CAUSA", "MERITO", "LEGGE", "NORMA", "ARTICOLO",
         "COMMA", "LETTERA", "TITOLO", "CAPO", "LIBRO", "CODICE",
-        "PROCEDURA", "PROCESSO", "RICORSO", "APPELLO", "GRAVAME",
+        "PROCEDURA", "PROCESSO", "GRAVAME",
         "DOMANDA", "DIFESA", "ECCEZIONE", "CENSURA", "MOTIVAZIONE",
         "RAGIONI", "DECISIONE", "IMPUGNAZIONE", "INAMMISSIBILE",
         "INAMMISSIBILITÀ", "INAMMISSIBILITA", "INFONDATO", "INFONDATA",
-        "ACCOLTO", "RIGETTATO", "CASSAZIONE",
+        "ACCOLTO", "RIGETTATO",
         # Geographic filler commonly appearing uppercase (capoluoghi + città
         # grandi; avoids redacting place-of-court mentions).
         "ROMA", "MILANO", "NAPOLI", "TORINO", "PALERMO", "BARI", "GENOVA",
