@@ -40,7 +40,6 @@ from typing import Iterator
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from eullm_forge.datasets.training_format import (  # noqa: E402
-    DEFAULT_KEEP_FIELDS,
     FormatStats,
     slim_record,
     split_indices,
@@ -291,10 +290,10 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("Next step — load with HuggingFace datasets:")
         print('    from datasets import load_dataset')
-        print(f'    ds = load_dataset("json", data_files={{')
+        print('    ds = load_dataset("json", data_files={')
         print(f'        "train": "{train_path}",')
         print(f'        "validation": "{val_path}",')
-        print(f'    }})')
+        print('    })')
     print("=" * 72)
     return 0
 
