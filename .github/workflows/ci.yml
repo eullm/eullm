@@ -563,6 +563,8 @@ jobs:
         run: pip install ruff==0.16.9 pytest==9.1.1
       - name: Lint
         run: ruff check bench/reflexbench bench/campaign
+      - name: Check UTF-8 text I/O
+        run: python tools/check_utf8.py forge bench/campaign tools/lumi/install_runtimes.sh tools/lumi/campaign_setup.sh
       - name: Test
         run: pytest -q bench/reflexbench
       - name: Test (LUMI campaign runner)
