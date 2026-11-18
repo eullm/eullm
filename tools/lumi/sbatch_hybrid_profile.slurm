@@ -159,7 +159,7 @@ for m in "${MODELS[@]}"; do
             if [ -n "$stats" ] && [ -s "$stats" ]; then
                 "$PY" - "$stats" <<'EOF'
 import csv, sys
-with open(sys.argv[1]) as f:
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
     rows = list(csv.DictReader(f))
 total = sum(float(r["TotalDurationNs"]) for r in rows) or 1.0
 rows.sort(key=lambda r: -float(r["TotalDurationNs"]))
