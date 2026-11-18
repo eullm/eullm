@@ -31,12 +31,15 @@ SKIP = {".git", "node_modules", "target", ".venv", "venv", "__pycache__"}
 SKIP_UNDER = (ROOT / "engine" / "vendor",)
 SUBPROCESS = {"run", "check_output", "check_call", "call", "Popen"}
 
-# A here-document fed to python (`python - <<'PY'`, `python3 -I - "$a" <<EOF`)
-# and its body, up to the delimiter alone on a line; and `python3 -c '...'`.
+# A here-document fed to python (`python - <<'PY'`, `$PY - "$a" <<EOF`)
+# and its body, up to the delimiter alone on a line; and `python3 -c '...'`
+# (or with double quotes around the program).
+PYTHON = r"(?:python3?|\$PY|\$\{PY\}|\"\$PY\")(?=\s)"
 HEREDOC = re.compile(
-    r"python3?\b[^\n]*?<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n\s*\2\s*$", re.DOTALL | re.MULTILINE
+    PYTHON + r"[^\n]*?<<-?\s*(['\"]?)(\w+)\1[^\n]*\n(.*?)\n\s*\2\s*$",
+    re.DOTALL | re.MULTILINE,
 )
-DASH_C = re.compile(r"python3?\b[^\n']*?-c\s+'([^']*)'", re.DOTALL)
+DASH_C = re.compile(PYTHON + r"[^\n]*?-c\s*(['\"])(.*?)\1", re.DOTALL)
 
 
 def is_true(node: ast.expr) -> bool:
@@ -78,7 +81,7 @@ def snippets(text: str):
     for m in HEREDOC.finditer(text):
         yield text.count("\n", 0, m.start(3)) + 1, m.group(3)
     for m in DASH_C.finditer(text):
-        yield text.count("\n", 0, m.start(1)) + 1, m.group(1)
+        yield text.count("\n", 0, m.start(2)) + 1, m.group(2)
 
 
 def files(paths: list[Path]):

@@ -67,3 +67,19 @@ def test_a_heredoc_with_shell_expansions_is_skipped(tmp_path, capsys):
         "EOF\n"
     ), capsys)
     assert code == 0, out
+
+
+def test_python_named_by_a_variable_and_double_quoted_c_are_checked(tmp_path, capsys):
+    code, out = run(tmp_path, "job.sh", (
+        "#!/bin/bash\n"
+        "$PY - \"$CSV\" <<'PY'\n"
+        "import sys\n"
+        "rows = open(sys.argv[1]).read()\n"
+        "PY\n"
+        "python3 -c \"import json,sys; print(json.load(open(sys.argv[1])))\" x.json\n"
+    ), capsys)
+    assert code == 1
+    lines = out.splitlines()
+    assert any(":4: open() in text mode" in line for line in lines), out
+    assert any(":6: open() in text mode" in line for line in lines), out
+    assert len(lines) == 2, out
