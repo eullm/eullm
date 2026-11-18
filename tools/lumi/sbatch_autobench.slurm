@@ -128,11 +128,11 @@ kill "${SAMPLER_PID:-0}" 2>/dev/null
 import json, os, re, sys
 report_path, util_path, status = sys.argv[1], sys.argv[2], int(sys.argv[3])
 try:
-    report = json.load(open(report_path))
+    report = json.load(open(report_path, encoding="utf-8"))
 except (OSError, ValueError):
     report = {}
-use = [int(m) for m in re.findall(r"GPU use \(%\):\s*(\d+)", open(util_path, errors="replace").read())]
-vram = [int(m) for m in re.findall(r"VRAM Total Used Memory \(B\):\s*(\d+)", open(util_path, errors="replace").read())]
+use = [int(m) for m in re.findall(r"GPU use \(%\):\s*(\d+)", open(util_path, encoding="utf-8", errors="replace").read())]
+vram = [int(m) for m in re.findall(r"VRAM Total Used Memory \(B\):\s*(\d+)", open(util_path, encoding="utf-8", errors="replace").read())]
 sets = {}
 for row in report.get("results", []):
     if row["router"] != "reflex (own)":
