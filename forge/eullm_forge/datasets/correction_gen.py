@@ -73,7 +73,7 @@ def passage_of(prompt: str, code: str, article: str) -> int | None:
     # The suffix is part of the identity: "art. 2-bis" is not "art. 2", and a
     # by-topic question can retrieve both. A plain number also refuses the
     # suffixed labels, so a 2-bis passage is never quoted as 2's.
-    base, sep, suffix = article.partition("-")
+    base, _, suffix = article.partition("-")
     numbered = re.escape(base)
     if suffix:
         numbered += rf"\s*[-–]?\s*{re.escape(suffix)}\b"
