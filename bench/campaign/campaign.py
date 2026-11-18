@@ -43,6 +43,7 @@ measurement. The trained model is deleted unless the point keeps it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import datetime as dt
 import fnmatch
@@ -592,10 +593,9 @@ class Runner:
 
     def loop(self):
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1):
-            try:
+            # Not the main thread (the tests): stop is set directly.
+            with contextlib.suppress(ValueError):
                 signal.signal(sig, lambda *_: (self.stop.set(), self.wake.set()))
-            except ValueError:
-                pass  # not the main thread (the tests): stop is set directly
         released = self.queue.requeue_stale(alive_jobs(), time.time(), STALE_CLAIM_S)
         if released:
             print(f"[{now_iso()}] put back {len(released)} points left by ended jobs", flush=True)
