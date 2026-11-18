@@ -153,7 +153,7 @@ def mmlu_items(rows):
     items = []
     for n, (subject, row) in enumerate(rows):
         question, options, answer = row[0], row[1:5], row[5].strip()
-        choices = list(zip("ABCD", options))
+        choices = list(zip("ABCD", options, strict=True))
         topic = subject.replace("_", " ")
         text = choices_text(f"({topic}) {question}", choices)
         items.append(Item(f"mmlu-{subject}-{n}", "mmlu", user(text), answer, "letter"))
