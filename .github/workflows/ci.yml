@@ -200,6 +200,8 @@ jobs:
               - 'bench/**'
               # The campaign specs are validated by bench/campaign's tests.
               - 'tools/lumi/campaigns/**'
+              - 'tools/check_utf8.py'
+              - 'tools/test_check_utf8.py'
               - 'catalog/**'
               - '.github/workflows/ci.yml'
             # ReflexBench too: the adapter asks its questions word for word,
@@ -567,6 +569,8 @@ jobs:
         run: pytest -q bench/reflexbench
       - name: Test (LUMI campaign runner)
         run: pytest -q bench/campaign
+      - name: Test (UTF-8 checker)
+        run: pytest -q tools/test_check_utf8.py
 
   # ── Reflex MCP adapter ───────────────────────────────────────────────
   # adapters/reflex-mcp, a Python package of its own on the MCP SDK. Its
