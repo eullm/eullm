@@ -560,7 +560,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install
-        run: pip install ruff==0.16.9 pytest==9.1.1
+        run: pip install ruff==0.16.9 pytest==9.1.1 aiohttp
       - name: Lint
         run: ruff check bench/reflexbench bench/campaign
       - name: Test
