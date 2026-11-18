@@ -1285,3 +1285,29 @@ licence question does not arise for the corpus. Next: Gemma rewrites every
 case and explanation (`memory-gemma`, eight 1-GPU chains), checked after by
 Flash-Next and GPT-OSS; Qwen3.8-27B and Mistral Small 4 join the table when
 their rows are checked.
+
+## 25. 2026-11-18: how much distillation, from where
+
+r2l as the teacher (`opd_train.py`, the 2,948 open-book prompts), from
+four starts, against r2l (devbig 449 / 442 without the note, practical
+87, traps 14, closed book 196 of 674):
+
+| model | devbig, note | devbig, no note | practical | traps | closed book | rub<-n | terms | penalty |
+|---|---|---|---|---|---:|---:|---:|---:|
+| r2l + whole knowledge (`r2l-k100`) | 5:113, worse | 8:130, worse | 6:59, worse | 4:11 | | | | |
+| `r2l-k100-opd` (300 steps) | 9:27, worse | 14:25 | 4:24, worse | 2:7 | **322** | 38% | 31% | 61% |
+| `r2l-k50-opd` (300, no GRPO) | 8:9 | 16:9 | 5:12 | 1:5 | 268 | 39% | 20% | 26% |
+| `r2l-k50-g1-opd100` | 7:48, worse | 7:42, worse | 5:12 | 5:4 | 286 | 40% | 24% | 30% |
+| **`r2l-k50-g1-opd200`** | 4:14 (p = 0.031; lenient 0.077) | 7:9 | 7:11 | 5:5 | **299** | 38% | 27% | 39% |
+| `r2l-k50-g1-opd` (300) | 10:10 | 12:10 | 4:10 | 1:4 | 227 | 32% | 20% | 30% |
+
+* The premise round is not needed: from the 0.5 merge directly, the
+  distillation reaches r2l's level on every product exam (268 closed book).
+* 200 steps from g1 keep more knowledge (299) than 300 (227) at the
+  product's level, but 100 steps are worse on devbig than either: the
+  steps are not a dial, and the runs vary more than a single run shows. A
+  repeat with another seed is the next measure, before a step count is
+  chosen.
+* From the whole adapter the distillation does not bring the reading back
+  in 300 steps (devbig and practical still behind), and keeps the most
+  knowledge of all (322).
