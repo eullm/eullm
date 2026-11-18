@@ -40,7 +40,6 @@ Usage:
 
 import argparse
 import os
-import statistics
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
