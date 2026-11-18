@@ -466,9 +466,9 @@ def check_audit(rep: Report, log: str, audit_dir: Path, expect_records: bool) ->
         rep.add("audit records written", None, "no inference ran")
         return
     try:
-        lines = [l for l in f.read_text(encoding="utf-8", errors="replace").splitlines()
-                 if l.strip()]
-        parsed = [json.loads(l) for l in lines]
+        lines = [line for line in f.read_text(encoding="utf-8", errors="replace").splitlines()
+                 if line.strip()]
+        parsed = [json.loads(line) for line in lines]
     except Exception as e:
         rep.add("audit records written", False, f"unreadable: {e}")
         return
@@ -597,7 +597,7 @@ def check_inference(rep: Report, api: str, model: str) -> dict:
                 },
             )
         )
-        objs = [json.loads(l) for l in lines]
+        objs = [json.loads(line) for line in lines]
         ok = bool(objs) and objs[-1].get("done") is True and all(
             "message" in o for o in objs
         )
@@ -670,7 +670,7 @@ def check_inference(rep: Report, api: str, model: str) -> dict:
                 },
             )
         )
-        data = [l[len("data: "):] for l in lines if l.startswith("data: ")]
+        data = [line[len("data: "):] for line in lines if line.startswith("data: ")]
         ok = bool(data) and data[-1].strip() == "[DONE]"
         terminator = data[-1].strip()[:16] if data else "(none)"
         rep.add(
@@ -1014,10 +1014,10 @@ def check_perimeter(
             time.sleep(0.5)
             try:
                 records = [
-                    json.loads(l)
-                    for l in (audit_dir / "audit.jsonl").read_text(
+                    json.loads(line)
+                    for line in (audit_dir / "audit.jsonl").read_text(
                         encoding="utf-8", errors="replace").splitlines()
-                    if l.strip()
+                    if line.strip()
                 ]
             except Exception as e:
                 records = []
