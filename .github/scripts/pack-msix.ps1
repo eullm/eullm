@@ -54,7 +54,7 @@ try {
 
     # Set the version on the Identity element only, through the XML DOM
     # rather than a text replace, so nothing else in the manifest can match.
-    [xml]$manifest = Get-Content (Join-Path $src 'AppxManifest.xml') -Raw
+    [xml]$manifest = Get-Content (Join-Path $src 'AppxManifest.xml') -Raw -Encoding UTF8
     $manifest.Package.Identity.Version = $Version
     $manifest.Save((Join-Path $layout 'AppxManifest.xml'))
 
