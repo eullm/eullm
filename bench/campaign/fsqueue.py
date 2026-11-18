@@ -15,6 +15,7 @@ which is how a project behind its calendar runs two nodes instead of one.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -97,10 +98,8 @@ class Queue:
     def _leave_running(self, pid: str, state: str, point: dict) -> None:
         _write(self._path(state, pid), point)
         for path in (self._path("running", pid), self._owner_path(pid)):
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.remove(path)
-            except FileNotFoundError:
-                pass
 
     def release(self, pid: str) -> None:
         """Back to todo, as if never claimed: the job ended, not the point."""
