@@ -1141,3 +1141,12 @@ def test_no_ui_help_is_read_as_utf8(monkeypatch):
     monkeypatch.setattr(point, "_NO_UI", {})
     assert point.no_ui_args("/bin/eullm") == ["--no-ui"]
     assert seen[0].get("encoding") == "utf-8"
+
+
+def test_a_missing_model_is_recognised_from_a_404_or_the_error_text():
+    import point
+
+    assert point.is_missing_model(point.RequestError("gone", 404))
+    assert point.is_missing_model(point.RequestError("the model 'x' not found"))
+    assert not point.is_missing_model(point.RequestError("server error", 500))
+    assert not point.is_missing_model(point.RequestError("not found: index"))
