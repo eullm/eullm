@@ -126,8 +126,7 @@ class Embedder:
         missing = [text for text in dict.fromkeys(texts) if text not in vectors]
         for start in range(0, len(missing), 32):
             batch = missing[start : start + 32]
-            for text, vector in zip(batch, await eullm.embeddings(self.model, batch),
-                                    strict=True):
+            for text, vector in zip(batch, await eullm.embeddings(self.model, batch), strict=True):
                 vectors[text] = self.keep(text, unit(vector))
         query = unit((await eullm.embeddings(self.model, [self.query_prefix + request]))[0])
         return [dot(query, vectors[text]) for text in texts]
