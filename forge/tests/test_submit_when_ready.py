@@ -45,7 +45,7 @@ def cluster(tmp_path):
     home.mkdir()
     shutil.copy(LEONARDO / "submit_when_ready.sh", home)
     _exe(home / "submit_chain.sh", '#!/usr/bin/env bash\necho "$*" >> "$CALLS.chain"\n')
-    (home / "sbatch_stage3.slurm").write_text("#!/bin/bash\n#SBATCH --job-name=eullm-stage3\n")
+    (home / "sbatch_stage3.slurm").write_text("#!/bin/bash\n#SBATCH --job-name=eullm-stage3\n", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     # The queue holds whatever $QUEUED names, as `squeue -n X -o %i` would.
@@ -81,7 +81,7 @@ def _generate_until_done(tmp_path: Path) -> Path:
     """Run the real generator to the end: every teacher job already answered
     by an earlier link, so it only has to say it is done."""
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     out = tmp_path / "openbook-pairs.jsonl"
     with open(tmp_path / "openbook-pairs.jsonl.rejected.jsonl", "w", encoding="utf-8") as f:
         for j in make_openbook_jobs(NormIndex(RECORDS), 10, seed=0):

@@ -41,13 +41,13 @@ def leonardo(tmp_path):
     work = tmp_path / "work"
     (work / "norms").mkdir(parents=True)
     (work / "norms" / "legislazione_x.chunks.jsonl").write_text(
-        "\n".join(json.dumps(r) for r in RECORDS) + "\n")
+        "\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     model = work / "model"
     model.mkdir()
-    (model / "config.json").write_text("{}")
+    (model / "config.json").write_text("{}", encoding="utf-8")
     pairs = work / "openbook-pairs.jsonl"
     pairs.write_text("\n".join(json.dumps({"key": f"ob-g-codice_civile-{n}"})
-                               for n in range(1, 21)) + "\n")
+                               for n in range(1, 21)) + "\n", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     _exe(bin_ / "sbatch", '#!/usr/bin/env bash\necho "$*" >> "$CALLS"\n'
@@ -63,7 +63,7 @@ def leonardo(tmp_path):
     def run(**extra):
         r = subprocess.run(["bash", str(SCRIPT)], cwd=tmp_path, env={**env, **extra},
                            capture_output=True, text=True, encoding="utf-8", timeout=120)
-        return r, calls.read_text() if calls.exists() else ""
+        return r, calls.read_text(encoding="utf-8") if calls.exists() else ""
 
     return run, work
 
@@ -74,7 +74,7 @@ def test_a_round_draws_without_trained_articles_then_exam_then_judge(leonardo):
     assert r.returncode == 0, r.stdout + r.stderr
     assert "20 trained articles left out" in r.stdout
     drawn = [json.loads(x)["metadata"] for x in
-             (work / "eval" / "norm-exam-v2.jsonl").read_text().splitlines()]
+             (work / "eval" / "norm-exam-v2.jsonl").read_text(encoding="utf-8").splitlines()]
     assert drawn
     assert not {int(m["articolo"]) for m in drawn if m["tipo"] != "inesistente"} & set(range(1, 21))
     exam, judge = calls.splitlines()
@@ -87,11 +87,11 @@ def test_an_existing_exam_is_reused_not_redrawn(leonardo):
     run, work = leonardo
     run()
     exam = work / "eval" / "norm-exam-v2.jsonl"
-    before = exam.read_text()
+    before = exam.read_text(encoding="utf-8")
     r, _ = run()
     assert r.returncode == 0, r.stdout + r.stderr
     assert "reusing it, not redrawing" in r.stdout
-    assert exam.read_text() == before
+    assert exam.read_text(encoding="utf-8") == before
 
 
 def test_a_round_without_its_exclusions_refuses(leonardo):
@@ -114,9 +114,9 @@ def test_a_development_round_shares_no_article_with_the_held_out_exam(leonardo):
 
     def arts(p):
         return {(json.loads(x)["metadata"]["code"], json.loads(x)["metadata"]["articolo"])
-                for x in p.read_text().splitlines()}
+                for x in p.read_text(encoding="utf-8").splitlines()}
     assert any(json.loads(x)["metadata"]["tipo"] == "contenuto"
-               for x in dev.read_text().splitlines())
+               for x in dev.read_text(encoding="utf-8").splitlines())
     assert not arts(dev) & arts(held)
 
 
@@ -135,7 +135,7 @@ def test_a_development_round_draws_more_per_code_and_chains_its_links(leonardo):
                    ROUND_PER_CODE="30", ROUND_CODES="codice_civile",
                    ROUND_EXAM_LINKS="3", ROUND_JUDGE_LINKS="2", ROUND_OPEN_ONLY="1")
     assert r.returncode == 0, r.stdout + r.stderr
-    kinds = [json.loads(x)["metadata"]["tipo"] for x in dev.read_text().splitlines()]
+    kinds = [json.loads(x)["metadata"]["tipo"] for x in dev.read_text(encoding="utf-8").splitlines()]
     assert kinds.count("contenuto") == 30          # 40 untrained articles, 30 asked
     lines = calls.splitlines()
     assert len(lines) == 5

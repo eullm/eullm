@@ -254,7 +254,7 @@ def test_sampler_window_per_device(tmp_path):
     w = s.window(0, 1e12, ["0", "1", "2"])
     assert w["0"]["vram_peak_mib"] == 32000 and w["0"]["use_mean"] == 97.0
     assert w["2"]["samples"] == 0
-    assert len((tmp_path / "n.jsonl").read_text().splitlines()) == 3
+    assert len((tmp_path / "n.jsonl").read_text(encoding="utf-8").splitlines()) == 3
 
 
 # ── budget ───────────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ def test_budget_prints_what_is_billed(capsys, monkeypatch, tmp_path):
     billed, the straight line to date, what is left and the rate a day."""
     monkeypatch.setattr(campaign.budget, "read_sacct", lambda start, account=None: [])
     alloc = tmp_path / "alloc.txt"
-    alloc.write_text(LUMI_ALLOCATIONS)
+    alloc.write_text(LUMI_ALLOCATIONS, encoding="utf-8")
     args = SimpleNamespace(start="2026-09-12", end="2027-03-12", account="project_465003366",
                            budget_node_hours=4500.0, json=False, allocations=str(alloc))
     assert campaign.cmd_budget(args) == 0
@@ -689,7 +689,8 @@ def test_a_load_records_the_file_system_its_model_is_on_through_links(tmp_path, 
     flash.mkdir()
     (flash / "m-00001-of-00002.gguf").write_bytes(b"GGUF")
     (store / "m" / "m-00001-of-00002.gguf").symlink_to(flash / "m-00001-of-00002.gguf")
-    (store / "m" / "manifest.json").write_text('{"gguf_file": "m-00001-of-00002.gguf"}')
+    (store / "m" / "manifest.json").write_text('{"gguf_file": "m-00001-of-00002.gguf"}',
+        encoding="utf-8")
     monkeypatch.setenv("EULLM_MODELS_DIR", str(store))
     root = "/" + os.path.realpath(tmp_path).split("/")[1]
     assert point.model_storage({"model": "m"}) == root
@@ -706,7 +707,7 @@ def test_a_cold_point_drops_every_part_of_its_model_from_the_page_cache(tmp_path
     d.mkdir(parents=True)
     for i, size in ((1, 10), (2, 7)):
         (d / f"M-0000{i}-of-00002.gguf").write_bytes(b"x" * size)
-    (d / "manifest.json").write_text('{"gguf_file": "M-00001-of-00002.gguf"}')
+    (d / "manifest.json").write_text('{"gguf_file": "M-00001-of-00002.gguf"}', encoding="utf-8")
     monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "store"))
     files = point.model_files({"model": "m"})
     assert [os.path.basename(f) for f in files] == ["M-00001-of-00002.gguf",

@@ -54,9 +54,9 @@ exec sleep 30
 """)
     model = tmp_path / "model"
     model.mkdir()
-    (model / "config.json").write_text("{}")
+    (model / "config.json").write_text("{}", encoding="utf-8")
     prompts = tmp_path / "prompts.jsonl"
-    prompts.write_text("{}\n")
+    prompts.write_text("{}\n", encoding="utf-8")
     judge = tmp_path / "judge-q8_0.gguf"
     judge.write_bytes(b"GGUF")
     work = tmp_path / "work"
@@ -87,15 +87,15 @@ def test_the_judge_takes_the_last_gpu_and_the_policy_the_others(job):
     run, rec, judge = job
     r = run(GRPO_JUDGE_GGUF=str(judge))
     assert r.returncode == 0, r.stdout + r.stderr
-    assert (rec / "srv_devs").read_text().strip() == "3"
-    assert (rec / "acc_devs").read_text().strip() == "1,2"
-    args = (rec / "acc_args").read_text().split()
+    assert (rec / "srv_devs").read_text(encoding="utf-8").strip() == "3"
+    assert (rec / "acc_devs").read_text(encoding="utf-8").strip() == "1,2"
+    args = (rec / "acc_args").read_text(encoding="utf-8").split()
     assert args[args.index("--num_processes") + 1] == "2"
     assert args[args.index("--judge-url") + 1] == "http://127.0.0.1:41234"
-    srv = (rec / "srv_args").read_text().split()
+    srv = (rec / "srv_args").read_text(encoding="utf-8").split()
     assert srv[srv.index("-m") + 1] == str(judge) and srv[srv.index("--port") + 1] == "41234"
     import time
-    pid = int((rec / "srv_pid").read_text())
+    pid = int((rec / "srv_pid").read_text(encoding="utf-8"))
     for _ in range(50):
         if _gone(pid):
             break
@@ -107,7 +107,7 @@ def test_without_a_judge_every_gpu_trains(job):
     run, rec, _ = job
     r = run()
     assert r.returncode == 0, r.stdout + r.stderr
-    args = (rec / "acc_args").read_text().split()
+    args = (rec / "acc_args").read_text(encoding="utf-8").split()
     assert args[args.index("--num_processes") + 1] == "3" and "--judge-url" not in args
     assert not (rec / "srv_args").exists()
 

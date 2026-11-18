@@ -668,7 +668,7 @@ def test_held_out_splits_are_also_written_as_labelled_requests(tmp_path):
     team = stats["by_question"]["team"]
     assert team["type"] == "choice" and 0 < team["majority_share"] <= 1
     assert sum(team["answers"].values()) == team["examples"]
-    assert json.loads((tmp_path / "out" / "stats.json").read_text())["sources"] == {
+    assert json.loads((tmp_path / "out" / "stats.json").read_text(encoding="utf-8"))["sources"] == {
         "rules": stats["sources"]["rules"]}
 
 
@@ -858,7 +858,7 @@ def test_decisions_train_and_export_pass_their_options_through(tmp_path, monkeyp
         summary = {"all": {"n": 4, "accuracy": 0.75, "ece": 0.1, "nll": 0.5, "coverage": 1.0}}
         (Path(config.output_dir) / train_mod.REPORT).write_text(json.dumps({
             "dev_before": summary, "dev_after": summary, "dev_temperature": 1.37,
-            "dev_after_at_temperature": summary}))
+            "dev_after_at_temperature": summary}), encoding="utf-8")
         return str(Path(config.output_dir) / "adapter")
 
     def fake_export(run, output, quantization, base_model, temperature):
@@ -989,7 +989,7 @@ def test_training_learns_the_answer_code_and_exports_through_forge(tmp_path, mon
     )
     adapter = train_decision_model(config)
     assert (Path(adapter) / "adapter_config.json").exists()
-    report = json.loads((tmp_path / "run" / REPORT).read_text())
+    report = json.loads((tmp_path / "run" / REPORT).read_text(encoding="utf-8"))
     before, after = report["dev_before"]["all"], report["dev_after"]["all"]
     assert after["n"] == before["n"] > 0
     # On states it never saw, the random model answers in codes almost

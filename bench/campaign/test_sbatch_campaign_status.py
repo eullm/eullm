@@ -41,7 +41,7 @@ def test_the_reaping_loop_replaces_the_interrupted_waits_143(tmp_path):
         "#!/bin/bash\n"
         f"touch {marker.as_posix()}\n"
         "sleep 1\n"
-        "exit 0\n")
+        "exit 0\n", encoding="utf-8")
     (tmp_path / "runner.sh").chmod(0o755)
     wrapper = tmp_path / "wrapper.sh"
     wrapper.write_text(
@@ -52,7 +52,7 @@ def test_the_reaping_loop_replaces_the_interrupted_waits_143(tmp_path):
         f"while [ ! -f {marker.as_posix()} ]; do sleep 0.05; done\n"
         "STATUS=143  # the interrupted wait, as signal delivery leaves it\n"
         + m.group(0) + "\n"
-        'exit "$STATUS"\n')
+        'exit "$STATUS"\n', encoding="utf-8")
     p = subprocess.run([_bash(), str(wrapper), str(tmp_path / "runner.sh")],
                        capture_output=True, text=True, encoding="utf-8", timeout=15)
     assert p.returncode == 0, p.stdout + p.stderr

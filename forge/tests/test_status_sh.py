@@ -80,18 +80,18 @@ def runs(tmp_path):
 def watcher_log(runs: Path, name: str, need: Path, left: int = 100) -> None:
     (runs / "logs" / f"{name}-9.out").write_text(
         f"[wait] 2026-09-28 12:34:09 not yet: {need}\n"
-        f"[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 9, {left} tries left)\n")
+        f"[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 9, {left} tries left)\n", encoding="utf-8")
 
 
 def test_this_mornings_three_false_alarms_stay_quiet(tmp_path, runs):
     (runs / "logs" / "eullm-gen-openbook-30.out").write_text(
-        "[ob] nothing left to do -> x.done\n")
+        "[ob] nothing left to do -> x.done\n", encoding="utf-8")
     done = runs / "openbook-pairs.jsonl.done"
-    done.write_text("done\n")                      # arrived after the last wake
+    done.write_text("done\n", encoding="utf-8")                      # arrived after the last wake
     watcher_log(runs, "wait-eullm-stage3", done)
     (runs / "logs" / "wait-eullm-stage3-pkg-8.out").write_text(
         f"[wait] 2026-09-28 12:34:09 not yet: {runs / 'sft' / 'adapter_config.json'}\n"
-        "[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 8, 100 tries left)\n")
+        "[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 8, 100 tries left)\n", encoding="utf-8")
     out = run_status(
         tmp_path,
         queue=[("wait-eullm-stage3", "PENDING", "BeginTime"),
@@ -128,10 +128,10 @@ def test_a_stage3_link_after_training_finished_is_not_an_alarm(tmp_path, runs):
     checkpoint, saved the adapter again and ended in 2:43 — flagged as a
     link that did no work, when the work had been done by the link before."""
     (runs / "logs" / "eullm-stage3-59054377.out").write_text(
-        "[s3] out    /w/sft-v04\n[stage3] adapter /w/sft-v04/adapter\n")
+        "[s3] out    /w/sft-v04\n[stage3] adapter /w/sft-v04/adapter\n", encoding="utf-8")
     (runs / "logs" / "eullm-s3-it4b-v05-60.out").write_text(
         "[stage3] adapter already at /w/sft-it4b-v05/adapter: training finished, "
-        "nothing left to do (move it away to train again)\n")
+        "nothing left to do (move it away to train again)\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[],
                      ended=[("59054377", "eullm-stage3", "COMPLETED", "00:02:43"),
                             ("60", "eullm-s3-it4b-v05", "COMPLETED", "00:00:40")])
@@ -147,10 +147,10 @@ def test_a_grpo_link_after_training_finished_is_not_an_alarm(tmp_path, runs):
     of names checked, but the escape only matched the stage-3 prefix."""
     (runs / "logs" / "eullm-grpo-77.out").write_text(
         "[grpo] resuming from /w/eullm_runs/grpo/v03/checkpoint-9000\n"
-        "[grpo] adapter /w/eullm_runs/grpo/v03/adapter\n")
+        "[grpo] adapter /w/eullm_runs/grpo/v03/adapter\n", encoding="utf-8")
     (runs / "logs" / "eullm-grpo-78.out").write_text(
         "[grpo] adapter already at /w/eullm_runs/grpo/v03/adapter: nothing "
-        "left to do (move it away to train again)\n")
+        "left to do (move it away to train again)\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[],
                      ended=[("77", "eullm-grpo", "COMPLETED", "00:04:31"),
                             ("78", "eullm-grpo", "COMPLETED", "00:00:12")])
@@ -163,7 +163,7 @@ def test_a_named_stage3_link_that_did_nothing_is_flagged(tmp_path, runs):
     """A chain renamed with -J is still a training chain: a three-minute link
     that never reached the end of training needs a human."""
     (runs / "logs" / "eullm-s3-q35-9b-v04-61.out").write_text(
-        "[s3] base   /w/Qwen3.5-9B\nTraceback (most recent call last):\n")
+        "[s3] base   /w/Qwen3.5-9B\nTraceback (most recent call last):\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[],
                      ended=[("61", "eullm-s3-q35-9b-v04", "COMPLETED", "00:03:00")])
     assert "61 eullm-s3-q35-9b-v04 ended COMPLETED after only 00:03:00" in out
@@ -181,11 +181,11 @@ def test_an_opd_link_is_watched_like_the_other_training_links(tmp_path):
     opd.mkdir(parents=True)
     (opd / "eullm-opd-11.out").write_text(
         "[opd] resuming at step 40\n"
-        "[opd] adapter /w/eullm_runs/opd/v01/adapter\n")
+        "[opd] adapter /w/eullm_runs/opd/v01/adapter\n", encoding="utf-8")
     (opd / "eullm-opd-12.out").write_text(
-        "[opd] adapter already at /w/eullm_runs/opd/v01/adapter: nothing left to do\n")
+        "[opd] adapter already at /w/eullm_runs/opd/v01/adapter: nothing left to do\n", encoding="utf-8")
     (opd / "eullm-opd-13.out").write_text(
-        "[opd] resuming at step 0\nTraceback (most recent call last):\n")
+        "[opd] resuming at step 0\nTraceback (most recent call last):\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[],
                      ended=[("11", "eullm-opd", "COMPLETED", "00:04:31"),
                             ("12", "eullm-opd", "COMPLETED", "00:00:12"),
@@ -207,9 +207,9 @@ def test_jobs_that_are_short_on_purpose_are_not_stalled_links(tmp_path, runs):
     its alarm.
     """
     (runs / "logs" / "eullm-p3-gguf-62.out").write_text(
-        "[quant] llama-quantize model-f16.gguf model-Q4_K_M.gguf\n")
-    (runs / "logs" / "eullm-probe-61.out").write_text("[probe] backfill window found\n")
-    (runs / "logs" / "eullm-p2-8b-63.out").write_text("[distill] nothing at all happened\n")
+        "[quant] llama-quantize model-f16.gguf model-Q4_K_M.gguf\n", encoding="utf-8")
+    (runs / "logs" / "eullm-probe-61.out").write_text("[probe] backfill window found\n", encoding="utf-8")
+    (runs / "logs" / "eullm-p2-8b-63.out").write_text("[distill] nothing at all happened\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[],
                      ended=[("61", "eullm-probe", "COMPLETED", "00:00:21"),
                             ("62", "eullm-p3-gguf", "COMPLETED", "00:04:30"),
@@ -228,11 +228,11 @@ def test_grpo_progress_is_shown_and_a_stop_is_flagged(tmp_path, runs):
     (logs / "eullm-grpo-70.out").write_text(
         "[grpo] step 10/250 reward 0.712 (std 0.301) zero-std 0.45 kl 0.0010 len 88 31s/step\n"
         " 8%|##  | 20/250 [10:00<1:55:00, 30.0s/it]"     # tqdm's bar, no newline
-        "[grpo] step 20/250 reward 0.744 (std 0.288) zero-std 0.48 kl 0.0021 len 85 30s/step\n")
+        "[grpo] step 20/250 reward 0.744 (std 0.288) zero-std 0.48 kl 0.0021 len 85 30s/step\n", encoding="utf-8")
     (logs / "eullm-grpo-71.out").write_text(
         "[grpo] step 10/250 reward 0.990 (std 0.010) zero-std 0.98 kl 0.0001 len 60 30s/step\n"
         "[grpo] STOP: 20 steps in a row with 98% of groups all-equal (step 30): "
-        "nothing left to learn from these prompts\n")
+        "nothing left to learn from these prompts\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[], ended=[])
     assert "     [grpo] step 20/250 reward 0.744" in out
     assert "[!!] eullm-grpo-71.out: STOP: 20 steps in a row" in out
@@ -329,12 +329,12 @@ def test_opd_progress_and_case_law_results_are_shown(tmp_path, runs, monkeypatch
         "[opd] step 1/60 kl 0.7665 len 174 53s/step\n"
         "[opd] step 2/60 kl 0.7001 len 180 45s/step\n"
         "[opd] step 33/60 kl 0.4194 len 210 45s/step\n"
-        "[opd] time is up at step 33: saved, the next link carries on\n")
+        "[opd] time is up at step 33: saved, the next link carries on\n", encoding="utf-8")
     repo_logs = tmp_path / "repo-logs"
     repo_logs.mkdir()
     (repo_logs / "eullm-cds-exam-9.out").write_text(
         "[cds-exam] v04-4b-q4: 1200 questions; source ruling retrieved 0.350, cited 0.069; "
-        "answers citing only rulings they were given 0.677 -> /w/answers-v04-4b-q4.jsonl\n")
+        "answers citing only rulings they were given 0.677 -> /w/answers-v04-4b-q4.jsonl\n", encoding="utf-8")
     monkeypatch.setenv("EULLM_REPO_LOGS", str(repo_logs))
     out = run_status(tmp_path, queue=[("eullm-opd", "RUNNING", "None")], ended=[])
     assert "     [opd] step 1/60 kl 0.7665" in out
@@ -349,7 +349,7 @@ def test_a_grpo_link_logged_in_the_checkout_is_read_there(tmp_path, runs, monkey
     repo_logs.mkdir()
     (repo_logs / "eullm-grpo-jg-q35-9b-r2n-85.out").write_text(
         "[grpo] adapter already at /w/eullm_runs/grpo/jg-q35-9b-r2n/adapter: nothing "
-        "left to do (move it away to train again)\n")
+        "left to do (move it away to train again)\n", encoding="utf-8")
     monkeypatch.setenv("EULLM_REPO_LOGS", str(repo_logs))
     out = run_status(tmp_path, queue=[],
                      ended=[("85", "eullm-grpo-jg-q35-9b-r2n", "COMPLETED", "00:01:17")])

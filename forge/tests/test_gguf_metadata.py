@@ -213,7 +213,7 @@ def stand_in_llama_cpp(tmp_path, monkeypatch):
 
 
 def ran_steps(log):
-    return [json.loads(line)[0] for line in log.read_text().splitlines()] if log.exists() else []
+    return [json.loads(line)[0] for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
 
 
 @pytest.mark.parametrize("quant", ["q8_0", "f16"])
@@ -288,9 +288,9 @@ def test_a_decision_models_gguf_carries_its_fitted_temperature(tmp_path, stand_i
     monkeypatch.setattr(identity, "merge_identity_adapter", merge)
     run = tmp_path / "run"
     (run / "adapter").mkdir(parents=True)
-    (run / "adapter" / "adapter_config.json").write_text('{"base_model_name_or_path": "b"}')
+    (run / "adapter" / "adapter_config.json").write_text('{"base_model_name_or_path": "b"}', encoding="utf-8")
     (run / REPORT).write_text(json.dumps({"base_model": "Qwen/Qwen3-1.7B",
-                                          "dev_temperature": 1.3712345678}))
+                                          "dev_temperature": 1.3712345678}), encoding="utf-8")
     out = str(tmp_path / "decide.gguf")
     for asked, carried in ((FITTED, 1.3712345678), (2.5, 2.5), (None, None)):
         gguf = export_decision_model(str(run), out, temperature=asked)
@@ -305,7 +305,7 @@ def test_a_decision_models_gguf_carries_its_fitted_temperature(tmp_path, stand_i
     assert len(merges) == 3
 
     # A run with no dev split fitted none: the GGUF carries none.
-    (run / REPORT).write_text(json.dumps({"base_model": "Qwen/Qwen3-1.7B"}))
+    (run / REPORT).write_text(json.dumps({"base_model": "Qwen/Qwen3-1.7B"}), encoding="utf-8")
     assert KEY not in read_fields(export_decision_model(str(run), out))
 
 

@@ -39,7 +39,7 @@ def _stub_hub(tmp_path: Path) -> Path:
     (stub / "huggingface_hub.py").write_text(
         "def hf_hub_download(**kw):\n"
         "    print('GOT', kw['repo_id'], kw['filename'], kw['local_dir'])\n"
-        "    return kw['local_dir'] + '/x.tar.gz'\n")
+        "    return kw['local_dir'] + '/x.tar.gz'\n", encoding="utf-8")
     return stub
 
 

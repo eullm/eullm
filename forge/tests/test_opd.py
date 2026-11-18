@@ -76,14 +76,14 @@ def _corpus(tmp_path: Path):
                       "domande_esame": []})
         index.append(f"cds/{num}")
     chunks = tmp_path / "train.jsonl"
-    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     cards_f = tmp_path / "schede.jsonl"
-    cards_f.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cards))
+    cards_f.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cards), encoding="utf-8")
     dev = tmp_path / "dev.txt"
-    dev.write_text("cds/202000000\n")
+    dev.write_text("cds/202000000\n", encoding="utf-8")
     statutes = tmp_path / "prompts.jsonl"
     statutes.write_text("".join(json.dumps({"id": f"s{i}", "prompt": [
-        {"role": "user", "content": f"Domanda sulle norme {i}"}]}) + "\n" for i in range(10)))
+        {"role": "user", "content": f"Domanda sulle norme {i}"}]}) + "\n" for i in range(10)), encoding="utf-8")
     return chunks, cards_f, dev, statutes
 
 
@@ -94,7 +94,7 @@ def test_prompts_leave_out_dev_and_sensitive_rulings_and_mix_statutes(tmp_path, 
     assert mod.main(["--chunks", str(chunks), "--cards", str(cards), "--dev-ids", str(dev),
                      "--statutes", str(statutes), "--mix", "0.25", "--per-ruling", "2",
                      "--out", str(out)]) == 0
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     case = [r for r in rows if r["kind"] == "caselaw"]
     assert len(case) == 8                                  # 4 rulings x 2 questions
     assert {r["ruling"] for r in case} == {"cds/202000001", "cds/202000002", "cds/202000003",
@@ -123,14 +123,14 @@ def test_no_prompt_contains_a_development_ruling_text_anywhere(tmp_path, capsys)
              "year": 2020, "kind": "cds", "chunk_index": 0}
             for num, extra in (("202000001", ""), ("202000002", mark))]
     (tmp_path / "train.jsonl").write_text(
-        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     (tmp_path / "schede.jsonl").write_text("".join(json.dumps(
         {"id": f"cds/{num}", "principi": [f"Il principio vale in appalto {num}."],
          "norme": ["art. 120 c.p.a."], "esito": "rigetto", "materia": "appalto",
          "oggetto": f"APPALTO {num}",
          "domande_ricerca": [f"Quando si applica appalto {num}?"]},
-        ensure_ascii=False) + "\n" for num in ("202000001", "202000002")))
-    (tmp_path / "dev.txt").write_text("cds/202000002\n")
+        ensure_ascii=False) + "\n" for num in ("202000001", "202000002")), encoding="utf-8")
+    (tmp_path / "dev.txt").write_text("cds/202000002\n", encoding="utf-8")
     out = tmp_path / "prompts.jsonl"
     mod = _load("make_opd_prompts")
     # -k 10 so every retrieved unit lands in the prompt: with the default 3
@@ -139,7 +139,7 @@ def test_no_prompt_contains_a_development_ruling_text_anywhere(tmp_path, capsys)
                      "--cards", str(tmp_path / "schede.jsonl"),
                      "--dev-ids", str(tmp_path / "dev.txt"), "-k", "10",
                      "--out", str(out)]) == 0
-    prompts = [json.loads(line) for line in out.read_text().splitlines()]
+    prompts = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert len(prompts) == 1 and prompts[0]["ruling"] == "cds/202000001"
     assert mark not in json.dumps(prompts[0]["student"], ensure_ascii=False)
     assert mark not in json.dumps(prompts[0]["teacher"], ensure_ascii=False)
@@ -184,7 +184,7 @@ def test_the_exam_asks_only_development_rulings_and_checks_citations(tmp_path, m
     questions.write_text("".join(json.dumps({"id": rid, "domande_esame": [
         {"domanda": f"Quando si applica il principio{n}?", "risposta": f"Sempre ({n}).",
          "rubrica": "Dice sempre."}] * 2}) + "\n"
-        for n, rid in ((0, "cds/202000000"), (1, "cds/202000001"))))
+        for n, rid in ((0, "cds/202000000"), (1, "cds/202000001"))), encoding="utf-8")
     mod = _load("cds_answer")
     seen = []
 
@@ -198,7 +198,7 @@ def test_the_exam_asks_only_development_rulings_and_checks_citations(tmp_path, m
     assert mod.main(["model", "--label", "x", "--questions", str(questions), "--dev-ids",
                      str(dev), "--chunks", str(chunks), "--cards", str(cards),
                      "--answers", str(out)]) == 0
-    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert [r["id"] for r in rows] == ["cds-202000000-0", "cds-202000000-1"]
     assert {"question", "reference", "rubric", "answer"} <= set(rows[0])
     assert all(c.startswith("Testi di riferimento") for c in seen)
@@ -219,16 +219,16 @@ def test_the_exam_reads_chunks_that_carry_only_source_id(tmp_path, monkeypatch):
     whole index was empty: the model was asked closed-book and the answer
     file claimed the source ruling was not retrieved."""
     chunks, _cards, dev, _ = _corpus(tmp_path)
-    rows = [json.loads(line) for line in chunks.read_text().splitlines()]
+    rows = [json.loads(line) for line in chunks.read_text(encoding="utf-8").splitlines()]
     for r in rows:
         r.pop("sentence_id", None)
         r.pop("kind", None)
         r["source_id"] = f"cds/{r['source_id'].split('/')[1]}"
-    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     questions = tmp_path / "dev-cards.jsonl"
     questions.write_text(json.dumps({"id": "cds/202000000", "domande_esame": [
         {"domanda": "Quando si applica il principio0?", "risposta": "Sempre.",
-         "rubrica": "Dice sempre."}]}) + "\n")
+         "rubrica": "Dice sempre."}]}) + "\n", encoding="utf-8")
     mod = _load("cds_answer")
     seen = []
 
@@ -241,7 +241,7 @@ def test_the_exam_reads_chunks_that_carry_only_source_id(tmp_path, monkeypatch):
     assert mod.main(["model", "--label", "x", "--questions", str(questions),
                      "--dev-ids", str(dev), "--chunks", str(chunks),
                      "--answers", str(out)]) == 0
-    row = json.loads(out.read_text().splitlines()[0])
+    row = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
     assert "cds/202000000" in row["context"]
     assert row["source_retrieved"]
     assert seen[0].startswith("Testi di riferimento")
@@ -286,7 +286,7 @@ def tiny_model(tmp_path):
     prompts.write_text("".join(json.dumps({
         "student": [{"role": "user", "content": "Domanda: il termine si applica"}],
         "teacher": [{"role": "user", "content": "sentenza principio Domanda: il termine"}]}) + "\n"
-        for _ in range(4)))
+        for _ in range(4)), encoding="utf-8")
     return path, prompts
 
 
@@ -338,7 +338,7 @@ def test_every_prompts_row_is_validated_before_the_models_load(tmp_path):
         {"student": [{"role": "user", "content": "q"}],
          "teacher": [{"role": "user", "content": "t"}]},
         {"student": [{"role": "user", "content": "q"}]},
-    ]))
+    ]), encoding="utf-8")
     with pytest.raises(SystemExit, match="row 1"):
         mod.load_rows(prompts)
 
@@ -405,8 +405,8 @@ def test_statute_rows_are_anchored_to_the_student_before_the_run(tiny_model, tmp
         model.lm_head.weight.mul_(50)
     model.save_pretrained(other)
     transformers.AutoTokenizer.from_pretrained(path).save_pretrained(other)
-    rows = [dict(json.loads(line), kind="statute") for line in prompts.read_text().splitlines()]
-    prompts.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    rows = [dict(json.loads(line), kind="statute") for line in prompts.read_text(encoding="utf-8").splitlines()]
+    prompts.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     mod = _load("opd_train")
     base = ["--student", str(path), "--teacher", str(other), "--prompts", str(prompts),
             "--student-device", "cpu", "--teacher-devices", "cpu", "--batch", "2",
@@ -432,7 +432,7 @@ def test_rescoring_reads_the_answers_already_written(tmp_path, capsys):
             {"id": "q1", "ruling": "cds/202301234", "context": ["cds/202301234"],
              "answer": "Cons. Stato n. 999/2019 lo esclude.", "cited_ok": False,
              "source_cited": False}]
-    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     assert mod.main([str(p)]) == 0
     out = capsys.readouterr().out
     assert "citing only rulings given 0.000 -> 0.500" in out
@@ -455,7 +455,7 @@ def test_rescoring_a_cassazione_answer_uses_the_same_key_as_cds_answer(tmp_path,
              "context": ["snciv/2023/12345"],
              "answer": "Secondo Cass. civ., Sez. III, n. 999/2019, il principio vale.",
              "cited_ok": False, "source_cited": False}]
-    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     assert mod.main([str(p)]) == 0
     out = capsys.readouterr().out
     assert "citing only rulings given 0.500 -> 0.500" in out
@@ -473,13 +473,13 @@ def test_the_cassazione_exam_labels_and_reads_citations_with_the_year(tmp_path, 
                      "kind": "snciv"})
     rows.append({"text": "Consiglio di Stato: altra cosa.", "sentence_id": "cds/202000000",
                  "chunk_index": 0, "year": 2020, "kind": "cds"})
-    chunks.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    chunks.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     dev = tmp_path / "snciv-dev-ids.txt"
-    dev.write_text("snciv/2021/100\n")
+    dev.write_text("snciv/2021/100\n", encoding="utf-8")
     questions = tmp_path / "snciv-dev-cards.jsonl"
     questions.write_text(json.dumps({"id": "snciv/2021/100", "domande_esame": [
         {"domanda": "Quando vale il principio0 sulla responsabilità?", "risposta": "Sempre.",
-         "rubrica": "Dice sempre."}]}) + "\n")
+         "rubrica": "Dice sempre."}]}) + "\n", encoding="utf-8")
     mod = _load("cds_answer")
     seen = []
 
@@ -491,7 +491,7 @@ def test_the_cassazione_exam_labels_and_reads_citations_with_the_year(tmp_path, 
     out = tmp_path / "answers-x.jsonl"
     assert mod.main(["model", "--label", "x", "--kind", "snciv", "--questions", str(questions),
                      "--dev-ids", str(dev), "--chunks", str(chunks), "--answers", str(out)]) == 0
-    row = json.loads(out.read_text())
+    row = json.loads(out.read_text(encoding="utf-8"))
     assert row["id"] == "snciv-202100100-0"
     assert "(sentenze della Corte di cassazione)" in seen[0]
     assert "Cass. civ., n. 100/2021" in seen[0] and "Consiglio di Stato" not in seen[0]

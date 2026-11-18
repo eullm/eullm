@@ -42,7 +42,7 @@ def test_a_heading_names_a_concept_unless_it_is_generic():
 
 def test_questions_by_concept_are_judged_on_the_article_they_retrieve(tmp_path):
     norms = tmp_path / "legislazione_cp.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     out = tmp_path / "concept.jsonl"
     assert load().main(["--norms", str(norms), "-k", "2", "--out", str(out)]) == 0
     rows = [json.loads(line) for line in out.open()]

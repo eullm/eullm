@@ -46,7 +46,7 @@ def stage(tmp_path, monkeypatch):
 
     (tmp_path / "base-q4_k_m.gguf").write_bytes(b"base model weights, version one\n")
     (tmp_path / "student-q4_k_m.gguf").write_bytes(b"student weights\n")
-    (tmp_path / "corpus.txt").write_text("held-out corpus text\n")
+    (tmp_path / "corpus.txt").write_text("held-out corpus text\n", encoding="utf-8")
     return tmp_path, calls
 
 

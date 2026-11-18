@@ -79,7 +79,7 @@ def test_numbers_asked_about_by_an_evaluation_are_never_stated_absent(tmp_path):
                                               "articolo": "624-ter"}}) + "\n"
                      + json.dumps({"id": "x", "metadata": {"tipo": "pena",
                                                            "code": "codice_penale",
-                                                           "articolo": "624"}}) + "\n")
+                                                           "articolo": "624"}}) + "\n", encoding="utf-8")
     fakes, asked = excluded([suite])
     assert fakes == {("codice_penale", "624-ter")} and asked == {("codice_penale", "624")}
     rows = program_rows(articles(), fakes=fakes, absent_share=1.0)
@@ -122,7 +122,7 @@ def test_the_teacher_is_shown_the_article_and_asked_one_style():
 
 def test_the_scripts_write_the_corpus_and_resume(tmp_path, capsys, monkeypatch):
     norms = tmp_path / "legislazione_cp.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     out = tmp_path / "program.jsonl"
     assert load("make_law_corpus").main(["--norms", str(norms), "--out", str(out)]) == 0
     assert "rows" in capsys.readouterr().out and out.stat().st_size > 0
@@ -153,7 +153,7 @@ def test_the_scripts_write_the_corpus_and_resume(tmp_path, capsys, monkeypatch):
 
 def test_a_chain_started_halfway_asks_the_middle_of_the_list(tmp_path, monkeypatch):
     norms = tmp_path / "legislazione_cp.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     mod = load("law_rewrites")
     asked = []
 

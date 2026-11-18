@@ -129,7 +129,7 @@ def test_the_script_writes_both_files_and_prints_counts_only(tmp_path, known, mo
     norms.write_text("".join(json.dumps({"code": a.code, "article_num": a.number,
                                          "text": a.text, "chunk_index": 0},
                                         ensure_ascii=False) + "\n"
-                             for a in known.values()))
+                             for a in known.values()), encoding="utf-8")
     monkeypatch.setattr(mod, "ask", lambda url, msgs, mt, t: _reply(articoli=[1]))
     dev, held = tmp_path / "dev.jsonl", tmp_path / "held.jsonl"
     args = [str(norms), "--url", "http://x", "--out-dev", str(dev), "--out-heldout", str(held),
@@ -233,7 +233,7 @@ def test_training_prompts_are_judged_rows_beside_the_mixed_ones(tmp_path, known,
     norms.write_text("".join(json.dumps({"code": a.code, "article_num": a.number,
                                          "text": a.text, "chunk_index": 0},
                                         ensure_ascii=False) + "\n"
-                             for a in arts.values()))
+                             for a in arts.values()), encoding="utf-8")
     # the c.p.c. group's articles are an exam's: no prompt is written from them
     g = [known[("codice_procedura_civile", "163")], known[("codice_civile", "1453")]]
     exam = tmp_path / "practical-dev.jsonl"
@@ -241,12 +241,12 @@ def test_training_prompts_are_judged_rows_beside_the_mixed_ones(tmp_path, known,
     save_eval_set([to_item(g, {"domanda": "q", "risposta": "r", "rubrica": "x",
                                "articoli": [g[0]]}, "dev")], exam)
     mix = tmp_path / "prompts-judge.jsonl"
-    mix.write_text(json.dumps({"id": "m1", "tipo": "termine", "prompt": []}) + "\n")
+    mix.write_text(json.dumps({"id": "m1", "tipo": "termine", "prompt": []}) + "\n", encoding="utf-8")
     monkeypatch.setattr(mod, "ask", lambda url, msgs, mt, t: _reply(articoli=[1]))
     out = tmp_path / "prompts-practical.jsonl"
     assert mod.main(["--norms", str(norms), "--exclude-exam", str(exam), "--url", "http://x",
                      "--parallel", "1", "--mix", str(mix), "--out", str(out)]) == 0
-    rows = [json.loads(ln) for ln in out.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     practical = [r for r in rows if r["tipo"] == "pratica"]
     assert {r["id"] for r in rows} - {r["id"] for r in practical} == {"m1"}
     # 163 and 1453 are an exam's: the one group left is 2043 with its neighbour 2044

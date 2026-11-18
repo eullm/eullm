@@ -44,14 +44,16 @@ def test_nodi_prints_the_week_and_the_pace_to_the_plans_end(tmp_path):
             f"{(now - dt.timedelta(hours=1)).isoformat()}|Unknown"]
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    (bin_dir / "sacct").write_text("#!/bin/bash\ncat <<'EOF'\n" + "\n".join(rows) + "\nEOF\n")
+    (bin_dir / "sacct").write_text("#!/bin/bash\ncat <<'EOF'\n" + "\n".join(rows) + "\nEOF\n",
+        encoding="utf-8")
     (bin_dir / "lumi-allocations").write_text(
         "#!/bin/bash\ncat <<'EOF'\nData updated: 2026-10-25 06:00:00\n"
         "  project_465003366     |  0/1000 (0.0%) core/hours|  4135/18000 (23.0%) gpu/hours|\n"
-        "EOF\n")
+        "EOF\n", encoding="utf-8")
     (bin_dir / "squeue").write_text(
         "#!/bin/bash\ncase \"$*\" in *RUNNING*) echo eullm-campaign/small-g ;; "
-        "*) echo eullm-campaign/standard-g; echo eullm-campaign/standard-g ;; esac\n")
+        "*) echo eullm-campaign/standard-g; echo eullm-campaign/standard-g ;; esac\n",
+            encoding="utf-8")
     for f in bin_dir.iterdir():
         f.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}", USER="tester",

@@ -43,7 +43,7 @@ def stage(tmp_path, monkeypatch):
         "import sys\n"
         "out = sys.argv[sys.argv.index('--outfile') + 1]\n"
         "ver = open(sys.argv[1] + '/version.txt').read().strip()\n"
-        "open(out, 'w').write('F16DATA-built-from-' + ver + chr(10))\n")
+        "open(out, 'w').write('F16DATA-built-from-' + ver + chr(10))\n", encoding="utf-8")
     _exe(lcpp / "build" / "bin" / "llama-quantize",
          "#!/usr/bin/env bash\ncp \"$1\" \"$2\"\n")
     _exe(lcpp / "build" / "bin" / "llama-cli",
@@ -51,11 +51,11 @@ def stage(tmp_path, monkeypatch):
          'if [ "${1:-}" = "--help" ]; then echo "--single-turn"; exit 0; fi\n'
          "echo 'llama_model_load: ok'\n"
          "echo 'prosa italiana legale di verifica.'\n")
-    (lcpp / "build" / "bin" / "llama-perplexity").write_text("")
+    (lcpp / "build" / "bin" / "llama-perplexity").write_text("", encoding="utf-8")
 
     hf = tmp_path / "hf"
     hf.mkdir()
-    (hf / "config.json").write_text('{"model": "x"}\n')
+    (hf / "config.json").write_text('{"model": "x"}\n', encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
     return hf, out
@@ -69,22 +69,22 @@ def _run(hf: Path, out: Path) -> str:
 
 
 def _write_export(hf: Path, version: str) -> None:
-    (hf / "version.txt").write_text(version + "\n")
+    (hf / "version.txt").write_text(version + "\n", encoding="utf-8")
 
 
 def test_a_rebuilt_f16_re_quantizes_the_q4_beside_it(stage):
     hf, out = stage
     _write_export(hf, "v1-old-checkpoint")
     _run(hf, out)
-    assert (out / "mymodel-q4_k_m.gguf").read_text().startswith("F16DATA-built-from-v1")
+    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v1")
     # F16 deleted to save space, HF re-exported, script re-run.
     (out / "mymodel-f16.gguf").unlink()
     _write_export(hf, "v2-new-checkpoint")
 
     printed = _run(hf, out)
     assert "skipping quantization" not in printed
-    assert (out / "mymodel-f16.gguf").read_text().startswith("F16DATA-built-from-v2")
-    assert (out / "mymodel-q4_k_m.gguf").read_text().startswith("F16DATA-built-from-v2")
+    assert (out / "mymodel-f16.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v2")
+    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v2")
 
 
 def test_a_reused_f16_reuses_its_q4(stage):
@@ -94,4 +94,4 @@ def test_a_reused_f16_reuses_its_q4(stage):
     printed = _run(hf, out)
     assert "skipping conversion" in printed
     assert "skipping quantization" in printed
-    assert (out / "mymodel-q4_k_m.gguf").read_text().startswith("F16DATA-built-from-v1")
+    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v1")

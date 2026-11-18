@@ -38,7 +38,7 @@ def test_the_twin_has_the_weights_and_no_projector(tmp_path):
     (src / "manifest.json").write_text(json.dumps({
         "id": "qwen3.5-9b-mtp-gguf-q4_k_m", "name": "Qwen3.5 9B MTP", "status": "ready",
         "gguf_file": "Qwen3.5-9B-Q4_K_M.gguf", "mmproj_file": "mmproj-F16.gguf",
-        "hf_repo": "unsloth/Qwen3.5-9B-MTP-GGUF"}))
+        "hf_repo": "unsloth/Qwen3.5-9B-MTP-GGUF"}), encoding="utf-8")
     twin = store / "qwen3.5-9b-mtp-gguf-q4_k_m-text"
     # A projector left in the twin's directory goes: the engine would find it
     # there, manifest or not (#1118).
@@ -50,12 +50,13 @@ def test_the_twin_has_the_weights_and_no_projector(tmp_path):
     assert sorted(os.listdir(twin)) == ["Qwen3.5-9B-Q4_K_M.gguf", "manifest.json"]
     assert (twin / "Qwen3.5-9B-Q4_K_M.gguf").read_bytes() == b"GGUF weights"
     assert os.path.samefile(twin / "Qwen3.5-9B-Q4_K_M.gguf", src / "Qwen3.5-9B-Q4_K_M.gguf")
-    m = json.loads((twin / "manifest.json").read_text())
+    m = json.loads((twin / "manifest.json").read_text(encoding="utf-8"))
     assert m["id"] == "qwen3.5-9b-mtp-gguf-q4_k_m-text" and "mmproj_file" not in m
     assert m["gguf_file"] == "Qwen3.5-9B-Q4_K_M.gguf" and m["status"] == "ready"
     assert m["hf_repo"] == "unsloth/Qwen3.5-9B-MTP-GGUF"
     # The original keeps its projector.
-    assert json.loads((src / "manifest.json").read_text())["mmproj_file"] == "mmproj-F16.gguf"
+    manifest = json.loads((src / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["mmproj_file"] == "mmproj-F16.gguf"
 
 
 def test_a_model_not_in_the_store_is_an_error(tmp_path):

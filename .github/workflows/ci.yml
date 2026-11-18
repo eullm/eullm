@@ -265,9 +265,12 @@ jobs:
   # found the bug and fixed it script by script; on 2026-11-15 the 125 places
   # left were fixed at once and this job started refusing new ones. Ruff's
   # PLW1514 (a preview rule: without --preview it checks nothing
-  # and passes) covers open() and read_text/write_text in .py files;
-  # tools/check_utf8.py covers subprocess and the Python inside shell scripts
-  # and Slurm jobs. Every Python folder, not only the four the lint jobs see.
+  # and passes) covers open() in .py files; tools/check_utf8.py covers
+  # subprocess, read_text/write_text on any object, the Python inside shell
+  # scripts and Slurm jobs however they name the interpreter ("$PY" too), and
+  # PowerShell's Get-Content and kin. Its first version saw only python3 by
+  # name and missed 485 places, found on 2026-11-18. Every Python folder, not
+  # only the four the lint jobs see.
   utf8:
     name: Text read and written as UTF-8
     runs-on: ubuntu-22.04

@@ -36,8 +36,8 @@ QUEUE = """102 afterany:101(unfulfilled)
 def run(tmp_path):
     bin_ = tmp_path / "bin"
     bin_.mkdir()
-    (bin_ / "squeue").write_text(f"#!/bin/sh\ncat <<'EOF'\n{QUEUE}EOF\n")
-    (bin_ / "scancel").write_text(f'#!/bin/sh\necho "$@" >> {tmp_path / "cancelled"}\n')
+    (bin_ / "squeue").write_text(f"#!/bin/sh\ncat <<'EOF'\n{QUEUE}EOF\n", encoding="utf-8")
+    (bin_ / "scancel").write_text(f'#!/bin/sh\necho "$@" >> {tmp_path / "cancelled"}\n', encoding="utf-8")
     for f in bin_.iterdir():
         f.chmod(0o755)
 
@@ -47,7 +47,7 @@ def run(tmp_path):
                            env={**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}",
                                 "SLURM_JOB_ID": "101", "HEARTBEAT_INTERVAL": "1", **env})
         cancelled = tmp_path / "cancelled"
-        out = cancelled.read_text().split() if cancelled.exists() else []
+        out = cancelled.read_text(encoding="utf-8").split() if cancelled.exists() else []
         cancelled.unlink(missing_ok=True)
         return r, out
 

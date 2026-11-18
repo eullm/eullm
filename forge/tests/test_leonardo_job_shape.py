@@ -218,7 +218,7 @@ def test_the_checks_catch_the_2026_10_01_grpo_script(tmp_path):
     bad = tmp_path / "sbatch_bad.slurm"
     bad.write_text("#!/bin/bash\n#SBATCH --partition=boost_usr_prod\n"
                    "#SBATCH --time=24:00:00\n#SBATCH --gres=gpu:4\n"
-                   "#SBATCH --cpus-per-task=32\n#SBATCH --mem=450G\n")
+                   "#SBATCH --cpus-per-task=32\n#SBATCH --mem=450G\n", encoding="utf-8")
     with pytest.raises(AssertionError):
         test_two_hours_at_most(bad)
     with pytest.raises(AssertionError):

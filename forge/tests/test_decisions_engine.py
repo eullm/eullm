@@ -120,7 +120,7 @@ def test_the_engine_reads_a_forge_decision_model_as_training_does(tmp_path, monk
                 urllib.request.urlopen(f"http://127.0.0.1:{port}/v1/models", timeout=2)
                 break
             except OSError:
-                assert server.poll() is None, (tmp_path / "serve.log").read_text()
+                assert server.poll() is None, (tmp_path / "serve.log").read_text(encoding="utf-8")
                 time.sleep(1)
         worst = 0.0
         for state in STATES:

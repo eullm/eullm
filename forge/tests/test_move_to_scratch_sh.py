@@ -29,7 +29,7 @@ def _model(root: Path, name: str) -> Path:
     (d / "blobs" / "w").write_bytes(b"weights" * 100)
     # the Hugging Face cache links snapshots to blobs relatively; they must survive
     (d / "snapshots" / "abc" / "model.safetensors").symlink_to("../../blobs/w")
-    (d / "config.json").write_text("{}")
+    (d / "config.json").write_text("{}", encoding="utf-8")
     return d
 
 
@@ -46,7 +46,7 @@ def test_a_model_is_copied_then_replaced_by_a_symlink(tmp_path):
     out = _run(str(scratch), str(src))
     assert f"[move] {src} -> {scratch / 'Qwen3-14B'}" in out
     assert src.is_symlink() and src.resolve() == (scratch / "Qwen3-14B").resolve()
-    assert (src / "config.json").read_text() == "{}"
+    assert (src / "config.json").read_text(encoding="utf-8") == "{}"
     assert (src / "snapshots" / "abc" / "model.safetensors").read_bytes() == b"weights" * 100
     assert not (work / "Qwen3-14B.old").exists()
     # run twice, as a resubmitted job would: nothing moves again

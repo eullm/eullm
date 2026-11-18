@@ -1306,7 +1306,7 @@ def finish(rep: Report, args, work: Path, keep: bool) -> int:
         "counts": counts,
         "engine_log": rep.engine_log,
     }
-    args.report.write_text(json.dumps(payload, indent=2))
+    args.report.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"\nreport written to {args.report}  (includes the full engine log — "
           "attach this when reporting a problem)")
 

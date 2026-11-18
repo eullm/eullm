@@ -16,7 +16,7 @@ from eullm_forge.datasets.memory_mix import (
 
 
 def _jsonl(path, rows):
-    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows) + "{cut")
+    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows) + "{cut", encoding="utf-8")
     return path
 
 
