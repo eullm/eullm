@@ -646,12 +646,15 @@ jobs:
         run: |
           pip install --upgrade pip setuptools
           pip install -r examples/decision-langgraph/requirements.txt
+          pip install pytest==9.1.1
       - name: Test the LangGraph graphs
         run: python -m unittest discover -s examples/decision-langgraph -v
       - name: Test the n8n workflow
         run: python -m unittest discover -s examples/decision-n8n -v
       - name: Test the Decision Desk
         run: python -m unittest discover -s examples/decision-desk -v
+      - name: Test the Decision Triage example
+        run: pytest -q examples/decision-triage
       - name: Audit dependencies
         # Blocking, as in the forge and reflex_mcp jobs: the requirements are
         # what a reader installs to run the example.

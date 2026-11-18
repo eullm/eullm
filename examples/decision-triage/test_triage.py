@@ -4,8 +4,8 @@ mailbox.mbox creates the file when missing (create=True is the default), so
 a typo'd path silently grew a stray 0-byte file and the run ended with "no
 email found" for mail that never existed.
 
-NOTE: CI collects no tests under examples/, so run this with
-`python -m pytest examples/decision-triage` (or unittest) locally.
+Run this with `python -m pytest examples/decision-triage`; the Examples
+job in CI runs it too.
 """
 
 from __future__ import annotations
