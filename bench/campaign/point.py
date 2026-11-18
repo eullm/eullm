@@ -20,6 +20,7 @@ prompt cache is off, so an answer that changes under load is a finding.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -364,10 +365,8 @@ class Server:
     def kill(self) -> None:
         """Immediately, without waiting: for a job whose time is up."""
         if self.proc is not None and self.proc.poll() is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
     def log_tail(self, lines=40) -> str:
         try:
@@ -918,10 +917,8 @@ class Job:
 
     def kill(self) -> None:
         if self.proc.poll() is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
 
 # How `eullm finetune` says why it would not run, and what each means here.
