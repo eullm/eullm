@@ -32,10 +32,10 @@ def _bash() -> str:
 def _env(tmp_path: Path, *, tar_dir: Path | None = None) -> dict[str, str]:
     repo = tmp_path / "repo"
     (repo / "bench" / "campaign").mkdir(parents=True)
-    (repo / "bench" / "campaign" / "campaign.py").write_text("raise SystemExit(0)\n")
+    (repo / "bench" / "campaign" / "campaign.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
     campaign = tmp_path / "campaign"
     (campaign / "results").mkdir(parents=True)
-    (campaign / "results" / "row.json").write_text("{}\n")
+    (campaign / "results" / "row.json").write_text("{}\n", encoding="utf-8")
     archive = tmp_path / "archive"
     archive.mkdir()
     env = {
@@ -60,7 +60,7 @@ def test_a_failed_tar_keeps_the_previous_archive(tmp_path):
     tar_dir = tmp_path / "bin"
     tar_dir.mkdir()
     stub = tar_dir / "tar"
-    stub.write_text('#!/bin/sh\nprintf PARTIAL > "$2"\nexit 2\n')
+    stub.write_text('#!/bin/sh\nprintf PARTIAL > "$2"\nexit 2\n', encoding="utf-8")
     stub.chmod(0o755)
     env = _env(tmp_path, tar_dir=tar_dir)
     env["EULLM_ARCHIVE_DIR"] = out.parent.as_posix()

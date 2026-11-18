@@ -69,12 +69,12 @@ def test_what_the_principle_does_not_hold_is_refused():
 def test_the_script_asks_the_cards_that_may_leave_and_resumes(tmp_path, monkeypatch, capsys):
     cards = tmp_path / "schede-civ.jsonl"
     sensitive = dict(CARD, id="snciv/2023000002", materia="separazione dei coniugi")
-    cards.write_text("".join(json.dumps(c) + "\n" for c in (CARD, sensitive)))
+    cards.write_text("".join(json.dumps(c) + "\n" for c in (CARD, sensitive)), encoding="utf-8")
     # the first Consiglio di Stato cards carry no court
     cds = tmp_path / "schede.jsonl"
     cds.write_text(json.dumps({k: v for k, v in CARD.items() if k != "court"}
-                              | {"id": "cds/2020000001", "oggetto": "appalti pubblici"}) + "\n")
-    (tmp_path / "schede-civ.rejects.jsonl").write_text(json.dumps({"id": "x", "reason": "r"}))
+                              | {"id": "cds/2020000001", "oggetto": "appalti pubblici"}) + "\n", encoding="utf-8")
+    (tmp_path / "schede-civ.rejects.jsonl").write_text(json.dumps({"id": "x", "reason": "r"}), encoding="utf-8")
     mod = load("principle_rewrites")
     asked = []
 

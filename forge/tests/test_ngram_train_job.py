@@ -33,16 +33,16 @@ def job(tmp_path):
     work = tmp_path / "work"
     mem = work / "eullm_runs" / "memory"
     mem.mkdir(parents=True)
-    (mem / "program.jsonl").write_text('{"text": "a"}\n')
-    (mem / "rewrites.jsonl").write_text('{"text": "b"}\n')
-    (mem / "rewrites-b.jsonl").write_text('{"text": "c"}\n')
+    (mem / "program.jsonl").write_text('{"text": "a"}\n', encoding="utf-8")
+    (mem / "rewrites.jsonl").write_text('{"text": "b"}\n', encoding="utf-8")
+    (mem / "rewrites-b.jsonl").write_text('{"text": "c"}\n', encoding="utf-8")
     model = work / "model"
     model.mkdir()
-    (model / "config.json").write_text("{}")
+    (model / "config.json").write_text("{}", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     py = bin_ / "python"
-    py.write_text(STUB)
+    py.write_text(STUB, encoding="utf-8")
     py.chmod(py.stat().st_mode | stat.S_IEXEC)
     calls = tmp_path / "calls"
     env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "WORK": str(work),
@@ -53,7 +53,7 @@ def job(tmp_path):
     def run(**extra):
         r = subprocess.run(["bash", str(SCRIPT)], cwd=tmp_path, env={**env, **extra},
                            capture_output=True, text=True, encoding="utf-8", timeout=60)
-        asked = calls.read_text().splitlines() if calls.exists() else []
+        asked = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
         calls.unlink(missing_ok=True)
         return r, asked
 
@@ -77,7 +77,7 @@ def test_a_finished_run_exits_without_python(job):
     run, work = job
     out = work / "eullm_runs" / "lineA" / "a2-r2l-ngram"
     out.mkdir(parents=True)
-    (out / "DONE").write_text('{"steps": 9}')
+    (out / "DONE").write_text('{"steps": 9}', encoding="utf-8")
     r, asked = run()
     assert r.returncode == 0 and asked == []
     assert "finished already" in r.stdout
@@ -97,6 +97,6 @@ def test_a_diverged_run_exits_without_python(job):
     run, work = job
     out = work / "eullm_runs" / "lineA" / "a2-r2l-ngram"
     out.mkdir(parents=True)
-    (out / "DIVERGED").write_text('{"step": 9}')
+    (out / "DIVERGED").write_text('{"step": 9}', encoding="utf-8")
     r, asked = run()
     assert r.returncode == 0 and asked == [] and "diverged" in r.stdout

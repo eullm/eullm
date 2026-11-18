@@ -66,7 +66,7 @@ def test_quiet_grading_prints_no_item(tmp_path, capsys):
     src = tmp_path / "answers-m.jsonl"
     src.write_text("\n".join(json.dumps({"id": f"norm-termine-codice_civile-{n}",
                                          "question": "Q?", "answer": "A.",
-                                         "reference": "R."}) for n in (1, 2, 3)) + "\n")
+                                         "reference": "R."}) for n in (1, 2, 3)) + "\n", encoding="utf-8")
 
     class Batched:
         calls = 0
@@ -99,7 +99,7 @@ def test_quiet_grading_prints_no_item(tmp_path, capsys):
     # with nothing.
     out = tmp_path / "graded.csv"
     for module in (ja, legal_eval):
-        out.write_text("")
+        out.write_text("", encoding="utf-8")
         module.append_csv_row(out, ["2026-09-27T00:00:00", "v0.3", "m", 3, 1, 0.5, 3, 3])
         module.append_csv_row(out, ["2026-09-27T00:01:00", "v0.3", "m2", 3, 1, 0.5, 3, 3])
         with out.open(encoding="utf-8", newline="") as f:
@@ -239,12 +239,12 @@ def test_a_judge_link_skips_answers_graded_already(tmp_path):
 
     judge = _judge_module()
     answers = tmp_path / "answers-v0.3-open.jsonl"
-    answers.write_text('{"id": "a"}\n{"id": "b"}\n')
+    answers.write_text('{"id": "a"}\n{"id": "b"}\n', encoding="utf-8")
     graded = tmp_path / "answers-v0.3-open.graded.jsonl"
     assert not judge.already_graded(answers)
-    graded.write_text('{"id": "a"}\n')                       # cut short
+    graded.write_text('{"id": "a"}\n', encoding="utf-8")                       # cut short
     assert not judge.already_graded(answers)
-    graded.write_text('{"id": "a"}\n{"id": "b"}\n')
+    graded.write_text('{"id": "a"}\n{"id": "b"}\n', encoding="utf-8")
     assert judge.already_graded(answers)
     # the model was asked again after grading: the grades are stale
     later = graded.stat().st_mtime + 10
@@ -255,8 +255,8 @@ def test_a_judge_link_skips_answers_graded_already(tmp_path):
 def test_grades_under_another_rubric_go_to_their_own_directory(tmp_path):
     judge = _judge_module()
     answers = tmp_path / "answers-v0.3-open.jsonl"
-    answers.write_text('{"id": "a"}\n')
-    (tmp_path / "answers-v0.3-open.graded.jsonl").write_text('{"id": "a"}\n')
+    answers.write_text('{"id": "a"}\n', encoding="utf-8")
+    (tmp_path / "answers-v0.3-open.graded.jsonl").write_text('{"id": "a"}\n', encoding="utf-8")
     v2 = tmp_path / "devbig-graded-v2"
     assert judge.graded_path(answers, v2) == v2 / "answers-v0.3-open.graded.jsonl"
     assert judge.already_graded(answers)            # under the old rubric, yes

@@ -35,7 +35,7 @@ def _cards(tmp_path):
                                         "risposta": f"Vale il principio numero {n}",
                                         "rubrica": "x"}]})
     path = tmp_path / "clean.jsonl"
-    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     return path
 
 
@@ -44,10 +44,10 @@ def test_grounded_pairs_show_the_card_among_others_and_cite_it(tmp_path, capsys)
     out = tmp_path / "sft.jsonl"
     mix = tmp_path / "statute.jsonl"
     mix.write_text(json.dumps({"instruction": "Testi normativi...", "output": "Secondo l'art."})
-                   + "\n")
+                   + "\n", encoding="utf-8")
     assert mod.main([str(_cards(tmp_path)), "--absent-share", "0", "--wrong-cite-share", "0",
                      "--mix", str(mix), "--out", str(out)]) == 0
-    rows = [json.loads(ln) for ln in out.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == len(TOPICS) + 1
     pairs = [r for r in rows if r.get("task") == "caselaw_grounded"]
     for r in pairs:
@@ -68,7 +68,7 @@ def test_absent_pairs_leave_the_card_out_and_cite_nothing(tmp_path):
     mod = _load()
     out = tmp_path / "sft.jsonl"
     assert mod.main([str(_cards(tmp_path)), "--absent-share", "1", "--out", str(out)]) == 0
-    rows = [json.loads(ln) for ln in out.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert rows and all(r["task"] == "caselaw_absent" for r in rows)
     for r in rows:
         n = int(r["key"].split("-")[1])
@@ -80,7 +80,7 @@ def test_cards_of_the_rulings_themselves_are_refused(tmp_path):
     mod = _load()
     raw = tmp_path / "schede.jsonl"
     raw.write_text(json.dumps({"id": "snciv/2023/12345", "principi": ["p"],
-                               "domande_esame": []}) + "\n")
+                               "domande_esame": []}) + "\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         mod.main([str(raw), "--out", str(tmp_path / "o.jsonl")])
 
@@ -90,7 +90,7 @@ def test_wrong_citation_pairs_correct_the_premise_then_answer(tmp_path):
     out = tmp_path / "sft.jsonl"
     assert mod.main([str(_cards(tmp_path)), "--absent-share", "0", "--wrong-cite-share", "1",
                      "--out", str(out)]) == 0
-    rows = [json.loads(ln) for ln in out.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert rows and all(r["task"] == "caselaw_wrong_cite" for r in rows)
     for r in rows:
         n = int(r["key"].split("-")[1])

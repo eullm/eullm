@@ -20,7 +20,7 @@ FAKE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fake_eullm.py")
 def engine(tmp_path):
     """fake_eullm.py behind an executable path, as EULLM_BIN would be."""
     path = tmp_path / "eullm"
-    path.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n")
+    path.write_text(f"#!/bin/sh\nexec {sys.executable} {FAKE} \"$@\"\n", encoding="utf-8")
     path.chmod(0o755)
     return str(path)
 
@@ -63,7 +63,7 @@ SPEC = {
 def test_runner_drains_a_campaign(tmp_path, engine, capsys):
     qdir = str(tmp_path / "q")
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(SPEC))
+    spec_path.write_text(json.dumps(SPEC), encoding="utf-8")
     assert campaign.main(["plan", str(spec_path), "--queue", qdir]) == 0
     os.makedirs(os.path.join(qdir, "sets"), exist_ok=True)
     with open(os.path.join(qdir, "sets", "tiny.jsonl"), "w", encoding="utf-8") as f:
@@ -227,7 +227,7 @@ def test_pulls_name_the_hf_ref_or_the_catalog_id(tmp_path, engine, capsys):
     spec = {"campaign": "c", "pull": ["hf.co/Qwen/Qwen3-8B-GGUF:Q8_0"], "groups": [
         {"name": "g", "axes": {"model": ["qwen3-8b-gguf-q8_0", "qwen3-14b", "qwen3-8b"]}}]}
     path = tmp_path / "s.json"
-    path.write_text(json.dumps(spec))
+    path.write_text(json.dumps(spec), encoding="utf-8")
     assert campaign.main(["pulls", str(path), "--engine", engine]) == 0
     # fake_eullm lists qwen3-8b and qwen3-4b
     assert capsys.readouterr().out.split() == ["qwen3-14b", "hf.co/Qwen/Qwen3-8B-GGUF:Q8_0"]
@@ -264,7 +264,7 @@ Not listed above — weights on disk, manifest unusable:
 def test_a_new_round_measures_everything_again(tmp_path, capsys):
     spec = {"campaign": "c", "groups": [{"name": "g", "axes": {"model": ["a", "b"]}}]}
     path = tmp_path / "s.json"
-    path.write_text(json.dumps(spec))
+    path.write_text(json.dumps(spec), encoding="utf-8")
     q = str(tmp_path / "q")
     campaign.main(["plan", str(path), "--queue", q])
     campaign.main(["plan", str(path), "--queue", q])
@@ -282,7 +282,7 @@ def test_a_round_can_plan_some_groups_of_a_campaign(tmp_path, capsys):
         {"name": "load-together-b", "set": {"model": "b"}},
         {"name": "load-q8", "set": {"model": "c"}}]}
     path = tmp_path / "s.json"
-    path.write_text(json.dumps(spec))
+    path.write_text(json.dumps(spec), encoding="utf-8")
     q = str(tmp_path / "q")
     assert campaign.main(["plan", str(path), "--queue", q, "--round", "r2",
                           "--group", "load-together-*", "--group", "load-q8"]) == 0
@@ -298,7 +298,8 @@ def test_a_round_can_plan_some_groups_of_a_campaign(tmp_path, capsys):
     # of both (c01's soak-node and c02's moe-soak, 03-11-2026).
     other = tmp_path / "t.json"
     other.write_text(json.dumps({"campaign": "c-t", "groups": [
-        {"name": "moe-soak", "set": {"model": "d"}}, {"name": "dense", "set": {"model": "e"}}]}))
+        {"name": "moe-soak", "set": {"model": "d"}}, {"name": "dense", "set": {"model": "e"}}]}),
+            encoding="utf-8")
     assert campaign.main(["plan", str(path), str(other), "--queue", q, "--round", "r4",
                           "--group", "load-q8", "--group", "moe-soak"]) == 0
     out = capsys.readouterr().out
@@ -338,14 +339,15 @@ def test_finetune_points_train_block_and_record_the_boundary(tmp_path, engine, c
                  "optimizer": "sgd", "keep_output": True}},
     ]}
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(spec))
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
     assert campaign.main(["plan", str(spec_path), "--queue", str(qdir)]) == 0
     assert "absent-f32.gguf" in capsys.readouterr().out  # named as still to convert
     (qdir / "f32").mkdir()
     for name in ("tiny-f32.gguf", "huge-f32.gguf", "notf32-q4.gguf"):
         (qdir / "f32" / name).write_bytes(b"GGUF")
     (qdir / "sets").mkdir()
-    (qdir / "sets" / "text.jsonl").write_text(json.dumps({"text": "Question: 2+2?"}) + "\n")
+    (qdir / "sets" / "text.jsonl").write_text(json.dumps({"text": "Question: 2+2?"}) + "\n",
+        encoding="utf-8")
 
     runner = campaign.Runner(run_args(str(qdir), engine, port_base=free_port_base()))
     runner.loop()
@@ -386,20 +388,21 @@ def test_finetune_points_train_block_and_record_the_boundary(tmp_path, engine, c
 def test_an_engine_without_finetune_blocks_the_points(tmp_path, capsys):
     old = tmp_path / "eullm"
     old.write_text("#!/bin/sh\n[ \"$1\" = --version ] && { echo 'eullm 0.7.20'; exit 0; }\n"
-                   "echo \"error: unrecognized subcommand '$1'\" >&2\nexit 2\n")
+                   "echo \"error: unrecognized subcommand '$1'\" >&2\nexit 2\n", encoding="utf-8")
     old.chmod(0o755)
     qdir = tmp_path / "q"
     spec_path = tmp_path / "spec.json"
     spec_path.write_text(json.dumps({"campaign": "c-old", "groups": [
         {"name": "ft", "est_s": 60,
-         "set": {"kind": "finetune", "data": "t.jsonl", "model": "m-f32.gguf"}}]}))
+         "set": {"kind": "finetune", "data": "t.jsonl", "model": "m-f32.gguf"}}]}),
+             encoding="utf-8")
     assert campaign.main(["plan", str(spec_path), "--queue", str(qdir),
                           "--engine", str(old)]) == 0
     assert "has no `finetune` command" in capsys.readouterr().out
     (qdir / "f32").mkdir()
     (qdir / "f32" / "m-f32.gguf").write_bytes(b"GGUF")
     (qdir / "sets").mkdir()
-    (qdir / "sets" / "t.jsonl").write_text(json.dumps({"text": "x"}) + "\n")
+    (qdir / "sets" / "t.jsonl").write_text(json.dumps({"text": "x"}) + "\n", encoding="utf-8")
 
     campaign.Runner(run_args(str(qdir), str(old), port_base=free_port_base())).loop()
     counts = Queue(str(qdir)).counts()
@@ -419,7 +422,7 @@ def test_decision_points_queue_behind_one_worker_and_answer_the_same(tmp_path, e
         {"name": "gone", "est_s": 60, "set": {"model": "missing-jev"}},
     ]}
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(spec))
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
     assert campaign.main(["plan", str(spec_path), "--queue", str(qdir)]) == 0
     monkeypatch.setenv("FAKE_EULLM_DELAY_S", "0.002")
     campaign.Runner(run_args(str(qdir), engine, port_base=free_port_base())).loop()
@@ -454,7 +457,8 @@ def test_llama_server_and_ollama_are_measured_like_the_engine(tmp_path, engine, 
     store = tmp_path / "models" / "qwen3-8b"
     store.mkdir(parents=True)
     (store / "Qwen3-8B-Q4_K_M.gguf").write_bytes(b"GGUF")
-    (store / "manifest.json").write_text(json.dumps({"gguf_file": "Qwen3-8B-Q4_K_M.gguf"}))
+    (store / "manifest.json").write_text(json.dumps({"gguf_file": "Qwen3-8B-Q4_K_M.gguf"}),
+        encoding="utf-8")
     monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "models"))
     monkeypatch.setenv("LLAMA_SERVER_BIN", engine)
     monkeypatch.setenv("OLLAMA_BIN", engine)
@@ -470,7 +474,7 @@ def test_llama_server_and_ollama_are_measured_like_the_engine(tmp_path, engine, 
          "set": {"model": "not-in-store", "runtime": "llama-server"}},
     ]}
     spec_path = tmp_path / "spec.json"
-    spec_path.write_text(json.dumps(spec))
+    spec_path.write_text(json.dumps(spec), encoding="utf-8")
     assert campaign.main(["plan", str(spec_path), "--queue", str(qdir)]) == 0
     (qdir / "sets").mkdir()
     with open(qdir / "sets" / "tiny.jsonl", "w", encoding="utf-8") as f:

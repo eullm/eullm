@@ -84,7 +84,7 @@ def test_pack_cuts_rows_of_seq_len():
 
 def test_read_texts_skips_broken_and_empty_lines(tmp_path):
     p = tmp_path / "a.jsonl"
-    p.write_text('{"text": "uno"}\n{"text": ""}\n{"x": 1}\n{"text": "du')
+    p.write_text('{"text": "uno"}\n{"text": ""}\n{"x": 1}\n{"text": "du', encoding="utf-8")
     assert nt.read_texts([p]) == ["uno"]
 
 
@@ -100,7 +100,7 @@ def test_batches_resume_where_they_stopped():
 def test_two_links_end_where_one_run_does(tiny_dir, data, tmp_path):
     run(tiny_dir, data, tmp_path / "one", "--max-steps", "4")
     run(tiny_dir, data, tmp_path / "two", "--max-steps", "2")
-    assert json.loads((tmp_path / "two" / "ckpt" / "state.json").read_text()) == {"step": 2}
+    assert json.loads((tmp_path / "two" / "ckpt" / "state.json").read_text(encoding="utf-8")) == {"step": 2}
     run(tiny_dir, data, tmp_path / "two", "--max-steps", "4")
     from eullm_forge.memory import NGramMemory
 
@@ -117,11 +117,11 @@ def test_two_links_end_where_one_run_does(tiny_dir, data, tmp_path):
 def test_a_finished_run_writes_done_and_stops(tiny_dir, data, tmp_path):
     out = tmp_path / "run"
     run(tiny_dir, data, out)
-    done = json.loads((out / "DONE").read_text())
+    done = json.loads((out / "DONE").read_text(encoding="utf-8"))
     assert done["steps"] > 0 and (out / "memory" / "config.json").exists()
-    log_lines = (out / "train-log.jsonl").read_text()
+    log_lines = (out / "train-log.jsonl").read_text(encoding="utf-8")
     run(tiny_dir, data, out)
-    assert (out / "train-log.jsonl").read_text() == log_lines
+    assert (out / "train-log.jsonl").read_text(encoding="utf-8") == log_lines
 
 
 def test_rows_are_tokenised_once(tiny_dir, data, tmp_path, monkeypatch):
@@ -135,7 +135,7 @@ def test_rows_are_tokenised_once(tiny_dir, data, tmp_path, monkeypatch):
 def test_stop_after_saves_the_position(tiny_dir, data, tmp_path):
     out = tmp_path / "run"
     run(tiny_dir, data, out, "--stop-after", "1e-9")
-    assert json.loads((out / "ckpt" / "state.json").read_text()) == {"step": 0}
+    assert json.loads((out / "ckpt" / "state.json").read_text(encoding="utf-8")) == {"step": 0}
     assert not (out / "DONE").exists()
 
 
@@ -157,7 +157,7 @@ def test_a_run_whose_loss_is_not_finite_stops_and_stays_stopped(tiny_dir, data, 
             "--seq-len", "16", "--batch", "4", "--rows-per-head", "101", "--embed-dim", "32",
             "--heads-per-ngram", "2", "--max-bad-steps", "3"]
     assert nt.main(args) == 3
-    assert json.loads((out / "DIVERGED").read_text())["step"] == 2
+    assert json.loads((out / "DIVERGED").read_text(encoding="utf-8"))["step"] == 2
     assert not (out / "DONE").exists()
     monkeypatch.undo()
     assert nt.main(args) == 3  # a later link does not train on from a diverged state
@@ -190,14 +190,14 @@ def test_replay_pairs_render_in_the_chat_format_and_train(tiny_dir, data, tmp_pa
     pairs = tmp_path / "pairs.jsonl"
     pairs.write_text("\n".join(json.dumps({"instruction": f"articolo comma {i}",
                                            "output": "legge decreto", "task": "x"})
-                               for i in range(20)) + "\n")
+                               for i in range(20)) + "\n", encoding="utf-8")
     spec = importlib.util.spec_from_file_location(
         "render_pairs_text", SCRIPT.parent / "render_pairs_text.py")
     rp = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(rp)
     out = tmp_path / "replay.jsonl"
     assert rp.main(["--model", str(model_dir), "--pairs", str(pairs), "--out", str(out)]) == 0
-    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    rows = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 20
     assert rows[0]["text"].startswith("<|im_start|>user\narticolo comma 0<|im_end|>")
     assert "<|im_start|>assistant\nlegge decreto<|im_end|>" in rows[0]["text"]
@@ -212,5 +212,5 @@ def test_a_given_lora_rank_is_used_as_given(tiny_dir, data, tmp_path):
     pytest.importorskip("peft")
     out = tmp_path / "run"
     run(tiny_dir, data, out, "--mode", "lora", "--lora-rank", "3", "--max-steps", "1")
-    cfg = json.loads((out / "ckpt" / "adapter" / "adapter_config.json").read_text())
+    cfg = json.loads((out / "ckpt" / "adapter" / "adapter_config.json").read_text(encoding="utf-8"))
     assert cfg["r"] == 3

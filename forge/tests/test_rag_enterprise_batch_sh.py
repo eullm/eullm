@@ -59,18 +59,18 @@ def _port() -> int:
 def test_each_model_is_asked_in_turn_and_the_env_is_put_back(tmp_path):
     engine = tmp_path / "engine"
     engine.mkdir()
-    (engine / "i3k-rag-engine").write_text(FAKE)
+    (engine / "i3k-rag-engine").write_text(FAKE, encoding="utf-8")
     (engine / "i3k-rag-engine").chmod(0o755)
-    (engine / ".env").write_text("AUTH__JWT_SECRET=x\nEULLM__MODEL_OVERRIDE=/old.gguf\n")
+    (engine / ".env").write_text("AUTH__JWT_SECRET=x\nEULLM__MODEL_OVERRIDE=/old.gguf\n", encoding="utf-8")
     models = tmp_path / "models"
     models.mkdir()
     for name in ("a.gguf", "b.gguf", "broken.gguf"):
-        (models / name).write_text("gguf")
+        (models / name).write_text("gguf", encoding="utf-8")
     items = tmp_path / "items.jsonl"
     items.write_text("".join(json.dumps({
         "id": f"norm-contenuto-codice_civile-{n}", "question": f"Che cosa prevede l'art. {n} c.c.?",
         "metadata": {"tipo": "contenuto", "code": "codice_civile", "articolo": str(n)}}) + "\n"
-        for n in (1, 2)))
+        for n in (1, 2)), encoding="utf-8")
     out = tmp_path / "out"
     port = _port()
     env = {**os.environ, "RAG_PASSWORD": "pw", "RAG_URL": f"http://127.0.0.1:{port}",
@@ -84,16 +84,16 @@ def test_each_model_is_asked_in_turn_and_the_env_is_put_back(tmp_path):
         env=env, capture_output=True, text=True, encoding="utf-8", timeout=300)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    started = [json.loads(ln) for ln in (tmp_path / "started.jsonl").read_text().splitlines()]
+    started = [json.loads(ln) for ln in (tmp_path / "started.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(Path(s["model"]).name, s["extra"]) for s in started] == \
         [("a.gguf", None), ("broken.gguf", None), ("b.gguf", "--moe-cache auto")]
-    rows = [json.loads(ln) for ln in (out / "answers-b-v022.jsonl").read_text().splitlines()]
+    rows = [json.loads(ln) for ln in (out / "answers-b-v022.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2 and rows[0]["answer"] == "Risposta di b.gguf"
-    assert len((out / "answers-a-v022.jsonl").read_text().splitlines()) == 2
+    assert len((out / "answers-a-v022.jsonl").read_text(encoding="utf-8").splitlines()) == 2
     assert "broken: RAG Enterprise did not come up" in proc.stdout
     assert "missing: " in proc.stdout and "not found, skipped" in proc.stdout
     # the .env is the one it found, and a second run skips what is done
-    assert (engine / ".env").read_text() == \
+    assert (engine / ".env").read_text(encoding="utf-8") == \
         "AUTH__JWT_SECRET=x\nEULLM__MODEL_OVERRIDE=/old.gguf\n"
     again = subprocess.run(["bash", str(SCRIPT), str(engine), str(items), str(out),
                             f"a={models / 'a.gguf'}"],

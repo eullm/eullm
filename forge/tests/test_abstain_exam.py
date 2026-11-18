@@ -143,12 +143,12 @@ def test_the_summary_counts_by_kind_and_works_out_old_files(tmp_path, capsys):
          "context": ["codice penale, art. 625"], "abstained": False,
          "unsourced_articles": [], "absent": True},
         {"id": "norm-termine-codice_penale-626", "question": "art. 626?", "answer": "...",
-         "context": [], "abstained": False, "unsourced_articles": ["49"], "absent": True}]))
+         "context": [], "abstained": False, "unsourced_articles": ["49"], "absent": True}]), encoding="utf-8")
     old = tmp_path / "answers-x.jsonl"         # closed book, written before the fields
     old.write_text(json.dumps({"id": "norm-contenuto-codice_civile-2043",
                                "question": "Che cosa prevede l'art. 2043 c.c.?",
                                "answer": "L'art. 2043, con l'art. 1176, ...",
-                               "context": None}) + "\n")
+                               "context": None}) + "\n", encoding="utf-8")
     assert mod.main([str(new), str(old)]) == 0
     out = capsys.readouterr().out
     assert "answers-x-absent.jsonl [absent]: 2 items | abstained 1 (50.0%) | " \
@@ -167,6 +167,6 @@ def test_the_summary_reads_answers_again_with_the_current_checks(tmp_path, capsy
     closed.write_text(json.dumps({
         "id": "norm-termine-codice_civile-1453", "question": "Che cosa prevede l'art. 1453 c.c.?",
         "answer": "L'art. 1453 e 3 mesi dopo...", "context": None,
-        "abstained": False, "unsourced_articles": ["3"]}) + "\n")
+        "abstained": False, "unsourced_articles": ["3"]}) + "\n", encoding="utf-8")
     assert mod.main([str(closed)]) == 0
     assert "citing articles not in hand 0 (0.0%)" in capsys.readouterr().out

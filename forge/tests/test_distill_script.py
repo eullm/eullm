@@ -344,7 +344,7 @@ def test_no_sentinel_lets_a_run_start(tmp_path):
 
 
 def test_a_sentinel_stops_a_run_before_it_starts(tmp_path):
-    (tmp_path / distill.DIVERGED_SENTINEL).write_text("{}\n")
+    (tmp_path / distill.DIVERGED_SENTINEL).write_text("{}\n", encoding="utf-8")
     with pytest.raises(SystemExit) as exc:
         distill.refuse_if_diverged(tmp_path)
     assert exc.value.code == 3
@@ -354,7 +354,7 @@ def test_declaring_divergence_records_why_and_saves_nothing(tmp_path):
     with pytest.raises(SystemExit) as exc:
         distill.declare_divergence(tmp_path, 36620, "loss went to nan")
     assert exc.value.code == 3
-    record = json.loads((tmp_path / distill.DIVERGED_SENTINEL).read_text())
+    record = json.loads((tmp_path / distill.DIVERGED_SENTINEL).read_text(encoding="utf-8"))
     assert record["step"] == 36620
     assert "nan" in record["reason"]
     assert not list(tmp_path.glob("checkpoint-*"))
@@ -463,7 +463,7 @@ def test_a_run_that_stays_nan_stops_and_keeps_the_healthy_checkpoints(
         run_train(monkeypatch, tmp_path, poison=set(range(4, 100)),
                   max_skipped=3)
     assert exc.value.code == 3
-    record = json.loads((tmp_path / distill.DIVERGED_SENTINEL).read_text())
+    record = json.loads((tmp_path / distill.DIVERGED_SENTINEL).read_text(encoding="utf-8"))
     assert record["step"] == 2
     assert steps_on_disk(tmp_path) == [2]
     saved = torch.load(tmp_path / "checkpoint-2" / "student.pt")
@@ -474,7 +474,7 @@ def test_a_diverged_chain_refuses_before_loading_the_teacher(monkeypatch,
                                                              tmp_path):
     """Every later link of the afterany chain must cost seconds, not a
     61 GB teacher load."""
-    (tmp_path / distill.DIVERGED_SENTINEL).write_text('{"step": 36620}\n')
+    (tmp_path / distill.DIVERGED_SENTINEL).write_text('{"step": 36620}\n', encoding="utf-8")
     loaded = {}
     with pytest.raises(SystemExit) as exc:
         _, _, loaded = run_train(monkeypatch, tmp_path)
@@ -497,7 +497,7 @@ def test_resuming_from_a_non_finite_checkpoint_is_caught_at_load(monkeypatch,
     with pytest.raises(SystemExit) as exc:
         run_train(monkeypatch, tmp_path)
     assert exc.value.code == 3
-    record = json.loads((tmp_path / distill.DIVERGED_SENTINEL).read_text())
+    record = json.loads((tmp_path / distill.DIVERGED_SENTINEL).read_text(encoding="utf-8"))
     assert record["step"] == 4
     assert "checkpoint-4" in record["reason"]
 
@@ -603,7 +603,7 @@ def test_the_tokenised_cache_fingerprint_is_stable_and_specific(tmp_path):
     import types
 
     data = tmp_path / "train.jsonl"
-    data.write_text('{"text": "a"}\n')
+    data.write_text('{"text": "a"}\n', encoding="utf-8")
     files = {"train": str(data), "validation": str(data)}
     cfg = types.SimpleNamespace(cutoff_len=2048, max_train_samples=None)
 
@@ -622,7 +622,7 @@ def test_the_tokenised_cache_fingerprint_is_stable_and_specific(tmp_path):
     other = Tok()
     other.name_or_path = "Qwen/Qwen3-8B-Base"
     assert base != fp(cfg, other, files, "train")                 # tokenizer
-    data.write_text('{"text": "a rebuilt corpus"}\n')
+    data.write_text('{"text": "a rebuilt corpus"}\n', encoding="utf-8")
     assert base != fp(cfg, Tok(), files, "train")                 # rebuilt corpus
 
 

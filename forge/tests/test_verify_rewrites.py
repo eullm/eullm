@@ -42,13 +42,13 @@ def test_verdicts_are_parsed_and_unknown_replies_dropped():
 
 def test_prepare_check_report_end_to_end(tmp_path):
     norms = tmp_path / "legislazione_codice_civile.chunks.jsonl"
-    norms.write_text(json.dumps({"code": "codice_civile", "text": ART}) + "\n")
+    norms.write_text(json.dumps({"code": "codice_civile", "text": ART}) + "\n", encoding="utf-8")
     rows = tmp_path / "rewrites.jsonl"
     rows.write_text(json.dumps({"id": "codice_civile|1|parafrasi|0", "code": "codice_civile",
                                 "articolo": "1", "forma": "parafrasi", "text":
                                 "L'art. 1 dice che il creditore può chiedere il pagamento "
                                 "entro trenta giorni e che il debitore non è tenuto oltre."})
-                    + "\n")
+                    + "\n", encoding="utf-8")
     items = vr.prepare([norms], [rows], per_form=5, seed=0)
     kinds = {it["kind"] for it in items}
     assert "originale" in kinds and {"numero", "modale", "negazione", "parte"} <= kinds
@@ -62,7 +62,7 @@ def test_prepare_check_report_end_to_end(tmp_path):
     out = tmp_path / "verdicts-perfect.jsonl"
     assert vr.check(items, ["u"], out, "perfect", ask_fn=perfect) == 0
     assert vr.check(items, ["u"], out, "perfect", ask_fn=perfect) == 0   # resumes: nothing new
-    assert len(out.read_text().splitlines()) == len(items)
+    assert len(out.read_text(encoding="utf-8").splitlines()) == len(items)
     text = vr.report(items, [out])
     assert "perfect: recall 100%" in text and "flags 0% of 1 corpus rows" in text
 

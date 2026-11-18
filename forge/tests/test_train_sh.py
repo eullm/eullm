@@ -46,13 +46,13 @@ def stage(tmp_path, monkeypatch):
 
     data = tmp_path / "data"
     data.mkdir()
-    (data / "train.jsonl").write_text('{"text": "x"}\n')
-    (data / "val.jsonl").write_text('{"text": "x"}\n')
+    (data / "train.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
+    (data / "val.jsonl").write_text('{"text": "x"}\n', encoding="utf-8")
 
     out = tmp_path / "out"
     out.mkdir()
     config = tmp_path / "train.yaml"
-    config.write_text(f"output_dir: {out}\nmodel_name_or_path: x\n")
+    config.write_text(f"output_dir: {out}\nmodel_name_or_path: x\n", encoding="utf-8")
     return config, data, out
 
 

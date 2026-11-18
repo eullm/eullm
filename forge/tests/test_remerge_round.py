@@ -20,10 +20,10 @@ def _round(grpo: Path, scratch: Path, name: str, start: Path, present: bool) -> 
     d = grpo / name
     (d / "adapter").mkdir(parents=True)
     (d / "adapter" / "adapter_config.json").write_text(
-        json.dumps({"base_model_name_or_path": str(start)}))
+        json.dumps({"base_model_name_or_path": str(start)}), encoding="utf-8")
     (scratch / name).mkdir(parents=True, exist_ok=True)
     if present:
-        (scratch / name / "config.json").write_text("{}")
+        (scratch / name / "config.json").write_text("{}", encoding="utf-8")
     (d / "merged").symlink_to(scratch / name)
     return d / "merged"
 
@@ -32,7 +32,7 @@ def test_a_round_is_merged_again_from_the_first_ancestor_still_there(tmp_path):
     grpo, scratch = tmp_path / "grpo", tmp_path / "scratch"
     base = tmp_path / "base"
     base.mkdir()
-    (base / "config.json").write_text("{}")
+    (base / "config.json").write_text("{}", encoding="utf-8")
     a = _round(grpo, scratch, "a", base, present=True)
     b = _round(grpo, scratch, "b", a, present=False)
     c = _round(grpo, scratch, "c", b, present=False)
@@ -42,7 +42,7 @@ def test_a_round_is_merged_again_from_the_first_ancestor_still_there(tmp_path):
     def merge(start, adapter, out):
         calls.append((Path(start), Path(adapter).parent.name, Path(out)))
         Path(out).mkdir(parents=True, exist_ok=True)
-        (Path(out) / "config.json").write_text(json.dumps({"from": start}))
+        (Path(out) / "config.json").write_text(json.dumps({"from": start}), encoding="utf-8")
 
     mod = load()
     assert mod.main([str(grpo / "d")], merge=merge) == 0
@@ -61,7 +61,7 @@ def test_a_dry_run_only_prints_the_chain(tmp_path, capsys):
     grpo, scratch = tmp_path / "grpo", tmp_path / "scratch"
     base = tmp_path / "base"
     base.mkdir()
-    (base / "config.json").write_text("{}")
+    (base / "config.json").write_text("{}", encoding="utf-8")
     a = _round(grpo, scratch, "a", base, present=False)
     _round(grpo, scratch, "b", a, present=False)
     assert load().main([str(grpo / "b"), "--dry-run"],
@@ -74,7 +74,7 @@ def test_a_start_recorded_by_its_scratch_path_is_followed_too(tmp_path):
     grpo, scratch = tmp_path / "grpo", tmp_path / "scratch"
     base = tmp_path / "base"
     base.mkdir()
-    (base / "config.json").write_text("{}")
+    (base / "config.json").write_text("{}", encoding="utf-8")
     _round(grpo, scratch, "a", base, present=False)
     _round(grpo, scratch, "b", scratch / "a", present=False)   # the resolved path
     start, rounds = load().chain_of(grpo / "b")
@@ -86,12 +86,12 @@ def test_an_sft_round_s_adapter_is_found_in_its_directory_or_given(tmp_path):
     grpo, scratch = tmp_path / "grpo", tmp_path / "scratch"
     base = tmp_path / "published"
     base.mkdir()
-    (base / "config.json").write_text("{}")
+    (base / "config.json").write_text("{}", encoding="utf-8")
     sft = grpo / "root" / "sft" / "final"
     sft.mkdir(parents=True)
-    (sft / "adapter_config.json").write_text(json.dumps({"base_model_name_or_path": str(base)}))
+    (sft / "adapter_config.json").write_text(json.dumps({"base_model_name_or_path": str(base)}), encoding="utf-8")
     (grpo / "root" / "sft" / "checkpoint-100").mkdir()
-    (grpo / "root" / "sft" / "checkpoint-100" / "adapter_config.json").write_text("{}")
+    (grpo / "root" / "sft" / "checkpoint-100" / "adapter_config.json").write_text("{}", encoding="utf-8")
     (grpo / "root" / "merged").symlink_to(scratch / "root")
     _round(grpo, scratch, "top", grpo / "root" / "merged", present=False)
     mod = load()
@@ -100,6 +100,6 @@ def test_an_sft_round_s_adapter_is_found_in_its_directory_or_given(tmp_path):
     # elsewhere: given by name
     other = tmp_path / "elsewhere" / "lora"
     other.mkdir(parents=True)
-    (other / "adapter_config.json").write_text(json.dumps({"base_model_name_or_path": str(base)}))
+    (other / "adapter_config.json").write_text(json.dumps({"base_model_name_or_path": str(base)}), encoding="utf-8")
     start, rounds = mod.chain_of(grpo / "top", {"root": other})
     assert rounds[0] == ("root", other)

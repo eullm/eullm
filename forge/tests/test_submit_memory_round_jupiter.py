@@ -29,17 +29,17 @@ def _setup(tmp_path):
     for d in (data / "memory", data / "openbook", data / "eval" / "leonardo", private,
               runs / "start"):
         d.mkdir(parents=True)
-    (runs / "start" / "config.json").write_text("{}")
+    (runs / "start" / "config.json").write_text("{}", encoding="utf-8")
     for f in (data / "memory" / "general-it.jsonl", data / "openbook" / "pairs.jsonl",
               data / "eval" / "leonardo" / "closed-book.jsonl",
               data / "eval" / "leonardo" / "norm-exam-devbig.jsonl",
               private / "practical-heldout.jsonl"):
-        f.write_text("{}\n")
+        f.write_text("{}\n", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     log, queue = tmp_path / "sbatch.log", tmp_path / "queue"
-    log.write_text("")
-    queue.write_text("")
+    log.write_text("", encoding="utf-8")
+    queue.write_text("", encoding="utf-8")
     _exe(bin_ / "sbatch", f"""#!/bin/bash
 L={log.as_posix()}
 n=$(( $(wc -l < "$L") + 100 ))
@@ -62,7 +62,7 @@ def test_a_round_is_queued_in_order_and_once(tmp_path):
     run = ["bash", str(SCRIPT), "e1-x", str(runs / "start")]
     p = subprocess.run(run, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
-    jobs = log.read_text().splitlines()
+    jobs = log.read_text(encoding="utf-8").splitlines()
     link1, link2, vert, closed, open_, reg = jobs
     assert "--job-name=forge-mem-e1-x" in link1 and "--dependency" not in link1
     assert "PREP=--epochs 5" in link1 and f"OUT={runs / 'memory' / 'e1-x'}" in link1
@@ -75,10 +75,10 @@ def test_a_round_is_queued_in_order_and_once(tmp_path):
     assert "RG=e1-x=" in reg
     assert p.stdout.strip().splitlines()[-1] == "OPEN 104"
 
-    queue.write_text("101\n")
+    queue.write_text("101\n", encoding="utf-8")
     p = subprocess.run(run, env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0 and "already queued" in p.stdout
-    assert len(log.read_text().splitlines()) == 6
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 6
 
 
 def test_a_model_made_elsewhere_is_measured_without_training(tmp_path):
@@ -87,7 +87,7 @@ def test_a_model_made_elsewhere_is_measured_without_training(tmp_path):
     p = subprocess.run(["bash", str(SCRIPT), "g9e-r2", str(runs / "grpo" / "g9e-r2" / "merged")],
                        env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
-    vert, closed, open_, reg = log.read_text().splitlines()
+    vert, closed, open_, reg = log.read_text(encoding="utf-8").splitlines()
     assert "--dependency=afterany:555" in vert and "ARMS=g9e-r2" in vert
     assert str(runs / "grpo" / "g9e-r2" / "merged") in closed
     assert "--dependency=afterany:100" in open_ and "RG=g9e-r2=" in reg

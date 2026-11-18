@@ -92,17 +92,17 @@ def test_the_helpers_read_numbers_and_headings():
 
 def test_the_scripts_build_once_and_print_counts_only(tmp_path, capsys):
     norms = tmp_path / "legislazione_cp.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     out = tmp_path / "closed-book.jsonl"
     make = load("make_closed_book")
     assert make.main(["--norms", str(norms), "--per-kind", "5", "--rulings", "3",
                       "--out", str(out)]) == 0
-    first = out.read_text()
-    assert make.main(["--norms", str(norms), "--out", str(out)]) == 0 and out.read_text() == first
+    first = out.read_text(encoding="utf-8")
+    assert make.main(["--norms", str(norms), "--out", str(out)]) == 0 and out.read_text(encoding="utf-8") == first
     items = [json.loads(line) for line in first.splitlines()]
     answers = tmp_path / "answers-r2l.jsonl"
     answers.write_text("".join(json.dumps({"id": it["id"], "answer": "Non lo so."}) + "\n"
-                               for it in items))
+                               for it in items), encoding="utf-8")
     capsys.readouterr()
     assert load("score_closed_book").main([str(out), str(answers)]) == 0
     printed = capsys.readouterr().out
@@ -110,7 +110,7 @@ def test_the_scripts_build_once_and_print_counts_only(tmp_path, capsys):
     assert "denies-real" in printed and "procedibility: 100% of the items want" in printed
     # a model that says "non esiste" to everything: right on the made-up, denying the real
     answers.write_text("".join(json.dumps({"id": it["id"], "answer": "Non esiste."}) + "\n"
-                               for it in items))
+                               for it in items), encoding="utf-8")
     load("score_closed_book").main([str(out), str(answers)])
     row = next(ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("r2l"))
     assert "100%" in row.split()[4]

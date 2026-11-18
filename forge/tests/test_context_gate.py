@@ -95,22 +95,22 @@ def test_off_topic_questions_are_parsed_and_the_ones_naming_our_codes_dropped():
 
 def test_the_examples_file_keeps_dev_articles_and_matters_apart(tmp_path):
     norms = tmp_path / "legislazione_cc.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     ob = tmp_path / "openbook.jsonl"
     ob.write_text("".join(json.dumps(pair(n, q)) + "\n" for n, q in (
         ("1", "Quali sono le fonti del diritto?"),
         ("2", "Entro quanto si propone la domanda di prova?"),
         ("3", "Davanti a chi si propone l'opposizione?"),
-        ("4", "Chi paga le spese della domanda?"))))
+        ("4", "Chi paga le spese della domanda?"))), encoding="utf-8")
     off = tmp_path / "off.jsonl"
     off.write_text("".join(json.dumps({"question": f"Domanda fiscale numero {i}?",
                                        "topic": f"t{i % 3}", "id": f"off-{i}"}) + "\n"
-                           for i in range(6)))
+                           for i in range(6)), encoding="utf-8")
     prem = tmp_path / "premise.jsonl"
     prem.write_text(json.dumps({"id": "pf-i-1", "tipo": "premessa_inesistente",
                                 "prompt": [{"role": "user", "content": "Testi…\n\nDomanda: "
                                             "Che cosa prevede l'art. 7-bis del codice civile?"}]})
-                    + "\n")
+                    + "\n", encoding="utf-8")
     tr, dv = tmp_path / "train.jsonl", tmp_path / "dev.jsonl"
     rc = load("make_gate_pairs").main(["--norms", str(norms), "--openbook", str(ob),
                                        "--premise", str(prem), "--offtopic", str(off),
@@ -176,11 +176,11 @@ def test_the_threshold_never_gates_more_than_its_share_of_sufficient_questions()
 def test_off_topic_prompts_are_rewarded_for_abstaining(tmp_path):
     from eullm_forge.rl import score_answer
     norms = tmp_path / "legislazione_cc.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     off = tmp_path / "off.jsonl"
     # texts that look close (a "domanda" and its expenses), on a matter not ours
     off.write_text(json.dumps({"question": "Chi paga le spese della domanda di rimborso IMU?",
-                               "topic": "IMU", "id": "off-1"}) + "\n")
+                               "topic": "IMU", "id": "off-1"}) + "\n", encoding="utf-8")
     out = tmp_path / "prompts.jsonl"
     assert load("make_offtopic_prompts").main(["--norms", str(norms), "--offtopic", str(off),
                                                "-k", "2", "--out", str(out)]) == 0
@@ -200,10 +200,10 @@ def test_off_topic_prompts_can_ask_the_judge_for_the_matter_and_what_is_needed(t
     from eullm_forge.rl import JUDGED_TYPES, answer_reward
     mod = load("make_offtopic_prompts")
     norms = tmp_path / "legislazione_cc.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     off = tmp_path / "off.jsonl"
     off.write_text(json.dumps({"question": "Chi paga le spese della domanda di rimborso IMU?",
-                               "topic": "IMU, TARI e altri tributi locali", "id": "off-1"}) + "\n")
+                               "topic": "IMU, TARI e altri tributi locali", "id": "off-1"}) + "\n", encoding="utf-8")
     first = tmp_path / "prompts.jsonl"
     assert mod.main(["--norms", str(norms), "--offtopic", str(off), "-k", "2",
                      "--out", str(first)]) == 0
@@ -224,4 +224,4 @@ def test_off_topic_prompts_can_ask_the_judge_for_the_matter_and_what_is_needed(t
     direct = tmp_path / "direct.jsonl"
     assert mod.main(["--norms", str(norms), "--offtopic", str(off), "-k", "2",
                      "--kind", "fuori_ambito", "--out", str(direct)]) == 0
-    assert json.loads(direct.read_text())["tipo"] == "fuori_ambito"
+    assert json.loads(direct.read_text(encoding="utf-8"))["tipo"] == "fuori_ambito"

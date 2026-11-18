@@ -59,7 +59,7 @@ def test_dump_refuses_the_held_out_exam(tmp_path, capsys):
     d = tmp_path / "norm-exam-answers-v2"
     d.mkdir()
     f = d / "a.graded.jsonl"
-    f.write_text(json.dumps(row(1, RIGHT, "correct")) + "\n")
+    f.write_text(json.dumps(row(1, RIGHT, "correct")) + "\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         dl.main([str(f), "--baseline", str(f), "--dump", str(tmp_path / "x.txt")])
     assert dl.main([str(f), "--baseline", str(f)]) == 0

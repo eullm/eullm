@@ -144,7 +144,7 @@ def test_the_review_sheet_is_blind_and_maps_back_to_the_judge(tmp_path):
     assert "a|" not in text and "b|" not in text           # nor which model wrote it
     rows = list(csv.DictReader(sheet.open(encoding="utf-8-sig"), delimiter=";"))
     assert len(rows) == 8
-    keys = json.loads(exporter.keys_path(sheet).read_text())
+    keys = json.loads(exporter.keys_path(sheet).read_text(encoding="utf-8"))
     assert set(keys) == {r["chiave"] for r in rows}
     # disagreements first: 3/4 of the sample is from the 10 split questions
     split = {f"norm-termine-codice_civile-{i}" for i in range(0, 20, 2)}
@@ -181,7 +181,7 @@ def test_a_review_subset_holds_exactly_the_answers_on_the_sheet(tmp_path):
     for label in ("a", "b"):
         (src / f"answers-{label}.jsonl").write_text("".join(
             json.dumps({"id": f"norm-contenuto-codice_civile-{i}", "answer": f"{label}{i}"}) + "\n"
-            for i in range(10)))
+            for i in range(10)), encoding="utf-8")
     sheet = tmp_path / "review.csv"
     with sheet.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.writer(f, delimiter=";")
@@ -189,12 +189,12 @@ def test_a_review_subset_holds_exactly_the_answers_on_the_sheet(tmp_path):
         w.writerows([[1, "r1", "corretto"], [2, "r2", "sbagliato"], [3, "r3", ""]])
     (tmp_path / "review.csv.keys.json").write_text(json.dumps({
         "r1": "a|norm-contenuto-codice_civile-3", "r2": "a|norm-contenuto-codice_civile-7",
-        "r3": "b|norm-contenuto-codice_civile-0"}))
+        "r3": "b|norm-contenuto-codice_civile-0"}), encoding="utf-8")
     out = tmp_path / "devreview"
     subset = _script("review_subset")
     assert subset.main([str(sheet), "--answers", str(src), "--out", str(out)]) == 0
-    a = [json.loads(x)["id"] for x in (out / "answers-a.jsonl").read_text().splitlines()]
-    b = [json.loads(x)["id"] for x in (out / "answers-b.jsonl").read_text().splitlines()]
+    a = [json.loads(x)["id"] for x in (out / "answers-a.jsonl").read_text(encoding="utf-8").splitlines()]
+    b = [json.loads(x)["id"] for x in (out / "answers-b.jsonl").read_text(encoding="utf-8").splitlines()]
     assert a == ["norm-contenuto-codice_civile-3", "norm-contenuto-codice_civile-7"]
     assert b == ["norm-contenuto-codice_civile-0"]
     # not a development name: refused
@@ -212,7 +212,7 @@ def test_compare_without_a_baseline_still_measures_the_judge(tmp_path, capsys):
         w.writerow(["chiave", "giudizio"])
         w.writerow(["r1", "corretto"])
     (tmp_path / "review.csv.keys.json").write_text(
-        json.dumps({"r1": "a|norm-contenuto-codice_civile-1"}))
+        json.dumps({"r1": "a|norm-contenuto-codice_civile-1"}), encoding="utf-8")
     assert _script("compare_graded").main([str(d), "--human", str(sheet)]) == 0
     out = capsys.readouterr().out
     assert "against" not in out and "judge vs person on 1 answers" in out
@@ -268,9 +268,9 @@ def test_questions_of_excluded_rulings_are_left_out_of_every_model(tmp_path, cap
         (d / f"answers-{label}.graded.jsonl").write_text("".join(
             json.dumps({"id": f"cds-20200000{i}-0", "ruling": f"cds/20200000{i}",
                         "answer": "x", "grade": {"c": "correct", "w": "wrong"}[g]}) + "\n"
-            for i, g in enumerate(grades)))
+            for i, g in enumerate(grades)), encoding="utf-8")
     seen = tmp_path / "seen.txt"
-    seen.write_text("cds/202000000\ncds/202000001\n")
+    seen.write_text("cds/202000000\ncds/202000001\n", encoding="utf-8")
     compare_graded = _script("compare_graded")
     assert compare_graded.main([str(d), "--baseline", "base"]) == 0
     assert "2:0" in capsys.readouterr().out

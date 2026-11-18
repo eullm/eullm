@@ -118,7 +118,7 @@ def corpus(tmp_path):
             "sentence_id": "cds/2025000001", "year": 2025, "kind": "cds", "chunk_index": 0}
     rows.append(late)
     chunks = tmp_path / "train.jsonl"
-    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     og = tmp_path / "cds-sentenze.csv"
     with og.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(index[0]), delimiter=";")
@@ -141,16 +141,16 @@ def test_the_split_keeps_appeals_together_and_the_test_years_out(corpus, tmp_pat
     out = tmp_path / "split"
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--dev", "4",
                      "--out-dir", str(out)]) == 0
-    dev = (out / "cds-dev-ids.txt").read_text().split()
-    train = (out / "cds-train-ids.txt").read_text().split()
+    dev = (out / "cds-dev-ids.txt").read_text(encoding="utf-8").split()
+    train = (out / "cds-train-ids.txt").read_text(encoding="utf-8").split()
     assert len(dev) >= 4 and not set(dev) & set(train) and len(dev) + len(train) == 12
     assert "cds/2025000001" not in dev + train
     pairs = {f"cds/{2019 + n // 2}{n:06d}": n // 2 for n in range(12)}
     assert {pairs[i] for i in dev}.isdisjoint({pairs[i] for i in train})   # whole appeals
-    first = json.loads((out / "cds-split.json").read_text())
+    first = json.loads((out / "cds-split.json").read_text(encoding="utf-8"))
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--dev", "4",
                      "--out-dir", str(out)]) == 0
-    assert json.loads((out / "cds-split.json").read_text())["dev_sha256"] == first["dev_sha256"]
+    assert json.loads((out / "cds-split.json").read_text(encoding="utf-8"))["dev_sha256"] == first["dev_sha256"]
     printed = capsys.readouterr()
     assert "fatto0_" not in printed.out + printed.err
     assert "after 2024" in printed.err
@@ -189,19 +189,19 @@ def test_cards_are_written_refused_and_not_asked_twice(corpus, teacher, tmp_path
     chunks, og = corpus
     url, seen = teacher
     ids = tmp_path / "ids.txt"
-    ids.write_text("cds/2019000000\ncds/2020000003\ncds/2021000004\ncds/nonexistent\n")
+    ids.write_text("cds/2019000000\ncds/2020000003\ncds/2021000004\ncds/nonexistent\n", encoding="utf-8")
     out = tmp_path / "cds" / "schede.jsonl"
     mod = _load("cds_schede")
     args = ["--chunks", str(chunks), "--openga", str(og), "--ids", str(ids), "--out", str(out),
             "--url", url, "--parallel", "2", "--teacher", "qwen3-30b-q8"]
     assert mod.main(args) == 0
-    cards = [json.loads(line) for line in out.read_text().splitlines()]
+    cards = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert sorted(c["id"] for c in cards) == ["cds/2019000000", "cds/2021000004"]
     c = next(c for c in cards if c["id"] == "cds/2019000000")
     assert c["nrg"] == "NRG0" and c["sezione"] == "Sezione Quarta" and c["numero"] == "2019000000"
     assert c["teacher"] == "qwen3-30b-q8" and c["principi"] == GOOD["principi"]
     rejects = [json.loads(line) for line in
-               (out.parent / "schede.rejects.jsonl").read_text().splitlines()]
+               (out.parent / "schede.rejects.jsonl").read_text(encoding="utf-8").splitlines()]
     assert rejects == [{"id": "cds/2020000003", "reason": "placeholder", "v": 2}]
     assert seen[0]["response_format"] == {"type": "json_object"} and seen[0]["temperature"] == 0
     assert seen[0]["chat_template_kwargs"] == {"enable_thinking": False}
@@ -225,17 +225,17 @@ def test_the_cards_job_serves_one_teacher_per_gpu(tmp_path):
     bin_.mkdir()
     for name, body in {"nvidia-smi": "printf 'GPU 0\\nGPU 1\\nGPU 2\\n'",
                        "python": f'echo "$@" > {tmp_path}/args'}.items():
-        (bin_ / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_ / name).write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
         (bin_ / name).chmod(0o755)
     server = tmp_path / "llama-server"
-    server.write_text("#!/bin/sh\n")
+    server.write_text("#!/bin/sh\n", encoding="utf-8")
     server.chmod(0o755)
     teacher = tmp_path / "t.gguf"
     teacher.write_bytes(b"GGUF")
     chunks = tmp_path / "train.jsonl"
-    chunks.write_text("{}\n")
+    chunks.write_text("{}\n", encoding="utf-8")
     ids = tmp_path / "ids.txt"
-    ids.write_text("cds/1\n")
+    ids.write_text("cds/1\n", encoding="utf-8")
     env = {**os.environ, "PATH": f"{bin_}:{os.environ['PATH']}", "WORK": str(tmp_path),
            "CS_REPO": str(repo), "CS_IDS": str(ids), "CS_OUT": str(tmp_path / "o.jsonl"),
            "CS_TEACHER": str(teacher), "CS_CHUNKS": str(chunks), "LCPP_SERVER": str(server),
@@ -246,7 +246,7 @@ def test_the_cards_job_serves_one_teacher_per_gpu(tmp_path):
     r = subprocess.run(["bash", str(script)], cwd=tmp_path, env=env, capture_output=True,
                        text=True, encoding="utf-8", timeout=60)
     assert r.returncode == 0, r.stdout + r.stderr
-    args = (tmp_path / "args").read_text().split()
+    args = (tmp_path / "args").read_text(encoding="utf-8").split()
     assert args[args.index("--gpus") + 1] == "1,2,3"
     assert args[args.index("--serve") + 1] == str(teacher)
     assert args[args.index("--stop-after") + 1] == "6300"
@@ -262,17 +262,17 @@ def test_a_second_chain_skips_what_the_first_one_carded(corpus, teacher, tmp_pat
     chunks, og = corpus
     url, seen = teacher
     ids = tmp_path / "ids.txt"
-    ids.write_text("cds/2019000000\ncds/2021000004\n")
+    ids.write_text("cds/2019000000\ncds/2021000004\n", encoding="utf-8")
     out = tmp_path / "cds" / "schede.jsonl"
     mod = _load("cds_schede")
     base = ["--chunks", str(chunks), "--openga", str(og), "--ids", str(ids), "--url", url]
     assert mod.main(base + ["--out", str(out), "--limit", "1"]) == 0
-    first = json.loads(out.read_text().splitlines()[0])["id"]
+    first = json.loads(out.read_text(encoding="utf-8").splitlines()[0])["id"]
     n = len(seen)
     other = out.with_name("schede-b.jsonl")
     assert mod.main(base + ["--out", str(other)]) == 0
     assert len(seen) == n + 1                                  # only the one not done
-    assert first not in other.read_text()
+    assert first not in other.read_text(encoding="utf-8")
 
 
 def test_odd_norms_are_dropped_and_extra_items_cut_not_the_card_refused():
@@ -291,16 +291,16 @@ def test_refusals_under_older_checks_are_asked_again_once(corpus, teacher, tmp_p
     chunks, og = corpus
     url, seen = teacher
     ids = tmp_path / "ids.txt"
-    ids.write_text("cds/2019000000\ncds/2021000004\n")
+    ids.write_text("cds/2019000000\ncds/2021000004\n", encoding="utf-8")
     out = tmp_path / "cds" / "schede.jsonl"
     out.parent.mkdir(parents=True)
     (out.parent / "schede.rejects.jsonl").write_text(
         '{"id": "cds/2019000000", "reason": "bad_norm"}\n'
-        '{"id": "cds/2021000004", "reason": "placeholder", "v": 2}\n')
+        '{"id": "cds/2021000004", "reason": "placeholder", "v": 2}\n', encoding="utf-8")
     mod = _load("cds_schede")
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--ids", str(ids),
                      "--out", str(out), "--url", url]) == 0
-    assert [json.loads(line)["id"] for line in out.read_text().splitlines()] == ["cds/2019000000"]
+    assert [json.loads(line)["id"] for line in out.read_text(encoding="utf-8").splitlines()] == ["cds/2019000000"]
     assert len(seen) == 1
 
 
@@ -327,7 +327,7 @@ def test_units_carry_the_card_prefix_and_cards_become_units(corpus):
     chunks_path, og = corpus
     rulings = load_rulings([chunks_path])
     attach_meta(rulings, load_openga([og]))
-    chunks = [json.loads(line) for line in chunks_path.read_text().splitlines()
+    chunks = [json.loads(line) for line in chunks_path.read_text(encoding="utf-8").splitlines()
               if json.loads(line).get("kind") == "cds"]
     cards = {"cds/2019000000": {**GOOD, "esito_openga": "RESPINGE"}}
     plain = build_units(rulings, chunks)
@@ -347,11 +347,11 @@ def test_the_retrieval_check_finds_the_rulings_its_questions_are_about(corpus, t
          "domande_esame": [{"domanda": "motivo0_100 motivo0_101", "risposta": "x",
                             "rubrica": "y"}]},
         {"id": "cds/2021000004", "domande_ricerca": ["fatto4_8 motivo4_150"],
-         "domande_esame": []}]))
+         "domande_esame": []}]), encoding="utf-8")
     dev = tmp_path / "dev.txt"
-    dev.write_text("cds/2019000000\ncds/2021000004\n")
+    dev.write_text("cds/2019000000\ncds/2021000004\n", encoding="utf-8")
     cards = tmp_path / "schede.jsonl"
-    cards.write_text(json.dumps({"id": "cds/2019000000", **GOOD}, ensure_ascii=False) + "\n")
+    cards.write_text(json.dumps({"id": "cds/2019000000", **GOOD}, ensure_ascii=False) + "\n", encoding="utf-8")
     out = tmp_path / "ret.csv"
     mod = _load("cds_retrieval")
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--cards", str(cards),
@@ -408,7 +408,7 @@ def cass_corpus(tmp_path):
                          "kind": kind})
     rows.append({"text": "Art. 1 legge", "source_id": "legge", "sentence_id": None,
                  "chunk_index": 0, "chunk_total": 1, "year": None, "kind": "legge"})
-    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     return path
 
 
@@ -417,11 +417,11 @@ def test_the_cassazione_split_is_by_kind_and_named_after_it(cass_corpus, tmp_pat
     out = tmp_path / "cass"
     assert mod.main(["--kind", "snciv", "--chunks", str(cass_corpus), "--dev", "2",
                      "--out-dir", str(out)]) == 0
-    dev = (out / "snciv-dev-ids.txt").read_text().split()
-    train = (out / "snciv-train-ids.txt").read_text().split()
+    dev = (out / "snciv-dev-ids.txt").read_text(encoding="utf-8").split()
+    train = (out / "snciv-train-ids.txt").read_text(encoding="utf-8").split()
     assert len(dev) >= 2 and not set(dev) & set(train) and len(dev) + len(train) == 8
     assert all(i.startswith("snciv/") for i in dev + train)
-    assert json.loads((out / "snciv-split.json").read_text())["kind"] == "snciv"
+    assert json.loads((out / "snciv-split.json").read_text(encoding="utf-8"))["kind"] == "snciv"
     assert not (out / "cds-dev-ids.txt").exists()
     assert "fatto" not in capsys.readouterr().out
     with pytest.raises(SystemExit):
@@ -431,12 +431,12 @@ def test_the_cassazione_split_is_by_kind_and_named_after_it(cass_corpus, tmp_pat
 def test_a_cassazione_card_is_asked_as_the_cassazione(cass_corpus, teacher, tmp_path):
     url, seen = teacher
     ids = tmp_path / "ids.txt"
-    ids.write_text("snciv/2021/10000\nsnciv/2022/10001\n")
+    ids.write_text("snciv/2021/10000\nsnciv/2022/10001\n", encoding="utf-8")
     out = tmp_path / "cass" / "schede.jsonl"
     mod = _load("cds_schede")
     assert mod.main(["--kind", "snciv", "--chunks", str(cass_corpus), "--ids", str(ids),
                      "--out", str(out), "--url", url, "--parallel", "2"]) == 0
-    cards = [json.loads(line) for line in out.read_text().splitlines()]
+    cards = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert sorted(c["id"] for c in cards) == ["snciv/2021/10000", "snciv/2022/10001"]
     assert all(c["court"] == "snciv" and c["numero"] in ("10000", "10001") for c in cards)
     system, user = seen[0]["messages"][0]["content"], seen[0]["messages"][-1]["content"]

@@ -57,10 +57,10 @@ esac
         "NAME=forge-sft-ob1\nTAG=ob1\nJUDGE_NAME=forge-judge-ob1\nUSER=tester\n"
         "QUEUED=\nprev=102\n"
         + m.group(0) + "\n"
-        'echo "JUDGE:$judge"\n')
+        'echo "JUDGE:$judge"\n', encoding="utf-8")
     env = {**os.environ, "PATH": bin_.as_posix() + ":" + os.environ.get("PATH", "")}
     p = subprocess.run([_bash(), str(wrapper)], env=env, capture_output=True, text=True, encoding="utf-8",
                        timeout=20)
     assert p.returncode == 0, p.stdout + p.stderr
     assert "JUDGE:101" in p.stdout
-    assert "JobId=101 Dependency=afterany:102" in updates.read_text()
+    assert "JobId=101 Dependency=afterany:102" in updates.read_text(encoding="utf-8")

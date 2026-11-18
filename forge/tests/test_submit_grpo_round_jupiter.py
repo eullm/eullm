@@ -42,27 +42,27 @@ def _setup(tmp_path):
     for d in (data / "grpo" / "leonardo", data / "eval", private, home / "libs-grpo",
               home / "libs-qwen35", runs / "start-model"):
         d.mkdir(parents=True)
-    (runs / "start-model" / "config.json").write_text("{}")
+    (runs / "start-model" / "config.json").write_text("{}", encoding="utf-8")
     rows = [{"id": f"p{i}", "prompt": [{"role": "user", "content": "Domanda?"}],
              "tipo": "pratica" if i % 2 else "premessa_termine", "keywords": [],
              "code": "codice_civile", "articolo": str(i)} for i in range(1, 9)]
     (data / "grpo" / "leonardo" / "prompts-practical.jsonl").write_text(
-        "".join(json.dumps(r) + "\n" for r in rows))
+        "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     # The trap test is on article 3: its prompt must go.
     trap = json.dumps(_item(1, "codice_civile", "3"))
-    (data / "eval" / "trap-test.jsonl").write_text(trap + "\n")
+    (data / "eval" / "trap-test.jsonl").write_text(trap + "\n", encoding="utf-8")
     for f in (data / "eval" / "trap-test-para.jsonl", data / "eval" / "norm-exam.jsonl",
               private / "lexia-trappole.jsonl", private / "practical-dev.jsonl"):
-        f.write_text(json.dumps(_item(9, "codice_penale", "1")) + "\n")
+        f.write_text(json.dumps(_item(9, "codice_penale", "1")) + "\n", encoding="utf-8")
     # START already answered the trap test: it is asked only the other sets.
     (runs / "teacher-eval").mkdir()
-    (runs / "teacher-eval" / "answers-trap-test-dqp-d-q9b.jsonl").write_text("{}\n")
+    (runs / "teacher-eval" / "answers-trap-test-dqp-d-q9b.jsonl").write_text("{}\n", encoding="utf-8")
 
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     log, queue = tmp_path / "sbatch.log", tmp_path / "queue"
-    queue.write_text("")
-    log.write_text("")
+    queue.write_text("", encoding="utf-8")
+    log.write_text("", encoding="utf-8")
     _exe(bin_ / "sbatch", f"""#!/bin/bash
 L={log.as_posix()}
 n=$(( $(wc -l < "$L") + 100 ))
@@ -89,10 +89,10 @@ def test_the_round_is_queued_in_order_and_once(tmp_path):
     p = _run(env, runs)
     assert p.returncode == 0, p.stdout + p.stderr
     prompts = runs / "grpo" / "r1" / "prompts.jsonl"
-    kept = [json.loads(ln) for ln in prompts.read_text().splitlines()]
+    kept = [json.loads(ln) for ln in prompts.read_text(encoding="utf-8").splitlines()]
     assert sorted(r["articolo"] for r in kept) == ["1", "2", "4", "5", "6", "7", "8"]
 
-    jobs = log.read_text().splitlines()
+    jobs = log.read_text(encoding="utf-8").splitlines()
     smoke, link1, link2, ev, start_ev, judge = jobs
     assert "--time=00:40:00" in smoke and "NO_MERGE=1" in smoke and "--limit 48" in smoke
     assert smoke.endswith("JUDGE=") and "OUT=" + str(runs / "grpo" / "r1-smoke") in smoke
@@ -110,10 +110,10 @@ def test_the_round_is_queued_in_order_and_once(tmp_path):
     assert "Domanda" not in p.stdout + p.stderr
 
     # Queued: a second run submits nothing.
-    queue.write_text("102\n")
+    queue.write_text("102\n", encoding="utf-8")
     p = _run(env, runs)
     assert p.returncode == 0 and "already queued" in p.stdout
-    assert len(log.read_text().splitlines()) == 6
+    assert len(log.read_text(encoding="utf-8").splitlines()) == 6
 
 
 def test_start_is_asked_only_the_sets_named(tmp_path):
@@ -121,7 +121,7 @@ def test_start_is_asked_only_the_sets_named(tmp_path):
     env["GRPO_START_SETS"] = "norm-exam"
     p = _run(env, runs)
     assert p.returncode == 0, p.stdout + p.stderr
-    start_ev = log.read_text().splitlines()[4]
+    start_ev = log.read_text(encoding="utf-8").splitlines()[4]
     assert "MODEL=" + str(runs / "start-model") in start_ev
     assert "SETS=norm-exam=" in start_ev and "practical-dev=" not in start_ev
 
@@ -133,7 +133,7 @@ def test_a_round_waits_for_the_one_that_writes_its_start(tmp_path):
     p = subprocess.run(["bash", str(SCRIPT), "r3", str(start), "2", "200"],
                        env=env, capture_output=True, text=True, encoding="utf-8", timeout=60)
     assert p.returncode == 0, p.stdout + p.stderr
-    jobs = log.read_text().splitlines()
+    jobs = log.read_text(encoding="utf-8").splitlines()
     link1, link2, ev, judge = jobs           # no smoke test, START not asked
     assert "--dependency=afterany:777" in link1 and "--limit" not in link1
     assert "--dependency=afterany:100" in link2
@@ -151,7 +151,7 @@ def test_prompts_a_queued_job_writes_are_filtered_by_the_first_link(tmp_path):
     assert p.returncode == 0, p.stdout + p.stderr
     out = runs / "grpo" / "r4"
     assert not (out / "prompts.jsonl").exists()
-    filt = (out / "filter.sh").read_text()
+    filt = (out / "filter.sh").read_text(encoding="utf-8")
     assert "filter_grpo_prompts.py" in filt and str(later) in filt
-    assert "--dependency=afterany:555" in log.read_text().splitlines()[0]
+    assert "--dependency=afterany:555" in log.read_text(encoding="utf-8").splitlines()[0]
 

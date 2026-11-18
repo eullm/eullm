@@ -82,20 +82,20 @@ def test_what_is_written_points_at_no_real_ruling():
 def test_the_script_refuses_without_the_dev_split_and_prints_counts_only(tmp_path, capsys):
     mod = _load()
     cards = tmp_path / "schede.jsonl"
-    cards.write_text(json.dumps(_card("ok-1"), ensure_ascii=False) + "\n")
+    cards.write_text(json.dumps(_card("ok-1"), ensure_ascii=False) + "\n", encoding="utf-8")
     dev = tmp_path / "dev.txt"
-    dev.write_text("")
+    dev.write_text("", encoding="utf-8")
     out = tmp_path / "clean.jsonl"
     try:
         mod.main([str(cards), "--dev-ids", str(dev), "--out", str(out)])
         raise AssertionError("an empty dev split was accepted")
     except SystemExit:
         pass
-    dev.write_text("dev-1\n")
+    dev.write_text("dev-1\n", encoding="utf-8")
     assert mod.main([str(cards), "--dev-ids", str(dev), "--out", str(out)]) == 0
     printed = capsys.readouterr().out
     assert "1 written" in printed and "grave illecito" not in printed
-    assert len(out.read_text().splitlines()) == 1
+    assert len(out.read_text(encoding="utf-8").splitlines()) == 1
 
 
 def _cass(rid, principio=None, materia="responsabilità contrattuale - onere della prova", **kw):
@@ -135,9 +135,9 @@ def test_criminal_rulings_are_never_exported(tmp_path):
     import pytest
     mod = _load()
     cards = tmp_path / "c.jsonl"
-    cards.write_text(json.dumps(_cass("snpen/2022/7")) + "\n")
+    cards.write_text(json.dumps(_cass("snpen/2022/7")) + "\n", encoding="utf-8")
     dev = tmp_path / "dev.txt"
-    dev.write_text("x\n")
+    dev.write_text("x\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         mod.main([str(cards), "--dev-ids", str(dev), "--kind", "snpen",
                   "--out", str(tmp_path / "o.jsonl")])

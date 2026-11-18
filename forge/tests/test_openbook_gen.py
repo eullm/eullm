@@ -173,7 +173,7 @@ def load_script():
 
 def test_the_driver_refuses_to_run_without_an_exam_to_exclude(tmp_path):
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     assert load_script().main(["--norms", str(norms), "--out", str(tmp_path / "o.jsonl"),
                                "--limit", "5", "--dry-run"]) == 2
 
@@ -181,16 +181,16 @@ def test_the_driver_refuses_to_run_without_an_exam_to_exclude(tmp_path):
 def test_a_dry_run_writes_the_teacher_free_pairs_and_says_how_many_it_excluded(tmp_path,
                                                                               capsys):
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     exam = tmp_path / "exam.jsonl"
-    exam.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n")
+    exam.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n", encoding="utf-8")
     out = tmp_path / "o.jsonl"
     mod = load_script()
     assert mod.main(["--norms", str(norms), "--exclude-exam", str(exam), "--out", str(out),
                      "--limit", "20", "--dry-run"]) == 0
     printed = capsys.readouterr().out
     assert "1 exam articles left out" in printed
-    lines = [json.loads(x) for x in out.read_text().splitlines()]
+    lines = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
     assert lines and {p["task"] for p in lines} == {"openbook_missing"}
     # grounded jobs are still to do: a dry run never claims the data is complete
     assert not out.with_name("o.jsonl.done").exists()
@@ -198,7 +198,7 @@ def test_a_dry_run_writes_the_teacher_free_pairs_and_says_how_many_it_excluded(t
 
 def test_the_done_marker_appears_only_when_no_job_is_left(tmp_path):
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     out = tmp_path / "o.jsonl"
     mod = load_script()
     args = ["--norms", str(norms), "--no-exam", "--out", str(out), "--limit", "10"]
@@ -252,10 +252,10 @@ def test_a_second_question_still_counts_as_the_same_trained_article():
 
 def test_the_driver_excludes_every_exam_it_is_given(tmp_path, capsys):
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     a, b = tmp_path / "v3.jsonl", tmp_path / "dev.jsonl"
-    a.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n")
-    b.write_text(json.dumps(exam_item("codice_civile", "4").to_dict()) + "\n")
+    a.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n", encoding="utf-8")
+    b.write_text(json.dumps(exam_item("codice_civile", "4").to_dict()) + "\n", encoding="utf-8")
     assert load_script().main(["--norms", str(norms), "--exclude-exam", str(a), str(b),
                                "--out", str(tmp_path / "o.jsonl"), "--limit", "10",
                                "--per-article", "2", "--shard", "1/2", "--dry-run"]) == 0
@@ -322,19 +322,19 @@ def test_an_absent_pair_removes_the_continuation_chunks_too():
 def test_the_raft_script_keeps_every_original_and_adds_the_share(tmp_path, index):
     import importlib.util
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     pairs = [_topic_pair(index) | {"key": f"ob-g-codice_civile-41-v{i}" if i else
                                    "ob-g-codice_civile-41"} for i in range(4)]
     pairs.append(_topic_pair(index, named=True))
     src = tmp_path / "v04.jsonl"
-    src.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n")
+    src.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8")
     out = tmp_path / "v05.jsonl"
     spec = importlib.util.spec_from_file_location(
         "make_raft_absent", Path(__file__).resolve().parents[1] / "scripts" / "make_raft_absent.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.main([str(src), "--norms", str(norms), "--share", "0.5", "--out", str(out)]) == 0
-    rows = [json.loads(x) for x in out.read_text().splitlines()]
+    rows = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 5 + 2
     assert sum(r["task"] == "openbook_absent" for r in rows) == 2
     assert mod.main([str(src), "--norms", str(norms), "--out", str(src)]) == 2
@@ -385,12 +385,12 @@ def test_abstain_prompts_teach_the_difference_and_hide_the_note_from_the_student
                  "Il debitore deve dare preavviso al creditore nel codice civile."},
     ]
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
+    norms.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
     question = "Nel codice civile, entro quanto deve agire il creditore?"
     pair = {"task": "openbook_grounded", "named": False, "key": "ob-g-codice_civile-41",
             "instruction": open_book_prompt(question, records[:2]), "output": "x"}
     pairs = tmp_path / "pairs.jsonl"
-    pairs.write_text(json.dumps(pair, ensure_ascii=False) + "\n")
+    pairs.write_text(json.dumps(pair, ensure_ascii=False) + "\n", encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "make_abstain_prompts.py"
     spec = importlib.util.spec_from_file_location("make_abstain_prompts", script)
     mod = importlib.util.module_from_spec(spec)
@@ -398,7 +398,7 @@ def test_abstain_prompts_teach_the_difference_and_hide_the_note_from_the_student
     out = tmp_path / "abstain.jsonl"
     assert mod.main([str(pairs), "--norms", str(norms), "--absent", "1", "--grounded", "1",
                      "--no-text", "1", "--out", str(out)]) == 0
-    rows = {r["kind"]: r for r in map(json.loads, out.read_text().splitlines())}
+    rows = {r["kind"]: r for r in map(json.loads, out.read_text(encoding="utf-8").splitlines())}
     assert set(rows) == {"absent", "statute", "no_text"}
     absent = rows["absent"]
     assert "sessanta giorni" not in absent["student"][0]["content"]   # the article is gone
@@ -442,9 +442,9 @@ def test_the_engine_backend_writes_grounded_pairs(tmp_path):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
         norms = tmp_path / "legislazione_x.chunks.jsonl"
-        norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+        norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
         exam = tmp_path / "exam.jsonl"
-        exam.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n")
+        exam.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n", encoding="utf-8")
         out = tmp_path / "o.jsonl"
         assert load_script().main([
             "--norms", str(norms), "--exclude-exam", str(exam), "--out", str(out),
@@ -453,7 +453,7 @@ def test_the_engine_backend_writes_grounded_pairs(tmp_path):
         ]) == 0
     finally:
         srv.shutdown()
-    pairs = [json.loads(x) for x in out.read_text().splitlines()]
+    pairs = [json.loads(x) for x in out.read_text(encoding="utf-8").splitlines()]
     grounded = [p for p in pairs if p["task"] == "openbook_grounded"]
     assert seen and set(seen) == {"/api/chat"}
     # the stub always names the article: kept when the job asked for it, rejected otherwise

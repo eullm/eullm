@@ -23,7 +23,7 @@ def test_the_server_serves_the_gguf_with_one_slot_a_question(tmp_path):
 
 def _fake_engine(tmp_path, help_text):
     exe = tmp_path / "eullm"
-    exe.write_text(f"#!/bin/sh\necho '{help_text}'\n")
+    exe.write_text(f"#!/bin/sh\necho '{help_text}'\n", encoding="utf-8")
     exe.chmod(0o755)
     return str(exe)
 

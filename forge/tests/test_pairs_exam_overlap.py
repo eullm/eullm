@@ -47,7 +47,7 @@ def exam(tmp_path: Path, articles: list[str]) -> Path:
 
 def test_pairs_on_exam_articles_are_counted_and_left_out(tmp_path, capsys):
     train = corpus(tmp_path)
-    records = [json.loads(line) for line in train.read_text().splitlines()]
+    records = [json.loads(line) for line in train.read_text(encoding="utf-8").splitlines()]
     jobs = make_jobs(records, 100, seed=0, cfg=GenConfig())
     assert jobs, "the toy corpus must yield jobs"
     pairs = tmp_path / "pairs.jsonl"
@@ -67,7 +67,7 @@ def test_pairs_on_exam_articles_are_counted_and_left_out(tmp_path, capsys):
     assert expected_bad and len(expected_bad) < len(jobs)
     assert f"pairs about an exam article: {len(expected_bad)}" in out
     assert "exam articles with pairs about them: 2 of 2" in out
-    kept = {json.loads(line)["key"] for line in clean.read_text().splitlines()}
+    kept = {json.loads(line)["key"] for line in clean.read_text(encoding="utf-8").splitlines()}
     assert kept == {j.key for j in jobs} - expected_bad
 
 

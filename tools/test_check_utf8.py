@@ -67,3 +67,43 @@ def test_a_heredoc_with_shell_expansions_is_skipped(tmp_path, capsys):
         "EOF\n"
     ), capsys)
     assert code == 0, out
+
+
+def test_python_named_by_a_variable_is_checked(tmp_path, capsys):
+    # Scripts call "$PY" as often as python3: before 2026-11-18 those went unseen.
+    code, out = run(tmp_path, "status.sh", (
+        "$PY - \"$LAST\" <<'PY'\n"
+        "import json, sys\n"
+        "d = json.load(open(sys.argv[1]))\n"
+        "PY\n"
+        "load=$(\"$PY\" -c \"import json, sys\n"
+        "print(json.load(open(sys.argv[1]))[\\\"x\\\"])\" a.json)\n"
+    ), capsys)
+    assert code == 1
+    assert ":3: open() in text mode" in out
+    assert ":6: open() in text mode" in out
+
+
+def test_read_text_on_any_object_and_encoding_by_position(tmp_path, capsys):
+    code, out = run(tmp_path, "c.py", (
+        "meta.read_text()\n"
+        "meta.write_text(data)\n"
+        "meta.read_text('utf-8')\n"  # by position: fine
+        "meta.write_text(data, 'utf-8')\n"  # by position: fine
+    ), capsys)
+    assert code == 1
+    lines = out.splitlines()
+    assert ":1: .read_text()" in out and ":2: .write_text()" in out
+    assert len(lines) == 2, out
+
+
+def test_powershell_needs_encoding(tmp_path, capsys):
+    code, out = run(tmp_path, "install.ps1", (
+        "foreach ($line in Get-Content $sums) { }\n"
+        "$m = Get-Content $f -Raw -Encoding UTF8\n"
+        "Set-Content -Path $p `\n"
+        "    -Value $v -Encoding UTF8\n"
+        "# Get-Content in a comment\n"
+    ), capsys)
+    assert code == 1
+    assert out.splitlines() == [f"{tmp_path / 'install.ps1'}:1: Get-Content without -Encoding"]
