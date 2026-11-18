@@ -171,7 +171,7 @@ async def run_prefill_sweep(session, args):
         # the prefill logits — see engine/src/inference/scheduler.rs), but a
         # single decode step is negligible next to prefilling thousands of
         # tokens on CPU.
-        ttft, total, prompt_tokens, gen_tokens, _ = await stream_generate(
+        ttft, _, prompt_tokens, _, _ = await stream_generate(
             session, args.url, args.model, prompt, max_tokens=1, timeout=args.timeout,
         )
         if ttft is None or not prompt_tokens:
@@ -189,7 +189,7 @@ async def run_decode_bench(session, args, power_sampler):
     for i in range(args.decode_repeats):
         if power_sampler:
             power_sampler.start()
-        ttft, total, prompt_tokens, gen_tokens, last_token_s = await stream_generate(
+        ttft, _, _, gen_tokens, last_token_s = await stream_generate(
             session, args.url, args.model, args.decode_prompt,
             max_tokens=args.decode_tokens, timeout=args.timeout,
         )
