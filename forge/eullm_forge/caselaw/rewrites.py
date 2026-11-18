@@ -92,7 +92,7 @@ def parse(card: dict, raw: str) -> tuple[list[tuple[int, str, str]], list[tuple[
         return [], [(-1, "count")]
     norms = " ".join(card.get("norme") or [])
     kept, refused = [], []
-    for i, (item, principle) in enumerate(zip(items, card["principi"])):
+    for i, (item, principle) in enumerate(zip(items, card["principi"], strict=True)):
         if not isinstance(item, dict):
             refused.append((i, "bad_field"))
             continue
