@@ -392,7 +392,7 @@ def prepare_dataset(
         console.print(f"[yellow]Not yet implemented:[/yellow] {e}")
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 
