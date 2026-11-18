@@ -753,8 +753,8 @@ def make_normattiva_session() -> object:
     """
     try:
         import requests
-    except ImportError:
-        raise RuntimeError("requests is required. Install with: pip install requests")
+    except ImportError as e:
+        raise RuntimeError("requests is required. Install with: pip install requests") from e
 
     from .base import DEFAULT_HEADERS
 
@@ -1173,11 +1173,11 @@ def parse_eurlex_html(html: str, source_id: str) -> list[dict]:
     """
     try:
         from bs4 import BeautifulSoup
-    except ImportError:
+    except ImportError as e:
         raise RuntimeError(
             "beautifulsoup4 is required for EUR-Lex parsing. "
             "Install with: pip install beautifulsoup4"
-        )
+        ) from e
 
     soup = BeautifulSoup(html, "html.parser")
 
