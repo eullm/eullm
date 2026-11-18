@@ -602,7 +602,7 @@ def decisions_import_rag(
                       f"{labels.get('answer', 0)} / {labels.get('retrieve_more', 0)} / "
                       f"{labels.get('abstain', 0)}")
     console.print(table)
-    for name, path in report["held_out"].items():
+    for path in report["held_out"].values():
         console.print(f"  Held out for ragbench.py: {Path(output) / path}")
     console.print(f"\nNext:\n  eullm-forge decisions build {output} -o <dataset>")
 
