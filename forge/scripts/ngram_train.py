@@ -81,7 +81,8 @@ def tokenized_rows(tok, paths: list[Path], seq_len: int, cache: Path):
     key = {"data": [str(p) for p in paths], "seq_len": seq_len,
            "sizes": [p.stat().st_size for p in paths]}
     meta = cache.with_suffix(".json")
-    if cache.exists() and meta.exists() and json.loads(meta.read_text()) == key:
+    if cache.exists() and meta.exists() and json.loads(
+            meta.read_text(encoding="utf-8")) == key:
         return np.load(cache), None
     texts = read_texts(paths)
     eos = tok.eos_token_id if tok.eos_token_id is not None else 0
@@ -92,7 +93,7 @@ def tokenized_rows(tok, paths: list[Path], seq_len: int, cache: Path):
     tmp = cache.with_name(cache.name + ".tmp.npy")
     np.save(tmp, rows)
     os.replace(tmp, cache)
-    meta.write_text(json.dumps(key))
+    meta.write_text(json.dumps(key), encoding="utf-8")
     return rows, len(texts)
 
 
@@ -200,7 +201,7 @@ def main(argv=None) -> int:
         print(f"[ngram] {out} is finished (DONE): nothing to do", flush=True)
         return 0
     if (out / "DIVERGED").exists():
-        print(f"[ngram] {out} diverged ({(out / 'DIVERGED').read_text().strip()}): "
+        print(f"[ngram] {out} diverged ({(out / 'DIVERGED').read_text(encoding='utf-8').strip()}): "
               "not resumed; start again with a lower --lr", flush=True)
         return 3
     out.mkdir(parents=True, exist_ok=True)
@@ -224,7 +225,7 @@ def main(argv=None) -> int:
     ckpt = out / "ckpt"
     state = {"step": 0}
     if (ckpt / "state.json").exists():
-        state = json.loads((ckpt / "state.json").read_text())
+        state = json.loads((ckpt / "state.json").read_text(encoding="utf-8"))
 
     if a.mode == "ngram":
         memory = (NGramMemory.load(ckpt / "memory") if (ckpt / "memory").exists()
@@ -276,7 +277,7 @@ def main(argv=None) -> int:
             model.save_pretrained(tmp / "adapter")
         for i, opt in enumerate(opts):
             torch.save(opt.state_dict(), tmp / f"optim{i}.pt")
-        (tmp / "state.json").write_text(json.dumps({"step": step}))
+        (tmp / "state.json").write_text(json.dumps({"step": step}), encoding="utf-8")
         shutil.rmtree(ckpt, ignore_errors=True)
         os.replace(tmp, ckpt)
         print(f"[ngram] saved at step {step}", flush=True)
@@ -310,7 +311,8 @@ def main(argv=None) -> int:
             print(f"[ngram] non-finite loss at step {step} ({bad} in a row)", flush=True)
             if bad >= a.max_bad_steps:
                 (out / "DIVERGED").write_text(json.dumps({"step": step, "lr": a.lr,
-                                                          "lr_table": a.lr_table}))
+                                                          "lr_table": a.lr_table}),
+                                             encoding="utf-8")
                 log.close()
                 print(f"[ngram] DIVERGED at step {step}: stopped; the last save is "
                       f"ckpt (step {state['step']} or later), nothing written after it",
@@ -349,7 +351,8 @@ def main(argv=None) -> int:
         memory.save(out / "memory")
     else:
         model.save_pretrained(out / "adapter")
-    (out / "DONE").write_text(json.dumps({"steps": final, "tokens": final * a.batch * a.seq_len}))
+    (out / "DONE").write_text(json.dumps({"steps": final, "tokens": final * a.batch * a.seq_len}),
+                             encoding="utf-8")
     print(f"[ngram] finished: {final} steps, written to {out}", flush=True)
     return 0
 
