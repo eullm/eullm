@@ -80,7 +80,7 @@ def bar_chart(arms: dict, out_path: str) -> None:
     width = 0.8 / max(n_arms, 1)
     x = np.arange(len(cat_display))
 
-    fig, ax = plt.subplots(figsize=(15, 7.5))
+    _fig, ax = plt.subplots(figsize=(15, 7.5))
     for i, a in enumerate(labels):
         style = ARM_STYLE.get(a, {"color": "#888", "label": a})
         offset = (i - (n_arms - 1) / 2) * width
@@ -125,7 +125,7 @@ def radar_chart(arms: dict, out_path: str) -> None:
     angles = np.linspace(0, 2 * np.pi, len(CATEGORIES), endpoint=False).tolist()
     angles += angles[:1]
 
-    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+    _fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
     for a in labels:
         style = ARM_STYLE.get(a, {"color": "#888", "label": a})
         cats = arms[a].get("categories", {})
