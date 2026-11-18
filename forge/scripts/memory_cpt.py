@@ -101,7 +101,8 @@ def prepare(args) -> int:
         {"epochs": args.epochs, "block": args.block, "seed": args.seed,
          "replay_share": args.replay_share, "general_share": args.general_share,
          "corpus": [str(p) for p in args.corpus], "replay": [str(p) for p in args.replay],
-         "general": [str(p) for p in args.general], "tokens": totals}, indent=2) + "\n")
+         "general": [str(p) for p in args.general], "tokens": totals}, indent=2) + "\n",
+        encoding="utf-8")
     print(f"[memory-cpt] {len(rows):,} examples -> {data} ({time.monotonic() - t0:.0f} s)",
           flush=True)
     return 0
