@@ -58,7 +58,7 @@ if [ -n "$LAST" ]; then
     echo "=== last finished job: $(basename "$LAST" .summary.json) ==="
     $PY - "$LAST" <<'PY'
 import json, sys
-d = json.load(open(sys.argv[1]))
+d = json.load(open(sys.argv[1], encoding="utf-8"))
 print(f"  {d['elapsed_s'] / 3600:.1f} h on {d['host']}: {d['points']}")
 frac = d.get("assigned_fraction", {})
 print("  share of the job each GCD had a point: "
