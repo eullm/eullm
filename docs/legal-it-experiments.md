@@ -1263,3 +1263,25 @@ has no margin; the candidate stays the distilled one (`r2l-k50-g1-opd`).
 **The verified corpus, a preview** (116,456 rewrites checked by Gemma 4
 31B and GPT-OSS-120B, 2026-11-17): flagged by both 19%; paraphrase 4%,
 elements 11%, questions 14%, case 42%, explanation 77%.
+
+## 24. 2026-11-18: the teacher, not the style — Gemma 4 31B writes cases the checkers pass
+
+The same 200 articles of each style rewritten by bigger teachers
+(`teacher_pilot.py`), each judged by the two checkers that are not itself,
+beside Qwen3-30B-A3B's rows on the same articles under the same judges:
+
+| teacher | cases flagged | Qwen3-30B, same articles | explanations flagged | Qwen3-30B, same articles |
+|---|---:|---:|---:|---:|
+| **Gemma 4 31B** (Apache 2.0, 1 GPU) | **14/196, 7%** | 80/169, 47% | **11/190, 6%** | 127/180, 71% |
+| Qwen3.8-Flash-Next | 32/161, 20% | 70/169, 41% | 57/191, 30% | 141/180, 78% |
+| GPT-OSS-120B | 92/138, 67% | 110/183, 60% | 80/130, 62% | 152/185, 82% |
+
+The cases and explanations were wrong because of who wrote them: a model
+with 3B active parameters applying rules to facts. Gemma's are near the
+checkers' floor (the article's own text is flagged 0-2%), and three read by
+hand were right in law, if close to the text. GPT-OSS lost many answers to
+its reasoning (138 and 130 of 200 kept). Flash-Next is not needed, so its
+licence question does not arise for the corpus. Next: Gemma rewrites every
+case and explanation (`memory-gemma`, eight 1-GPU chains), checked after by
+Flash-Next and GPT-OSS; Qwen3.8-27B and Mistral Small 4 join the table when
+their rows are checked.
