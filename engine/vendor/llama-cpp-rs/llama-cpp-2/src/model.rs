@@ -380,6 +380,15 @@ impl LlamaModel {
             .unwrap_or(0)
     }
 
+    /// EuLLM addition: the sliding window of the model's local attention
+    /// layers, in tokens — 0 for a model without any (Gemma 2, 3 and 4 and
+    /// gpt-oss have them).
+    #[must_use]
+    pub fn n_swa(&self) -> u32 {
+        u32::try_from(unsafe { llama_cpp_sys_2::llama_model_n_swa(self.model.as_ptr()) })
+            .unwrap_or(0)
+    }
+
     /// Returns the number of layers within the model.
     pub fn n_layer(&self) -> u32 {
         // It's never possible for this to panic because while the API interface is defined as an int32_t,

@@ -619,7 +619,19 @@ pub(crate) fn build_ctx_params_with_cache(
         .with_n_threads(config.threads as i32)
         .with_n_threads_batch(config.threads as i32)
         .with_n_rs_seq(config.rs_seq)
-        .with_kv_unified(config.kv_unified);
+        .with_kv_unified(config.kv_unified)
+        // The sliding-window layers keep only their window, as llama-server
+        // does (`swa_full = false` in common's defaults). llama.cpp's own C
+        // default is the opposite, and it was ours by omission: Gemma 4 31B
+        // at `-c 49152` with 8 slots asked for 38,400 MiB for its 50 window
+        // layers alone, every one holding the whole context, and failed to
+        // allocate on a 64 GB A100 where llama-server ran (Leonardo,
+        // 19-11-2026). Kept to its window, each slot's is n_swa + n_ubatch
+        // cells: about 9,600 MiB. A slot can then go back to an earlier token
+        // only while its window still holds what precedes it: the scheduler
+        // checks (`prefill_setup`) and keeps checkpoints of the window to go
+        // back to (`StateCheckpoint`).
+        .with_swa_full(false);
 
     if config.moe_cache_bytes > 0 {
         params = params.with_moe_cache_size(config.moe_cache_bytes as usize);
