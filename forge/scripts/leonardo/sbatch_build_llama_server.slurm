@@ -45,7 +45,7 @@ source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 
 SRC="${LCPP_DIR:-$WORK/llama.cpp}"
 if [ "${LCPP_RPC:-0}" = 1 ]; then
-    BUILD="$SRC/build-cuda-rpc"; EXTRA="-DGGML_RPC=ON"; TARGETS="llama-server rpc-server"
+    BUILD="$SRC/build-cuda-rpc"; EXTRA="-DGGML_RPC=ON"; TARGETS="llama-server ggml-rpc-server"
 else
     BUILD="$SRC/build-cuda"; EXTRA=""; TARGETS="llama-server"
 fi
@@ -74,6 +74,15 @@ cmake --build "$BUILD" --config Release --target $TARGETS -j "${SLURM_CPUS_PER_T
 module -t list 2>&1 | grep -E "^(${MODULES// /|})(/|$)" > "$BUILD/modules.txt" ||
     echo "$MODULES" > "$BUILD/modules.txt"
 echo "[build] modules: $(tr '\n' ' ' < "$BUILD/modules.txt")"
+
+if [ "${LCPP_RPC:-0}" = 1 ]; then
+    # the target is ggml-rpc-server (tools/rpc, 2026-11); the job scripts call it rpc-server
+    [ -x "$BUILD/bin/rpc-server" ] || ln -sf "$(basename "$(ls "$BUILD"/bin/*rpc-server* | head -1)")" "$BUILD/bin/rpc-server"
+    [ -x "$BUILD/bin/rpc-server" ] || { echo "[build] no rpc-server in $BUILD/bin" >&2; exit 1; }
+    "$BUILD/bin/llama-server" --help 2>&1 | grep -q -- "--rpc" ||
+        { echo "[build] llama-server has no --rpc: the RPC backend is not in it" >&2; exit 1; }
+    echo "[build] ok: rpc-server and llama-server --rpc"
+fi
 
 "$BUILD/bin/llama-server" --list-devices 2>&1 | tail -5
 if "$BUILD/bin/llama-server" --list-devices 2>&1 | grep -q "CUDA0"; then
