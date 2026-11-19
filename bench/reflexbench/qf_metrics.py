@@ -74,12 +74,12 @@ THRESHOLDS = {
 #: Checks with no threshold to set.
 FIXED = {
     "beats_majority": "a model no more often right than one that gives every question its "
-                      "commonest answer has learnt nothing about the states",
+    "commonest answer has learnt nothing about the states",
     "gguf_temperature": "the temperature fitted on the model's dev split travels in its GGUF "
-                        "(eullm.decision.temperature) for the engine to apply by default; a "
-                        "server that applies another — an engine that does not read the key — "
-                        "serves, and was measured on, probabilities the fit did not calibrate: "
-                        "update the engine, or have every request send eullm.temperature",
+    "(eullm.decision.temperature) for the engine to apply by default; a "
+    "server that applies another — an engine that does not read the key — "
+    "serves, and was measured on, probabilities the fit did not calibrate: "
+    "update the engine, or have every request send eullm.temperature",
 }
 #: How far an applied temperature may be from the GGUF's float32 and still
 #: be it: an engine may read the key as text, printed to six decimals.
@@ -164,31 +164,54 @@ def summarize(records, serve_mode, reference_mode, modes):
         right = [argmax(r["modes"][serve_mode]["p"]) == r["right"] for r in served]
         n = len(rows)
         k = sum(right)
-        coverage = [r["modes"][serve_mode]["coverage"] for r in served
-                    if r["modes"][serve_mode].get("coverage") is not None]
+        coverage = [
+            r["modes"][serve_mode]["coverage"]
+            for r in served
+            if r["modes"][serve_mode].get("coverage") is not None
+        ]
         entry = {
             "answers": n,
             "refused": n - len(served),
             "accuracy": k / n,
             "accuracy_ci95": wilson(k, n),
             "majority_baseline": majority_baseline([(r["qid"], r["right"]) for r in rows]),
-            "ece": ece([(max(r["modes"][serve_mode]["p"]), ok) for r, ok in zip(served, right)]),
-            "nll": (statistics.mean(-math.log(max(r["modes"][serve_mode]["p"][r["right"]],
-                                                  1e-12)) for r in served)
-                    if served else None),
+            "ece": ece(
+                [
+                    (max(r["modes"][serve_mode]["p"]), ok)
+                    for r, ok in zip(served, right, strict=True)
+                ]
+            ),
+            "nll": (
+                statistics.mean(
+                    -math.log(max(r["modes"][serve_mode]["p"][r["right"]], 1e-12)) for r in served
+                )
+                if served
+                else None
+            ),
             "coverage": statistics.mean(coverage) if coverage else None,
             "modes": {},
         }
         for mode in modes:
             if mode == reference_mode:
                 continue
-            compared = [r for r in rows if r["modes"].get(mode) is not None
-                        and r["modes"].get(reference_mode) is not None]
-            deltas = [max(abs(a - b) for a, b in zip(r["modes"][mode]["p"],
-                                                      r["modes"][reference_mode]["p"]))
-                      for r in compared]
-            flips = sum(argmax(r["modes"][mode]["p"]) != argmax(r["modes"][reference_mode]["p"])
-                        for r in compared)
+            compared = [
+                r
+                for r in rows
+                if r["modes"].get(mode) is not None and r["modes"].get(reference_mode) is not None
+            ]
+            deltas = [
+                max(
+                    abs(a - b)
+                    for a, b in zip(
+                        r["modes"][mode]["p"], r["modes"][reference_mode]["p"], strict=True
+                    )
+                )
+                for r in compared
+            ]
+            flips = sum(
+                argmax(r["modes"][mode]["p"]) != argmax(r["modes"][reference_mode]["p"])
+                for r in compared
+            )
             entry["modes"][mode] = {
                 "compared": len(compared),
                 "max_delta": max(deltas) if deltas else None,
@@ -213,55 +236,100 @@ def checks(candidate, thresholds, current=None):
 
     def check(passed, name, scope, text):
         reason = THRESHOLDS[name][1] if name in THRESHOLDS else FIXED[name]
-        out.append({"passed": bool(passed), "check": name, "type": scope,
-                    "text": text, "reason": reason})
+        out.append(
+            {"passed": bool(passed), "check": name, "type": scope, "text": text, "reason": reason}
+        )
 
     for kind in KINDS:
         m = candidate["by_type"].get(kind)
         if not m:
             continue
-        check(m["answers"] >= t["min_answers"], "min_answers", kind,
-              f"{m['answers']} answers (at least {t['min_answers']})")
-        check(m["accuracy"] > m["majority_baseline"], "beats_majority", kind,
-              f"accuracy {m['accuracy']:.3f} against {m['majority_baseline']:.3f} for "
-              "the commonest answer every time")
+        check(
+            m["answers"] >= t["min_answers"],
+            "min_answers",
+            kind,
+            f"{m['answers']} answers (at least {t['min_answers']})",
+        )
+        check(
+            m["accuracy"] > m["majority_baseline"],
+            "beats_majority",
+            kind,
+            f"accuracy {m['accuracy']:.3f} against {m['majority_baseline']:.3f} for "
+            "the commonest answer every time",
+        )
         if m["ece"] is not None:
-            check(m["ece"] <= t["max_ece"], "max_ece", kind,
-                  f"ECE {m['ece']:.3f} (at most {t['max_ece']})")
+            check(
+                m["ece"] <= t["max_ece"],
+                "max_ece",
+                kind,
+                f"ECE {m['ece']:.3f} (at most {t['max_ece']})",
+            )
         if m["max_mode_delta"] is not None:
-            check(m["max_mode_delta"] <= t["max_mode_delta"], "max_mode_delta", kind,
-                  f"largest probability change between modes {m['max_mode_delta']:.3f} "
-                  f"(at most {t['max_mode_delta']})")
-            check(m["mode_flip_rate"] <= t["max_mode_flips"], "max_mode_flips", kind,
-                  f"answers changed by the mode {100 * m['mode_flip_rate']:.1f}% "
-                  f"(at most {100 * t['max_mode_flips']:.0f}%)")
+            check(
+                m["max_mode_delta"] <= t["max_mode_delta"],
+                "max_mode_delta",
+                kind,
+                f"largest probability change between modes {m['max_mode_delta']:.3f} "
+                f"(at most {t['max_mode_delta']})",
+            )
+            check(
+                m["mode_flip_rate"] <= t["max_mode_flips"],
+                "max_mode_flips",
+                kind,
+                f"answers changed by the mode {100 * m['mode_flip_rate']:.1f}% "
+                f"(at most {100 * t['max_mode_flips']:.0f}%)",
+            )
         if m["coverage"] is not None:
-            check(m["coverage"] >= t["min_coverage"], "min_coverage", kind,
-                  f"coverage {m['coverage']:.3f} (at least {t['min_coverage']})")
+            check(
+                m["coverage"] >= t["min_coverage"],
+                "min_coverage",
+                kind,
+                f"coverage {m['coverage']:.3f} (at least {t['min_coverage']})",
+            )
         if current and current["by_type"].get(kind):
             c = current["by_type"][kind]
-            check(m["accuracy"] >= c["accuracy"] - t["max_accuracy_drop"], "max_accuracy_drop",
-                  kind, f"accuracy {m['accuracy']:.3f} against {c['accuracy']:.3f} for the "
-                        f"current model (at most {t['max_accuracy_drop']} lower)")
+            check(
+                m["accuracy"] >= c["accuracy"] - t["max_accuracy_drop"],
+                "max_accuracy_drop",
+                kind,
+                f"accuracy {m['accuracy']:.3f} against {c['accuracy']:.3f} for the "
+                f"current model (at most {t['max_accuracy_drop']} lower)",
+            )
     carried = candidate.get("temperature_gguf")
     if carried is not None and candidate.get("temperature_asked") is None:
         # Asked for a temperature of its own, the server applies that one:
         # what the GGUF carries is then not what is measured, by choice.
         applied = candidate.get("temperatures_applied") or []
-        check(applied and all(math.isclose(t, carried, rel_tol=TEMPERATURE_TOLERANCE,
-                                           abs_tol=TEMPERATURE_TOLERANCE) for t in applied),
-              "gguf_temperature", "all",
-              f"temperature applied {', '.join(f'{t:.4g}' for t in applied) or 'not reported'}"
-              f", the GGUF carries {carried:.4g}")
+        check(
+            applied
+            and all(
+                math.isclose(
+                    t, carried, rel_tol=TEMPERATURE_TOLERANCE, abs_tol=TEMPERATURE_TOLERANCE
+                )
+                for t in applied
+            ),
+            "gguf_temperature",
+            "all",
+            f"temperature applied {', '.join(f'{t:.4g}' for t in applied) or 'not reported'}"
+            f", the GGUF carries {carried:.4g}",
+        )
     serve = candidate["serve_mode"]
     p95 = candidate["latency_ms"].get(serve, {}).get("p95")
     if t.get("max_p95_ms") is not None and p95 is not None:
-        check(p95 <= t["max_p95_ms"], "max_p95_ms", "all",
-              f"p95 {p95:.0f} ms in {serve} (at most {t['max_p95_ms']:.0f})")
+        check(
+            p95 <= t["max_p95_ms"],
+            "max_p95_ms",
+            "all",
+            f"p95 {p95:.0f} ms in {serve} (at most {t['max_p95_ms']:.0f})",
+        )
     if current:
         current_p95 = current["latency_ms"].get(serve, {}).get("p95")
         if p95 is not None and current_p95:
-            check(p95 <= current_p95 * t["max_latency_ratio"], "max_latency_ratio", "all",
-                  f"p95 {p95:.0f} ms against {current_p95:.0f} ms for the current model "
-                  f"(at most {t['max_latency_ratio']}x)")
+            check(
+                p95 <= current_p95 * t["max_latency_ratio"],
+                "max_latency_ratio",
+                "all",
+                f"p95 {p95:.0f} ms against {current_p95:.0f} ms for the current model "
+                f"(at most {t['max_latency_ratio']}x)",
+            )
     return out
