@@ -71,13 +71,15 @@ class EmbedMax:
         missing = [p for p in dict.fromkeys(case.passages) if p not in self.seen]
         for start in range(0, len(missing), 32):
             batch = missing[start : start + 32]
-            for text, vector in zip(batch, self.embeddings.embed(batch)):
+            for text, vector in zip(batch, self.embeddings.embed(batch), strict=True):
                 self.seen[text] = unit(vector)
         started = time.perf_counter()
         prefix = self.embeddings.query_prefix
         query = unit(self.embeddings.embed([prefix + case.question])[0])
         ms = (time.perf_counter() - started) * 1000
-        best = max(sum(a * b for a, b in zip(query, self.seen[p])) for p in case.passages)
+        best = max(
+            sum(a * b for a, b in zip(query, self.seen[p], strict=True)) for p in case.passages
+        )
         return Decision(best, ms=ms)
 
 
