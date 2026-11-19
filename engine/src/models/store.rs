@@ -329,16 +329,18 @@ pub struct ProjectorAsk {
 /// Whether a model loads with the projector found for it, and the line that
 /// says why not.
 ///
-/// A model with a projector is loaded on the sequential engine, one request
-/// at a time, since the continuous-batching scheduler does not route images.
-/// Two things are worth more than the images to some users, and each gives a
-/// reason to leave the projector on disk:
+/// A model with a projector reads images into its own sequence of the
+/// scheduler, and does not draft with `--mtp`; before 19-11-2026 it was
+/// served by the sequential engine, one request at a time. Two things are
+/// worth more than the images to some users, and each gives a reason to leave
+/// the projector on disk:
 ///
-/// * `--no-mmproj` (`refused`): a multimodal model used for text alone. On
-///   Leonardo (19-11-2026), Gemma 4 31B with its projector beside the
-///   weights served 200 text requests one at a time with `--batch-size 8`:
-///   20 answered in 25 minutes, where llama-server answered 198 in 6.5. Any
-///   projector goes, named or found, and requests with images are refused.
+/// * `--no-mmproj` (`refused`): a multimodal model used for text alone, which
+///   needs neither the projector's memory nor the micro-batch an image takes.
+///   Any projector goes, named or found, and requests with images are
+///   refused. It was first the way out of the sequential engine: on Leonardo
+///   (19-11-2026), Gemma 4 31B with its projector beside the weights served
+///   200 text requests one at a time with `--batch-size 8`.
 /// * `--mtp` on one slot (`drafts`): only the scheduler's single slot
 ///   drafts, so `--mtp` on such a model did nothing and said nothing, the
 ///   banner reading "MTP drafts" all the same: unsloth's Qwen3.5 and Qwen3.6
@@ -372,7 +374,7 @@ pub fn choose_projector(
         Some(p) if ask.drafts => (
             Some(p),
             Some(format!(
-                "--mtp: {model} loads with --mmproj on the sequential engine, which does not \
+                "--mtp: {model} loads with --mmproj, and a model reading images does not \
                  draft: --mtp does nothing for it"
             )),
         ),

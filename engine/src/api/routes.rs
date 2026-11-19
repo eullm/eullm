@@ -1002,11 +1002,11 @@ fn with_media_markers(
 /// the picture and without anything said before it.
 #[cfg(feature = "multimodal")]
 fn multimodal_chat_prompt(
-    engine: &InferenceEngine,
+    rendered: Option<crate::inference::DynamicChatTemplate>,
     messages: &[(&str, &str)],
     think: bool,
 ) -> (String, Vec<String>, String) {
-    if let Some(dynamic) = engine.apply_jinja_chat_template(messages, think) {
+    if let Some(dynamic) = rendered {
         return (dynamic.prompt, Vec::new(), dynamic.preopened);
     }
     let gemma = crate::chat_template::ChatTemplate::Gemma;
@@ -1015,6 +1015,14 @@ fn multimodal_chat_prompt(
         gemma.stop_sequences(),
         String::new(),
     )
+}
+
+/// Who reads a request's images and audio (`chat_with`): the scheduler, or
+/// the sequential engine (`--batch-size 0`).
+#[cfg_attr(not(feature = "multimodal"), allow(dead_code))]
+enum MediaReader {
+    Engine(Arc<InferenceEngine>),
+    Scheduler(crate::inference::scheduler::SchedulerHandle),
 }
 
 /// Background mtmd-aware generation, mirroring `sequential_to_channel`.
@@ -2611,11 +2619,19 @@ async fn chat_with(
     // the conversation with each attachment replaced by a note.
     let media = collect_chat_media(&messages)
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))))?;
-    let projector = snap
-        .engine
-        .as_ref()
-        .filter(|engine| !media.items.is_empty() && engine.has_projector())
-        .map(Arc::clone);
+    // Who reads the attachments: the scheduler, which reads them into the
+    // request's own sequence beside the others' (`scheduler::SchedMedia`),
+    // or the sequential engine (`--batch-size 0`).
+    let projector = if media.items.is_empty() {
+        None
+    } else if let Some(sched) = snap.scheduler.as_ref().filter(|s| s.has_projector()) {
+        Some(MediaReader::Scheduler(sched.clone()))
+    } else {
+        snap.engine
+            .as_ref()
+            .filter(|engine| engine.has_projector())
+            .map(|engine| MediaReader::Engine(Arc::clone(engine)))
+    };
     let messages = if media.items.is_empty() || projector.is_some() {
         messages
     } else if media.current_turn > 0 {
@@ -2630,7 +2646,7 @@ async fn chat_with(
     };
 
     #[cfg(feature = "multimodal")]
-    if let Some(engine) = projector {
+    if let Some(reader) = projector {
         let sp = parse_generate_params(&body);
         // Parsed here rather than reused from the text path below: the
         // multimodal branch returns before that code runs.
@@ -2644,7 +2660,11 @@ async fn chat_with(
             .iter()
             .map(|(role, content)| (role.as_str(), content.as_str()))
             .collect();
-        let (mm_prompt, mm_stops, mm_prefix) = multimodal_chat_prompt(&engine, &pairs, mm_think);
+        let rendered = match &reader {
+            MediaReader::Engine(engine) => engine.apply_jinja_chat_template(&pairs, mm_think),
+            MediaReader::Scheduler(sched) => sched.apply_jinja_chat_template(&pairs, mm_think),
+        };
+        let (mm_prompt, mm_stops, mm_prefix) = multimodal_chat_prompt(rendered, &pairs, mm_think);
         let mm_request = GenerateRequest {
             prompt: mm_prompt,
             max_tokens: sp.max_tokens,
@@ -2669,9 +2689,16 @@ async fn chat_with(
             cache_prompt: sp.cache_prompt,
             response_prefix: mm_prefix,
         };
+        let rx = match reader {
+            MediaReader::Engine(engine) => {
+                multimodal_to_channel(engine, mm_request, media.items, media.current_turn)
+            }
+            MediaReader::Scheduler(sched) => {
+                sched.try_submit_media(mm_request, media.items, media.current_turn)?
+            }
+        };
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
         if is_streaming(&body) {
-            let rx = multimodal_to_channel(engine, mm_request, media.items, media.current_turn);
-            let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
             return Ok(ndjson_stream_response(
                 rx,
                 model,
@@ -2682,8 +2709,6 @@ async fn chat_with(
                 split_thinking,
             ));
         }
-        let rx = multimodal_to_channel(engine, mm_request, media.items, media.current_turn);
-        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
         let Collected {
             text,
             tokens_generated,

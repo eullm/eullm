@@ -94,6 +94,27 @@ impl Default for SchedulerConfig {
 pub(crate) struct ScheduledRequest {
     pub request: GenerateRequest,
     pub tx: mpsc::Sender<StreamEvent>,
+    /// Its images and audio, for a model loaded with its projector: see
+    /// [`SchedMedia`].
+    pub media: Option<SchedMedia>,
+}
+
+/// The attachments of a multimodal request: their bytes, oldest first, one
+/// per media marker in the prompt, and how many of the newest are the
+/// current turn's, never dropped to make room (`pinned`, see
+/// `super::prepare_media_prompt`).
+///
+/// Read whole into the request's own sequence when it is taken
+/// (`admit_media`), as llama-server reads an image into its slot: the other
+/// sequences wait for that one step, then decode beside it. Until
+/// 19-11-2026 a model with a projector was served by the sequential engine
+/// alone, one request at a time, text requests included: on Leonardo, Gemma 4
+/// 31B with 8 slots answered 20 of 200 text requests in 25 minutes, where
+/// llama-server answered 198 in 6.5.
+#[cfg_attr(not(feature = "multimodal"), allow(dead_code))]
+pub(crate) struct SchedMedia {
+    pub items: Vec<Vec<u8>>,
+    pub pinned: usize,
 }
 
 /// State for a single active sequence being decoded.
@@ -153,6 +174,9 @@ struct ActiveSequence {
     /// How long reading the prompt took, from `start`; the answer's own time
     /// is what follows it. Set when the prefill succeeds.
     prompt_time: std::time::Duration,
+    /// Its prompt carried images or audio (`admit_media`): its memory holds
+    /// positions no token stands for, so it is never offered for reuse.
+    media: bool,
 }
 
 /// A prompt read a chunk at a time, when there is more than one slot: in the
@@ -619,9 +643,18 @@ pub struct SchedulerHandle {
     /// (`SchedulerHandle::gate`).
     #[cfg_attr(not(test), allow(dead_code))]
     gate: Arc<std::sync::Mutex<()>>,
+    /// The model was loaded with its projector: requests with images or
+    /// audio can be queued (`try_submit_media`).
+    projector: bool,
 }
 
 impl SchedulerHandle {
+    /// Whether the model was loaded with its projector, and so reads the
+    /// images and audio a request carries.
+    pub fn has_projector(&self) -> bool {
+        self.projector
+    }
+
     /// Shut down the scheduler and wait for the thread to exit.
     ///
     /// Sets the shutdown flag, wakes the thread, and joins it to
@@ -688,8 +721,35 @@ impl SchedulerHandle {
         &self,
         request: GenerateRequest,
     ) -> Result<mpsc::Receiver<StreamEvent>, NotQueued> {
+        self.enqueue(request, None)
+    }
+
+    /// [`Self::try_submit`] for a request with images or audio: `media` oldest
+    /// first, one per media marker in the prompt, the newest `pinned` the
+    /// current turn's (see [`SchedMedia`]). Only for a model loaded with its
+    /// projector ([`Self::has_projector`]).
+    pub fn try_submit_media(
+        &self,
+        request: GenerateRequest,
+        media: Vec<Vec<u8>>,
+        pinned: usize,
+    ) -> Result<mpsc::Receiver<StreamEvent>, NotQueued> {
+        self.enqueue(
+            request,
+            Some(SchedMedia {
+                items: media,
+                pinned,
+            }),
+        )
+    }
+
+    fn enqueue(
+        &self,
+        request: GenerateRequest,
+        media: Option<SchedMedia>,
+    ) -> Result<mpsc::Receiver<StreamEvent>, NotQueued> {
         let (tx, rx) = mpsc::channel::<StreamEvent>(256);
-        match self.tx.try_send(ScheduledRequest { request, tx }) {
+        match self.tx.try_send(ScheduledRequest { request, tx, media }) {
             Ok(()) => {
                 // Wake up the scheduler thread.
                 let _lock = self.notify_mutex.lock().unwrap();
@@ -734,6 +794,7 @@ impl SchedulerHandle {
             shutdown: Arc::new(AtomicBool::new(false)),
             thread: Arc::new(std::sync::Mutex::new(None)),
             gate: Arc::new(std::sync::Mutex::new(())),
+            projector: false,
         };
         (handle, rx)
     }
@@ -848,6 +909,9 @@ impl BatchScheduler {
 
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
+        // The loop fails to start rather than run without a projector it
+        // was given (`super::InferenceEngine::init_mtmd_optional`).
+        let projector = cfg!(feature = "multimodal") && self.config.mmproj_path.is_some();
 
         let join_handle = std::thread::Builder::new()
             .name("eullm-scheduler".into())
@@ -904,6 +968,7 @@ impl BatchScheduler {
                 shutdown,
                 thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
                 gate,
+                projector,
             },
             model_info,
         ))
@@ -1134,6 +1199,18 @@ fn finish_sequence_clean(
     checkpoints: &mut Vec<PromptCheckpoint>,
     sched_config: &SchedulerConfig,
 ) {
+    // An image's positions have no tokens: a later prompt could match the
+    // text around them and read on from an image it never sent. The slot
+    // goes back empty, and the next request to take it clears it.
+    if seq.media {
+        idle_slots.push(CachedSlot {
+            seq_id: seq.seq_id,
+            tokens: Vec::new(),
+            text: String::new(),
+            last_used: std::time::Instant::now(),
+        });
+        return;
+    }
     let tokens = resident_tokens(seq);
 
     if sched_config.ctx_checkpoints > 0 && !tokens.is_empty() {
@@ -1354,6 +1431,145 @@ fn fall_back_from_reuse(
 
     tracing::warn!("Seq {seq_id}: retrying prefill with reuse_len={effective_reuse_len}");
     effective_reuse_len
+}
+
+/// A request with images or audio, taken by the decode loop: its prompt and
+/// attachments read whole into the least recently used idle slot, with
+/// mtmd's `eval_chunks` (text through the model, images through the
+/// projector and then the model), as llama-server reads an image into its
+/// slot. The sequences already answering wait for that, then decode beside
+/// it. Returns the sequence, with its first token, if it goes on; an error
+/// goes to the client and the slot back to the idle ones.
+///
+/// Nothing is reused from the slot, and nothing is kept for reuse when the
+/// answer is over (`ActiveSequence::media`). A media chunk is decoded whole,
+/// and a vision encoder's attention is not causal, so llama.cpp needs it in
+/// one micro-batch: an image larger than the context's is refused, as
+/// decoding it would abort the process.
+#[cfg(feature = "multimodal")]
+#[allow(clippy::too_many_arguments)]
+fn admit_media(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext,
+    mtmd: &mut llama_cpp_2::mtmd::MtmdContext,
+    scheduled: ScheduledRequest,
+    media: SchedMedia,
+    per_seq_ctx: u32,
+    idle_slots: &mut Vec<CachedSlot>,
+    states: &mut StateCheckpoints,
+    checkpoints: &mut Vec<PromptCheckpoint>,
+    sched_config: &SchedulerConfig,
+) -> Option<ActiveSequence> {
+    let start = std::time::Instant::now();
+    let ScheduledRequest { request, tx, .. } = scheduled;
+    if idle_slots.is_empty() {
+        let _ = tx.try_send(StreamEvent::Error("No free slot for the request".into()));
+        return None;
+    }
+    let (seq_id, _) = pick_slot(idle_slots, &[]);
+    let _ = ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None);
+    if let Some(kept) = states.get_mut(seq_id as usize) {
+        kept.clear();
+    }
+    let refuse = |message: String, ctx: &mut LlamaContext, idle_slots: &mut Vec<CachedSlot>| {
+        let _ = tx.try_send(StreamEvent::Error(message));
+        finish_wiped(ctx, seq_id, idle_slots);
+    };
+
+    let effective_ctx = request
+        .num_ctx
+        .map_or(per_seq_ctx, |n| n.min(per_seq_ctx));
+    let budget = effective_ctx.saturating_sub(super::reply_reserve(request.max_tokens, effective_ctx));
+    let prepared = match super::prepare_media_prompt(
+        mtmd,
+        model,
+        &request.prompt,
+        &media.items,
+        media.pinned,
+        budget,
+    ) {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            refuse(e, ctx, idle_slots);
+            return None;
+        }
+    };
+    let tokens_prompt = prepared.chunks.total_tokens() as u32;
+    if tokens_prompt >= effective_ctx {
+        refuse(
+            format!(
+                "Multimodal prompt ({tokens_prompt} tokens) does not fit in context window \
+                 ({effective_ctx})"
+            ),
+            ctx,
+            idle_slots,
+        );
+        return None;
+    }
+    let n_ubatch = ctx.n_ubatch();
+    if prepared.max_media_tokens > n_ubatch {
+        refuse(
+            format!(
+                "this image encodes to {} tokens, past the {n_ubatch} the server reads in one \
+                 micro-batch. Send a smaller image, lower the encoder's resolution with \
+                 EULLM_IMAGE_MAX_TOKENS, or start the server with a larger --n-ubatch.",
+                prepared.max_media_tokens
+            ),
+            ctx,
+            idle_slots,
+        );
+        return None;
+    }
+    let n_past = match prepared
+        .chunks
+        .eval_chunks(mtmd, ctx, 0, seq_id, n_ubatch as i32, true)
+    {
+        Ok(n_past) => n_past,
+        Err(e) => {
+            refuse(format!("mtmd eval_chunks failed: {e:?}"), ctx, idle_slots);
+            return None;
+        }
+    };
+    let max_tokens = request.max_tokens.min(effective_ctx - tokens_prompt);
+    tracing::info!(
+        "Seq {seq_id}: multimodal prompt, media={} ({}), dropped={}, prompt_tokens={tokens_prompt}, \
+         max_output={max_tokens}, effective_ctx={effective_ctx}",
+        media.items.len() - prepared.dropped,
+        match (prepared.has_image, prepared.has_audio) {
+            (true, true) => "image+audio",
+            (false, true) => "audio",
+            _ => "image",
+        },
+        prepared.dropped,
+    );
+
+    let seq = ActiveSequence {
+        seq_id,
+        tx,
+        sampler: super::sampling::build_sampler(model, &request, seq_id as u32),
+        decoder: encoding_rs::UTF_8.new_decoder(),
+        pending: request.response_prefix.clone(),
+        tokens_prompt,
+        tokens_generated: 0,
+        max_tokens,
+        n_past,
+        stop_sequences: request.stop_sequences.clone(),
+        filter_sequences: request.filter_sequences.clone(),
+        start,
+        prefilled: true,
+        last_token: None,
+        prompt_tokens: Vec::new(),
+        generated_tokens: Vec::new(),
+        prompt_text: String::new(),
+        raw_generated_pieces: Vec::new(),
+        mtp_drafted: 0,
+        mtp_accepted: 0,
+        prompt_time: start.elapsed(),
+        media: true,
+    };
+    // The last decode was `eval_chunks`' own, of the prompt's last token,
+    // with its logits: the answer's first token is sampled from them.
+    begin_generation(model, ctx, seq, -1, idle_slots, checkpoints, sched_config)
 }
 
 /// The answer's first token, sampled from the logits of the prompt's last
@@ -1839,6 +2055,23 @@ fn run_scheduler_loop(
         (false, _) => model.n_layer_nextn(),
     };
 
+    // The projector, when the model was loaded with one: requests with images
+    // or audio are read in this thread, into their own sequence of this
+    // context (`admit_media`). A projector that will not load fails the load,
+    // as on the sequential engine: whoever gave it wants images read.
+    #[cfg(feature = "multimodal")]
+    let mut mtmd = match super::InferenceEngine::init_mtmd_optional(&config, model) {
+        Ok(mtmd) => mtmd,
+        Err(e) => {
+            let msg = e.to_string();
+            let _ = ready_tx.send(Err(msg.clone()));
+            return Err(msg.into());
+        }
+    };
+    #[cfg(not(feature = "multimodal"))]
+    let mtmd: Option<()> = None;
+    let reads_media = mtmd.is_some();
+
     // Use context_size as the TOTAL KV cache budget, shared across all
     // sequences (matching Ollama / llama.cpp server behaviour).  Previous
     // code multiplied context_size × max_batch_size, which easily overflowed
@@ -1884,7 +2117,7 @@ fn run_scheduler_loop(
     // with logits, and may take back up to `mtp_draft` positions: the
     // recurrent rollback window of a hybrid model is raised to that, as
     // llama-server does (`need_n_rs_seq`).
-    let (mtp_draft, mtp_off) = mtp_drafts(
+    let (mut mtp_draft, mtp_off) = mtp_drafts(
         config.mtp,
         sched_config.max_batch_size,
         mtp_layers,
@@ -1892,7 +2125,27 @@ fn run_scheduler_loop(
     if let Some(reason) = mtp_off {
         tracing::warn!("{reason}");
     }
+    // An image read into the sequence is not read by the MTP head, whose
+    // drafts would then guess from a prompt it never saw: a model loaded
+    // with its projector does not draft (`models::store::choose_projector`
+    // leaves a projector found for it on disk when --mtp asks for drafts).
+    if mtp_draft > 0 && reads_media {
+        tracing::warn!("--mtp: a model loaded with its projector does not draft");
+        mtp_draft = 0;
+    }
     let mut config = config;
+    // An image is decoded whole, in one micro-batch: with a projector, the
+    // context's is at least what the sequential engine sizes one by
+    // (`multimodal_batch_size`: 512, or EULLM_IMAGE_MAX_TOKENS).
+    if reads_media && config.text_ubatch() < super::multimodal_batch_size() {
+        let floor = super::multimodal_batch_size();
+        tracing::info!(
+            "Projector: reading prompts {floor} tokens at a time (--n-ubatch), the most an \
+             image may take"
+        );
+        config.n_ubatch = floor;
+        config.n_batch = config.n_batch.max(floor);
+    }
     if mtp_draft > 0 {
         config.rs_seq = config.rs_seq.max(mtp_draft);
         tracing::info!("MTP: the model's MTP head drafts up to {mtp_draft} tokens per step");
@@ -2147,7 +2400,36 @@ fn run_scheduler_loop(
         // ── 1. Drain new requests from the queue ────────────────────────
         while active.len() + prefilling.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
-                Ok(scheduled) => {
+                Ok(mut scheduled) => {
+                    // Images or audio: read whole, into a sequence of their
+                    // own, now (`admit_media`).
+                    if let Some(media) = scheduled.media.take() {
+                        #[cfg(feature = "multimodal")]
+                        if let Some(mtmd) = mtmd.as_mut() {
+                            if let Some(seq) = admit_media(
+                                model,
+                                &mut ctx,
+                                mtmd,
+                                scheduled,
+                                media,
+                                per_seq_ctx,
+                                &mut idle_slots,
+                                &mut states,
+                                &mut checkpoints,
+                                &sched_config,
+                            ) {
+                                active.push(seq);
+                            }
+                            continue;
+                        }
+                        drop(media);
+                        let _ = scheduled.tx.try_send(StreamEvent::Error(
+                            "This model was loaded without a projector: it cannot read images \
+                             or audio"
+                                .into(),
+                        ));
+                        continue;
+                    }
                     let prompt_text = scheduled.request.prompt.clone();
 
                     // Fast path: if some idle slot's cached text is an exact
@@ -2265,6 +2547,7 @@ fn run_scheduler_loop(
                         mtp_drafted: 0,
                         mtp_accepted: 0,
                         prompt_time: std::time::Duration::ZERO,
+                        media: false,
                     };
 
                     // Prefill the unreused suffix of the prompt into the context.

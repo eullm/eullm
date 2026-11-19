@@ -443,8 +443,9 @@ impl AppState {
         }
         // Resolve an mmproj sibling (vision projector) if the model store
         // declares one. Presence of a projector is the signal that this is
-        // a multimodal model — we then force sequential loading (next step)
-        // because the continuous-batching scheduler is text-only.
+        // a multimodal model, which reads images into its own scheduler slot
+        // (`scheduler::SchedMedia`; the sequential engine with
+        // `--batch-size 0`).
         // A projector beside the weights counts too: that is how every
         // HuggingFace vision repo is laid out, and a model resolved from a
         // path has no store entry to declare one. `--mmproj` is the last
@@ -543,14 +544,9 @@ impl AppState {
         let ram_total = crate::fit::system_ram_bytes();
         // Laid out as this load will lay out its KV cache: what the
         // sliding-window layers of a Gemma take depends on it
-        // (`fit::SlidingWindow`). A model with a projector loads on the
-        // sequential engine, one sequence.
+        // (`fit::SlidingWindow`).
         let kv_layout = crate::fit::KvLayout::new(
-            if mmproj_path.is_some() {
-                0
-            } else {
-                override_batch_size.unwrap_or(self.batch_size)
-            },
+            override_batch_size.unwrap_or(self.batch_size),
             self.n_ubatch.unwrap_or(crate::inference::DEFAULT_N_UBATCH),
             self.kv_unified,
         );
@@ -820,16 +816,13 @@ impl AppState {
                 tracing::info!("{}", mmproj_placement.describe());
             }
 
-            // The continuous-batching scheduler is text-only — it does not
-            // route mtmd chunks. For multimodal models we therefore force the
-            // sequential `InferenceEngine` (batch_size=0). Vision is
-            // interactive single-user anyway, so losing batching here is not
-            // a practical regression.
-            let batch_size = if mmproj_path.is_some() {
-                0
-            } else {
-                override_batch_size.unwrap_or(self.batch_size)
-            };
+            // A model with a projector runs on the scheduler too, which reads
+            // a request's images into its own sequence (`scheduler::SchedMedia`).
+            // It was forced onto the sequential engine until 19-11-2026, on
+            // the grounds that vision is one user at a time: a multimodal
+            // model used for text alone was then served one request at a
+            // time, whatever --batch-size said.
+            let batch_size = override_batch_size.unwrap_or(self.batch_size);
             let ctx_checkpoints_for_swap = self.ctx_checkpoints;
             let checkpoint_min_step_for_swap = self.checkpoint_min_step;
             let rust_debug_for_swap = self.rust_debug;
