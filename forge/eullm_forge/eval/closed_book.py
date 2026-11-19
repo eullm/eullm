@@ -166,7 +166,7 @@ def build_suite(records: list[dict], per_kind: int = 15, n_rulings: int = 40,
             add("termine", code, a.number, Q_TERMINE.format(n=a.number, of=of),
                 _flat(a.text), [_deadline_keyword(n, unit)])
         punished = [(a, p) for a in live if defines_offence(a.text) and (p := penalty_of(a.text))]
-        for a, (kind_, lo, lo_unit, hi, unit, sentence, comma) in draw(punished):
+        for a, (_, lo, lo_unit, hi, unit, sentence, comma) in draw(punished):
             add("pena", code, a.number, Q_PENA.format(n=a.number, of=of, comma=comma),
                 sentence, [f"{hi} {unit}"], high=[hi, unit], low=[lo, lo_unit])
         regimes = [(a, r) for a in live
