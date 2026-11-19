@@ -1217,6 +1217,26 @@ chain of 2 jobs of 4 hours, 23812860 and 23812861. The same split for dense
 models (each GPU's own reserve and compute buffer, the output layer on the
 last) waits for this result.
 
+19-11-2026, 10:47: the queue empty since the morning (nothing queued on 18-11,
+no session that day); the `v090-long` soaks all done, none failed
+(`dsv4-soak-long` 4, `moe-soak` 3, `soak-node` 3, `moe-235b-soak-x2` 1).
+2,345 node-hours left, 432 ahead of the straight line (17.2 days).
+`r-splitfix`: 17 points of 18 done. Five of the six two-GCD points that had
+failed on every binary load now: DeepSeek-V4-Flash's three (`--fit: 2 GPUs,
+layers 27/16`) and two of GLM-5.3-Flash's (`layers 32/14`, the experts of 19
+layers in RAM instead of 18). At four and eight GCDs nothing changed
+(`compare`: `dsv4-gcds` 1.00, 0.95-1.06; `glm-gcds` 1.00, 0.99-1.01). The
+sixth, GLM at 32 requests, split as meant, then its context asked 2,795.76
+MiB of compute buffer of the first GCD, where the split had kept 1,472 MiB
+and the 1 GiB reserve: `fit::per_device_reserve` now counts the growth of a
+2,048-token micro-batch twice for each GPU of a split (2,624 MiB beside the
+reserve). Both fixes were on `main` by then (54e3211).
+Queued the same morning: this branch (`main` and that change) built in its
+own worktree, label `v090f`, round `r-v090f`, the campaigns of `r-v090` with
+`c19` (without `b13-trace`) and the same points set aside, two chains of
+4-hour jobs; behind them by dependency, under `v090f-long`, the soaks no
+4-hour job holds, once more on the binary the next release is made from.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
