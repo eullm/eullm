@@ -5,7 +5,8 @@ First off, thanks for considering contributing to EULLM. Every contribution matt
 ## Quick start
 
 ```bash
-git clone https://github.com/eullm/eullm.git && cd eullm
+# --recursive is required: llama.cpp is a submodule
+git clone --recursive https://github.com/eullm/eullm.git && cd eullm
 
 # Engine (Rust)
 cargo build --release
