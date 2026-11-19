@@ -24,7 +24,7 @@
 # 20:37 started between 06:05 and 06:54 (forge/CLAUDE.md, rule 1).
 #
 # Settable:
-#   RR_TEACHER  first part of the teacher GGUF (required)
+#   RR_TEACHER  first part of the teacher GGUF, or a pattern for it (required)
 #   RR_OUT      rewrites JSONL (required)
 #   RR_ARGS     more law_rewrites.py options (--styles, --limit, --teacher, ...)
 #   RR_PARALLEL requests in flight (default 8)
@@ -56,7 +56,9 @@ fi
 # shellcheck disable=SC1091
 source "$REPO/forge/scripts/leonardo/env.sh"
 
-TEACHER="${RR_TEACHER:-}"
+# a pattern is taken as it is meant ("...-00001-of-*.gguf"): the part count of
+# a split GGUF is not known before the download ends
+TEACHER="$(compgen -G "${RR_TEACHER:-}" | sort | head -1)"
 OUT="${RR_OUT:-}"
 BIN="${LCPP_RPC_BIN:-$LCPP_DIR/build-cuda-rpc/bin}"
 PARALLEL="${RR_PARALLEL:-8}"
