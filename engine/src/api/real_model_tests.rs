@@ -24,6 +24,14 @@
 //!     cargo test -p eullm-engine -- --ignored real_model_a_hybrid --test-threads=1
 //! ```
 //!
+//! The sliding-window test needs a model with local attention layers, such
+//! as Gemma 3 270M (a few seconds on four CPU cores):
+//!
+//! ```text
+//! EULLM_SWA_TEST_MODEL=/path/to/gemma-3-270m-it-Q8_0.gguf \
+//!     cargo test -p eullm-engine -- --ignored real_model_a_sliding --test-threads=1
+//! ```
+//!
 //! The reasoning test needs a model whose chat template opens the reasoning
 //! block at the end of the prompt, such as Spark-X2.5-1.7B (about a minute
 //! on four CPU cores):
@@ -65,6 +73,14 @@ fn mtp_test_model() -> PathBuf {
 fn hybrid_test_model() -> PathBuf {
     std::env::var("EULLM_HYBRID_TEST_MODEL")
         .expect("set EULLM_HYBRID_TEST_MODEL to a hybrid GGUF, such as Qwen3.5-0.8B")
+        .into()
+}
+
+/// The GGUF the sliding-window test runs on: one with local attention
+/// layers, such as Gemma 3 270M (a window of 512 tokens).
+fn swa_test_model() -> PathBuf {
+    std::env::var("EULLM_SWA_TEST_MODEL")
+        .expect("set EULLM_SWA_TEST_MODEL to a GGUF with a sliding window, such as Gemma 3 270M")
         .into()
 }
 
@@ -1716,6 +1732,114 @@ async fn real_model_a_hybrid_models_next_turn_restores_its_kept_state() {
             next_ns * 4 < whole_ns,
             "{slots} slots: the next turn read its prompt in {next_ns} ns, the whole one in \
              {whole_ns} ns: the kept state was not restored"
+        );
+    }
+}
+
+/// `--no-mmproj`: a model with a projector beside its weights loads on the
+/// scheduler with every slot asked for, answers text, and refuses a request
+/// with an image, saying why. Without it, the projector would have sent the
+/// model to the sequential engine, one request at a time: on Leonardo, Gemma 4
+/// 31B with `--batch-size 8` answered 20 of 200 text requests in 25 minutes.
+/// The projector here is not a projector at all, which is the point: it is
+/// never opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a GGUF model in EULLM_GENERATION_TEST_MODEL"]
+async fn real_model_no_mmproj_serves_a_model_with_a_projector_in_batches() {
+    let server = start(&["tiny-mm"], |state| {
+        state.no_mmproj = true;
+        state.batch_size = 4;
+    })
+    .await;
+    std::fs::write(server.dir.join("tiny-mm").join("mmproj-F16.gguf"), b"GGUF").unwrap();
+
+    let (status, lines) = server
+        .generate(json!({
+            "model": "tiny-mm", "prompt": "Once upon a time", "stream": false,
+            "options": { "num_predict": 8 },
+        }))
+        .await;
+    assert_eq!(status, 200, "{lines:?}");
+    assert_finished(&lines);
+    {
+        let models = server.state.models.read().await;
+        let model = models.find("tiny-mm").expect("loaded");
+        assert!(model.scheduler.is_some(), "on the scheduler");
+        assert!(model.engine.is_none(), "not on the sequential engine");
+        assert_eq!(model.facts.batch_size, 4);
+    }
+
+    let (status, objects) = server
+        .post(
+            "/api/chat",
+            json!({
+                "model": "tiny-mm", "stream": false,
+                "messages": [{ "role": "user", "content": "what is this?",
+                               "images": ["/9j/4AAQSkZJRg=="] }],
+            }),
+        )
+        .await;
+    assert_eq!(status, 503, "{objects:?}");
+    let error = objects[0]["error"].as_str().expect("an error");
+    assert!(error.contains("--no-mmproj"), "{error}");
+}
+
+/// A conversation's next turn on a model with sliding-window layers (Gemma),
+/// whose window keeps only its last n_swa + n_ubatch tokens per slot. The
+/// first turn's answer runs long enough that the window no longer reaches
+/// back to where the next prompt parts from it, 4 tokens before the first
+/// prompt's end: read on from there, the next prompt's first token would miss
+/// what it must see, and answer as if it had never been said. The window kept
+/// at that point (`StateCheckpoint`) is restored instead, and the answer must
+/// be the one the whole prompt read from the start gets, with one slot and
+/// with two; and reading it must take a fraction of reading it whole, or
+/// nothing was restored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a GGUF with a sliding window in EULLM_SWA_TEST_MODEL"]
+async fn real_model_a_sliding_window_models_next_turn_restores_its_window() {
+    let configure = |slots: usize| {
+        move |state: &mut AppState| {
+            state.ctx_size = 4096 * slots as u32;
+            state.batch_size = slots;
+            state.n_batch = 128;
+            state.n_ubatch = Some(32);
+        }
+    };
+    let ask = |prompt: &str, cache_prompt: bool, num_predict: u32| {
+        json!({
+            "model": "swa", "prompt": prompt, "raw": true, "stream": false,
+            "cache_prompt": cache_prompt,
+            "options": { "temperature": 0, "seed": 1, "num_predict": num_predict },
+        })
+    };
+    let base = "The harbour office kept a ledger of every ship that entered the bay, \
+                with the hour, the cargo and the weather at the mouth of the river."
+        .repeat(30);
+    let first = format!("{base} alpha beta gamma delta");
+    let second = format!("{base} one two three four five six seven");
+
+    let fresh = start_on(&swa_test_model(), &["swa"], configure(1)).await;
+    let (status, whole) = fresh.generate(ask(&second, false, 16)).await;
+    assert_eq!(status, 200, "{whole:?}");
+    assert_finished(&whole);
+    let whole_ns = whole.last().unwrap()["prompt_eval_duration"].as_u64().unwrap();
+
+    for slots in [1, 2] {
+        let server = start_on(&swa_test_model(), &["swa"], configure(slots)).await;
+        let (status, lines) = server.generate(ask(&first, true, 600)).await;
+        assert_eq!(status, 200, "{lines:?}");
+        assert_finished(&lines);
+        let generated = lines.last().unwrap()["eval_count"].as_u64().unwrap();
+        assert!(generated > 600 / 2, "the first answer ran {generated} tokens: too short to slide the window past");
+        let (status, next) = server.generate(ask(&second, true, 16)).await;
+        assert_eq!(status, 200, "{next:?}");
+        assert_finished(&next);
+        assert_eq!(answer(&next), answer(&whole), "{slots} slots");
+        let next_ns = next.last().unwrap()["prompt_eval_duration"].as_u64().unwrap();
+        assert!(
+            next_ns * 4 < whole_ns,
+            "{slots} slots: the next turn read its prompt in {next_ns} ns, the whole one in \
+             {whole_ns} ns: the kept window was not restored"
         );
     }
 }

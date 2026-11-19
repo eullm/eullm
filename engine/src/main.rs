@@ -785,6 +785,20 @@ struct RuntimeOpts {
     #[arg(long, help_heading = HELP_MEDIA)]
     no_mmproj_offload: bool,
 
+    /// Load every model without its projector: text only, served in batches
+    ///
+    /// A model with a projector (one beside the weights as `mmproj*.gguf`, or
+    /// one the store recorded at pull) is served one request at a time,
+    /// whatever --batch-size says, because the continuous-batching scheduler
+    /// does not read images. For a multimodal model used for text alone
+    /// (RAG, rewriting, grading), that turns 8 parallel requests into a
+    /// queue: on an A100, Gemma 4 31B answered 20 of 200 in 25 minutes
+    /// where llama-server answered 198 in 6.5. With this flag the projector
+    /// is left on disk, the model runs on the scheduler with --batch-size
+    /// slots, and a request carrying images or audio is refused.
+    #[arg(long, conflicts_with = "mmproj", help_heading = HELP_MEDIA)]
+    no_mmproj: bool,
+
     /// Generation models loaded at the same time, 1 to 16
     ///
     /// The embedding and decision models have slots of their own and are not
@@ -1376,6 +1390,7 @@ async fn main() {
                 mmproj,
                 mmproj_offload,
                 no_mmproj_offload,
+                no_mmproj,
                 keep_alive,
                 embedding_model,
                 decision_model,
@@ -1390,6 +1405,7 @@ async fn main() {
             let residency = residency_config(
                 &store,
                 mmproj.as_deref(),
+                no_mmproj,
                 api::ResidencyFlags {
                     max_loaded_models,
                     default_model,
@@ -1525,6 +1541,7 @@ async fn main() {
                 rust_debug,
                 mmproj,
                 mmproj_offload,
+                no_mmproj,
                 keep_alive,
                 embedding_model,
                 decision_model,
@@ -1583,6 +1600,7 @@ async fn main() {
                 mmproj,
                 mmproj_offload,
                 no_mmproj_offload,
+                no_mmproj,
                 keep_alive,
                 embedding_model,
                 decision_model,
@@ -1597,6 +1615,7 @@ async fn main() {
             let residency = residency_config(
                 &store,
                 mmproj.as_deref(),
+                no_mmproj,
                 api::ResidencyFlags {
                     max_loaded_models,
                     default_model,
@@ -1685,6 +1704,7 @@ async fn main() {
                 rust_debug,
                 mmproj,
                 mmproj_offload,
+                no_mmproj,
                 keep_alive,
                 embedding_model,
                 decision_model,
@@ -2584,18 +2604,19 @@ fn resolve_model_path(model: &str, store: &ModelStore) -> Option<PathBuf> {
 /// `--max-loaded-models`, `--default-model` and `--auto-model`, resolved
 /// against the store; exits when one of the models named is no model, as for
 /// `--decision-model`, or when `--auto-model` is refused. `mmproj` is
-/// `--mmproj`, which gives every model a projector.
+/// `--mmproj`, which gives every model a projector; `no_mmproj` is
+/// `--no-mmproj`, which takes every model's away.
 fn residency_config(
     store: &ModelStore,
     mmproj: Option<&std::path::Path>,
+    no_mmproj: bool,
     flags: api::ResidencyFlags,
 ) -> api::ResidencyConfig {
-    api::ResidencyConfig::resolve(&flags, |arg| candidate_facts(arg, store, mmproj)).unwrap_or_else(
-        |e| {
+    api::ResidencyConfig::resolve(&flags, |arg| candidate_facts(arg, store, mmproj, no_mmproj))
+        .unwrap_or_else(|e| {
             eprintln!("Error: {e}");
             std::process::exit(1);
-        },
-    )
+        })
 }
 
 /// A generation model named on the command line, with what the store and
@@ -2607,6 +2628,7 @@ fn candidate_facts(
     arg: &str,
     store: &ModelStore,
     mmproj: Option<&std::path::Path>,
+    no_mmproj: bool,
 ) -> Option<api::CandidateFacts> {
     let model = named_model(arg, store)?;
     let entry = catalog::find_model(&model.name);
@@ -2616,9 +2638,10 @@ fn candidate_facts(
         .flatten()
         .and_then(|manifest| manifest.written_description().map(str::to_string))
         .filter(|text| entry.is_none_or(|entry| entry.description.trim() != text.as_str()));
-    let has_projector = mmproj.is_some()
-        || store.mmproj_path(&model.name).is_some()
-        || models::store::mmproj_beside(&model.path).is_some();
+    let has_projector = !no_mmproj
+        && (mmproj.is_some()
+            || store.mmproj_path(&model.name).is_some()
+            || models::store::mmproj_beside(&model.path).is_some());
     Some(api::CandidateFacts {
         catalog: entry.map(|entry| api::CatalogFacts {
             description: entry.description.clone(),
@@ -2789,7 +2812,7 @@ mod launch_companion_name_tests {
         stored("mine", "Italian contracts and case law", true);
         stored("pulled", "External model pulled from hf.co/x/y", false);
         let store = super::ModelStore::at(dir.clone());
-        let facts = |id| super::candidate_facts(id, &store, None).expect(id);
+        let facts = |id| super::candidate_facts(id, &store, None, false).expect(id);
 
         let qwen = facts("qwen3-8b");
         assert_eq!(qwen.store_description, None, "the catalog's own text");
@@ -2803,10 +2826,16 @@ mod launch_companion_name_tests {
         assert_eq!(facts("pulled").store_description, None, "only provenance");
         let projector = std::path::Path::new("/models/mmproj.gguf");
         assert!(
-            super::candidate_facts("qwen3-8b", &store, Some(projector))
+            super::candidate_facts("qwen3-8b", &store, Some(projector), false)
                 .unwrap()
                 .has_projector,
             "--mmproj gives every model one"
+        );
+        assert!(
+            !super::candidate_facts("mine", &store, None, true)
+                .unwrap()
+                .has_projector,
+            "--no-mmproj takes every model's away"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -2930,10 +2959,10 @@ fn resolve_auto_context(
     cache_type_v: &inference::KvCacheType,
     vram_reserve: u64,
     extra_reserve: u64,
-    batch_size: usize,
+    kv: fit::KvLayout,
 ) -> u32 {
     let default = fit::AUTO_CTX_FLOOR;
-    let info = fit::read_gguf_info(gguf_path);
+    let info = fit::read_gguf_info(gguf_path).map(|info| info.with_kv_layout(kv));
     let moe = info.as_ref().is_some_and(|i| {
         fit::read_model_moe_layout(gguf_path, i.n_layers).is_some_and(|l| l.is_moe())
     });
@@ -2949,7 +2978,7 @@ fn resolve_auto_context(
         return default;
     }
     // The slots divide the window, in blocks of 256 tokens.
-    let slots = batch_size.max(1) as u32;
+    let slots = kv.slots;
     let align = slots * 256 / gcd(slots, 256);
     match fit::auto_context(
         fit::vram_bytes(),
@@ -3093,6 +3122,7 @@ async fn cmd_run(
     rust_debug: bool,
     mmproj: Option<PathBuf>,
     mmproj_offload: Option<bool>,
+    no_mmproj: bool,
     keep_alive: Option<std::time::Duration>,
     embedding_model: Option<String>,
     decision_model: Option<String>,
@@ -3423,15 +3453,19 @@ async fn cmd_run(
             .or_else(|| store.resolve_mmproj(&model_name))
             .or_else(|| store.resolve_mmproj(model))
             .or_else(|| crate::models::store::mmproj_beside(&gguf_path));
-        // `--mtp` drafts on the scheduler's one slot only, which a projector
-        // rules out: see `projector_with_mtp`.
-        let (mmproj_for_config, mtp_note) = crate::models::store::projector_with_mtp(
+        // `--no-mmproj` leaves it on disk, and `--mtp` drafts on the
+        // scheduler's one slot only, which a projector rules out: see
+        // `choose_projector`.
+        let (mmproj_for_config, projector_note) = crate::models::store::choose_projector(
             mmproj_for_config,
-            mmproj.is_some(),
-            mtp > 0 && batch_size == 1,
+            crate::models::store::ProjectorAsk {
+                named: mmproj.is_some(),
+                drafts: mtp > 0 && batch_size == 1,
+                refused: no_mmproj,
+            },
             &model_name,
         );
-        if let Some(note) = mtp_note {
+        if let Some(note) = projector_note {
             println!("{note}");
         }
         let mmproj_bytes = fit::mmproj_footprint_bytes(mmproj_for_config.as_deref());
@@ -3450,6 +3484,9 @@ async fn cmd_run(
         // already chose --cpu-moe/--n-cpu-moe themselves — explicit intent
         // beats a guess) does the dense run_fit flow, with its prompt and
         // its --fit-strict handling, take over.
+        // How the context lays out its KV cache: what the sliding-window
+        // layers of a Gemma take depends on it (`fit::SlidingWindow`).
+        let kv_layout = fit::KvLayout::new(batch_size, n_ubatch, kv_unified);
         if ctx_size == fit::CTX_AUTO {
             ctx_size = resolve_auto_context(
                 &gguf_path,
@@ -3464,7 +3501,7 @@ async fn cmd_run(
                     } else {
                         mmproj_bytes
                     }),
-                batch_size,
+                kv_layout,
             );
         }
         if fit {
@@ -3540,6 +3577,7 @@ async fn cmd_run(
                         keep_mapped: mmap,
                         ram_total: fit::system_ram_bytes(),
                     },
+                    kv_layout,
                 ),
                 Err(why) => {
                     println!("[EULLM] --moe-cache: {why}; running without the cache.");
@@ -3595,6 +3633,7 @@ async fn cmd_run(
                         sizing_reserve,
                         vram_reserve,
                         n_ubatch_flag.is_none(),
+                        kv_layout,
                     )
                 } else {
                     fit::MoeFitPlan {
@@ -3634,6 +3673,7 @@ async fn cmd_run(
                                 n_ubatch,
                                 sizing_reserve,
                                 vram_reserve,
+                                kv_layout,
                             )
                         {
                             println!(
@@ -3681,6 +3721,7 @@ async fn cmd_run(
                             kv_bpe_v,
                             sizing_reserve,
                             vram_reserve,
+                            kv_layout,
                         )
                     } else {
                         fit::run_fit_headless(
@@ -3692,6 +3733,7 @@ async fn cmd_run(
                             kv_bpe_v,
                             sizing_reserve,
                             vram_reserve,
+                            kv_layout,
                         )
                     } {
                         fit::FitOutcome::Proceed(n) => gpu_layers = n,
@@ -4041,6 +4083,7 @@ async fn cmd_run(
             // The flag, not `mmproj_placement`: that was worked out for the
             // launch model, and each swap decides again for its own.
             mmproj_offload,
+            no_mmproj,
             model_name: Some(api_model_name),
             engine,
             scheduler,
@@ -4164,6 +4207,7 @@ async fn cmd_serve(
     rust_debug: bool,
     mmproj: Option<PathBuf>,
     mmproj_offload: Option<bool>,
+    no_mmproj: bool,
     keep_alive: Option<std::time::Duration>,
     embedding_model: Option<String>,
     decision_model: Option<String>,
@@ -4255,6 +4299,7 @@ async fn cmd_serve(
         port,
         mmproj,
         mmproj_offload,
+        no_mmproj,
         model_name: None,
         engine: None,
         scheduler: None,
@@ -5714,6 +5759,21 @@ mod cli_default_parity_tests {
             let both =
                 Cli::try_parse_from([sub, &["--mmproj-offload", "--no-mmproj-offload"]].concat());
             assert!(both.is_err(), "both flags at once must be refused");
+        }
+    }
+
+    /// `--no-mmproj` is on both subcommands, off by default, and cannot be
+    /// asked for beside a projector named with `--mmproj`.
+    #[test]
+    fn no_mmproj_is_on_both_commands_and_excludes_mmproj() {
+        for sub in [&["eullm", "run", "m.gguf"][..], &["eullm", "serve"][..]] {
+            assert!(!runtime_opts(sub).no_mmproj, "off by default");
+            assert!(runtime_opts(&[sub, &["--no-mmproj"]].concat()).no_mmproj);
+            let both = Cli::try_parse_from([sub, &["--no-mmproj", "--mmproj", "p.gguf"]].concat());
+            assert!(
+                both.is_err(),
+                "--no-mmproj and --mmproj together must be refused"
+            );
         }
     }
 

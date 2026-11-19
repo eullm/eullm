@@ -2045,7 +2045,13 @@ fn run_scheduler_loop(
     let mut checkpoints: Vec<PromptCheckpoint> = Vec::new();
     // Every slot's recurrent-state checkpoints (`StateCheckpoint`), on a model
     // whose memory cannot be cut back to an earlier token.
-    let keeps_states = model.is_hybrid() || model.is_recurrent();
+    // And on a model with sliding-window layers (Gemma), whose window keeps
+    // only its last n_swa + n_ubatch tokens per slot (`swa_full = false`, see
+    // `build_ctx_params_with_cache`): a slot cut back further than its window
+    // reaches has lost what the next token must see, and its window kept at a
+    // checkpoint is what makes the cut possible (`prefill_setup`).
+    let n_swa = model.n_swa();
+    let keeps_states = model.is_hybrid() || model.is_recurrent() || n_swa > 0;
     let mut states: StateCheckpoints = (0..sched_config.max_batch_size)
         .map(|_| Vec::new())
         .collect();
@@ -2075,12 +2081,34 @@ fn run_scheduler_loop(
     );
 
     // Estimate KV cache memory from model dimensions and cache types.
-    let kv_info = estimate_kv_memory(
+    let mut kv_info = estimate_kv_memory(
         model,
         total_ctx as u64,
         &config.cache_type_k,
         &config.cache_type_v,
     );
+    // On a model with sliding-window layers, what this context really holds:
+    // the window layers keep only their window (`fit::SlidingWindow`), and
+    // the uniform estimate above charged Gemma 4 31B 42 GB where 13 were
+    // allocated.
+    if let Some(info) = crate::fit::read_gguf_info(&config.model_path).map(|info| {
+        info.with_kv_layout(crate::fit::KvLayout::new(
+            sched_config.max_batch_size,
+            ctx.n_ubatch(),
+            config.kv_unified,
+        ))
+    }) {
+        let mib = |k: f64, v: f64| {
+            info.windowed_kv_bytes(total_ctx, k, v)
+                .map(|bytes| bytes / (1024.0 * 1024.0))
+        };
+        let bpe_k = cache_type_bytes_per_elem(&config.cache_type_k);
+        let bpe_v = cache_type_bytes_per_elem(&config.cache_type_v);
+        if let (Some(k), Some(v)) = (mib(bpe_k, 0.0), mib(0.0, bpe_v)) {
+            kv_info.kv_k_mib = k;
+            kv_info.kv_v_mib = v;
+        }
+    }
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));
@@ -2274,6 +2302,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
+                            n_swa,
                             None,
                         );
                         if setup.is_err()
@@ -2295,6 +2324,7 @@ fn run_scheduler_loop(
                                 per_seq_ctx,
                                 &tokens,
                                 effective_reuse_len,
+                                n_swa,
                                 None,
                             );
                         }
@@ -2316,6 +2346,7 @@ fn run_scheduler_loop(
                                 per_seq_ctx,
                                 &tokens,
                                 effective_reuse_len,
+                                n_swa,
                                 None,
                             );
                         }
@@ -2350,6 +2381,7 @@ fn run_scheduler_loop(
                         per_seq_ctx,
                         &tokens,
                         effective_reuse_len,
+                        n_swa,
                         mtp_state.as_mut(),
                         keep_states.then_some(&mut *slot_states),
                     );
@@ -2373,6 +2405,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
+                            n_swa,
                             mtp_state.as_mut(),
                             Some(&mut *slot_states),
                         );
@@ -2390,6 +2423,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
+                            n_swa,
                             mtp_state.as_mut(),
                             keep_states.then_some(&mut *slot_states),
                         );
@@ -3054,6 +3088,7 @@ fn prefill_sequence(
     per_seq_ctx: u32,
     tokens: &[LlamaToken],
     reuse_len: usize,
+    n_swa: u32,
     mut mtp: Option<&mut MtpState<'_>>,
     mut states: Option<&mut Vec<StateCheckpoint>>,
 ) -> Result<(u32, i32, u32), String> {
@@ -3064,6 +3099,7 @@ fn prefill_sequence(
         per_seq_ctx,
         tokens,
         reuse_len,
+        n_swa,
         mtp.as_deref_mut(),
     )?;
 
@@ -3126,7 +3162,11 @@ fn prefill_sequence(
 /// check the prompt against the context, cap the answer to what is left of
 /// it, and drop what the slot holds past the reused prefix.
 ///
+/// `n_swa` is the model's sliding window (0 without one): see
+/// [`window_reaches_back`].
+///
 /// Returns `(prompt_tokens, effective_max_tokens)`.
+#[allow(clippy::too_many_arguments)]
 fn prefill_setup(
     ctx: &mut LlamaContext,
     request: &GenerateRequest,
@@ -3134,6 +3174,7 @@ fn prefill_setup(
     per_seq_ctx: u32,
     tokens: &[LlamaToken],
     reuse_len: usize,
+    n_swa: u32,
     mtp: Option<&mut MtpState<'_>>,
 ) -> Result<(u32, u32), String> {
     let n_tokens = tokens.len() as u32;
@@ -3206,6 +3247,17 @@ fn prefill_setup(
             seq.seq_id,
         ));
     }
+    // A sliding window accepts any cut and says nothing: whether it still
+    // holds what the next token sees is asked of it here.
+    if reuse_len > 0
+        && !window_reaches_back(ctx.kv_cache_seq_pos_min(seq.seq_id), reuse_len, n_swa)
+    {
+        return Err(format!(
+            "Seq {}: the sliding window no longer holds the {n_swa} tokens before \
+             reuse_len={reuse_len}; reuse is unsafe here",
+            seq.seq_id,
+        ));
+    }
 
     // The MTP head reads every decode of the target: this prompt's chunks
     // here, each speculative step in `mtp_step`. Its own memory keeps what
@@ -3217,6 +3269,24 @@ fn prefill_setup(
     }
 
     Ok((n_tokens, effective_max_tokens))
+}
+
+/// Whether a slot whose memory starts at position `pos_min` can be read on
+/// from `reuse_len`: on a model with a sliding window of `n_swa` tokens
+/// (`swa_full = false`), the token at `reuse_len` sees the `n_swa - 1`
+/// before it, and a window that dropped any of them answers as if they had
+/// never been said. llama-server's test (`pos_min_thold`): the window must
+/// start before `reuse_len - n_swa + 2`, or at 0. Always true without a
+/// window, and false for a slot that holds nothing (`pos_min` -1).
+fn window_reaches_back(pos_min: i32, reuse_len: usize, n_swa: u32) -> bool {
+    if n_swa == 0 {
+        return true;
+    }
+    if pos_min < 0 {
+        return false;
+    }
+    let threshold = (reuse_len as i64 - i64::from(n_swa) + 2).max(0);
+    pos_min == 0 || i64::from(pos_min) < threshold
 }
 
 /// Decodes `tokens[chunk_start..chunk_end]` of a prompt into sequence
@@ -3559,7 +3629,7 @@ mod tests {
         CachedSlot, GenerateRequest, NotQueued, PieceOutcome, PromptCheckpoint, SchedulerHandle,
         SendOutcome, StepTimes, StreamEvent, best_checkpoint, checkpoint_cuts, common_prefix_len,
         decode_passes, drafts_kept, mtp_drafts, next_cut, pick_slot, process_piece,
-        prompt_budget, text_prefix_match, try_send_piece,
+        prompt_budget, text_prefix_match, try_send_piece, window_reaches_back,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
@@ -3686,6 +3756,20 @@ mod tests {
     /// micro-batch before that, where llama.cpp's server keeps it; a chunk
     /// read from anywhere stops at the next of them, and none is past the
     /// end, at the start, or behind where reading begins.
+    /// A window of 1024 (Gemma 4) and a slot read on from token 3000: the
+    /// token at 3000 sees the 1023 before it, from 1977 on, so the window
+    /// must start there at the latest.
+    #[test]
+    fn a_slot_is_read_on_only_while_its_window_reaches_back() {
+        assert!(window_reaches_back(1500, 3000, 1024));
+        assert!(window_reaches_back(1977, 3000, 1024));
+        assert!(!window_reaches_back(1978, 3000, 1024), "one token short");
+        assert!(window_reaches_back(0, 3000, 1024), "it still holds everything");
+        assert!(window_reaches_back(0, 100, 1024), "a prompt inside the window");
+        assert!(!window_reaches_back(-1, 100, 1024), "it holds nothing");
+        assert!(window_reaches_back(2900, 3000, 0), "no window, nothing to check");
+    }
+
     #[test]
     fn a_prompt_stops_for_its_checkpoints_where_llama_server_takes_them() {
         assert_eq!(checkpoint_cuts(2723, 512), [2207, 2719]);

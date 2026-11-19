@@ -619,7 +619,19 @@ pub(crate) fn build_ctx_params_with_cache(
         .with_n_threads(config.threads as i32)
         .with_n_threads_batch(config.threads as i32)
         .with_n_rs_seq(config.rs_seq)
-        .with_kv_unified(config.kv_unified);
+        .with_kv_unified(config.kv_unified)
+        // The sliding-window layers keep only their window, as llama-server
+        // does (`swa_full = false` in common's defaults). llama.cpp's own C
+        // default is the opposite, and it was ours by omission: Gemma 4 31B
+        // at `-c 49152` with 8 slots asked for 38,400 MiB for its 50 window
+        // layers alone, every one holding the whole context, and failed to
+        // allocate on a 64 GB A100 where llama-server ran (Leonardo,
+        // 19-11-2026). Kept to its window, each slot's is n_swa + n_ubatch
+        // cells: about 9,600 MiB. A slot can then go back to an earlier token
+        // only while its window still holds what precedes it: the scheduler
+        // checks (`prefill_setup`) and keeps checkpoints of the window to go
+        // back to (`StateCheckpoint`).
+        .with_swa_full(false);
 
     if config.moe_cache_bytes > 0 {
         params = params.with_moe_cache_size(config.moe_cache_bytes as usize);
@@ -2883,8 +2895,6 @@ impl InferenceEngine {
         pinned: usize,
         tx: mpsc::Sender<StreamEvent>,
     ) {
-        use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputChunkType, MtmdInputText};
-
         let _lock = self.ctx_mutex.lock();
         let start = std::time::Instant::now();
 
@@ -2905,156 +2915,39 @@ impl InferenceEngine {
             Err(poisoned) => poisoned.into_inner(),
         };
         let mtmd_ctx = &mut *mtmd_guard;
-        // No M-RoPE guard here any more, and the reason is in upstream's own
-        // code. The guard assumed a model with multi-dimensional positions
-        // needed four positions per token in the decode batch, and that our
-        // scalar `batch.add(token, n_cur, ..)` below would therefore be wrong.
-        // It isn't: `llama_batch_allocr` broadcasts a text batch's single
-        // position across all RoPE sections — `src_off = batch.token ? 0 : ..`
-        // in `llama-batch.cpp`, with the comment spelling it out — and
-        // llama.cpp's reference `mtmd-cli` generates with exactly the same
-        // scalar `common_batch_add(batch, token_id, n_past++, {0}, true)`.
-        // The image's real 2D positions are set inside `eval_chunks`, which
-        // returns an `n_past` already advanced past the whole grid, so the
-        // decode loop resumes at a position the M-RoPE consistency check
-        // accepts. Refusing these models cost us every Qwen VL for nothing.
-        //
-        // Reject the request if the user supplied a modality the projector
-        // does not support, to fail loudly rather than silently mis-decode.
-        // Both checks can apply at once: a conversation can hold a photo from
-        // one turn and a voice note from another.
-        let has_audio = media.iter().any(|b| media_looks_like_audio(b));
-        let has_image = media.iter().any(|b| !media_looks_like_audio(b));
-        if has_audio && !mtmd_ctx.support_audio() {
-            let _ = tx.blocking_send(StreamEvent::Error(
-                "This mmproj does not support audio input (vision-only projector)".into(),
-            ));
-            return;
-        }
-        if has_image && !mtmd_ctx.support_vision() {
-            let _ = tx.blocking_send(StreamEvent::Error(
-                "This mmproj does not support image input".into(),
-            ));
-            return;
-        }
-        // Markers pair with attachments by position, and step 3 relies on it
-        // to swap an attachment for its note. A mismatch is a caller bug, and
-        // mtmd would refuse it anyway with a count and no context.
-        let marker = llama_cpp_2::mtmd::mtmd_default_marker();
-        let markers = request.prompt.matches(marker).count();
-        if markers != media.len() {
-            let _ = tx.blocking_send(StreamEvent::Error(format!(
-                "The prompt carries {markers} media markers for {} attachments; \
-                 each attachment needs exactly one",
-                media.len()
-            )));
-            return;
-        }
-
-        // ── 2. Decode media bytes into mtmd bitmaps ─────────────────────
-        let mut bitmaps: Vec<MtmdBitmap> = Vec::with_capacity(media.len());
-        for (i, bytes) in media.iter().enumerate() {
-            // llama-cpp-2 0.1.151 added a `placeholder` flag to from_buffer:
-            // false = decode and load the actual media (what we need for inference).
-            match MtmdBitmap::from_buffer(mtmd_ctx, bytes, false) {
-                Ok(mut b) => {
-                    // The index as id: mtmd copies it onto every chunk made
-                    // from this bitmap, which is how step 3 learns what each
-                    // attachment costs. Digits never hold the NUL that is
-                    // the only way this can fail.
-                    let _ = b.set_id(&i.to_string());
-                    bitmaps.push(b);
-                }
-                Err(e) => {
-                    // `NullResult` on its own tells the caller nothing, and the
-                    // most common cause is simply an unsupported container: a
-                    // .webp fails exactly like a corrupt file does. Name the
-                    // formats so the answer is in the error rather than in the
-                    // source.
-                    let _ = tx.blocking_send(StreamEvent::Error(format!(
-                        "Media #{i} failed to decode ({e:?}). Supported images \
-                         are jpg, png, bmp and gif, and audio is wav, mp3 or \
-                         flac. Other containers, webp among them, are not \
-                         decoded by the multimodal backend."
-                    )));
-                    return;
-                }
-            }
-        }
-        // ── 3. Tokenize text + media → MtmdInputChunks ──────────────────
-        // The prompt is hand-templated by the caller (turn markers + one
-        // <__media__> marker per bitmap) but does NOT include <bos>.
-        // `add_special = true` makes mtmd prepend the model's BOS, matching
-        // llama.cpp's reference `mtmd-cli` (`add_special = add_bos` on the
-        // first turn). Omitting BOS was the bug: Gemma needs it, and without
-        // it the model degrades into "wall of text / line art" confabulation
-        // on all but the easiest images (the missing-BOS prompt is malformed;
-        // strong landscapes survived it, weaker subjects did not).
-        // `parse_special = true` so the turn tokens (Gemma <start_of_turn>)
-        // are recognised rather than tokenised literally.
-        //
-        // Every attachment in the conversation rides along on every turn —
-        // that is what lets a follow-up question still see the photo — so a
-        // long enough conversation outgrows the context. Rather than refuse
-        // it, the oldest attachments give way: each is swapped for a note
-        // saying one was there, and the prompt is tokenized again. How many
-        // must go is estimated in one step from what each one cost, so this
-        // is two tokenizations in practice rather than one per attachment,
-        // which matters because each preprocesses every image it is handed.
-        // The target leaves room for the reply; whether the prompt fits at
-        // all is checked against the real context in step 5.
+        // ── 2-3. Decode the media, tokenize text and media together ──────
+        // Within a budget that leaves room for the reply: see
+        // `prepare_media_prompt`. `ctx_size`, not the context's `n_ctx`: the
+        // context is built after this, sized to the images that stay, and
+        // llama.cpp only ever rounds `n_ctx` up — so this target errs toward
+        // keeping less, never more. Whether the prompt fits at all is checked
+        // against the real context in step 5.
         let ctx_size =
             NonZeroU32::new(self.config.context_size).unwrap_or(NonZeroU32::new(4096).unwrap());
-        // `ctx_size`, not the context's `n_ctx`: the context is built after
-        // this, sized to the images that stay, and llama.cpp only ever rounds
-        // `n_ctx` up — so this target errs toward keeping less, never more.
         let target_ctx = request
             .num_ctx
             .map_or(ctx_size.get(), |n| n.min(ctx_size.get()));
-        let reserve = reply_reserve(request.max_tokens, target_ctx);
-        let budget = target_ctx.saturating_sub(reserve) as usize;
-        let pinned = pinned.max(1);
-        let mut prompt = request.prompt.clone();
-        let mut dropped = 0;
-        let chunks = loop {
-            let bitmap_refs: Vec<&MtmdBitmap> = bitmaps[dropped..].iter().collect();
-            let input_text = MtmdInputText {
-                text: prompt.clone(),
-                add_special: true,
-                parse_special: true,
-            };
-            let chunks = match mtmd_ctx.tokenize(input_text, &bitmap_refs) {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx
-                        .blocking_send(StreamEvent::Error(format!("mtmd tokenize failed: {e:?}")));
-                    return;
-                }
-            };
-            let total = chunks.total_tokens();
-            let kept = bitmaps.len() - dropped;
-            if total <= budget || kept <= pinned {
-                break chunks;
+        let budget = target_ctx.saturating_sub(reply_reserve(request.max_tokens, target_ctx));
+        let MediaPrompt {
+            chunks,
+            dropped,
+            has_image,
+            has_audio,
+            max_media_tokens,
+        } = match prepare_media_prompt(
+            mtmd_ctx,
+            &self.model,
+            &request.prompt,
+            media,
+            pinned,
+            budget,
+        ) {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                let _ = tx.blocking_send(StreamEvent::Error(e));
+                return;
             }
-            let note_tokens = self
-                .model
-                .str_to_token(DROPPED_IMAGE_NOTE, AddBos::Never)
-                .map_or(0, |tokens| tokens.len());
-            let costs = media_token_costs(&chunks, dropped, kept);
-            // At least one: `kept > pinned` here, so one can always go, and
-            // an estimate that said none would otherwise loop forever.
-            let n = media_to_drop(total, &costs, note_tokens, budget, pinned).max(1);
-            tracing::info!(
-                "Dropping the {n} oldest of {kept} attachments from the prompt: with \
-                 them it is {total} tokens, past the {budget} that leave {reserve} of \
-                 the {target_ctx}-token context for the reply"
-            );
-            for bitmap in &bitmaps[dropped..dropped + n] {
-                prompt = prompt.replacen(marker, dropped_media_note(bitmap.is_audio()), 1);
-            }
-            dropped += n;
         };
-
         let tokens_prompt = chunks.total_tokens() as u32;
 
         // ── 4. Size the batch to the image that actually arrived ────────
@@ -3079,12 +2972,6 @@ impl InferenceEngine {
         // many tokens each media chunk became, so the batch is sized to the
         // largest of them and that same figure is what `eval_chunks` splits
         // by. The two cannot disagree any more.
-        let max_media_tokens = (0..chunks.len())
-            .filter_map(|i| chunks.get(i))
-            .filter(|c| !matches!(c.chunk_type(), MtmdInputChunkType::Text))
-            .map(|c| c.n_tokens() as u32)
-            .max()
-            .unwrap_or(0);
         // A ceiling so a pathological image cannot ask for a compute buffer
         // that will not fit anywhere. `EULLM_IMAGE_MAX_TOKENS` bounds the
         // encoder itself and is the setting to reach for.
@@ -3315,6 +3202,184 @@ impl InferenceEngine {
             },
         });
     }
+}
+
+/// A multimodal prompt tokenized for mtmd, as [`prepare_media_prompt`] made it.
+#[cfg(feature = "multimodal")]
+pub(crate) struct MediaPrompt {
+    pub chunks: llama_cpp_2::mtmd::MtmdInputChunks,
+    /// How many of the oldest attachments gave way to a note.
+    pub dropped: usize,
+    pub has_image: bool,
+    pub has_audio: bool,
+    /// The largest image or audio chunk, in tokens: what one micro-batch
+    /// must hold, since a media chunk is decoded whole.
+    pub max_media_tokens: u32,
+}
+
+/// The prompt of a multimodal request, tokenized with its attachments into
+/// mtmd's chunks: what the sequential engine (`generate_multimodal`) and the
+/// scheduler both read. `Err` is the message for the client.
+///
+/// The text prompt MUST carry exactly one media marker (`<__media__>`, see
+/// [`llama_cpp_2::mtmd::mtmd_default_marker`]) for each entry in `media`, in
+/// the same order; `media[i]` is the raw bytes of an image (jpg/png/bmp/gif)
+/// or audio file (wav/mp3/flac), which `MtmdBitmap::from_buffer` tells apart.
+///
+/// `media` is oldest first, and a conversation that outgrows `budget` tokens
+/// loses its oldest attachments first: each is replaced in the prompt by
+/// [`DROPPED_IMAGE_NOTE`] (or the audio one). The newest `pinned` are never
+/// dropped — the current turn's own attachments — and neither is the most
+/// recent one, whatever `pinned` says. Whether what is left fits the context
+/// is the caller's to check.
+#[cfg(feature = "multimodal")]
+pub(crate) fn prepare_media_prompt(
+    mtmd_ctx: &mut llama_cpp_2::mtmd::MtmdContext,
+    model: &LlamaModel,
+    prompt: &str,
+    media: &[Vec<u8>],
+    pinned: usize,
+    budget: u32,
+) -> Result<MediaPrompt, String> {
+    use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputChunkType, MtmdInputText};
+
+    // No M-RoPE guard here, and the reason is in upstream's own code. The
+    // guard assumed a model with multi-dimensional positions needed four
+    // positions per token in the decode batch, and that a scalar
+    // `batch.add(token, n_cur, ..)` would therefore be wrong. It isn't:
+    // `llama_batch_allocr` broadcasts a text batch's single position across
+    // all RoPE sections — `src_off = batch.token ? 0 : ..` in
+    // `llama-batch.cpp`, with the comment spelling it out — and llama.cpp's
+    // reference `mtmd-cli` generates with exactly the same scalar
+    // `common_batch_add(batch, token_id, n_past++, {0}, true)`. The image's
+    // real 2D positions are set inside `eval_chunks`, which returns an
+    // `n_past` already advanced past the whole grid, so decoding resumes at
+    // a position the M-RoPE consistency check accepts. Refusing these models
+    // cost us every Qwen VL for nothing.
+    //
+    // Refuse a modality the projector does not support, to fail loudly
+    // rather than silently mis-decode. Both checks can apply at once: a
+    // conversation can hold a photo from one turn and a voice note from
+    // another.
+    let has_audio = media.iter().any(|b| media_looks_like_audio(b));
+    let has_image = media.iter().any(|b| !media_looks_like_audio(b));
+    if has_audio && !mtmd_ctx.support_audio() {
+        return Err("This mmproj does not support audio input (vision-only projector)".into());
+    }
+    if has_image && !mtmd_ctx.support_vision() {
+        return Err("This mmproj does not support image input".into());
+    }
+    // Markers pair with attachments by position, and dropping relies on it to
+    // swap an attachment for its note. A mismatch is a caller bug, and mtmd
+    // would refuse it anyway with a count and no context.
+    let marker = llama_cpp_2::mtmd::mtmd_default_marker();
+    let markers = prompt.matches(marker).count();
+    if markers != media.len() {
+        return Err(format!(
+            "The prompt carries {markers} media markers for {} attachments; \
+             each attachment needs exactly one",
+            media.len()
+        ));
+    }
+
+    // Decode media bytes into mtmd bitmaps.
+    let mut bitmaps: Vec<MtmdBitmap> = Vec::with_capacity(media.len());
+    for (i, bytes) in media.iter().enumerate() {
+        // llama-cpp-2 0.1.151 added a `placeholder` flag to from_buffer:
+        // false = decode and load the actual media (what we need for inference).
+        match MtmdBitmap::from_buffer(mtmd_ctx, bytes, false) {
+            Ok(mut b) => {
+                // The index as id: mtmd copies it onto every chunk made from
+                // this bitmap, which is how dropping learns what each
+                // attachment costs. Digits never hold the NUL that is the
+                // only way this can fail.
+                let _ = b.set_id(&i.to_string());
+                bitmaps.push(b);
+            }
+            Err(e) => {
+                // `NullResult` on its own tells the caller nothing, and the
+                // most common cause is simply an unsupported container: a
+                // .webp fails exactly like a corrupt file does. Name the
+                // formats so the answer is in the error rather than in the
+                // source.
+                return Err(format!(
+                    "Media #{i} failed to decode ({e:?}). Supported images \
+                     are jpg, png, bmp and gif, and audio is wav, mp3 or \
+                     flac. Other containers, webp among them, are not \
+                     decoded by the multimodal backend."
+                ));
+            }
+        }
+    }
+
+    // Tokenize text + media → MtmdInputChunks. The prompt is templated by the
+    // caller (turn markers + one <__media__> marker per bitmap) but does NOT
+    // include <bos>. `add_special = true` makes mtmd prepend the model's BOS,
+    // matching llama.cpp's reference `mtmd-cli` (`add_special = add_bos` on
+    // the first turn). Omitting BOS was the bug: Gemma needs it, and without
+    // it the model degrades into "wall of text / line art" confabulation on
+    // all but the easiest images (the missing-BOS prompt is malformed; strong
+    // landscapes survived it, weaker subjects did not). `parse_special =
+    // true` so the turn tokens (Gemma <start_of_turn>) are recognised rather
+    // than tokenised literally.
+    //
+    // Every attachment in the conversation rides along on every turn — that
+    // is what lets a follow-up question still see the photo — so a long
+    // enough conversation outgrows the context. Rather than refuse it, the
+    // oldest attachments give way: each is swapped for a note saying one was
+    // there, and the prompt is tokenized again. How many must go is estimated
+    // in one step from what each one cost, so this is two tokenizations in
+    // practice rather than one per attachment, which matters because each
+    // preprocesses every image it is handed.
+    let budget = budget as usize;
+    let pinned = pinned.max(1);
+    let mut prompt = prompt.to_string();
+    let mut dropped = 0;
+    let chunks = loop {
+        let bitmap_refs: Vec<&MtmdBitmap> = bitmaps[dropped..].iter().collect();
+        let input_text = MtmdInputText {
+            text: prompt.clone(),
+            add_special: true,
+            parse_special: true,
+        };
+        let chunks = mtmd_ctx
+            .tokenize(input_text, &bitmap_refs)
+            .map_err(|e| format!("mtmd tokenize failed: {e:?}"))?;
+        let total = chunks.total_tokens();
+        let kept = bitmaps.len() - dropped;
+        if total <= budget || kept <= pinned {
+            break chunks;
+        }
+        let note_tokens = model
+            .str_to_token(DROPPED_IMAGE_NOTE, AddBos::Never)
+            .map_or(0, |tokens| tokens.len());
+        let costs = media_token_costs(&chunks, dropped, kept);
+        // At least one: `kept > pinned` here, so one can always go, and an
+        // estimate that said none would otherwise loop forever.
+        let n = media_to_drop(total, &costs, note_tokens, budget, pinned).max(1);
+        tracing::info!(
+            "Dropping the {n} oldest of {kept} attachments from the prompt: with \
+             them it is {total} tokens, past the {budget} left for it beside the reply"
+        );
+        for bitmap in &bitmaps[dropped..dropped + n] {
+            prompt = prompt.replacen(marker, dropped_media_note(bitmap.is_audio()), 1);
+        }
+        dropped += n;
+    };
+
+    let max_media_tokens = (0..chunks.len())
+        .filter_map(|i| chunks.get(i))
+        .filter(|c| !matches!(c.chunk_type(), MtmdInputChunkType::Text))
+        .map(|c| c.n_tokens() as u32)
+        .max()
+        .unwrap_or(0);
+    Ok(MediaPrompt {
+        chunks,
+        dropped,
+        has_image,
+        has_audio,
+        max_media_tokens,
+    })
 }
 
 fn num_cpus() -> u32 {

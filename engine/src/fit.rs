@@ -78,6 +78,86 @@ pub struct GgufInfo {
     /// The context the model was trained for (`<arch>.context_length`), when
     /// declared: the ceiling of `--ctx-size auto`.
     pub context_length: Option<u32>,
+    /// Its sliding-window layers, on a model that has them and says which
+    /// (Gemma 2, 3 and 4, gpt-oss): see [`SlidingWindow`].
+    pub window: Option<SlidingWindow>,
+}
+
+/// A model's sliding-window attention layers, which keep only the last
+/// `n_swa` tokens of each slot (`swa_full = false`, as llama-server and the
+/// engine load them), and how many cells llama.cpp allocates for them.
+///
+/// Without it every layer is charged the whole context. On Gemma 4 31B that
+/// was not even the worst of it: its KV heads are given per layer (16 on the
+/// 50 window layers, 4 on the 10 global ones), an array the header reader
+/// skipped, so sizing fell back to 128 bytes per token per layer and charged
+/// about 0.4 GB of KV where llama.cpp allocates 13 GB with 8 slots at
+/// `-c 49152`: "fits fully", then out of memory (Leonardo, 19-11-2026).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SlidingWindow {
+    /// The window, in tokens (`<arch>.attention.sliding_window`).
+    pub n_swa: u32,
+    /// Per layer, whether it is a window layer
+    /// (`<arch>.attention.sliding_window_pattern`, or the architecture's
+    /// period, as llama.cpp's `load_swa_pattern`).
+    pub layers: Vec<bool>,
+    /// Per layer, its KV heads, when the header gives them per layer.
+    pub head_count_kv: Vec<u32>,
+    /// The window layers' head dimensions, when they differ from the others'
+    /// (`key_length_swa`, `value_length_swa`).
+    pub key_length: Option<u32>,
+    pub value_length: Option<u32>,
+    /// How the load being sized lays out its KV cache (see [`KvLayout`]);
+    /// `None` when sizing does not know, and then each window layer is
+    /// charged the whole context, which is never less than llama.cpp
+    /// allocates.
+    pub layout: Option<KvLayout>,
+}
+
+/// How a load lays out its KV cache, which decides what the window layers
+/// take: its slots (`--batch-size`, 1 for the sequential engine), its
+/// micro-batch (`--n-ubatch`) and `--kv-unified`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KvLayout {
+    pub slots: u32,
+    pub n_ubatch: u32,
+    pub unified: bool,
+}
+
+impl KvLayout {
+    /// The layout a load of `batch_size` slots (0: the sequential engine,
+    /// one sequence) takes.
+    pub fn new(batch_size: usize, n_ubatch: u32, unified: bool) -> Self {
+        Self {
+            slots: u32::try_from(batch_size.max(1)).unwrap_or(u32::MAX),
+            n_ubatch: n_ubatch.max(1),
+            unified,
+        }
+    }
+}
+
+impl SlidingWindow {
+    /// The cells a window layer has in a context of `ctx` tokens, as
+    /// llama.cpp's `llama_kv_cache_iswa` sizes them: per sequence (one
+    /// stream each) the window and a micro-batch, padded to 256 and never
+    /// more than the sequence's share of the context; with `--kv-unified`,
+    /// one stream holding every sequence's window.
+    fn cells(&self, ctx: u32) -> u64 {
+        let pad = |n: u64| n.div_ceil(256) * 256;
+        let ctx = u64::from(ctx);
+        let Some(layout) = self.layout else {
+            return ctx;
+        };
+        let n_swa = u64::from(self.n_swa);
+        let slots = u64::from(layout.slots.max(1));
+        let ubatch = u64::from(layout.n_ubatch);
+        if layout.unified {
+            pad(ctx.min(n_swa * slots + ubatch))
+        } else {
+            let per_seq = pad(ctx / slots);
+            slots * pad(per_seq.min(n_swa + ubatch))
+        }
+    }
 }
 
 impl GgufInfo {
@@ -124,6 +204,65 @@ impl GgufInfo {
         };
 
         Some((n_head_kv * k_dim, n_head_kv * v_dim))
+    }
+
+    /// Bytes of KV cache `ctx` tokens take on a model with sliding-window
+    /// layers, every layer counted with its own heads, head dimensions and
+    /// cells (see [`SlidingWindow`]); `None` without a window, or without the
+    /// dimensions to count one with, and the uniform estimate applies.
+    pub(crate) fn windowed_kv_bytes(&self, ctx: u32, bpe_k: f64, bpe_v: f64) -> Option<f64> {
+        let w = self.window.as_ref()?;
+        let n = self.n_layers as usize;
+        if w.n_swa == 0 || w.layers.len() < n {
+            return None;
+        }
+        let derived = || -> Option<u32> {
+            let n_embd = self.n_embd.filter(|&v| v > 0)?;
+            let n_head = self.n_head.filter(|&v| v > 0)?;
+            Some(n_embd / n_head)
+        };
+        let k_full = self.key_length.filter(|&v| v > 0).or_else(derived)?;
+        let v_full = self.value_length.filter(|&v| v > 0).unwrap_or(k_full);
+        let k_swa = w.key_length.filter(|&v| v > 0).unwrap_or(k_full);
+        let v_swa = w.value_length.filter(|&v| v > 0).unwrap_or(v_full);
+        let window_cells = w.cells(ctx) as f64;
+        let mut bytes = 0.0;
+        for (i, &is_swa) in w.layers.iter().take(n).enumerate() {
+            let heads = match w.head_count_kv.get(i) {
+                Some(&h) => h,
+                None => self.n_head_kv.filter(|&v| v > 0)?,
+            };
+            let (k, v, cells) = if is_swa {
+                (k_swa, v_swa, window_cells)
+            } else {
+                (k_full, v_full, f64::from(ctx))
+            };
+            bytes += cells * f64::from(heads) * (f64::from(k) * bpe_k + f64::from(v) * bpe_v);
+        }
+        Some(bytes)
+    }
+
+    /// Bytes of KV cache one paying layer takes at `ctx` tokens, for sizers
+    /// that charge layers one at a time: on a model with sliding-window
+    /// layers, its whole KV over its layers (window and global layers
+    /// alternate through the model, so a block of them pays about its share).
+    fn kv_bytes_per_paying_layer(&self, ctx: u32, bpe_k: f64, bpe_v: f64) -> f64 {
+        if let Some(total) = self.windowed_kv_bytes(ctx, bpe_k, bpe_v) {
+            return total / f64::from(self.n_layers.max(1));
+        }
+        match self.kv_elems_per_token_per_layer() {
+            Some((k_elems, v_elems)) => f64::from(ctx) * (k_elems * bpe_k + v_elems * bpe_v),
+            None => f64::from(ctx) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
+        }
+    }
+
+    /// The same model, sized for a load laid out as `layout`: what its window
+    /// layers take depends on it (see [`SlidingWindow::cells`]).
+    pub fn with_kv_layout(mut self, layout: KvLayout) -> Self {
+        if let Some(window) = self.window.as_mut() {
+            window.layout = Some(layout);
+        }
+        self
     }
 
     /// How many of `n` offloaded layers pay per-token KV cache.
@@ -243,6 +382,24 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Read an array of integers or flags (bool, any integer type), after its
+    /// `GGUF_TYPE_ARRAY` tag: one per layer, so a count past `MAX_LAYERS` is
+    /// not one of the arrays wanted, and is skipped with `None`... after
+    /// which parsing stops, as it does for any malformed value.
+    fn uint_array(&mut self) -> Option<Vec<u64>> {
+        let elem_type = self.u32()?;
+        let count = usize::try_from(self.u64()?).ok()?;
+        if count > MAX_LAYERS as usize {
+            return None;
+        }
+        (0..count)
+            .map(|_| match elem_type {
+                GGUF_TYPE_BOOL => self.take(1).map(|b| u64::from(b[0])),
+                other => self.read_uint_as_u64(other),
+            })
+            .collect()
+    }
+
     /// Read a scalar integer value of the given type tag as u64, when the tag
     /// is one of the unsigned/signed integer types. Used for `block_count`,
     /// which different exporters store as u32 or u64.
@@ -285,6 +442,16 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let mut nextn_layers: Option<u32> = None;
     let mut context_length: Option<u32> = None;
     let mut architecture: Option<String> = None;
+    // Sliding-window layers (see `SlidingWindow`): the window, which layers
+    // have it (an array of flags, or a period), their head dimensions, and
+    // the KV heads when given per layer, as arrays the loop below reads
+    // rather than skips.
+    let mut n_swa: Option<u32> = None;
+    let mut swa_period: Option<u32> = None;
+    let mut swa_layers: Option<Vec<bool>> = None;
+    let mut head_count_kv_layers: Option<Vec<u32>> = None;
+    let mut key_length_swa: Option<u32> = None;
+    let mut value_length_swa: Option<u32> = None;
 
     // The metadata keys we want, each an integer stored as u32 or u64 depending
     // on the exporter. The `_kv` head count is checked before the plain head
@@ -320,10 +487,40 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             }
         }
 
+        // The two arrays wanted: the KV heads per layer (Gemma 4) and the
+        // window layers' flags. Any other array is skipped below.
+        if value_type == GGUF_TYPE_ARRAY
+            && (key_bytes.ends_with(b".attention.head_count_kv")
+                || key_bytes.ends_with(b".attention.sliding_window_pattern"))
+        {
+            let Some(values) = c.uint_array() else {
+                break;
+            };
+            if key_bytes.ends_with(b".attention.head_count_kv") {
+                // The most any layer has stands for all where one number is
+                // read: never less than a layer takes.
+                if n_head_kv.is_none() {
+                    n_head_kv = values.iter().max().and_then(|&v| u32::try_from(v).ok());
+                }
+                head_count_kv_layers = values.iter().map(|&v| u32::try_from(v).ok()).collect();
+            } else {
+                swa_layers = Some(values.iter().map(|&v| v != 0).collect());
+            }
+            continue;
+        }
+
         // Pick which field (if any) this key feeds. All are scalar integers;
         // an array-typed match is ignored (skipped) to stay aligned.
         let target: Option<&mut Option<u32>> = if value_type == GGUF_TYPE_ARRAY {
             None
+        } else if key_bytes.ends_with(b".attention.sliding_window") {
+            Some(&mut n_swa)
+        } else if key_bytes.ends_with(b".attention.sliding_window_pattern") {
+            Some(&mut swa_period)
+        } else if key_bytes.ends_with(b".attention.key_length_swa") {
+            Some(&mut key_length_swa)
+        } else if key_bytes.ends_with(b".attention.value_length_swa") {
+            Some(&mut value_length_swa)
         } else if key_bytes.ends_with(b".block_count") {
             Some(&mut n_layers)
         } else if key_bytes.ends_with(b".embedding_length") {
@@ -392,7 +589,25 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         }
     }
 
-    n_layers.map(|n_layers| GgufInfo {
+    let n_layers = n_layers?;
+    let window = n_swa.filter(|&n| n > 0).and_then(|n_swa| {
+        let layers = swa_layers.or_else(|| {
+            let (period, dense_first) = match swa_period {
+                Some(period) => (period, false),
+                None => swa_period_of(architecture.as_deref()?)?,
+            };
+            Some(swa_pattern(n_layers, period, dense_first))
+        })?;
+        Some(SlidingWindow {
+            n_swa,
+            layers,
+            head_count_kv: head_count_kv_layers.unwrap_or_default(),
+            key_length: key_length_swa,
+            value_length: value_length_swa,
+            layout: None,
+        })
+    });
+    Some(GgufInfo {
         n_layers,
         n_embd,
         n_head,
@@ -403,7 +618,38 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         architecture,
         nextn_layers,
         context_length,
+        window,
     })
+}
+
+/// The period of an architecture's sliding-window layers when its header
+/// gives none, and whether the period starts with a global layer: the
+/// defaults llama.cpp's models pass to `load_swa_pattern`, for the
+/// architectures EuLLM users run.
+fn swa_period_of(architecture: &str) -> Option<(u32, bool)> {
+    match architecture {
+        "gemma2" | "gpt-oss" => Some((2, false)),
+        "gemma3" | "gemma-embedding" => Some((6, false)),
+        "gemma3n" => Some((5, false)),
+        "cohere2" | "exaone4" => Some((4, false)),
+        _ => None,
+    }
+}
+
+/// llama.cpp's `set_swa_pattern`: with a period of `n`, the last layer of
+/// every `n` is global and the others have a window (or, `dense_first`, the
+/// first); 0 makes every layer a window layer.
+fn swa_pattern(n_layers: u32, period: u32, dense_first: bool) -> Vec<bool> {
+    (0..n_layers)
+        .map(|il| {
+            period == 0
+                || if dense_first {
+                    il % period != 0
+                } else {
+                    il % period < period - 1
+                }
+        })
+        .collect()
 }
 
 /// Read the leading bytes of a GGUF file and parse its header.
@@ -1004,8 +1250,9 @@ pub fn run_balance_moe_split(
     n_ubatch: u32,
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
 ) -> Option<BalancedSplit> {
-    let info = read_gguf_info(model_path)?;
+    let info = read_gguf_info(model_path)?.with_kv_layout(kv);
     let layout = read_model_moe_layout(model_path, info.n_layers)?;
     let mut free: Vec<u64> = device_vram().into_iter().map(|(free, _)| free).collect();
     if let Some(first) = free.first_mut() {
@@ -1338,6 +1585,9 @@ pub(crate) fn kv_cache_bytes(
     let Some(info) = info.filter(|i| i.n_layers > 0 && i.n_layers <= MAX_LAYERS) else {
         return 0;
     };
+    if let Some(bytes) = info.windowed_kv_bytes(ctx, kv_bytes_per_elem_k, kv_bytes_per_elem_v) {
+        return bytes as u64;
+    }
     let per_token_per_layer = match info.kv_elems_per_token_per_layer() {
         Some((k_elems, v_elems)) => k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v,
         None => FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
@@ -1526,13 +1776,11 @@ pub fn compute_fit(
     // per-layer weights times n plus this slice times the paying count —
     // counted exactly, not averaged, because the average under-charges
     // whenever the offloaded block holds one more attention layer than the
-    // mean (measured live: ~0.5 GiB at 262k context).
-    let kv_per_paying_layer = match info.kv_elems_per_token_per_layer() {
-        Some((k_elems, v_elems)) => {
-            (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
-        }
-        None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    };
+    // mean (measured live: ~0.5 GiB at 262k context). A model with
+    // sliding-window layers is charged its whole KV over its layers (see
+    // `GgufInfo::kv_bytes_per_paying_layer`).
+    let kv_per_paying_layer =
+        info.kv_bytes_per_paying_layer(ctx_size, kv_bytes_per_elem_k, kv_bytes_per_elem_v);
 
     // Budget = free VRAM, minus the reserve that must stay free (the same
     // amount the loader's context probe will demand, so sizing past it only
@@ -1600,12 +1848,8 @@ fn moe_budget(
     kv_bytes_per_elem_v: f64,
     vram_reserve: u64,
 ) -> (f64, f64) {
-    let kv_per_paying_layer = match info.kv_elems_per_token_per_layer() {
-        Some((k_elems, v_elems)) => {
-            (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
-        }
-        None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    };
+    let kv_per_paying_layer =
+        info.kv_bytes_per_paying_layer(ctx_size, kv_bytes_per_elem_k, kv_bytes_per_elem_v);
     let total_kv = kv_per_paying_layer * info.kv_paying_layers(info.n_layers as u64) as f64;
     let usable =
         (free_vram as f64 - vram_reserve as f64 - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
@@ -2552,6 +2796,7 @@ pub fn run_fit(
     kv_bytes_per_elem_v: f64,
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -2562,6 +2807,7 @@ pub fn run_fit(
         kv_bytes_per_elem_v,
         reserve_bytes,
         vram_reserve,
+        kv,
         /* allow_prompt */ true,
         /* announce */ true,
     )
@@ -2583,6 +2829,7 @@ pub fn run_fit_headless(
     kv_bytes_per_elem_v: f64,
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -2593,6 +2840,7 @@ pub fn run_fit_headless(
         kv_bytes_per_elem_v,
         reserve_bytes,
         vram_reserve,
+        kv,
         /* allow_prompt */ false,
         /* announce */ false,
     )
@@ -2620,12 +2868,13 @@ fn run_fit_impl(
     // `EmbeddingSlot::is_reserved_companion`).
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
     allow_prompt: bool,
     announce: bool,
 ) -> FitOutcome {
     let vram = vram_bytes().map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
     let free_vram = vram.map(|(free, _)| free);
-    let info = read_gguf_info(model_path);
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
 
     let decision = compute_fit(
@@ -2762,6 +3011,7 @@ fn run_fit_impl(
 /// `reserve_bytes`: see the identical parameter on `run_fit_impl` — same
 /// purpose (protect a launch-time embedding companion's footprint), applied
 /// here before the MoE decision instead of the dense one.
+#[allow(clippy::too_many_arguments)]
 pub fn run_moe_fit_plan(
     model_path: &Path,
     ctx_size: u32,
@@ -2770,8 +3020,9 @@ pub fn run_moe_fit_plan(
     reserve_bytes: u64,
     vram_reserve: u64,
     auto_n_ubatch: bool,
+    kv: KvLayout,
 ) -> MoeFitPlan {
-    let info = read_gguf_info(model_path);
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
     let layout = match (&info, file_size) {
         (Some(i), size) if size > 0 => read_model_moe_layout(model_path, i.n_layers),
@@ -2806,8 +3057,9 @@ pub fn run_moe_cache(
     n_cpu_moe: u32,
     auto_n_ubatch: bool,
     prefetch: MoePrefetch,
+    kv: KvLayout,
 ) -> Option<MoeCachePlan> {
-    let info = read_gguf_info(model_path);
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
     let layout = match (&info, file_size) {
         (Some(i), size) if size > 0 => read_model_moe_layout(model_path, i.n_layers),
@@ -3495,6 +3747,7 @@ mod tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -3778,6 +4031,7 @@ mod tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
         let file = 18_500_000_000;
@@ -3922,6 +4176,7 @@ mod plan_offload_tests {
             architecture: Some("qwen3".into()),
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -5576,6 +5831,7 @@ mod key_length_tests {
             architecture: Some("qwen35".to_string()),
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         // The reported case: 14.38 GiB free on a 15.92 GiB card, 15.66 GiB
         // of weights, 4096 context, F16 cache.
@@ -5667,6 +5923,7 @@ mod key_length_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         let hybrid = GgufInfo {
             full_attention_interval: Some(4),
@@ -5705,6 +5962,7 @@ mod key_length_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         let assumed = GgufInfo {
             key_length: None,
@@ -6042,6 +6300,7 @@ mod moe_fit_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -6398,6 +6657,7 @@ mod balanced_split_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -6590,5 +6850,120 @@ mod balanced_split_tests {
         )
         .unwrap();
         assert!(split.layers[0] > split.layers[1], "{:?}", split.layers);
+    }
+}
+
+#[cfg(test)]
+mod sliding_window_tests {
+    use super::*;
+
+    const MIB: u64 = 1024 * 1024;
+
+    fn key(k: &[u8], tag: u32, b: &mut Vec<u8>) {
+        b.extend_from_slice(&(k.len() as u64).to_le_bytes());
+        b.extend_from_slice(k);
+        b.extend_from_slice(&tag.to_le_bytes());
+    }
+    fn put_u32(k: &[u8], v: u32, b: &mut Vec<u8>) {
+        key(k, GGUF_TYPE_UINT32, b);
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn put_u32s(k: &[u8], vs: &[u32], b: &mut Vec<u8>) {
+        key(k, GGUF_TYPE_ARRAY, b);
+        b.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+        b.extend_from_slice(&(vs.len() as u64).to_le_bytes());
+        for v in vs {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    fn put_bools(k: &[u8], vs: &[bool], b: &mut Vec<u8>) {
+        key(k, GGUF_TYPE_ARRAY, b);
+        b.extend_from_slice(&GGUF_TYPE_BOOL.to_le_bytes());
+        b.extend_from_slice(&(vs.len() as u64).to_le_bytes());
+        b.extend(vs.iter().map(|&v| u8::from(v)));
+    }
+
+    /// The header of ggml-org's gemma-4-31B-it Q8_0, as far as KV sizing
+    /// reads it: 60 layers, every sixth global with 4 KV heads of 512, the
+    /// rest a window of 1024 with 16 KV heads of 256.
+    fn gemma_4_31b() -> GgufInfo {
+        let global = |il: u32| il % 6 == 5;
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        b.extend_from_slice(&11u64.to_le_bytes());
+        key(b"general.architecture", GGUF_TYPE_STRING, &mut b);
+        b.extend_from_slice(&6u64.to_le_bytes());
+        b.extend_from_slice(b"gemma4");
+        put_u32(b"gemma4.block_count", 60, &mut b);
+        put_u32(b"gemma4.embedding_length", 5376, &mut b);
+        put_u32(b"gemma4.attention.head_count", 32, &mut b);
+        let heads: Vec<u32> = (0..60).map(|il| if global(il) { 4 } else { 16 }).collect();
+        put_u32s(b"gemma4.attention.head_count_kv", &heads, &mut b);
+        put_u32(b"gemma4.attention.key_length", 512, &mut b);
+        put_u32(b"gemma4.attention.value_length", 512, &mut b);
+        put_u32(b"gemma4.attention.sliding_window", 1024, &mut b);
+        let pattern: Vec<bool> = (0..60).map(|il| !global(il)).collect();
+        put_bools(b"gemma4.attention.sliding_window_pattern", &pattern, &mut b);
+        put_u32(b"gemma4.attention.key_length_swa", 256, &mut b);
+        put_u32(b"gemma4.attention.value_length_swa", 256, &mut b);
+        parse_gguf_header(&b).expect("parsed")
+    }
+
+    #[test]
+    fn gemma_4s_per_layer_heads_and_window_are_read() {
+        let info = gemma_4_31b();
+        assert_eq!(info.n_layers, 60);
+        assert_eq!(info.n_head_kv, Some(16), "the most any layer has");
+        let w = info.window.as_ref().expect("a window");
+        assert_eq!(w.n_swa, 1024);
+        assert_eq!(w.layers.iter().filter(|&&s| s).count(), 50);
+        assert_eq!(w.head_count_kv.len(), 60);
+        assert_eq!((w.key_length, w.value_length), (Some(256), Some(256)));
+    }
+
+    /// Leonardo's load (19-11-2026): `-c 49152`, 8 slots, F16. llama.cpp
+    /// allocates 8 streams of 1536 cells in each window layer (9,600 MiB)
+    /// and the whole context in each global one (3,840 MiB). Sizing charged
+    /// about 360 MiB before, and said "fits fully".
+    #[test]
+    fn gemma_4s_kv_is_what_llama_cpp_allocates() {
+        let info = gemma_4_31b().with_kv_layout(KvLayout::new(8, 512, false));
+        assert_eq!(kv_cache_bytes(Some(&info), 49152, 2.0, 2.0), (9600 + 3840) * MIB);
+        // Not knowing the slots, every window layer is charged the whole
+        // context: what llama.cpp's own default (`swa_full`) allocates.
+        let unknown = gemma_4_31b();
+        assert_eq!(kv_cache_bytes(Some(&unknown), 49152, 2.0, 2.0), (38400 + 3840) * MIB);
+        // One slot: 1536 cells of window; the whole --kv-unified stream for 8.
+        let one = gemma_4_31b().with_kv_layout(KvLayout::new(1, 512, false));
+        assert_eq!(kv_cache_bytes(Some(&one), 49152, 2.0, 2.0), (1200 + 3840) * MIB);
+        let unified = gemma_4_31b().with_kv_layout(KvLayout::new(8, 512, true));
+        let cells = (1024 * 8 + 512) as u64; // 8704, a multiple of 256
+        assert_eq!(
+            kv_cache_bytes(Some(&unified), 49152, 2.0, 2.0),
+            50 * cells * 16 * 1024 + 3840 * MIB
+        );
+    }
+
+    /// A context shorter than the window: every layer holds it all.
+    #[test]
+    fn a_short_context_is_held_whole_by_the_window_layers_too() {
+        let info = gemma_4_31b().with_kv_layout(KvLayout::new(1, 512, false));
+        let all_full = 50 * 1024 * 16 * 1024 + 10 * 1024 * 4 * 2048;
+        assert_eq!(kv_cache_bytes(Some(&info), 1024, 2.0, 2.0), all_full);
+    }
+
+    /// Gemma 3 gives no pattern in its header: llama.cpp's period of 6 for
+    /// the architecture stands in for it.
+    #[test]
+    fn gemma_3s_pattern_is_the_architectures_period() {
+        assert_eq!(
+            swa_pattern(12, 6, false),
+            [true, true, true, true, true, false, true, true, true, true, true, false]
+        );
+        assert_eq!(swa_period_of("gemma3"), Some((6, false)));
+        assert_eq!(swa_period_of("llama"), None);
+        assert_eq!(swa_pattern(4, 2, true), [false, true, false, true]);
     }
 }

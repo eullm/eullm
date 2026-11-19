@@ -111,8 +111,15 @@ the reasoning arrives first, in lines whose `content` (or `response`) is empty,
 then the answer. The delimiters (`<think>`…`</think>`, Gemma 4's
 `<|channel>thought`…`<channel|>`) and the blank lines around them are dropped.
 An answer cut off by its token budget mid-thought has only `thinking`.
-`/v1/chat/completions` keeps the reasoning in the answer either way, except on a
-request with `tools`, where it comes back in `reasoning_content`.
+
+**`/v1/chat/completions` always returns the reasoning apart, in
+`reasoning_content`** (`delta.reasoning_content` as it streams), as
+llama-server does: `content` holds only the answer. Whether the model reasons
+at all follows the first of `think`, `chat_template_kwargs.enable_thinking`
+(llama-server's, which many OpenAI clients send) and `reasoning_effort`
+(`"none"` turns it off) that the request carries; with none of them, it
+reasons. Until this release the reasoning stayed in `content` there, and only
+`think` was read.
 
 ```bash
 curl -s http://localhost:11434/api/chat -H 'Content-Type: application/json' -d '{
@@ -1332,7 +1339,11 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   a note telling the model one was there; the current turn's never do. Each
 >   turn with a picture in it encodes the picture again.
 > - Multimodal models load in **sequential mode** (the continuous-batching
->   scheduler is text-only); text-only models keep full batching.
+>   scheduler is text-only); text-only models keep full batching. A
+>   multimodal model used for text alone (RAG, rewriting, grading) is
+>   therefore served one request at a time, whatever `--batch-size` says:
+>   `--no-mmproj` loads it without its projector, in batches, and refuses
+>   requests with images or audio.
 > - Web Chat UI accepts **both images and audio** as of v0.6.2 — 📎 attach or
 >   drag & drop. The engine itself reads `.wav`/`.mp3`/`.flac` and
 >   `.jpg`/`.png`/`.bmp`/`.gif`; since v0.6.43 anything else the browser can
