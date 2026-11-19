@@ -128,6 +128,7 @@ eullm run ./model.gguf --cli --no-ui       # The terminal chat only
 | `--mmproj` | (auto) | Multimodal projector path, when it is not beside the weights |
 | `--mmproj-offload` | (sizing decides) | Keep the projector on the GPU, whatever sizing would decide |
 | `--no-mmproj-offload` | (sizing decides) | Keep the projector in system RAM: the most VRAM for the text model, images encoded on the CPU |
+| `--no-mmproj` | off | Load every model without its projector: text only, served in batches with `--batch-size` slots, and a request with images or audio refused. A model with a projector is otherwise served one request at a time, whatever `--batch-size` says. Cannot be combined with `--mmproj` |
 | `--ctx-checkpoints` | `0` | Prompt-prefix state snapshots for hybrid/recurrent models |
 | `--checkpoint-min-step` | `8192` | Minimum new tokens between checkpoints |
 | `--rs-seq` | `0` | Recurrent-state rollback window — leave off unless you know why |

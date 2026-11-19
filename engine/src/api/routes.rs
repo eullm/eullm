@@ -893,8 +893,21 @@ fn media_as_notes(mut messages: Vec<Value>, media: &ChatMedia) -> Vec<Value> {
 }
 
 /// The error for a turn whose own attachments the loaded model cannot read.
-fn cannot_read_media(model_name: &str) -> (StatusCode, Json<Value>) {
-    if cfg!(feature = "multimodal") {
+/// `no_mmproj`: the server was started with `--no-mmproj`, so the model may
+/// well have a projector, left on disk on purpose.
+fn cannot_read_media(model_name: &str, no_mmproj: bool) -> (StatusCode, Json<Value>) {
+    if cfg!(feature = "multimodal") && no_mmproj {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": format!(
+                    "`{model_name}` was loaded without its projector: this server was started \
+                     with --no-mmproj, which serves text only, in batches. Images and audio \
+                     need a server started without it."
+                )
+            })),
+        )
+    } else if cfg!(feature = "multimodal") {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -2606,7 +2619,7 @@ async fn chat_with(
     let messages = if media.items.is_empty() || projector.is_some() {
         messages
     } else if media.current_turn > 0 {
-        return Err(cannot_read_media(&snap.model_name).into());
+        return Err(cannot_read_media(&snap.model_name, state.no_mmproj).into());
     } else {
         tracing::info!(
             "`{}` cannot read attachments: {} from earlier turns become notes",

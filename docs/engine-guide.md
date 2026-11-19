@@ -1332,7 +1332,11 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   a note telling the model one was there; the current turn's never do. Each
 >   turn with a picture in it encodes the picture again.
 > - Multimodal models load in **sequential mode** (the continuous-batching
->   scheduler is text-only); text-only models keep full batching.
+>   scheduler is text-only); text-only models keep full batching. A
+>   multimodal model used for text alone (RAG, rewriting, grading) is
+>   therefore served one request at a time, whatever `--batch-size` says:
+>   `--no-mmproj` loads it without its projector, in batches, and refuses
+>   requests with images or audio.
 > - Web Chat UI accepts **both images and audio** as of v0.6.2 — 📎 attach or
 >   drag & drop. The engine itself reads `.wav`/`.mp3`/`.flac` and
 >   `.jpg`/`.png`/`.bmp`/`.gif`; since v0.6.43 anything else the browser can

@@ -1719,3 +1719,51 @@ async fn real_model_a_hybrid_models_next_turn_restores_its_kept_state() {
         );
     }
 }
+
+/// `--no-mmproj`: a model with a projector beside its weights loads on the
+/// scheduler with every slot asked for, answers text, and refuses a request
+/// with an image, saying why. Without it, the projector would have sent the
+/// model to the sequential engine, one request at a time: on Leonardo, Gemma 4
+/// 31B with `--batch-size 8` answered 20 of 200 text requests in 25 minutes.
+/// The projector here is not a projector at all, which is the point: it is
+/// never opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a GGUF model in EULLM_GENERATION_TEST_MODEL"]
+async fn real_model_no_mmproj_serves_a_model_with_a_projector_in_batches() {
+    let server = start(&["tiny-mm"], |state| {
+        state.no_mmproj = true;
+        state.batch_size = 4;
+    })
+    .await;
+    std::fs::write(server.dir.join("tiny-mm").join("mmproj-F16.gguf"), b"GGUF").unwrap();
+
+    let (status, lines) = server
+        .generate(json!({
+            "model": "tiny-mm", "prompt": "Once upon a time", "stream": false,
+            "options": { "num_predict": 8 },
+        }))
+        .await;
+    assert_eq!(status, 200, "{lines:?}");
+    assert_finished(&lines);
+    {
+        let models = server.state.models.read().await;
+        let model = models.find("tiny-mm").expect("loaded");
+        assert!(model.scheduler.is_some(), "on the scheduler");
+        assert!(model.engine.is_none(), "not on the sequential engine");
+        assert_eq!(model.facts.batch_size, 4);
+    }
+
+    let (status, objects) = server
+        .post(
+            "/api/chat",
+            json!({
+                "model": "tiny-mm", "stream": false,
+                "messages": [{ "role": "user", "content": "what is this?",
+                               "images": ["/9j/4AAQSkZJRg=="] }],
+            }),
+        )
+        .await;
+    assert_eq!(status, 503, "{objects:?}");
+    let error = objects[0]["error"].as_str().expect("an error");
+    assert!(error.contains("--no-mmproj"), "{error}");
+}

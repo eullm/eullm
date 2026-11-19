@@ -257,6 +257,11 @@ pub struct AppState {
     /// worked out for the launch model says nothing about the next one.
     pub mmproj_offload: Option<bool>,
 
+    /// `--no-mmproj`: every model loads without its projector, on the
+    /// scheduler, and a request with images or audio is refused. See
+    /// `models::store::choose_projector`.
+    pub no_mmproj: bool,
+
     /// Whether a request's `model` field may name an arbitrary filesystem
     /// path. Off by default — see `resolve_model`.
     pub allow_model_paths: bool,
@@ -460,15 +465,19 @@ impl AppState {
                 );
             })
         });
-        // `--mtp` drafts on the scheduler's one slot only, which a projector
-        // rules out: see `projector_with_mtp`.
-        let (mmproj_path, mtp_note) = crate::models::store::projector_with_mtp(
+        // `--no-mmproj` leaves it on disk, and `--mtp` drafts on the
+        // scheduler's one slot only, which a projector rules out: see
+        // `choose_projector`.
+        let (mmproj_path, projector_note) = crate::models::store::choose_projector(
             mmproj_path,
-            named,
-            self.mtp > 0 && override_batch_size.unwrap_or(self.batch_size) == 1,
+            crate::models::store::ProjectorAsk {
+                named,
+                drafts: self.mtp > 0 && override_batch_size.unwrap_or(self.batch_size) == 1,
+                refused: self.no_mmproj,
+            },
             &crate::audit::sanitize_for_log(&normalized),
         );
-        if let Some(note) = mtp_note {
+        if let Some(note) = projector_note {
             if mmproj_path.is_some() {
                 tracing::warn!("{note}");
             } else {
@@ -2946,6 +2955,8 @@ pub struct ServeConfig {
     pub mmproj: Option<PathBuf>,
     /// See `AppState::mmproj_offload`.
     pub mmproj_offload: Option<bool>,
+    /// See `AppState::no_mmproj`.
+    pub no_mmproj: bool,
     pub model_name: Option<String>,
     pub engine: Option<Arc<InferenceEngine>>,
     pub scheduler: Option<SchedulerHandle>,
@@ -3293,6 +3304,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         backend: cfg.backend,
         fallback_mmproj: cfg.mmproj.clone(),
         mmproj_offload: cfg.mmproj_offload,
+        no_mmproj: cfg.no_mmproj,
         models: tokio::sync::RwLock::new(models),
         swap_lock: tokio::sync::Mutex::new(()),
         max_loaded_models,
@@ -3492,6 +3504,7 @@ impl AppState {
             backend: crate::inference::test_backend(),
             fallback_mmproj: None,
             mmproj_offload: None,
+            no_mmproj: false,
             models: tokio::sync::RwLock::new(resident::ResidentModels::default()),
             swap_lock: tokio::sync::Mutex::new(()),
             max_loaded_models: 1,

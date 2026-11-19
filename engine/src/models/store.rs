@@ -315,27 +315,53 @@ pub fn mmproj_beside(gguf: &Path) -> Option<PathBuf> {
     None
 }
 
-/// What `--mtp` makes of a model's projector, and the line that says so.
+/// What a load asks of a model's projector: see [`choose_projector`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProjectorAsk {
+    /// The projector was named with `--mmproj`, not found for the model.
+    pub named: bool,
+    /// This load would draft with `--mtp` (on one slot) without a projector.
+    pub drafts: bool,
+    /// `--no-mmproj`: no projector at all, the model reads text only.
+    pub refused: bool,
+}
+
+/// Whether a model loads with the projector found for it, and the line that
+/// says why not.
 ///
-/// Only the scheduler's single slot drafts, and a model with a projector is
-/// loaded on the sequential engine, since the scheduler does not route
-/// images. So `--mtp` on such a model did nothing and said nothing, the
-/// banner reading "MTP drafts" all the same: unsloth's Qwen3.5 and Qwen3.6
-/// MTP repositories ship `mmproj-*.gguf`, a pull fetches it with the
-/// weights, and LUMI-G measured no draft on them in any round (24-10-2026).
+/// A model with a projector is loaded on the sequential engine, one request
+/// at a time, since the continuous-batching scheduler does not route images.
+/// Two things are worth more than the images to some users, and each gives a
+/// reason to leave the projector on disk:
 ///
-/// `drafts` is whether this load would draft without the projector (`--mtp`
-/// on one slot). A projector found for the model, in the store or beside its
-/// weights, then gives way to the drafts asked for; one `named` with
-/// `--mmproj` stays, and the line says `--mtp` drafts nothing for the model.
-pub fn projector_with_mtp(
+/// * `--no-mmproj` (`refused`): a multimodal model used for text alone. On
+///   Leonardo (19-11-2026), Gemma 4 31B with its projector beside the
+///   weights served 200 text requests one at a time with `--batch-size 8`:
+///   20 answered in 25 minutes, where llama-server answered 198 in 6.5. Any
+///   projector goes, named or found, and requests with images are refused.
+/// * `--mtp` on one slot (`drafts`): only the scheduler's single slot
+///   drafts, so `--mtp` on such a model did nothing and said nothing, the
+///   banner reading "MTP drafts" all the same: unsloth's Qwen3.5 and Qwen3.6
+///   MTP repositories ship `mmproj-*.gguf`, a pull fetches it with the
+///   weights, and LUMI-G measured no draft on them in any round
+///   (24-10-2026). A projector found for the model gives way to the drafts;
+///   one `named` with `--mmproj` stays, and the line says `--mtp` drafts
+///   nothing for the model.
+pub fn choose_projector(
     projector: Option<PathBuf>,
-    named: bool,
-    drafts: bool,
+    ask: ProjectorAsk,
     model: &str,
 ) -> (Option<PathBuf>, Option<String>) {
     match projector {
-        Some(p) if drafts && !named => {
+        Some(p) if ask.refused => {
+            let line = format!(
+                "--no-mmproj: {model} loads without its projector ({}): text only, served in \
+                 batches; a request with images or audio is refused",
+                p.display()
+            );
+            (None, Some(line))
+        }
+        Some(p) if ask.drafts && !ask.named => {
             let line = format!(
                 "--mtp: {model} loads without its projector ({}) so that the MTP head can draft; \
                  it takes no images this way (without --mtp it loads with them)",
@@ -343,7 +369,7 @@ pub fn projector_with_mtp(
             );
             (None, Some(line))
         }
-        Some(p) if drafts => (
+        Some(p) if ask.drafts => (
             Some(p),
             Some(format!(
                 "--mtp: {model} loads with --mmproj on the sequential engine, which does not \
@@ -1156,13 +1182,21 @@ mod addressable_id_tests {
 }
 
 #[cfg(test)]
-mod projector_with_mtp_tests {
+mod choose_projector_tests {
     use super::*;
+
+    fn ask(named: bool, drafts: bool, refused: bool) -> ProjectorAsk {
+        ProjectorAsk {
+            named,
+            drafts,
+            refused,
+        }
+    }
 
     #[test]
     fn a_found_projector_gives_way_to_the_drafts_asked_for() {
         let p = PathBuf::from("/m/qwen3.5-9b/mmproj-F16.gguf");
-        let (kept, line) = projector_with_mtp(Some(p.clone()), false, true, "qwen3.5-9b");
+        let (kept, line) = choose_projector(Some(p.clone()), ask(false, true, false), "qwen3.5-9b");
         assert_eq!(kept, None);
         let line = line.expect("said");
         assert!(
@@ -1172,16 +1206,42 @@ mod projector_with_mtp_tests {
         assert!(line.contains("mmproj-F16.gguf"), "{line}");
 
         // Named with --mmproj, it stays, and the line says --mtp is idle.
-        let (kept, line) = projector_with_mtp(Some(p.clone()), true, true, "qwen3.5-9b");
+        let (kept, line) = choose_projector(Some(p.clone()), ask(true, true, false), "qwen3.5-9b");
         assert_eq!(kept, Some(p.clone()));
         assert!(line.expect("said").contains("--mtp does nothing for it"));
 
         // Without drafts to make room for, nothing changes and nothing is said.
         assert_eq!(
-            projector_with_mtp(Some(p.clone()), false, false, "m"),
+            choose_projector(Some(p.clone()), ProjectorAsk::default(), "m"),
             (Some(p), None)
         );
-        assert_eq!(projector_with_mtp(None, false, true, "m"), (None, None));
+        assert_eq!(
+            choose_projector(None, ask(false, true, false), "m"),
+            (None, None)
+        );
+    }
+
+    #[test]
+    fn no_mmproj_leaves_any_projector_on_disk_and_says_so() {
+        let p = PathBuf::from("/m/gemma-4-31b/mmproj-F16.gguf");
+        for named in [false, true] {
+            for drafts in [false, true] {
+                let (kept, line) =
+                    choose_projector(Some(p.clone()), ask(named, drafts, true), "gemma-4-31b");
+                assert_eq!(kept, None, "named {named}, drafts {drafts}");
+                let line = line.expect("said");
+                assert!(line.starts_with("--no-mmproj: gemma-4-31b"), "{line}");
+                assert!(
+                    line.contains("text only") && line.contains("refused"),
+                    "{line}"
+                );
+            }
+        }
+        // A model without one: nothing to leave, nothing said.
+        assert_eq!(
+            choose_projector(None, ask(false, false, true), "m"),
+            (None, None)
+        );
     }
 }
 
