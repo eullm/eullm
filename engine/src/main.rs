@@ -2959,10 +2959,10 @@ fn resolve_auto_context(
     cache_type_v: &inference::KvCacheType,
     vram_reserve: u64,
     extra_reserve: u64,
-    batch_size: usize,
+    kv: fit::KvLayout,
 ) -> u32 {
     let default = fit::AUTO_CTX_FLOOR;
-    let info = fit::read_gguf_info(gguf_path);
+    let info = fit::read_gguf_info(gguf_path).map(|info| info.with_kv_layout(kv));
     let moe = info.as_ref().is_some_and(|i| {
         fit::read_model_moe_layout(gguf_path, i.n_layers).is_some_and(|l| l.is_moe())
     });
@@ -2978,7 +2978,7 @@ fn resolve_auto_context(
         return default;
     }
     // The slots divide the window, in blocks of 256 tokens.
-    let slots = batch_size.max(1) as u32;
+    let slots = kv.slots;
     let align = slots * 256 / gcd(slots, 256);
     match fit::auto_context(
         fit::vram_bytes(),
@@ -3484,6 +3484,9 @@ async fn cmd_run(
         // already chose --cpu-moe/--n-cpu-moe themselves — explicit intent
         // beats a guess) does the dense run_fit flow, with its prompt and
         // its --fit-strict handling, take over.
+        // How the context lays out its KV cache: what the sliding-window
+        // layers of a Gemma take depends on it (`fit::SlidingWindow`).
+        let kv_layout = fit::KvLayout::new(batch_size, n_ubatch, kv_unified);
         if ctx_size == fit::CTX_AUTO {
             ctx_size = resolve_auto_context(
                 &gguf_path,
@@ -3498,7 +3501,7 @@ async fn cmd_run(
                     } else {
                         mmproj_bytes
                     }),
-                batch_size,
+                kv_layout,
             );
         }
         if fit {
@@ -3574,6 +3577,7 @@ async fn cmd_run(
                         keep_mapped: mmap,
                         ram_total: fit::system_ram_bytes(),
                     },
+                    kv_layout,
                 ),
                 Err(why) => {
                     println!("[EULLM] --moe-cache: {why}; running without the cache.");
@@ -3629,6 +3633,7 @@ async fn cmd_run(
                         sizing_reserve,
                         vram_reserve,
                         n_ubatch_flag.is_none(),
+                        kv_layout,
                     )
                 } else {
                     fit::MoeFitPlan {
@@ -3668,6 +3673,7 @@ async fn cmd_run(
                                 n_ubatch,
                                 sizing_reserve,
                                 vram_reserve,
+                                kv_layout,
                             )
                         {
                             println!(
@@ -3715,6 +3721,7 @@ async fn cmd_run(
                             kv_bpe_v,
                             sizing_reserve,
                             vram_reserve,
+                            kv_layout,
                         )
                     } else {
                         fit::run_fit_headless(
@@ -3726,6 +3733,7 @@ async fn cmd_run(
                             kv_bpe_v,
                             sizing_reserve,
                             vram_reserve,
+                            kv_layout,
                         )
                     } {
                         fit::FitOutcome::Proceed(n) => gpu_layers = n,

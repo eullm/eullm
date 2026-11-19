@@ -2081,12 +2081,34 @@ fn run_scheduler_loop(
     );
 
     // Estimate KV cache memory from model dimensions and cache types.
-    let kv_info = estimate_kv_memory(
+    let mut kv_info = estimate_kv_memory(
         model,
         total_ctx as u64,
         &config.cache_type_k,
         &config.cache_type_v,
     );
+    // On a model with sliding-window layers, what this context really holds:
+    // the window layers keep only their window (`fit::SlidingWindow`), and
+    // the uniform estimate above charged Gemma 4 31B 42 GB where 13 were
+    // allocated.
+    if let Some(info) = crate::fit::read_gguf_info(&config.model_path).map(|info| {
+        info.with_kv_layout(crate::fit::KvLayout::new(
+            sched_config.max_batch_size,
+            ctx.n_ubatch(),
+            config.kv_unified,
+        ))
+    }) {
+        let mib = |k: f64, v: f64| {
+            info.windowed_kv_bytes(total_ctx, k, v)
+                .map(|bytes| bytes / (1024.0 * 1024.0))
+        };
+        let bpe_k = cache_type_bytes_per_elem(&config.cache_type_k);
+        let bpe_v = cache_type_bytes_per_elem(&config.cache_type_v);
+        if let (Some(k), Some(v)) = (mib(bpe_k, 0.0), mib(0.0, bpe_v)) {
+            kv_info.kv_k_mib = k;
+            kv_info.kv_v_mib = v;
+        }
+    }
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));

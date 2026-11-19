@@ -541,7 +541,21 @@ impl AppState {
             0
         };
         let ram_total = crate::fit::system_ram_bytes();
-        let info = crate::fit::read_gguf_info(&gguf_path);
+        // Laid out as this load will lay out its KV cache: what the
+        // sliding-window layers of a Gemma take depends on it
+        // (`fit::SlidingWindow`). A model with a projector loads on the
+        // sequential engine, one sequence.
+        let kv_layout = crate::fit::KvLayout::new(
+            if mmproj_path.is_some() {
+                0
+            } else {
+                override_batch_size.unwrap_or(self.batch_size)
+            },
+            self.n_ubatch.unwrap_or(crate::inference::DEFAULT_N_UBATCH),
+            self.kv_unified,
+        );
+        let info =
+            crate::fit::read_gguf_info(&gguf_path).map(|info| info.with_kv_layout(kv_layout));
         let file_size = crate::fit::model_file_bytes(&gguf_path);
         let layout = match (&info, file_size) {
             (Some(i), size) if self.fit && size > 0 => {
