@@ -51,8 +51,8 @@ def chars(tools):
 
 def summarize(items, rankings):
     """`items` and their `rankings`, one method on one set."""
-    with_tools = [(i, r) for i, r in zip(items, rankings) if i.needed]
-    without = [(i, r) for i, r in zip(items, rankings) if not i.needed]
+    with_tools = [(i, r) for i, r in zip(items, rankings, strict=True) if i.needed]
+    without = [(i, r) for i, r in zip(items, rankings, strict=True) if not i.needed]
     report = {"items": len(items), "items_needing_tools": len(with_tools)}
     if with_tools:
         worst = [worst_rank(r.order, i.needed, len(i.candidates)) for i, r in with_tools]
