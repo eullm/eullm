@@ -58,7 +58,9 @@ def fit_threshold(scores, small_correct, large_correct, max_loss=MAX_LOSS_POINTS
     best, best_small = None, -1
     for t in sorted(set(scores)) + [math.inf]:
         routed = [s >= t for s in scores]
-        right = sum(sc if r else lc for r, sc, lc in zip(routed, small_correct, large_correct))
+        right = sum(
+            sc if r else lc for r, sc, lc in zip(routed, small_correct, large_correct, strict=True)
+        )
         if 100 * (large - right) / n <= max_loss and sum(routed) > best_small:
             best, best_small = t, sum(routed)
     return best
@@ -70,7 +72,7 @@ def cohen_kappa(a, b):
         return None
     labels = sorted(set(a) | set(b))
     n = len(a)
-    observed = sum(x == y for x, y in zip(a, b)) / n
+    observed = sum(x == y for x, y in zip(a, b, strict=True)) / n
     expected = sum((a.count(label) / n) * (b.count(label) / n) for label in labels)
     if expected == 1:
         return 1.0
@@ -83,16 +85,16 @@ def summarize(items, routed, small_correct, large_correct, large_ms, scores=None
     `large_ms`: what each request took on the large model; `latency`: what
     deciding took, in ms, when it is not free."""
     n = len(items)
-    chosen = [s if r else lc for r, s, lc in zip(routed, small_correct, large_correct)]
+    chosen = [s if r else lc for r, s, lc in zip(routed, small_correct, large_correct, strict=True)]
     report = {
         "test_items": n,
         "routed_small": sum(routed),
         "calls_avoided": sum(routed) / n if n else None,
-        "large_gpu_s_avoided": sum(ms for r, ms in zip(routed, large_ms) if r) / 1000,
+        "large_gpu_s_avoided": sum(ms for r, ms in zip(routed, large_ms, strict=True) if r) / 1000,
         "accuracy": sum(chosen) / n if n else None,
         "accuracy_large": sum(large_correct) / n if n else None,
-        "lost": sum(lc and not c for c, lc in zip(chosen, large_correct)),
-        "gained": sum(c and not lc for c, lc in zip(chosen, large_correct)),
+        "lost": sum(lc and not c for c, lc in zip(chosen, large_correct, strict=True)),
+        "gained": sum(c and not lc for c, lc in zip(chosen, large_correct, strict=True)),
     }
     if n:
         report["delta"] = report["accuracy"] - report["accuracy_large"]
@@ -100,7 +102,7 @@ def summarize(items, routed, small_correct, large_correct, large_ms, scores=None
             [float(c) for c in chosen], [float(c) for c in large_correct]
         )
     if scores is not None:
-        ok = [sc or not lc for sc, lc in zip(small_correct, large_correct)]
+        ok = [sc or not lc for sc, lc in zip(small_correct, large_correct, strict=True)]
         report["auroc"] = auroc(scores, ok)
     if latency:
         report["latency_ms"] = {"p50": percentile(latency, 0.5), "p95": percentile(latency, 0.95)}
