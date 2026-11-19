@@ -375,7 +375,7 @@ async def collect(args):
     print()
 
     async with aiohttp.ClientSession() as session:
-        for i, test in enumerate(TESTS):
+        for test in TESTS:
             response = await send_prompt(session, args.url, args.model, test["prompt"], args.temperature)
             ok, detail = check_answer(test, response)
             status = "PASS" if ok else "FAIL"
