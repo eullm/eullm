@@ -66,8 +66,11 @@ def load_articles(paths: list[Path]):
 
 def ask(url: str, msgs: list[dict], max_tokens: int, temperature: float, seed: int,
         timeout: float = 600.0) -> dict:
+    # repeat_penalty 1.0 is llama-server's default and not EULLM's (1.1, as
+    # Ollama): said here, the two servers answer the same request
     body = {"messages": msgs, "temperature": temperature, "max_tokens": max_tokens,
-            "seed": seed, "chat_template_kwargs": {"enable_thinking": False}}
+            "seed": seed, "repeat_penalty": 1.0,
+            "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(url.rstrip("/") + "/v1/chat/completions",
                                  data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
