@@ -100,7 +100,7 @@ def make_test_grid_lookup(filler_tokens: int) -> dict:
     """Test 2: Memorize a digit grid, recall a specific cell."""
     random.seed(42)  # deterministic grid
     grid = []
-    for r in range(20):
+    for _ in range(20):
         row = [str(random.randint(0, 9)) for _ in range(20)]
         grid.append(row)
 
