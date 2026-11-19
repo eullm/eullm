@@ -279,13 +279,15 @@ class Knn:
         vectors = []
         for start in range(0, len(texts), 32):
             vectors += self.embed(texts[start : start + 32])
-        self.dev = list(zip(vectors, small_ok))
+        self.dev = list(zip(vectors, small_ok, strict=True))
 
     def decide(self, item):
         started = time.perf_counter()
         query = self.embed([item.text])[0]
         ms = (time.perf_counter() - started) * 1000
-        near = sorted(self.dev, key=lambda d: -sum(a * b for a, b in zip(query, d[0])))[: self.k]
+        near = sorted(
+            self.dev, key=lambda d: -sum(a * b for a, b in zip(query, d[0], strict=True))
+        )[: self.k]
         score = sum(ok for _, ok in near) / len(near) if near else 0.0
         return Decision(score, score >= 0.5, ms)
 
