@@ -89,7 +89,7 @@ def main(argv=None) -> int:
         else:
             dst.symlink_to(part.resolve())
     chunk = b"\0" * (1 << 20)
-    for part, name, _, offset, n in found:
+    for part, _name, _, offset, n in found:
         with open(a.out / part.name, "r+b") as f:
             f.seek(offset)
             left = n
