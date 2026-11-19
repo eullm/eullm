@@ -68,8 +68,11 @@ def ask(url: str, msgs: list[dict], max_tokens: int, temperature: float, seed: i
         timeout: float = 600.0) -> dict:
     # repeat_penalty 1.0 is llama-server's default and not EULLM's (1.1, as
     # Ollama): said here, the two servers answer the same request
+    # thinking off said both ways: llama-server reads chat_template_kwargs,
+    # EULLM only Ollama's "think" (2026-11-19: Gemma 4 wrote its reasoning
+    # into every answer through the engine without it)
     body = {"messages": msgs, "temperature": temperature, "max_tokens": max_tokens,
-            "seed": seed, "repeat_penalty": 1.0,
+            "seed": seed, "repeat_penalty": 1.0, "think": False,
             "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(url.rstrip("/") + "/v1/chat/completions",
                                  data=json.dumps(body).encode(),
