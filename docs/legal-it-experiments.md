@@ -1311,3 +1311,31 @@ four starts, against r2l (devbig 449 / 442 without the note, practical
 * From the whole adapter the distillation does not bring the reading back
   in 300 steps (devbig and practical still behind), and keeps the most
   knowledge of all (322).
+
+## 26. 2026-11-19: the second seed, the last teachers, the verified corpus
+
+**Teachers, completed.** Judged by all three checkers (they are not checkers
+themselves), against Qwen3-30B on the same articles under the same three:
+Qwen3.8-27B cases 21/117 (18%) against 40%, explanations 35/190 (18%)
+against 70%; Mistral Small 4 cases 106/176 (60%) against 40%, explanations
+129/183 (70%) against 70%. Gemma 4 31B (7% and 6% under two judges, against
+47% and 71%) stays the teacher; Mistral Small 4 is no better than the old one.
+
+**Gemma's rewrite of the corpus**, done overnight: 6,357 cases and 6,943
+explanations (eight 1-GPU chains), 13,300 checked by Flash-Next and
+GPT-OSS-120B.
+
+**The verified corpus** (`memory-v3`, the old corpus without the rows both
+Gemma and GPT-OSS flag): 217,902 rows of 253,897; the strict variant without
+cases and explanations (`memory-v3s`) 202,570. The knowledge LoRA on it
+(`k3s-r2l`, the recipe of `a2-r2l-lora2`) is training.
+
+**The distillation, a second seed** (`r2l-k50-g1-opd200s1`, seed 1): devbig
+7:7 and 12:13 without the note, practical 5:13 (p = 0.096), traps 1:3,
+closed book 274 (seed 0: 299). 200 steps from g1 hold r2l's level on the
+product in both seeds, with 274-299 closed book against r2l's 196: the
+candidate. 600 steps from the whole adapter: practical worse (7:26), closed
+book 258, below 300 steps (322); more steps take knowledge away without
+giving the reading back. The 0.75 merge, alone and distilled, is worse than
+both neighbours (distilled: devbig 6:76, closed book 182), an outlier to be
+read before it is believed.
