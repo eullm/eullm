@@ -3226,7 +3226,9 @@ async fn chat_completions_with(
     )
     .await;
 
-    let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
+    // `think`, `chat_template_kwargs.enable_thinking` or `reasoning_effort`:
+    // see `thinking::openai_think`.
+    let think = super::thinking::openai_think(&body);
     let model_name_ref: &str = &model;
     // ── Tool calling (issue #334): render through the model's own template
     // with the request's full OpenAI-format JSON, so tool definitions, tool
@@ -3345,7 +3347,15 @@ async fn chat_completions_with(
         );
 
         let (message, called_tools) = match tmpl.parse_output(&text) {
-            Some(parsed) => {
+            Some(mut parsed) => {
+                // A template parser that left the reasoning in the answer
+                // (Gemma 4's `<|channel>thought`): taken apart here, as the
+                // plain path does.
+                if parsed.reasoning_content.is_none() {
+                    let (reasoning, content) = super::thinking::split(&parsed.content);
+                    parsed.reasoning_content = reasoning;
+                    parsed.content = content;
+                }
                 let mut message = json!({ "role": "assistant" });
                 message["content"] =
                     if parsed.content.is_empty() && !parsed.tool_calls.is_empty() {
@@ -3374,7 +3384,7 @@ async fn chat_completions_with(
                 }
                 (message, called)
             }
-            None => (json!({ "role": "assistant", "content": text }), false),
+            None => (openai_message(text), false),
         };
         let finish_reason = if called_tools {
             "tool_calls"
@@ -3461,10 +3471,7 @@ async fn chat_completions_with(
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": text
-                    },
+                    "message": openai_message(text),
                     "finish_reason": stop_reason.as_api_str()
                 }],
                 "usage": {
@@ -3528,10 +3535,7 @@ async fn chat_completions_with(
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": result.text
-                    },
+                    "message": openai_message(result.text),
                     "finish_reason": result.stop_reason.as_api_str()
                 }],
                 "usage": {
@@ -3707,14 +3711,29 @@ fn stream_from_channel_sse(
     async_stream::stream! {
         let _lease = lease;
         let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+        // The OpenAI stream carries the reasoning apart, in
+        // `delta.reasoning_content` (see `super::thinking`).
+        let mut splitter = matches!(format, StreamFormat::OpenAI).then(ThinkingSplitter::new);
 
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::Token(piece) => {
-                    let data = format_token_event(&piece, &model, &completion_id, format);
-                    yield Ok(Event::default().data(data.to_string()));
+                    let parts = match splitter.as_mut() {
+                        Some(splitter) => splitter.push(&piece),
+                        None => vec![Part::Content(piece)],
+                    };
+                    for part in parts {
+                        let data = format_part_event(&part, &model, &completion_id, format);
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
                 }
                 StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason, stats } => {
+                    // What the splitter still held: the end of the answer, or
+                    // of reasoning the token budget cut short.
+                    for part in splitter.take().map(ThinkingSplitter::finish).unwrap_or_default() {
+                        let data = format_part_event(&part, &model, &completion_id, format);
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
                     // Audit log
                     audit.log(&model, format, tokens_prompt, tokens_generated, duration_ms, &stats);
 
@@ -3844,14 +3863,25 @@ fn format_part_event(part: &Part, model: &str, completion_id: &str, format: Stre
             let mut event = format_token_event("", model, completion_id, format);
             match format {
                 StreamFormat::OllamaChat => event["message"]["thinking"] = json!(piece),
-                // `/v1` never splits, so this is `/api/generate`.
-                StreamFormat::OllamaGenerate | StreamFormat::OpenAI => {
-                    event["thinking"] = json!(piece)
+                StreamFormat::OllamaGenerate => event["thinking"] = json!(piece),
+                StreamFormat::OpenAI => {
+                    event["choices"][0]["delta"] = json!({ "reasoning_content": piece })
                 }
             }
             event
         }
     }
+}
+
+/// `/v1/chat/completions`' `message`: the answer, and its reasoning apart in
+/// `reasoning_content` when it had any (see [`super::thinking`]).
+fn openai_message(text: String) -> Value {
+    let (reasoning, content) = super::thinking::split(&text);
+    let mut message = json!({ "role": "assistant", "content": content });
+    if let Some(reasoning) = reasoning {
+        message["reasoning_content"] = Value::String(reasoning);
+    }
+    message
 }
 
 /// `/api/chat`'s `message`: the answer, and its reasoning in `thinking` when
