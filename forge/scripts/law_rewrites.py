@@ -134,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="one server per comma-separated entry; '0+1+2' is one server over "
                          "three GPUs, for a teacher no single GPU holds (Flash-Next)")
     ap.add_argument("--llama-server")
+    ap.add_argument("--engine", metavar="EULLM_BIN",
+                    help="serve --serve with this EULLM Engine binary (`eullm serve`) instead "
+                         "of llama-server: the same llama.cpp underneath, through the runtime "
+                         "that ships, to compare the two on the same requests")
     ap.add_argument("--parallel", type=int, default=16, help="requests in flight per server")
     ap.add_argument("--ctx", type=int, default=6144, help="context per request (tokens)")
     ap.add_argument("--max-tokens", type=int, default=1200)
@@ -178,11 +182,17 @@ def main(argv: list[str] | None = None) -> int:
     with contextlib.ExitStack() as stack:
         urls = list(args.url)
         if args.serve:
-            from eullm_forge.eval.gguf import LlamaServer
+            from eullm_forge.eval.gguf import EullmServer, LlamaServer
             for gpu in args.gpus.split(","):
-                srv = LlamaServer(args.serve, binary=args.llama_server, parallel=args.parallel,
-                                  ctx_per_slot=args.ctx, devices=gpu.replace("+", ","),
-                                  log_path=args.out.with_name(f"server-gpu{gpu}.log"))
+                log = args.out.with_name(f"server-gpu{gpu}.log")
+                if args.engine:
+                    srv = EullmServer(args.serve, binary=args.engine, parallel=args.parallel,
+                                      ctx_per_slot=args.ctx, devices=gpu.replace("+", ","),
+                                      log_path=log)
+                else:
+                    srv = LlamaServer(args.serve, binary=args.llama_server,
+                                      parallel=args.parallel, ctx_per_slot=args.ctx,
+                                      devices=gpu.replace("+", ","), log_path=log)
                 urls.append(stack.enter_context(srv).url)
             print(f"[rewrites] {len(urls)} teacher server(s) up after "
                   f"{time.monotonic() - t0:.0f} s", flush=True)
