@@ -325,7 +325,7 @@ async def run_warmup(url: str, model: str, count: int):
     """Send warmup requests to prime the engine."""
     print(f"  Sending {count} warmup request(s)...", end="", flush=True)
     async with aiohttp.ClientSession() as session:
-        for i in range(count):
+        for _ in range(count):
             await stream_request(
                 session=session,
                 url=url,
