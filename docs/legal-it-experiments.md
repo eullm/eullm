@@ -1370,3 +1370,12 @@ word; of the 127 that differ the median first difference is at character
 206 (9 before character 20), the arithmetic of a different batch and not a
 different prompt. For text work the engine answers as llama-server does once
 told the same things.
+
+**Speed**: the engine 198 in 4.2 minutes (47 a minute, 237 prompt and 128
+generated tokens a second), llama-server 198 in 6.4 (31 a minute, 156 and
+84): half as fast again, the same two refused (a deadline, a length). Not
+all of it is the engine's own: its 0.9.0 carries llama.cpp 1.0, whose
+few-token kernel speeds up several requests at once on Ampere and later,
+while the llama-server of these jobs was built from a checkout of
+2026-11-03; and its context per slot was 3,072 tokens against 6,144. To
+know what is whose, llama-server again at llama.cpp 1.0 and 3,072 tokens.
