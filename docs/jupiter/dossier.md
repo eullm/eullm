@@ -713,6 +713,32 @@ JUPITER, named by its Slurm job id.
   both. From g9prc-r10 with the mix without made-up articles (g9prcv),
   the rulings fade (28% to 8-18%) as the denials ease (26-29%).
 
+  **19-11, the lines to their end** (118.1 node-hours on the 17th, the
+  most in a day; the queue ran out on the 18th, 2.1 that day and none on
+  the 19th by morning; 474 left):
+
+  | | closed right | real denied | ruling refused | held-out | devbig | practical | practical held-out | rewritten traps |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9r-r2 | 206 | 51% | 90% | 197 + 4 | 438 + 11 | 76 + 19 | 45 + 9 | 975 |
+  | g9prv-r8 | 230 | 33% | 0% | 207 + 1 | 438 + 8 | 80 + 12 | 42 + 10 | 953 |
+  | **g9prm-r6** | 269 | **14%** | **75%** | 203 + 1 | **442 + 8** | 82 + 10 | **47 + 4** | **960** |
+  | g9prm-r8 | **276** | 23% | 75% | 204 + 1 | 438 + 8 | 81 + 9 | 46 + 5 | 958 |
+  | g9pro r1-r6 (seed 44) | 232-250 | 38-45% | 8-45% | 201-204 | 430-439 | 77-83 | 42-46 | 947-971 |
+  | g4-r3 | 91 | 19% | 5% | 198 + 1 | 447 + 6 | 76 + 18 | 40 + 10 | 958 |
+  | g4m-r1 | 162 | 44% | 100% | 199 + 1 | 447 + 6 | 76 + 20 | 44 + 10 | 960 |
+  | g4m-r6 | 187 | 51% | 100% | 198 + 3 | 447 + 5 | 73 + 22 | 46 + 8 | 943 |
+
+  With three seeds of the no-premise mix, the made-up rulings come back in
+  all (8-75%), the denial of real articles depends on the seed (14-32% for
+  seed 42, 38-47% for 43 and 44). **Candidate 9B: g9prm-r6**, the fewest
+  real articles denied and the made-up rulings refused three times in
+  four, open book at or above g9r-r2 but for the rewritten traps (-15).
+  **Candidate 4B: g4m-r1**, the same mix on g4-r3 without the memory
+  training: every made-up ruling refused, the open book and the traps as
+  g4-r3's, the practical held-out +4; it calls real articles nonexistent
+  more often (44% against 19%), a model that knows few articles erring
+  towards doubt.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
