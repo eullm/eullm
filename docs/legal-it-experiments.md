@@ -1339,3 +1339,43 @@ book 258, below 300 steps (322); more steps take knowledge away without
 giving the reading back. The 0.75 merge, alone and distilled, is worse than
 both neighbours (distilled: devbig 6:76, closed book 182), an outlier to be
 read before it is believed.
+
+## 27. 2026-11-19: the same teacher through EULLM Engine 0.9.0 and llama-server
+
+Gemma 4 31B Q8_0 rewriting the same 200 cases (`law_rewrites.py`, 1 A100, 8
+requests in flight, temperature 0), once through llama-server and once
+through the engine (`--engine`, the published 0.9.0 data-center build), both
+on the same llama.cpp. Four things stood in the way before the two compared,
+all of them the engine's, all handed to the engine's own branch:
+
+1. **A projector beside the weights makes the engine sequential.** Gemma's
+   folder holds its `mmproj`, the engine loads it on its own
+   (`mmproj_beside`) and forces `batch_size = 0` for every request, text
+   included: 20 answers in 25 minutes against llama-server's 198 in 6.5. The
+   weights hard-linked into a folder without it: the scheduler, 8 slots.
+2. **Its KV cache for 8 x 6,144 tokens did not fit** (38,400 MiB on top of
+   30.4 GiB of weights) where llama-server, same context, did: the
+   sliding-window layers seem to get a full cache. `--fit` had said the
+   model fits. 8 x 3,072 tokens did.
+3. **Thinking stays on in `/v1/chat/completions`** unless the request says
+   Ollama's `think: false`; `chat_template_kwargs.enable_thinking` is not
+   read, and Gemma 4's `<|channel>thought` block came back inside `content`
+   (13 of 13, 3,712 characters against 650).
+4. Its `repeat_penalty` defaults to 1.1 (Ollama's), llama-server's to 1.0:
+   now stated in every request.
+
+With the projector away, a context that fits and `think: false`: 198 answers
+each, the same mean length (673 and 671 characters), 71 identical word for
+word; of the 127 that differ the median first difference is at character
+206 (9 before character 20), the arithmetic of a different batch and not a
+different prompt. For text work the engine answers as llama-server does once
+told the same things.
+
+**Speed**: the engine 198 in 4.2 minutes (47 a minute, 237 prompt and 128
+generated tokens a second), llama-server 198 in 6.4 (31 a minute, 156 and
+84): half as fast again, the same two refused (a deadline, a length). Not
+all of it is the engine's own: its 0.9.0 carries llama.cpp 1.0, whose
+few-token kernel speeds up several requests at once on Ampere and later,
+while the llama-server of these jobs was built from a checkout of
+2026-11-03; and its context per slot was 3,072 tokens against 6,144. To
+know what is whose, llama-server again at llama.cpp 1.0 and 3,072 tokens.
