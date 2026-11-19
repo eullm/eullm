@@ -32,7 +32,8 @@ from pathlib import Path
 # a teacher's directory name in the pilot -> its label as a checker
 SELF = {"gemma": "gemma4-31b", "gptoss": "gpt-oss-120b", "flashnext": "flashnext",
         "qwen38": "qwen38-27b",     # Qwen3.8-27B: a teacher only, judged by all three
-        "mistral4": "mistral-small-4"}  # Mistral Small 4 119B: likewise
+        "mistral4": "mistral-small-4",  # Mistral Small 4 119B: likewise
+        "large4": "mistral-large-4"}    # Mistral Large 4, 1T over four nodes: likewise
 BASE = "qwen30b"
 
 
