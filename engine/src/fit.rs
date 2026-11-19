@@ -1025,8 +1025,17 @@ pub fn run_balance_moe_split(
 
 /// What each GPU of a split keeps free beside its share of the model: the
 /// reserve, and its own compute buffer, which every GPU of a split has.
+///
+/// The buffer's growth with the micro-batch is counted twice over here.
+/// `ubatch_reserve_bytes` was measured on Qwen3.8-Flash-Next, and a wider
+/// model asks more: GLM-5.3-Flash split over two GCDs of LUMI-G asked
+/// 2,795.76 MiB of the first at 2,048 tokens and 32 slots, where the flat
+/// reserve and the growth came to 1,472 MiB and the load failed
+/// (17-11-2026); twice the growth, 2,624 MiB, and the reserve beside it,
+/// hold it. A single GPU has the cache's own way back
+/// (`inference::grow_moe_cache`); a split, made at load, has none.
 pub fn per_device_reserve(vram_reserve: u64, n_ubatch: u32) -> u64 {
-    vram_reserve + COMPUTE_BUFFER_RESERVE_BYTES as u64 + ubatch_reserve_bytes(n_ubatch)
+    vram_reserve + COMPUTE_BUFFER_RESERVE_BYTES as u64 + 2 * ubatch_reserve_bytes(n_ubatch)
 }
 
 /// The line the load log gets for a balanced split.
@@ -6491,6 +6500,20 @@ mod balanced_split_tests {
             split.layers
         );
         assert!(describe_balanced_split(&split, 6).contains("7 layers in RAM instead of 6"));
+    }
+
+    /// Each GPU of a split keeps its reserve, the flat compute buffer and
+    /// twice the growth of a large micro-batch: GLM-5.3-Flash asked
+    /// 2,795.76 MiB at 2,048 tokens, which once the growth did not hold.
+    #[test]
+    fn a_split_gpu_keeps_room_for_a_wide_models_compute_buffer() {
+        const MIB: u64 = 1024 * 1024;
+        let reserve = per_device_reserve(1024 * MIB, 2048);
+        assert_eq!(reserve, 1024 * MIB + 320 * MIB + 2 * 1152 * MIB);
+        // GLM's 2,795.76 MiB, with half a GiB to spare.
+        assert!(reserve > 2796 * MIB + 512 * MIB);
+        // At the default micro-batch, the flat buffer alone.
+        assert_eq!(per_device_reserve(1024 * MIB, 512), 1344 * MIB);
     }
 
     /// The proportions land each block where meant for any counts, also on
