@@ -88,6 +88,20 @@ mid-sentence and came back as `done_reason="length"`, pointing at no flag,
 because the operator had set none. Both default to 1 now and concurrency is
 asked for.
 
+## The engine is a library too
+
+`src/main.rs` is the root of the `eullm_engine` library, not of the binary:
+`src/bin/eullm.rs` only calls `eullm_engine::main()`. The file kept its name
+(and the `mod` lines stayed where they were) so that branches editing the
+command line merge as before. Unit tests run under `cargo test` (or `cargo
+test --lib`); `cargo test --bin eullm` runs none.
+
+`src/extensions.rs` is what a program that builds its own binary on the
+engine can add: wraps around the two HTTP routers, an `Identity::named`
+the API keys accept, an `AdminGrant` the admin checks accept. These are
+generic extension points with no-op defaults; the open repository never
+names a distribution or checks a licence.
+
 ## Keeping llama.cpp Current (MANDATORY)
 
 Falling behind on llama.cpp means falling behind on every new model

@@ -107,6 +107,15 @@ impl Identity {
         Self { key_id: None }
     }
 
+    /// A caller an embedding program authenticated itself (its own login,
+    /// say): see `crate::extensions`. The engine takes it as authenticated
+    /// and writes `name` in the audit trail as the request's user.
+    pub fn named(name: impl Into<String>) -> Self {
+        Self {
+            key_id: Some(name.into()),
+        }
+    }
+
     /// The key id, for the audit trail's `user_id` and for log lines. `None`
     /// means no authentication was configured, which is a legitimate state for
     /// single-user local use — not an error.

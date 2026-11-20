@@ -2510,6 +2510,54 @@ curl http://localhost:11434/v1/chat/completions \
   -d '{"model": "local", "messages": [{"role": "user", "content": "Ciao!"}]}'
 ```
 
+## Building on the engine (the `eullm_engine` library)
+
+The engine is a Rust library as well as the `eullm` binary, so that a
+distribution can build its own binary around it and add to the HTTP side
+without forking it. The `eullm` binary is three lines: it calls
+`eullm_engine::main()`. A distribution calls
+`eullm_engine::run_with_extensions(registry)` instead, and everything else,
+the command line included, is the engine's own.
+
+```rust
+use std::sync::Arc;
+use eullm_engine::extensions::{ExtensionRegistry, Identity, axum};
+
+fn main() {
+    let registry = ExtensionRegistry {
+        // The chat listener's finished router, perimeter and all.
+        chat: Some(Arc::new(|router: axum::Router| {
+            router.layer(axum::middleware::from_fn(
+                |mut req: axum::extract::Request, next: axum::middleware::Next| async move {
+                    // Your own login decided who this is:
+                    req.extensions_mut().insert(Identity::named("mario.rossi"));
+                    next.run(req).await
+                },
+            ))
+        })),
+        ..ExtensionRegistry::default()
+    };
+    eullm_engine::run_with_extensions(registry);
+}
+```
+
+- `chat` and `api` wrap the two listeners' routers: add routes with
+  `router.merge(...)`, and middleware with `router.layer(...)`, which runs
+  before the engine's API keys, address allowlist and origin checks. Routes
+  added this way are outside that perimeter, and are the distribution's to
+  protect.
+- An `Identity::named(user)` in a request's extensions is taken as
+  authenticated (the API keys are skipped for it) and written in the audit
+  trail as the request's user. An `AdminGrant` lets the request do what the
+  admin key allows ([a managed server](#a-managed-server-eullm_admin_key)).
+  Clients cannot send either: they exist only inside the process.
+- `eullm_engine::extensions::axum` is the axum the routers are made with;
+  `build_info()` gives the engine's version and commit for the
+  distribution's own `--version`.
+- Depend on the engine at an exact commit (`git = "...", rev = "<sha>"`)
+  and commit `Cargo.lock`: the library's interface follows the engine's
+  releases, with no promise of stability between them.
+
 ## Logging & Troubleshooting
 
 The Engine uses [`tracing`](https://docs.rs/tracing) for structured logging. Control verbosity with the `RUST_LOG` environment variable.

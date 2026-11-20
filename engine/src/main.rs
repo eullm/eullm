@@ -1,3 +1,10 @@
+//! The EuLLM engine: the `eullm` binary's whole program, and a library for
+//! programs that build their own binary around it (see [`extensions`]).
+//!
+//! This file is the library's root, not the binary's: `src/bin/eullm.rs`
+//! calls [`main`]. It kept its name so that the history of the command line,
+//! which lives here, did not move.
+
 mod api;
 mod audit;
 mod banner;
@@ -19,6 +26,18 @@ mod settings;
 mod tools;
 mod ui;
 mod update;
+
+pub mod extensions;
+
+/// Run the engine with what `registry` adds, the command line and all else
+/// as `eullm` itself: what an embedding program's `main` calls instead of
+/// [`main`]. See [`extensions`].
+pub fn run_with_extensions(registry: extensions::ExtensionRegistry) {
+    if !extensions::install(registry) {
+        eprintln!("eullm: extensions were installed twice; keeping the first");
+    }
+    main();
+}
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -1239,8 +1258,9 @@ enum Commands {
     },
 }
 
+/// The `eullm` command line: what `src/bin/eullm.rs` runs.
 #[tokio::main]
-async fn main() {
+pub async fn main() {
     // Check --daemon BEFORE initializing tracing/tokio internals.
     // The daemon spawns a child process, so must happen early.
     {
