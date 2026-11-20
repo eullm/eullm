@@ -188,7 +188,7 @@ def main():
             for method in build_methods(args):
                 print(f"  {method.name}", file=sys.stderr, flush=True)
                 decisions = run(method, cases, details, dataset.name, sides)
-                paired = list(zip(cases, decisions))
+                paired = list(zip(cases, decisions, strict=True))
                 served = sorted({d.server["model"] for d in decisions if d.server.get("model")})
                 results.append(
                     {
