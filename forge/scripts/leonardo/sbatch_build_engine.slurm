@@ -21,7 +21,9 @@
 # Settable:
 #   EB_LABEL     the result's name, $WORK/eullm-engine/EB_LABEL/eullm
 #   EB_MODULES   modules to load (default "gcc/12.2.0 cuda/12.2")
-#   EB_LLVM      the llvm module for libclang (default llvm/14.0.6--gcc--12.2.0-cuda-12.2)
+#   EB_LLVM      the llvm module whose libclang to use, read with `module show`
+#                and never loaded (default llvm/14.0.6--gcc--12.2.0-cuda-12.2)
+#   LIBCLANG_PATH  the directory of libclang.so, if found some other way
 #   EULLM_REPO   checkout to build (default $WORK/eullm)
 #
 #SBATCH --job-name=eullm-build-engine
@@ -63,21 +65,50 @@ GCC_LIB="$GCC_PREFIX/lib64"
 [ -f "$GCC_LIB/libstdc++.so.6" ] || die "no libstdc++ in $GCC_LIB"
 echo "[engine] gcc $GCC_VER, $(nvcc --version | tail -1)"
 
-# libclang for bindgen: the llvm module only puts it on LD_LIBRARY_PATH
-if [ -z "${LIBCLANG_PATH:-}" ]; then
-    module load "${EB_LLVM:-llvm/14.0.6--gcc--12.2.0-cuda-12.2}" 2>/dev/null || module load llvm 2>/dev/null || true
-    IFS=: read -r -a dirs <<<"${LD_LIBRARY_PATH:-}"
-    for d in "${dirs[@]}"; do
-        if compgen -G "$d/libclang.so*" >/dev/null; then LIBCLANG_PATH="$d"; break; fi
+# libclang for bindgen, found without loading the llvm module: it requires a
+# binutils of its own that conflicts with gcc/12.2.0's ("Module cannot be
+# loaded due to a conflict", 2026-11-20), and bindgen only needs the library's
+# directory. `module show` prints the module's paths without loading it; the
+# Spack tree is the fallback (docs/cineca/leonardo.md).
+find_libclang() {
+    local d
+    # shellcheck disable=SC2086
+    for d in $(module show "${EB_LLVM:-llvm/14.0.6--gcc--12.2.0-cuda-12.2}" 2>&1 |
+               grep -oE '/[^ ",)]+' | sort -u) \
+             /leonardo/prod/spack/*/install/*/*/*/llvm-14*/lib \
+             /leonardo/prod/spack/*/install/*/*/*/llvm-*/lib; do
+        [ -e "$d" ] || continue
+        for c in "$d" "$d/lib" "$(dirname "$d")/lib"; do
+            if compgen -G "$c/libclang.so*" >/dev/null; then echo "$c"; return 0; fi
+        done
     done
+    return 1
+}
+if [ -z "${LIBCLANG_PATH:-}" ]; then
+    LIBCLANG_PATH="$(find_libclang)" || LIBCLANG_PATH=""
 fi
-[ -n "${LIBCLANG_PATH:-}" ] || die "no libclang: 'module avail llvm' and set EB_LLVM"
+[ -n "${LIBCLANG_PATH:-}" ] || die "no libclang: set LIBCLANG_PATH to the directory of libclang.so"
 export LIBCLANG_PATH
-export BINDGEN_EXTRA_CLANG_ARGS="-I$GCC_PREFIX/lib/gcc/x86_64-pc-linux-gnu/$GCC_VER/include"
-export RUSTFLAGS="-L $CUDA_ROOT/targets/x86_64-linux/lib -L $CUDA_ROOT/targets/x86_64-linux/lib/stubs"
+LIBCLANG_LDD=$(ldd "$(compgen -G "$LIBCLANG_PATH/libclang.so*" | head -1)" 2>&1 || true)
+grep -q 'not found' <<<"$LIBCLANG_LDD" &&
+    { grep 'not found' <<<"$LIBCLANG_LDD" >&2; die "libclang in $LIBCLANG_PATH misses libraries"; }
+GCC_INC="$GCC_PREFIX/lib/gcc/x86_64-pc-linux-gnu/$GCC_VER/include"
+[ -f "$GCC_INC/stdbool.h" ] || die "no stdbool.h in $GCC_INC (bindgen needs gcc's own headers)"
+export BINDGEN_EXTRA_CLANG_ARGS="-I$GCC_INC"
+CUDA_LIB="$CUDA_ROOT/targets/x86_64-linux/lib"
+[ -f "$CUDA_LIB/libcudart_static.a" ] || die "no libcudart_static.a in $CUDA_LIB"
+[ -f "$CUDA_LIB/stubs/libcuda.so" ] || die "no libcuda.so stub in $CUDA_LIB/stubs"
+export RUSTFLAGS="-L $CUDA_LIB -L $CUDA_LIB/stubs"
 command -v cmake >/dev/null || module load cmake 2>/dev/null || die "no cmake"
 echo "[engine] libclang $LIBCLANG_PATH, $(cmake --version | head -1)"
 echo "[engine] eullm $(git -C "$EULLM_REPO" log -1 --format='%h %cd' --date=short), into $CARGO_TARGET_DIR"
+# build_engine.sh runs this far on the login node before submitting: what
+# the environment lacks is said in seconds, not after the queue (2026-11-20:
+# two builds waited, started and died in six seconds on the llvm module)
+if [ "${EB_PREFLIGHT:-0}" = 1 ]; then
+    echo "[engine] preflight ok"
+    exit 0
+fi
 
 cd "$EULLM_REPO" || die "no checkout at $EULLM_REPO"
 mkdir -p "$CARGO_TARGET_DIR"
