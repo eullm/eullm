@@ -385,6 +385,8 @@ has each one with an example; `eullm --help` lists them too.
 | `EULLM_API_KEYS_FILE` | (none) | The same keys, one per line of a file that can be `chmod 600` |
 | `EULLM_ALLOWED_ORIGINS` | loopback pages | Web pages on other hosts allowed to call the API; `*` allows every origin |
 | `EULLM_AUDIT_DIR` | `~/.eullm/audit` | Where the audit trail is written. Set and not writable, the server does not start |
+| `EULLM_METRICS_DIR` | `~/.eullm/metrics` | Where the Monitor's history goes, one file a day; `off` keeps it in memory only. Not writable, the history stays in memory and the server starts: see [`GET /api/monitor/history`](#get-apimonitorhistory) |
+| `EULLM_METRICS_RETENTION_DAYS` | `30` | Days of history kept, 1 to 366. A retention set from the Monitor page (`PUT /api/monitor/storage`) wins over it |
 | `EULLM_WEB_ALLOWED_DOMAINS` | any public host | With `--web`: fetch only from these domains and their subdomains, comma-separated |
 | `EULLM_WEB_ALLOW_HTTP` | off | With `--web`: fetch plain `http` pages too |
 | `EULLM_WEB_ALLOW_PRIVATE_HOSTS` | off | With `--web`: fetch from private and loopback addresses too, which turns the protection against requests into the local network off |
@@ -1893,13 +1895,16 @@ curl http://localhost:11434/api/about
 #### `GET /api/monitor`
 
 What the chat UI's Monitor page (the pulse icon in its top bar) shows: the
-requests running, the last 50 answered, and the machine's last two minutes,
-one sample a second. Kept in the engine's memory only: nothing is written to
-disk (the [audit trail](#audit-trail) is the durable record) and nothing is
-sent anywhere. The models in memory are `/api/ps`.
+requests running, the last 50 answered, and the machine and the engine one
+sample a second. The last two minutes come back, or with `?since=<ms>` every
+sample after that time, up to the hour kept in memory: a page that polls
+passes the time of the last sample it has. The models in memory are
+`/api/ps`; the minutes before the hour are
+[`/api/monitor/history`](#get-apimonitorhistory). Nothing is sent anywhere.
 
 ```bash
 curl http://localhost:11434/api/monitor
+curl "http://localhost:11434/api/monitor?since=1793280000000"
 ```
 
 ```json
@@ -1925,7 +1930,9 @@ curl http://localhost:11434/api/monitor
           "vram_used": 12884901888, "vram_total": 17179869184, "temp_c": 64.0,
           "power_w": 271.3, "power_limit_w": 300.0,
           "pcie_rx_bps": 1048576, "pcie_tx_bps": 524288 }
-      ] }
+      ],
+      "gen_tps": 131.0, "gen_tokens": 131, "prompt_tokens": 0, "done": 0, "failed": 0,
+      "active": 1, "reading": 0 }
   ]
 }
 ```
@@ -1935,17 +1942,104 @@ curl http://localhost:11434/api/monitor
   error. A running request's `decode_tps` is its speed so far; a finished
   one's are the engine's own figures, as in the audit trail. `drafts` is
   `[proposed, kept]` with `--mtp`.
-- `system` is sampled only while someone reads this endpoint: the sampler
-  starts with the first call and stops 30 seconds after the last, so a
-  server nobody watches pays nothing for it, and the first call after a quiet
-  spell returns no samples yet. `disk_read_bps` is what the engine process
-  read from disk in that second (a model loading, weights paged in through
-  mmap).
+- `system` is sampled from the moment the server starts, whether anyone
+  reads it or not, so the Monitor shows what happened while its page was
+  closed too. `disk_read_bps` is what the engine process read from disk in
+  that second (a model loading, weights paged in through mmap). `gen_tps` is
+  the answer tokens of every request together in that second; `gen_tokens`,
+  `prompt_tokens`, `done` and `failed` are what was counted in it (a prompt's
+  tokens when its answer ends); `active` and `reading` are the requests
+  running and those of them not writing yet.
 - GPUs come from the NVIDIA driver (NVML, loaded at run time; Linux and
   Windows) with load, VRAM, temperature, power and PCIe traffic; from the
   `amdgpu` driver's files on Linux, without PCIe traffic; and for any other GPU
   (Metal, Vulkan, Intel) from llama.cpp's device list, VRAM only. What a
   driver does not report is `null`.
+
+#### `GET /api/monitor/history`
+
+The Monitor's history, minute by minute: every row has the minimum, the mean
+and the maximum of each figure over its minute, so a peak stays visible long
+after its seconds are gone, and the events of the range (the server starting,
+a model loaded or unloaded, a request the engine failed, images scaled down to
+fit). `from` and `to` are milliseconds since 1970 (by default the last 24
+hours); `step` merges rows into steps of that many seconds, rounded up to
+whole minutes and aligned to the clock (by default one that gives at most 720
+rows: two minutes for a day, an hour for a month). A merged row keeps the
+lowest minimum, the highest maximum and the mean of its minutes; counts are
+added. Minutes the server was not running have no row. At most 367 days are
+read at once, and the newest 1000 events.
+
+```bash
+curl "http://localhost:11434/api/monitor/history?from=1795132800000&step=3600"
+```
+
+```json
+{
+  "from": 1795132800000, "to": 1795219200000, "step": 3600,
+  "rows": [
+    { "t": 1795132800000, "n": 3600,
+      "cpu": [0.4, 12.6, 98.1], "ram": [21474836480, 23622320128, 30064771072],
+      "ram_total": 68719476736, "proc_ram": [1288490188, 1310720000, 1342177280],
+      "disk_read": [0, 4194304, 2147483648], "gen_tps": [0, 88.4, 291.2],
+      "active": [0, 1.3, 4], "reading": [0, 0.1, 2],
+      "gen_tokens": 318240, "prompt_tokens": 1022410, "done": 412, "failed": 1,
+      "gpus": [ { "name": "NVIDIA GeForce RTX 5070 Ti", "util": [0, 61.2, 100],
+                  "vram": [12884901888, 13958643712, 15032385536],
+                  "vram_total": 17179869184, "temp": [38.0, 57.4, 71.0],
+                  "power": [21.4, 180.3, 298.7] } ] }
+  ],
+  "events": [
+    { "t": 1795133012000, "kind": "model_loaded",
+      "message": "gemma-4-12b loaded: 4 slot(s), 32768 tokens of context" }
+  ]
+}
+```
+
+Rows and events are written to one JSON Lines file a day, named by its UTC
+date (`2026-11-20.jsonl`), in `EULLM_METRICS_DIR` (`~/.eullm/metrics`): about
+1 MB a day with one GPU. Days past the retention (`EULLM_METRICS_RETENTION_DAYS`,
+30 by default, at most 366) are deleted when the server starts and every day
+after. With `EULLM_METRICS_DIR=off`, or a folder that cannot be written, the
+last 24 hours are kept in memory and lost at a restart; a monitor is no reason
+to refuse to serve, so neither stops the server. Requests are not written one
+by one: the [audit trail](#audit-trail) is that record.
+
+#### `GET /api/monitor/storage`, `PUT /api/monitor/storage`, `DELETE /api/monitor/history`
+
+How much room the history takes and for how long it is kept, and the means to
+change both: what the Monitor page's storage panel shows.
+
+```bash
+curl http://localhost:11434/api/monitor/storage
+# keep a year from now on
+curl -X PUT http://localhost:11434/api/monitor/storage \
+  -H 'Content-Type: application/json' -d '{"retention_days": 365}'
+# delete every day before the 1st of November (UTC)
+curl -X DELETE "http://localhost:11434/api/monitor/history?before=2026-11-01"
+```
+
+```json
+{
+  "dir": "/home/me/.eullm/metrics", "dir_source": "default",
+  "retention_days": 30, "retention_source": "default", "max_retention_days": 366,
+  "total_bytes": 9437184, "projected_bytes": 28311552,
+  "days": [ { "date": "2026-11-11", "bytes": 943718 }, { "date": "2026-11-12", "bytes": 943718 } ]
+}
+```
+
+- `projected_bytes` is what the retention would take at the size of the full
+  days kept so far.
+- `PUT` takes 1 to 366 days, saves them in the folder's `settings.json` (so a
+  restart keeps them, and they win over `EULLM_METRICS_RETENTION_DAYS` from
+  then on; the startup log says which was used), deletes at once what is
+  older, and answers with the new `storage` and the `deleted_files` and
+  `freed_bytes` that took.
+- `DELETE` removes every day before `before` and answers with
+  `deleted_files` and `freed_bytes`.
+
+All three are behind the same perimeter as the rest of `/api` (the API keys
+and the IP allowlist): whoever may use the API may change them.
 
 #### `POST /api/unload`
 

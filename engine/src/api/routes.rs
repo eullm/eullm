@@ -186,6 +186,14 @@ pub fn api_routes() -> Router<S> {
         .route("/tags", get(list_models))
         .route("/ps", get(list_running))
         .route("/monitor", get(monitor))
+        .route(
+            "/monitor/history",
+            get(monitor_history).delete(monitor_delete_history),
+        )
+        .route(
+            "/monitor/storage",
+            get(monitor_storage).put(monitor_set_storage),
+        )
         .route("/about", get(about))
         .route("/generate", post(generate))
         .route("/chat", post(chat))
@@ -2145,14 +2153,124 @@ fn running_model_entry(m: &RunningModel, now: chrono::DateTime<chrono::Utc>) -> 
 
 /// `GET /api/monitor` — what the chat UI's Monitor page shows: the requests
 /// running (oldest first) and the last ones answered (newest first), and the
-/// machine's samples of the last two minutes (oldest first). The models in
-/// memory are `/api/ps`. In memory only: see [`crate::monitor`].
-async fn monitor() -> Json<Value> {
+/// machine's samples (oldest first): the last two minutes, or with
+/// `?since=<ms>` every one after that time, up to the hour kept. The models
+/// in memory are `/api/ps`; the minutes before the hour are
+/// `/api/monitor/history`. See [`crate::monitor`].
+async fn monitor(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    let since = q.get("since").and_then(|v| v.parse::<u64>().ok());
     let (active, history) = crate::monitor::requests();
-    let system = tokio::task::spawn_blocking(crate::monitor::system::snapshot)
+    let system = tokio::task::spawn_blocking(move || crate::monitor::system::snapshot(since))
         .await
         .unwrap_or_default();
     Json(json!({ "active": active, "history": history, "system": system }))
+}
+
+fn monitor_bad_request(message: String) -> (StatusCode, Json<Value>) {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
+}
+
+/// `GET /api/monitor/history?from=<ms>&to=<ms>&step=<s>` — a row per minute
+/// (or per `step` seconds, rounded up to whole minutes) with the minimum, the
+/// mean and the maximum of every figure, and what happened in the range
+/// (models loaded, requests failed). `to` defaults to now and `from` to a
+/// day before it; with no `step`, one that gives at most 720 rows. Read from
+/// the days on disk: see [`crate::monitor::history`].
+async fn monitor_history(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<crate::monitor::history::History>, (StatusCode, Json<Value>)> {
+    let number = |key: &str| -> Result<Option<u64>, (StatusCode, Json<Value>)> {
+        q.get(key)
+            .map(|v| {
+                v.trim().parse::<u64>().map_err(|_| {
+                    monitor_bad_request(format!("{key} must be a whole number, got {v:?}"))
+                })
+            })
+            .transpose()
+    };
+    let to = number("to")?.unwrap_or_else(crate::monitor::now_ms);
+    let from = number("from")?.unwrap_or(to.saturating_sub(86_400_000));
+    let step = number("step")?;
+    if from > to {
+        return Err(monitor_bad_request("from must not be after to".into()));
+    }
+    let days = u64::from(crate::monitor::history::MAX_RETENTION_DAYS) + 1;
+    if to - from > days * 86_400_000 {
+        return Err(monitor_bad_request(format!(
+            "a range of at most {days} days can be asked for"
+        )));
+    }
+    let history =
+        tokio::task::spawn_blocking(move || crate::monitor::history::store().read(from, to, step))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+            })?;
+    Ok(Json(history))
+}
+
+/// `DELETE /api/monitor/history?before=YYYY-MM-DD` — delete every day before
+/// that date (UTC), and say how many files and bytes went.
+async fn monitor_delete_history(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let Some(text) = q.get("before") else {
+        return Err(monitor_bad_request(
+            "before=YYYY-MM-DD is required: the days before it are deleted".into(),
+        ));
+    };
+    let before = crate::monitor::history::parse_date(text).ok_or_else(|| {
+        monitor_bad_request(format!("before must be a date as YYYY-MM-DD, got {text:?}"))
+    })?;
+    let freed =
+        tokio::task::spawn_blocking(move || crate::monitor::history::store().delete_before(before))
+            .await
+            .unwrap_or_default();
+    tracing::info!(
+        "Monitor history: deleted {} day(s) before {before}, {} bytes, as asked from the API",
+        freed.files,
+        freed.bytes
+    );
+    Ok(Json(
+        json!({ "deleted_files": freed.files, "freed_bytes": freed.bytes }),
+    ))
+}
+
+/// `GET /api/monitor/storage` — where the history is kept, for how many
+/// days and why, the space each day takes and what the retention would
+/// take at that size.
+async fn monitor_storage() -> Json<crate::monitor::history::Usage> {
+    Json(
+        tokio::task::spawn_blocking(|| crate::monitor::history::store().usage())
+            .await
+            .unwrap_or_else(|_| crate::monitor::history::store().usage()),
+    )
+}
+
+/// `PUT /api/monitor/storage {"retention_days": n}` — keep n days (1 to 366)
+/// from now on, saved in the folder so a restart keeps it; what is older is
+/// deleted at once, and the answer says what that freed.
+async fn monitor_set_storage(
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let days = body
+        .get("retention_days")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| monitor_bad_request("retention_days must be a whole number".into()))?;
+    let store = crate::monitor::history::store();
+    let freed = tokio::task::spawn_blocking(move || store.set_retention(days))
+        .await
+        .map_err(|e| monitor_bad_request(e.to_string()))?
+        .map_err(monitor_bad_request)?;
+    let usage = store.usage();
+    Ok(Json(json!({
+        "storage": usage,
+        "deleted_files": freed.files,
+        "freed_bytes": freed.bytes,
+    })))
 }
 
 /// `GET /api/about` — what the chat UI's About page shows: this build, the

@@ -58,15 +58,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # image: the compose file shares the `models` volume between them.
 RUN groupadd -r -g 10001 eullm \
     && useradd -r -u 10001 -g eullm -s /usr/sbin/nologin eullm \
-    && mkdir -p /models /data/audit \
-    && chown eullm:eullm /models /data/audit
+    && mkdir -p /models /data/audit /data/metrics \
+    && chown eullm:eullm /models /data/audit /data/metrics
 USER eullm
 
 COPY --from=builder /usr/local/bin/eullm /usr/local/bin/eullm
 
-VOLUME ["/models", "/data/audit"]
+VOLUME ["/models", "/data/audit", "/data/metrics"]
 ENV EULLM_MODELS_DIR=/models
 ENV EULLM_AUDIT_DIR=/data/audit
+# The Monitor's history, a file a day, kept 30 days unless set otherwise.
+ENV EULLM_METRICS_DIR=/data/metrics
 
 # The API, and the chat UI (`serve --no-ui` turns it off).
 EXPOSE 11434 11435

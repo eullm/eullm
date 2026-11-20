@@ -1,11 +1,12 @@
 //! What the chat UI's Monitor page shows: the requests the server is
 //! answering and has answered, and the machine it runs on.
 //!
-//! Kept in memory only, and only on this machine: the last
-//! [`HISTORY`] requests and two minutes of system samples, read by
-//! `GET /api/monitor` behind the same perimeter as the rest of `/api`.
-//! Nothing is written to disk (the audit trail is the durable record) and
-//! nothing is sent anywhere.
+//! Only on this machine: the last [`HISTORY`] requests and an hour of system
+//! samples in memory, read by `GET /api/monitor`, and a row a minute with
+//! the events on disk ([`history`]), read by `GET /api/monitor/history`,
+//! all behind the same perimeter as the rest of `/api`. Requests are not
+//! written one by one (the audit trail is that record), and nothing is sent
+//! anywhere.
 //!
 //! A request is watched by [`watch`], which every streamed generation puts
 //! between the engine's event channel and its own reader: it forwards each
@@ -13,6 +14,7 @@
 //! of answer came and what its last event said. An answer read whole
 //! (`stream: false` without the scheduler) is recorded by a [`Tracker`].
 
+pub mod history;
 pub mod system;
 
 use std::collections::VecDeque;
@@ -82,12 +84,62 @@ struct Book {
 static BOOK: Mutex<Option<Book>> = Mutex::new(None);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+// What every request together has done since the server started: the
+// sampler reads them once a second and keeps the difference.
+static GENERATED: AtomicU64 = AtomicU64::new(0);
+static PROMPT: AtomicU64 = AtomicU64::new(0);
+static DONE: AtomicU64 = AtomicU64::new(0);
+static FAILED: AtomicU64 = AtomicU64::new(0);
+
+/// Answer and prompt tokens, requests answered and failed, since the server
+/// started.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Totals {
+    pub generated: u64,
+    pub prompt: u64,
+    pub done: u64,
+    pub failed: u64,
+}
+
+impl Totals {
+    /// What was added since `before`.
+    pub fn since(&self, before: &Totals) -> Totals {
+        Totals {
+            generated: self.generated.saturating_sub(before.generated),
+            prompt: self.prompt.saturating_sub(before.prompt),
+            done: self.done.saturating_sub(before.done),
+            failed: self.failed.saturating_sub(before.failed),
+        }
+    }
+}
+
+pub fn totals() -> Totals {
+    Totals {
+        generated: GENERATED.load(Ordering::Relaxed),
+        prompt: PROMPT.load(Ordering::Relaxed),
+        done: DONE.load(Ordering::Relaxed),
+        failed: FAILED.load(Ordering::Relaxed),
+    }
+}
+
+/// Requests running, and those of them not yet writing their answer.
+pub fn load() -> (u32, u32) {
+    with_book(|b| {
+        let reading = b
+            .active
+            .iter()
+            .filter(|l| l.request.phase == Phase::Reading)
+            .count();
+        (b.active.len() as u32, reading as u32)
+    })
+}
+
 fn with_book<T>(f: impl FnOnce(&mut Book) -> T) -> T {
     let mut guard = BOOK.lock().unwrap_or_else(|e| e.into_inner());
     f(guard.get_or_insert_with(Book::default))
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -149,6 +201,7 @@ impl Tracker {
                     r.phase = Phase::Generating;
                 }
                 r.output_tokens += 1;
+                GENERATED.fetch_add(1, Ordering::Relaxed);
             }
         });
     }
@@ -169,6 +222,13 @@ impl Tracker {
             Phase::Done,
             Some(stop.as_api_str().to_string()),
             move |r| {
+                // The pieces were counted as they came; the engine's count
+                // adds what an answer read whole never sent as pieces.
+                GENERATED.fetch_add(
+                    u64::from(generated.saturating_sub(r.output_tokens)),
+                    Ordering::Relaxed,
+                );
+                PROMPT.fetch_add(u64::from(prompt), Ordering::Relaxed);
                 r.prompt_tokens = Some(prompt);
                 r.output_tokens = generated;
                 r.duration_ms = Some(duration_ms);
@@ -195,7 +255,16 @@ impl Tracker {
     /// The request ended with an error.
     pub fn failed(mut self, error: &str) {
         self.finished = true;
-        finish(self.id, Phase::Failed, Some(error.to_string()), |_| {});
+        // The engine's error, not a client that left: worth finding in the
+        // history next to the minute it happened in.
+        // Written after the book is let go: a file is no place to hold it.
+        let mut what = None;
+        finish(self.id, Phase::Failed, Some(error.to_string()), |r| {
+            what = Some(format!("{} on {}", r.endpoint, r.model));
+        });
+        if let Some(what) = what {
+            history::event("request_failed", format!("{what}: {error}"));
+        }
     }
 }
 
@@ -290,6 +359,10 @@ fn finish(id: u64, phase: Phase, ended: Option<String>, update: impl FnOnce(&mut
             return;
         };
         let live = b.active.remove(i);
+        match phase {
+            Phase::Failed => FAILED.fetch_add(1, Ordering::Relaxed),
+            _ => DONE.fetch_add(1, Ordering::Relaxed),
+        };
         let mut r = live.request;
         r.phase = phase;
         r.ended = ended;
