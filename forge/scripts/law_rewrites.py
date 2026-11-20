@@ -144,6 +144,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="serve --serve with this EULLM Engine binary (`eullm serve`) instead "
                          "of llama-server: the same llama.cpp underneath, through the runtime "
                          "that ships, to compare the two on the same requests")
+    ap.add_argument("--engine-mmproj", action="store_true",
+                    help="with --engine, load the projector beside the weights too (by default "
+                         "the engine is started with --no-mmproj where it has it: the work is "
+                         "text); to measure the engine as a multimodal model is served")
     ap.add_argument("--parallel", type=int, default=16, help="requests in flight per server")
     ap.add_argument("--ctx", type=int, default=6144, help="context per request (tokens)")
     ap.add_argument("--max-tokens", type=int, default=1200)
@@ -194,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.engine:
                     srv = EullmServer(args.serve, binary=args.engine, parallel=args.parallel,
                                       ctx_per_slot=args.ctx, devices=gpu.replace("+", ","),
-                                      log_path=log)
+                                      log_path=log, mmproj=args.engine_mmproj)
                 else:
                     srv = LlamaServer(args.serve, binary=args.llama_server,
                                       parallel=args.parallel, ctx_per_slot=args.ctx,
