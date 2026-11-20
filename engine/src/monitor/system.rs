@@ -149,6 +149,12 @@ pub fn snapshot(since: Option<u64>) -> Vec<Sample> {
     })
 }
 
+/// The newest sample, without starting the sampler or counting as a reader:
+/// what `/metrics` reports.
+pub fn latest() -> Option<Sample> {
+    with_state(|s| s.samples.back().cloned())
+}
+
 fn run() {
     let mut sampler = Sampler::new();
     let mut recorder = super::history::Recorder::default();

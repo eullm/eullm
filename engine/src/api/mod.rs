@@ -16,6 +16,7 @@
 //! one is waited for rather than cut off. The residents are kept in
 //! `resident::ResidentModels`.
 
+pub(crate) mod admin;
 mod auth;
 mod decision_policy;
 mod decision_traces;
@@ -236,6 +237,10 @@ pub struct AppState {
 
     /// Which browser origins may call the API — see `origin`.
     pub allowed_origins: origin::AllowedOrigins,
+
+    /// Who may delete the Monitor's history or change its retention, and
+    /// who may scrape `/metrics` — see `admin`.
+    pub monitor_access: Arc<admin::MonitorAccess>,
 
     /// What the web tool is allowed to fetch — see `tools::guard`. Resolved
     /// once at startup so a request cannot pay for re-reading the environment,
@@ -3087,6 +3092,14 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         )
     })?);
     let allowed_origins = origin::AllowedOrigins::load(env_file);
+    // Fatal when set but unusable, for the reason the API keys are: whoever
+    // set a secret to guard the Monitor's history must not find it unguarded.
+    let monitor_access = Arc::new(admin::MonitorAccess::load(env_file).map_err(|e| {
+        format!(
+            "{e}\n  Refusing to start: the Monitor's administration or /metrics would \
+             not be guarded the way you configured."
+        )
+    })?);
     // Fatal when configured but unusable, for the reason the API keys are: an
     // operator who wrote a policy and gets every option through because of a
     // typo in it is worse off than one whose server refused to start.
@@ -3217,6 +3230,11 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     // goes where EULLM_METRICS_DIR says. Never fatal: see `monitor::history`.
     crate::monitor::history::init();
     crate::monitor::system::start();
+    {
+        let (admin, metrics) = monitor_access.describe();
+        tracing::info!("Monitor administration (EULLM_ADMIN_KEY): {admin}");
+        tracing::info!("Prometheus /metrics (EULLM_METRICS_TOKEN): {metrics}");
+    }
     match &decision_traces {
         Some(traces) => tracing::info!(
             "Decision traces: on — every decision's state, questions and answers, personal \
@@ -3368,6 +3386,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         ip_allowlist,
         api_keys,
         allowed_origins,
+        monitor_access: monitor_access.clone(),
         web_policy,
         allow_model_paths,
         launch_model: cfg.launch_model,
@@ -3567,6 +3586,7 @@ impl AppState {
             ip_allowlist: ip_allowlist::IpAllowlist::load(absent),
             api_keys: Arc::new(api_keys),
             allowed_origins: origin::AllowedOrigins::load(absent),
+            monitor_access: Arc::new(admin::MonitorAccess::disabled()),
             web_policy: crate::tools::guard::WebPolicy::default(),
             allow_model_paths: false,
             launch_model: None,
@@ -3927,6 +3947,11 @@ fn api_router(state: Arc<AppState>) -> Router {
             (state.clone(), false),
             enforce_auth,
         ))
+        // Outside the layers above: a Prometheus server scrapes from another
+        // machine with a token of its own, which is neither an API key nor
+        // bound to the IP allowlist (see `admin`). The API port only: the
+        // chat's is for browsers.
+        .route("/metrics", axum::routing::get(routes::prometheus_metrics))
         .with_state(state)
 }
 

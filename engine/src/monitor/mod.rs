@@ -15,6 +15,7 @@
 //! (`stream: false` without the scheduler) is recorded by a [`Tracker`].
 
 pub mod history;
+pub mod prometheus;
 pub mod system;
 
 use std::collections::VecDeque;
