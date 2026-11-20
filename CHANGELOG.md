@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Fixed
+- **A vision model whose larger micro-batch does not fit loads without an out-of-memory error in its log.** With its projector, a model like Gemma 4 raises its micro-batch so that images keep their full resolution; where that did not fit (Gemma 4 31B with 16 slots on an A100), llama.cpp logged `ERROR … out of memory` before the engine fell back to the usual micro-batch, and the load looked failed though the model ran. The engine now checks first whether it fits, and where it does not says so in one line and reads images scaled down to fit, as llama-server does.
+
 ## 0.9.1 — 2026-11-20
 
 ### Added
