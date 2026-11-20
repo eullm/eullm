@@ -1419,3 +1419,31 @@ program differs. Gemma 4 31B Q8_0, the same 200 cases, 8 in flight:
   3,072, where 0.9.0 asked 38,400 MiB and did not load.
 - The answers as before: no thinking in any, the same mean length, 57-63
   word for word the same as llama-server's.
+
+**Where the quarter comes from, 2026-11-20: the KV cache's layout.** The
+settings compared: `n_batch` 2048, `n_ubatch` 512, flash attention on, F16
+cache, 3,072 tokens a slot, for both (llama-server's defaults read in
+`common/common.h` at `b1b770d9`, the engine's in its log). One difference
+was left: the engine allocates one KV pool for all its slots, llama-server
+by default one cache a slot (`kv_unified = 'false'`). llama-server given the
+engine's layout (`--kv-unified --kv-unified-per-slot 3072`,
+`law_rewrites.py --server-args`), and both at 16 slots too:
+
+| | 8 slots | 16 slots |
+|---|---:|---:|
+| llama-server, a cache a slot (default) | 36 a minute (182 / 99 tok/s) | 49 (244 / 133) |
+| llama-server, one pool, 3,072 a slot | 42 (213 / 116) | 57 (285 / 153) |
+| engine main, one pool (its default) | 45 (228 / 123) | 58 (292 / 159) |
+
+- **Most of the quarter is the layout**, not the code around llama.cpp:
+  one pool alone takes llama-server from 36 to 42 at 8 slots, 49 to 57 at
+  16. On the same layout the engine leads by 7% at 8 slots and 2% at 16,
+  where two runs of the same binary differ by 2% (0.9.0: 47 and 48).
+- **So what can be said:** with each program's defaults, EuLLM serves this
+  model 25% faster than llama-server at 8 requests and 18% at 16, because
+  it shares one KV pool among the requests on its own; llama-server matches
+  it, within a few percent, when told to. Not "faster than llama.cpp".
+- **16 slots instead of 8: a third more** for every program (engine 45 to
+  58), and they fit (49,152 tokens of context on the A100 with the 31B).
+- The answers: 198 in every run, no thinking, 54-65 word for word the same
+  as llama-server's default run.
