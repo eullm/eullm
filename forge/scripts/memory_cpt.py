@@ -69,7 +69,7 @@ def prepare(args) -> int:
     def encode(batch):
         return tok(batch, add_special_tokens=False)["input_ids"]
 
-    corpus = tokenize_texts(corpus_texts(args.corpus), encode, args.block)
+    corpus = tokenize_texts(corpus_texts(args.corpus, args.keep_styles), encode, args.block)
     general = (tokenize_texts(general_texts(args.general), encode, args.block)
                if args.general else [])
     pairs = replay_pairs(args.replay) if args.replay else []
@@ -198,6 +198,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="post-training pairs (instruction, output)")
     p.add_argument("--general", nargs="*", type=Path, default=[],
                    help="general Italian text (prefetch_general_it.py)")
+    p.add_argument("--keep-styles", nargs="*", default=[],
+                   help="elaborating styles (caso, spiegazione) to keep: only for checked corpora")
     p.add_argument("--epochs", type=int, default=3)
     p.add_argument("--replay-share", type=float, default=0.25)
     p.add_argument("--general-share", type=float, default=0.20)
