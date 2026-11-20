@@ -289,7 +289,9 @@ two builds of llama-server. Rules:
 * **An exam series keeps one server.** Models compared with each other are
   examined through the same server and the same build; moving a series to
   the engine re-examines its baselines through it, or the series stays on
-  llama-server to its end. The PI decides which.
+  llama-server to its end. **PI, 2026-11-20: the exams stay on llama-server
+  to the end of the legal-it series** (no baselines re-examined for a
+  server change); a new series may start on the engine.
 * **The corpus says who served it.** A row keeps its teacher; a pass
   through a new server or engine commit is named in the experiment log
   beside its results.

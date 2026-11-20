@@ -382,7 +382,8 @@ keeps the binary it started with. Two things learnt building it:
 - Requests state `repeat_penalty: 1.0` and turn thinking off with
   `chat_template_kwargs.enable_thinking` (and `think`), which the engine
   and llama-server both read.
-- Exams: one server for a whole series (see `forge/CLAUDE.md`).
+- Exams: one server for a whole series (see `forge/CLAUDE.md`); the
+  legal-it series stays on llama-server to its end (PI, 2026-11-20).
 
 ## Open items
 
