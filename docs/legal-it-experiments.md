@@ -1379,3 +1379,17 @@ few-token kernel speeds up several requests at once on Ampere and later,
 while the llama-server of these jobs was built from a checkout of
 2026-11-03; and its context per slot was 3,072 tokens against 6,144. To
 know what is whose, llama-server again at llama.cpp 1.0 and 3,072 tokens.
+
+**The same pin, 2026-11-20.** The official llama-server built from the
+engine's own llama.cpp commit (`b1b770d9`, none of our patches), 3,072
+tokens a slot, the same 200 cases: 198 in 5.5 minutes, 36 a minute, 182
+prompt and 99 generated tokens a second. The engine 0.9.0 again (a second
+run): 198 in 4.1, 48 a minute, 243 and 131. So of the half again, a sixth
+was the newer llama.cpp (31 to 36 a minute) and the rest is the engine's:
+**a third faster than llama-server on the same llama.cpp**, prompt and
+generation alike. The answers: llama-server of 11-03 and of `b1b770d9` agree
+word for word on 71 of 198, the engine's two runs on 67 and 57 with the
+latter, the same mean length (669-673 characters), no thinking in any. The
+engine stands as close to llama-server as two llama-servers to each other.
+Next: the engine from main (projector on the scheduler, sliding-window KV
+sized to its window), on Gemma's own folder, projector included.
