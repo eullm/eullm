@@ -732,14 +732,20 @@ fn parse_sampling_params(body: &Value, with_max_completion_tokens: bool) -> Samp
     let max_tokens = limit
         .and_then(|v| v.as_u64())
         .unwrap_or(u32::MAX as u64) as u32;
-    // Defaults match Ollama: temperature=0.8, top_k=40, top_p=0.9, repeat_penalty=1.1
+    // Defaults match Ollama: temperature=0.8, top_k=40, top_p=0.9, and
+    // repeat_penalty=1.1 on Ollama's endpoints (1.0 on /v1, below)
     let temperature = get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.8) as f32;
     let top_k = get("top_k").and_then(|v| v.as_i64()).unwrap_or(40) as i32;
     let top_p = get("top_p").and_then(|v| v.as_f64()).unwrap_or(0.9) as f32;
     let min_p = get("min_p").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    // Off on /v1/chat/completions, as llama-server has it; Ollama's 1.1 on
+    // Ollama's endpoints, whose clients expect it. Over the last 64 tokens it
+    // counts the newlines, `###` and `**` a Markdown answer repeats all the
+    // time, and pushed Gemma 4 into joins like "anal### Il problema"
+    // (20-11-2026).
     let repeat_penalty = get("repeat_penalty")
         .and_then(|v| v.as_f64())
-        .unwrap_or(1.1) as f32;
+        .unwrap_or(if with_max_completion_tokens { 1.0 } else { 1.1 }) as f32;
     let repeat_last_n = get("repeat_last_n").and_then(|v| v.as_i64()).unwrap_or(64) as i32;
     let seed = get("seed").and_then(|v| v.as_u64()).map(|v| v as u32);
     let num_ctx = get("num_ctx").and_then(|v| v.as_u64()).map(|v| v as u32);
@@ -4280,6 +4286,22 @@ mod tests {
     fn max_tokens_defaults_to_unbounded_not_a_small_fixed_cap() {
         let sp = parse_generate_params(&json!({}));
         assert_eq!(sp.max_tokens, u32::MAX);
+    }
+
+    /// The repeat penalty is off on /v1 unless asked for, as llama-server has
+    /// it, and Ollama's 1.1 on Ollama's endpoints; a value sent is used.
+    #[test]
+    fn the_repeat_penalty_is_off_on_v1_and_ollamas_on_ollamas_endpoints() {
+        assert_eq!(parse_chat_completions_params(&json!({})).repeat_penalty, 1.0);
+        assert_eq!(parse_generate_params(&json!({})).repeat_penalty, 1.1);
+        assert_eq!(
+            parse_chat_completions_params(&json!({ "repeat_penalty": 1.2 })).repeat_penalty,
+            1.2
+        );
+        assert_eq!(
+            parse_generate_params(&json!({ "options": { "repeat_penalty": 1.0 } })).repeat_penalty,
+            1.0
+        );
     }
 
     /// #345: two quants of the same HuggingFace repo are different models.

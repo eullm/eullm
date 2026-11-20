@@ -315,6 +315,13 @@ sampling: sampling took 2.7 ms per token, and 1.1 ms with
 vocabulary's candidates (about 248,000 here) in its table of recent tokens,
 for every token of every answer.
 
+Since 0.9.1 the repeat penalty is off by default on `/v1/chat/completions`
+and in the chat UI, as llama-server has it; `/api/chat` and `/api/generate`
+keep Ollama's 1.1, which their clients expect. Over the last 64 tokens it
+counts the newlines, `###` and `**` a Markdown answer repeats all the time,
+and pushed Gemma 4 into joins like "anal### Il problema". A request that
+sends `repeat_penalty` gets what it asks for.
+
 ## Security
 
 ### Restricting who can reach the engine (`EULLM_ALLOWED_IPS`, new in v0.6.29)
