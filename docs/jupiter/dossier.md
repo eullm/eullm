@@ -739,6 +739,29 @@ JUPITER, named by its Slurm job id.
   more often (44% against 19%), a model that knows few articles erring
   towards doubt.
 
+  **20-11, the recipe in one go does not reproduce the candidate.** From
+  g9r-r2, E1 on one file of case-law summaries (two seeds), then the
+  no-premise mix straight away (g9fin, g9fin2; four rounds each so far):
+
+  | | closed right | real denied | ruling refused | held-out | devbig | practical | practical held-out | rewritten traps | LexIA |
+  |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+  | g9prm-r6 | 269 | 14% | 75% | 203 + 1 | 442 + 8 | 82 + 10 | 47 + 4 | 960 | 13 |
+  | e1-g9-fin | 188 | 19% | 0% | 159 + 5 | 377 + 19 | 68 + 11 | 46 + 7 | 937 | 13 |
+  | e1-g9-fin2 | 207 | 7% | 0% | 192 + 5 | 433 + 15 | 66 + 12 | 40 + 7 | 949 | 13 |
+  | g9fin r1-r4 | 211-255 | 14-22% | 0-85% | 190-193 | 426-429 | 65-69 | 41-44 | 956-965 | 13-16 |
+  | g9fin2 r1-r4 | 232-271 | 8-11% | 0-65% | 196-200 | 432-442 | 60-67 | 41-44 | 946-957 | 15-18 |
+
+  The memory step alone varies with the seed as much as the rounds do (the
+  held-out exam 159, 192 and, in e1-g9-pr, 199). The made-up rulings come
+  back and the real articles are denied less than ever (8-11% for g9fin2),
+  but the practical exam stays 13-22 questions under: the candidate's path
+  (E1, two rounds on the full mix, eight without made-up articles, six
+  without the premise file) carries something the short path does not.
+  The 4B, three rounds without made-up articles after g4m-r1 (g4mv): real
+  articles denied 17-33% (44%), every made-up ruling still refused,
+  held-out 199-201, devbig 444-447, practical 72-75, practical held-out
+  42-46. **Candidate 4B: g4mv-r2.**
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
