@@ -1580,6 +1580,50 @@ fn admit_media(
     begin_generation(model, ctx, seq, -1, idle_slots, checkpoints, sched_config)
 }
 
+/// Whether a context whose micro-batch is `ubatch` tokens fits in the VRAM
+/// free now, the model already loaded, with `--vram-reserve` left: what the
+/// micro-batch raised to an image's (above, in `run_scheduler_loop`) costs is
+/// counted before it is tried, the KV cache of the sliding-window layers
+/// (each slot's window holds a micro-batch beside it, `fit::SlidingWindow`)
+/// and the larger compute buffer. Tried blind, a micro-batch that does not
+/// fit made llama.cpp log an out-of-memory ERROR before the context fell back
+/// and loaded, which read as a failed load: Gemma 4 31B with 16 slots on an
+/// A100 asked 28,800 MiB for the window layers (Leonardo, 20-11-2026). Says
+/// why when it does not fit. Without a GPU, or not knowing the free VRAM, it
+/// is tried, and the fall-back still catches it.
+fn larger_ubatch_fits(config: &InferenceConfig, slots: usize, ubatch: u32) -> bool {
+    if config.gpu_layers == 0 {
+        return true;
+    }
+    let Some((free, _)) = crate::fit::vram_bytes() else {
+        return true;
+    };
+    let info = crate::fit::read_gguf_info(&config.model_path).map(|info| {
+        info.with_kv_layout(crate::fit::KvLayout::new(slots, ubatch, config.kv_unified))
+    });
+    let needed = crate::fit::kv_cache_bytes(
+        info.as_ref(),
+        config.context_size,
+        cache_type_bytes_per_elem(&config.cache_type_k),
+        cache_type_bytes_per_elem(&config.cache_type_v),
+    )
+    .saturating_add(crate::fit::ubatch_reserve_bytes(ubatch))
+    .saturating_add(config.vram_reserve);
+    if needed <= free {
+        return true;
+    }
+    tracing::warn!(
+        "Projector: a micro-batch of {ubatch} tokens, the most an image takes, needs about {} \
+         MiB for the context and {} MiB are free: reading prompts {} at a time instead, with \
+         images scaled down to fit. Fewer --batch-size slots or a smaller --ctx-size leave room \
+         for images at full size",
+        needed >> 20,
+        free >> 20,
+        config.text_ubatch(),
+    );
+    false
+}
+
 /// A projector reloaded with the tokens of an image capped at `n_ubatch`,
 /// when its attention over an image is not causal and its largest image
 /// takes more than one micro-batch holds (see `super::image_token_ceiling`):
@@ -2215,7 +2259,8 @@ fn run_scheduler_loop(
         .and_then(super::image_token_ceiling)
         .filter(|&ceiling| {
             ceiling > config.text_ubatch() && ceiling <= super::MAX_MEDIA_TOKENS_PER_CHUNK
-        });
+        })
+        .filter(|&ceiling| larger_ubatch_fits(&config, sched_config.max_batch_size, ceiling));
     #[cfg(not(feature = "multimodal"))]
     let image_ubatch: Option<u32> = None;
     if let Some(ceiling) = image_ubatch {
@@ -2270,8 +2315,9 @@ fn run_scheduler_loop(
     let first = match (model.new_context(&backend, ctx_params), image_ubatch) {
         (Err(e), Some(ceiling)) => {
             tracing::warn!(
-                "Projector: no room for a micro-batch of {ceiling} tokens ({e}); reading \
-                 prompts {} at a time, and scaling images down to fit",
+                "Projector: a micro-batch of {ceiling} tokens did not fit after all ({e}; the \
+                 out-of-memory error above is that attempt, not a failed load). Reading \
+                 prompts {} at a time instead, with images scaled down to fit",
                 text_batches.1
             );
             (config.n_batch, config.n_ubatch) = text_batches;
