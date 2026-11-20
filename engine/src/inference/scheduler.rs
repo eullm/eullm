@@ -1621,6 +1621,15 @@ fn larger_ubatch_fits(config: &InferenceConfig, slots: usize, ubatch: u32) -> bo
         free >> 20,
         config.text_ubatch(),
     );
+    crate::monitor::history::event(
+        "warning",
+        format!(
+            "Images scaled down: a micro-batch of {ubatch} tokens needs about {} MiB, {} MiB \
+             free",
+            needed >> 20,
+            free >> 20
+        ),
+    );
     false
 }
 
@@ -2319,6 +2328,10 @@ fn run_scheduler_loop(
                  out-of-memory error above is that attempt, not a failed load). Reading \
                  prompts {} at a time instead, with images scaled down to fit",
                 text_batches.1
+            );
+            crate::monitor::history::event(
+                "warning",
+                format!("Images scaled down: a micro-batch of {ceiling} tokens did not fit ({e})"),
             );
             (config.n_batch, config.n_ubatch) = text_batches;
             let params = super::build_ctx_params(&config, ctx_size)

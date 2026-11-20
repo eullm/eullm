@@ -962,6 +962,13 @@ impl AppState {
                 "Model swap complete → {} (batch_size={batch_size})",
                 crate::audit::sanitize_for_log(&normalized)
             );
+            crate::monitor::history::event(
+                "model_loaded",
+                format!(
+                    "{} loaded: {batch_size} slot(s), {effective_ctx_size} tokens of context",
+                    crate::audit::sanitize_for_log(&normalized)
+                ),
+            );
 
             // The diagnostic banner `run` prints at startup. `serve` starts
             // with no model, so this is the only place it can be emitted — and
@@ -1285,6 +1292,10 @@ impl AppState {
         };
         let name = model.name.clone();
         retire(model).await;
+        crate::monitor::history::event(
+            "model_unloaded",
+            format!("{} unloaded", crate::audit::sanitize_for_log(&name)),
+        );
         Some(name)
     }
 
@@ -3202,6 +3213,10 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             audit.log_path().display(),
         ),
     }
+    // The Monitor's sampler runs from now on, watched or not, and its history
+    // goes where EULLM_METRICS_DIR says. Never fatal: see `monitor::history`.
+    crate::monitor::history::init();
+    crate::monitor::system::start();
     match &decision_traces {
         Some(traces) => tracing::info!(
             "Decision traces: on — every decision's state, questions and answers, personal \

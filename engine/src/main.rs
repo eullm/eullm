@@ -141,6 +141,9 @@ file in the folder eullm starts from (the startup log says which was used):
   EULLM_API_KEYS_FILE            the same, one key per line of a file
   EULLM_ALLOWED_ORIGINS          web pages on other hosts that may call the API
   EULLM_AUDIT_DIR                where the audit trail goes [~/.eullm/audit]
+  EULLM_METRICS_DIR              where the Monitor's history goes, a file a
+                                 day; off keeps it in memory [~/.eullm/metrics]
+  EULLM_METRICS_RETENTION_DAYS   days of history kept, 1 to 366 [30]
   EULLM_WEB_ALLOWED_DOMAINS      --web fetches from these domains only
   EULLM_WEB_ALLOW_HTTP=1         --web fetches http pages too, not only https
   EULLM_WEB_ALLOW_PRIVATE_HOSTS=1  --web fetches from private addresses too
