@@ -3133,6 +3133,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     // be read from the environment only.
     let allow_model_paths = crate::settings::flag("EULLM_ALLOW_MODEL_PATHS");
 
+    crate::extensions::set_api_keys_required(api_keys.is_enabled());
     if api_keys.is_enabled() {
         tracing::info!(
             "API authentication: enabled — keys: {}  [source: {}]",

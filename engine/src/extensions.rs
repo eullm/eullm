@@ -25,6 +25,7 @@
 //! running in this process sets them. Routes a wrap adds are outside the
 //! engine's perimeter, and are the wrap's to protect.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 pub use crate::api::admin::AdminGrant;
@@ -82,6 +83,21 @@ pub(crate) fn wrap_api(router: axum::Router) -> axum::Router {
         Some(wrap) => wrap(router),
         None => router,
     }
+}
+
+static API_KEYS_REQUIRED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the engine requires an API key (`EULLM_API_KEYS` or
+/// `EULLM_API_KEYS_FILE` is set), as resolved when the server started. An
+/// embedding program's own login needs to know: with no keys, a request that
+/// merely carries an `Authorization` header is let in by the engine as an
+/// anonymous caller, so such a request must not be waved past a login.
+pub fn api_keys_required() -> bool {
+    API_KEYS_REQUIRED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_api_keys_required(required: bool) {
+    API_KEYS_REQUIRED.store(required, Ordering::Relaxed);
 }
 
 /// The engine's version and the commit it was built from, for an embedding
