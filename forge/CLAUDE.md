@@ -292,6 +292,12 @@ two builds of llama-server. Rules:
   llama-server to its end. **PI, 2026-11-20: the exams stay on llama-server
   to the end of the legal-it series** (no baselines re-examined for a
   server change); a new series may start on the engine.
+* **Training rows come from `$WORK/eullm_runs/clean/`** (`clean_corpus.py`):
+  nothing on a held-out set's articles, no question-like row on a
+  development set's. The corpora were written from every article until
+  2026-11-20 (experiments log, section 28); a held-out exam is given only to
+  a model trained on clean files, and a new corpus is cleaned before
+  anything trains on it.
 * **The corpus says who served it.** A row keeps its teacher; a pass
   through a new server or engine commit is named in the experiment log
   beside its results.
