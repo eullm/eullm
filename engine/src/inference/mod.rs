@@ -242,7 +242,7 @@ pub fn cpu_features_summary() -> String {
 /// the compute buffer a single request can ask for. 8192 is far above any
 /// image a current projector produces (a 1584x1584 photo through Gemma 4 is
 /// 1089) and well below a figure that would fail to allocate on a small card.
-const MAX_MEDIA_TOKENS_PER_CHUNK: u32 = 8192;
+pub(crate) const MAX_MEDIA_TOKENS_PER_CHUNK: u32 = 8192;
 
 /// The batch a request needs, given the largest media chunk it carries.
 ///
@@ -2341,6 +2341,20 @@ impl InferenceEngine {
         model: &LlamaModel,
     ) -> Result<Option<llama_cpp_2::mtmd::MtmdContext>, Box<dyn std::error::Error + Send + Sync>>
     {
+        Self::init_mtmd(config, model, None)
+    }
+
+    /// [`Self::init_mtmd_optional`], with the tokens an image may take capped
+    /// at `max_image_tokens` when given: what the scheduler asks of a
+    /// projector whose images must fit one micro-batch
+    /// (`scheduler::cap_image_tokens`).
+    #[cfg(feature = "multimodal")]
+    pub(crate) fn init_mtmd(
+        config: &InferenceConfig,
+        model: &LlamaModel,
+        max_image_tokens: Option<i32>,
+    ) -> Result<Option<llama_cpp_2::mtmd::MtmdContext>, Box<dyn std::error::Error + Send + Sync>>
+    {
         use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
 
         let Some(mmproj_path) = config.mmproj_path.as_ref() else {
@@ -2384,6 +2398,12 @@ impl InferenceEngine {
         if let Some(mint) = env_i32("EULLM_IMAGE_MIN_TOKENS") {
             params.image_min_tokens = mint;
             tracing::info!("Override image_min_tokens = {mint} (EULLM_IMAGE_MIN_TOKENS)");
+        }
+        if let Some(cap) = max_image_tokens {
+            params.image_max_tokens = cap;
+            if params.image_min_tokens > cap {
+                params.image_min_tokens = cap;
+            }
         }
 
         tracing::info!("Loading mmproj projector: {}", mmproj_path.display());
@@ -3202,6 +3222,37 @@ impl InferenceEngine {
             },
         });
     }
+}
+
+/// The most tokens one image takes with this projector: what it makes of a
+/// very large one, preprocessed and tokenized but not encoded. `None` for a
+/// projector that reads no images, or one that would not tokenize it.
+///
+/// llama-server reads the figure from `mtmd_get_memory_usage`, a C++-only
+/// call its header marks as unstable; what the projector does with an image
+/// past its largest size is the same figure, through the C API.
+#[cfg(feature = "multimodal")]
+pub(crate) fn image_token_ceiling(mtmd: &mut llama_cpp_2::mtmd::MtmdContext) -> Option<u32> {
+    use llama_cpp_2::mtmd::{MtmdBitmap, MtmdInputChunkType, MtmdInputText};
+    if !mtmd.support_vision() {
+        return None;
+    }
+    // Past the largest image any projector EuLLM runs scales down from
+    // (Gemma 4's is about 1,600 pixels a side).
+    let side = 3072u32;
+    let bitmap = MtmdBitmap::from_image_data(side, side, &vec![128u8; (side * side * 3) as usize])
+        .ok()?;
+    let text = MtmdInputText {
+        text: llama_cpp_2::mtmd::mtmd_default_marker().to_string(),
+        add_special: false,
+        parse_special: true,
+    };
+    let chunks = mtmd.tokenize(text, &[&bitmap]).ok()?;
+    (0..chunks.len())
+        .filter_map(|i| chunks.get(i))
+        .filter(|c| !matches!(c.chunk_type(), MtmdInputChunkType::Text))
+        .map(|c| c.n_tokens() as u32)
+        .max()
 }
 
 /// A multimodal prompt tokenized for mtmd, as [`prepare_media_prompt`] made it.

@@ -1342,9 +1342,15 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   `--batch-size` slots (new in 0.9.1; they used to be served one request
 >   at a time). A request with images reads them whole into its own slot,
 >   as llama-server does: the requests already answering wait for that one
->   step, then go on beside it. An image must fit in one micro-batch: with a
->   projector `--n-ubatch` is at least 512, or `EULLM_IMAGE_MAX_TOKENS` when
->   that is larger. A slot that read an image is not reused for the next
+>   step, then go on beside it. With a projector `--n-ubatch` is at least
+>   512, or `EULLM_IMAGE_MAX_TOKENS` when that is larger; one whose attention
+>   over an image is not causal (Gemma) needs each image whole in one
+>   micro-batch, which is raised to the most an image takes with it (1089
+>   tokens on Gemma 4 12B, about 150 MiB more of compute buffer), so images
+>   keep their full resolution. Where that does not fit, images are scaled
+>   down to the micro-batch, as llama-server does. Qwen-VL and other causal
+>   projectors read a large image a micro-batch at a time. A slot that read
+>   an image is not reused for the next
 >   turn's prompt, which is read whole again. `--mtp` does not draft for a
 >   model loaded with its projector. A multimodal model used for text alone
 >   (RAG, rewriting, grading) can be loaded without its projector with
