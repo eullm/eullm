@@ -102,7 +102,11 @@
     topP: 0.9,
     topK: 40,
     minP: 0,
-    repeatPenalty: 1.1,
+    // Off, as llama-server and /v1/chat/completions have it. Ollama's 1.1 over
+    // the last 64 tokens counts the newlines, `###` and `**` a Markdown answer
+    // repeats all the time, and pushed Gemma 4 into joins like
+    // "anal### Il problema" (20-11-2026). Gemma and Qwen3 recommend none.
+    repeatPenalty: 1.0,
     // null = a new seed each answer.
     seed: null,
     // 0 = unlimited: max_tokens is omitted from the request and the server
@@ -134,11 +138,19 @@
       const fits = k === "seed"
         ? saved[k] === null || Number.isInteger(saved[k])
         : typeof saved[k] === typeof DEFAULT_SETTINGS[k];
-      if (k in saved && fits) settings[k] = saved[k];
+      // 1.1 kept from before 0.9.1 was the old default, not a choice: it
+      // gives way to the new one. A value chosen since is kept.
+      const oldDefault = k === "repeatPenalty" && saved[k] === 1.1 && !saved.penaltyOffByDefault;
+      if (k in saved && fits && !oldDefault) settings[k] = saved[k];
     }
   } catch {}
   const saveSettings = () => {
-    try { localStorage.setItem(SETTINGS_STORAGE, JSON.stringify(settings)); } catch {}
+    try {
+      localStorage.setItem(
+        SETTINGS_STORAGE,
+        JSON.stringify({ ...settings, penaltyOffByDefault: true }),
+      );
+    } catch {}
   };
 
   // Strip reasoning blocks from an assistant turn before storing it in history.
