@@ -307,16 +307,15 @@ class Server:
                 + no_ui_args(self.engine) + self.args)
 
     def start(self) -> None:
-        log = open(self.log_path, "ab")
         # A session of its own, so stopping it stops whatever it started too.
         # Run beside its log: a server that crashes leaves its core dump (and
         # ROCm its gpucore.<pid>) in its working directory, which was the
         # job's, the checkout in /projappl with its 50 GB quota (17-10-2026).
-        self.proc = subprocess.Popen(
-            self.command(), stdout=log, stderr=subprocess.STDOUT, env=self.env,
-            start_new_session=True, cwd=os.path.dirname(os.path.abspath(self.log_path)),
-        )
-        log.close()
+        with open(self.log_path, "ab") as log:
+            self.proc = subprocess.Popen(
+                self.command(), stdout=log, stderr=subprocess.STDOUT, env=self.env,
+                start_new_session=True, cwd=os.path.dirname(os.path.abspath(self.log_path)),
+            )
 
     def wait_ready(self, timeout_s=READY_TIMEOUT_S, stop=None) -> None:
         deadline = time.time() + timeout_s
