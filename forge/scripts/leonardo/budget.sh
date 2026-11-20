@@ -41,9 +41,19 @@ fi
 # Columns on the data row: 1 account, 2 start, 3 end, 4 total, 5 localCluster,
 # 6 totConsumed, 7 pct, 8 monthTotal, 9 monthConsumed. Guarded by NF so a
 # change in saldo's output degrades to a clear message instead of nonsense.
+# Only an allocation still open: from 2026-11-02 saldo lists the ended
+# Playground (AIFAC_P02_1147) before the Fast Lane, and its first row made the
+# Fast Lane read -191% free on 2026-11-20. $EULLM_ACCOUNT picks among several
+# open ones; otherwise the first open one.
 read -r TOTAL ALLOC_START SETTLED MONTH_TOTAL MONTH_USED <<<"$(
     saldo -b 2>/dev/null |
-    awk 'NF >= 9 && $4 ~ /^[0-9]+$/ && $2 ~ /^[0-9]{8}$/ {print $4, $2, $6, $8, $9; exit}'
+    awk -v acct="${EULLM_ACCOUNT:-}" -v today="$(date +%Y%m%d)" '
+        NF >= 9 && $4 ~ /^[0-9]+$/ && $2 ~ /^[0-9]{8}$/ && $3 >= today {
+            row = $4 " " $2 " " $6 " " $8 " " $9
+            if ($1 == acct) { print row; found = 1; exit }
+            if (first == "") first = row
+        }
+        END { if (!found && first != "") print first }'
 )"
 if [ -z "${TOTAL:-}" ]; then
     echo "[err] could not parse 'saldo -b' — run it by hand and check the columns" >&2
