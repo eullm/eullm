@@ -751,23 +751,62 @@
     return { msg, contentEl, metaEl: msg.querySelector(".msg-meta") };
   }
 
-  // Stick-to-bottom: auto-scroll during streaming ONLY when the user is
-  // already near the bottom. Once they scroll up to read, stop auto-scrolling
-  // so they can keep reading while the answer keeps streaming in the
-  // background. Re-enables itself when they scroll back near the bottom.
+  // Stick-to-bottom: while an answer streams, the page follows its newest
+  // line until the reader moves away, and the answer goes on streaming below.
+  //
+  // Moving away used to mean being more than 80 px from the bottom when a
+  // scroll event came. A turn of the wheel upward moved the page less than
+  // that, the next token brought it back down, and stopping it took several
+  // energetic turns, some of them undone (reported 20-11-2026). Now any
+  // gesture that goes up lets go at once: the wheel turned up, a click or a
+  // drag in the messages (the scrollbar included), a finger on a touch
+  // screen, Page Up, Up or Home. The page follows again once the reader
+  // scrolls back down to the bottom, sends a message, or clicks
+  // "Jump to latest".
   let stickToBottom = true;
+  let letGo = false;
+  let lastScrollTop = 0;
   const STICK_THRESHOLD_PX = 80;
+
+  function letGoOfBottom() {
+    if (!document.querySelector(".msg.streaming")) return;
+    letGo = true;
+    stickToBottom = false;
+    updateJumpButton();
+  }
+  els.messages.addEventListener("wheel", (e) => {
+    if (e.deltaY < 0) letGoOfBottom();
+  }, { passive: true });
+  els.messages.addEventListener("mousedown", letGoOfBottom);
+  els.messages.addEventListener("touchstart", letGoOfBottom, { passive: true });
+  document.addEventListener("keydown", (e) => {
+    const typing = e.target instanceof HTMLElement && e.target.closest("textarea, input, select");
+    if (!typing && ["PageUp", "ArrowUp", "Home"].includes(e.key)) letGoOfBottom();
+  });
 
   els.messages.addEventListener("scroll", () => {
     const { scrollTop, scrollHeight, clientHeight } = els.messages;
     const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
-    stickToBottom = distanceFromBottom < STICK_THRESHOLD_PX;
+    const wentDown = scrollTop > lastScrollTop;
+    lastScrollTop = scrollTop;
+    if (!letGo) {
+      stickToBottom = distanceFromBottom < STICK_THRESHOLD_PX;
+    } else if (wentDown && distanceFromBottom < STICK_THRESHOLD_PX) {
+      // Back at the bottom by the reader's own hand: follow again.
+      letGo = false;
+      stickToBottom = true;
+    }
     updateJumpButton();
   });
 
   function scrollToBottom(force = false) {
+    if (force) {
+      letGo = false;
+      stickToBottom = true;
+    }
     if (force || stickToBottom) {
       els.messages.scrollTop = els.messages.scrollHeight;
+      lastScrollTop = els.messages.scrollTop;
     }
   }
 
@@ -780,7 +819,6 @@
   jumpBtn.textContent = "↓ Jump to latest";
   jumpBtn.hidden = true;
   jumpBtn.addEventListener("click", () => {
-    stickToBottom = true;
     scrollToBottom(true);
     updateJumpButton();
   });
@@ -964,6 +1002,8 @@
     if (media) userEntry.media = { base64: media.base64, kind: media.kind };
     history.push(userEntry);
     appendMessage("user", userText, media);
+    // A new question: the page follows its answer, wherever the reader was.
+    scrollToBottom(true);
     saveChat();
 
     // An attachment whose own turn failed is not re-sent. When the failure
