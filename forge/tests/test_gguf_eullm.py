@@ -39,6 +39,19 @@ def test_two_servers_on_a_node_open_no_chat_ui(tmp_path):
     assert "--no-ui" not in old.command()
 
 
+def test_text_work_leaves_the_projector_on_disk(tmp_path):
+    # Gemma 4's mmproj beside the weights made 0.9.0 sequential (2026-11-19).
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"GGUF")
+    new = _fake_engine(tmp_path, "--port --no-mmproj --no-mmproj-offload")
+    assert "--no-mmproj" in EullmServer(gguf, binary=new).command()
+    assert "--no-mmproj" not in EullmServer(gguf, binary=new, mmproj=True).command()
+    # 0.9.0 has --no-mmproj-offload only: not the same flag
+    (tmp_path / "old").mkdir()
+    old = _fake_engine(tmp_path / "old", "--port --no-mmproj-offload")
+    assert "--no-mmproj" not in EullmServer(gguf, binary=old).command()
+
+
 class _Engine(BaseHTTPRequestHandler):
     seen: list = []
 
