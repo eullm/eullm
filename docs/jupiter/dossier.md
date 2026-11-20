@@ -806,6 +806,14 @@ JUPITER, named by its Slurm job id.
   the overlap on its own models before cleaning and found that it had not
   inflated its development results; ours concerns held-out sets and is
   left open until a clean run measures it.
+  Checked here (21-11): devbig, the closed book, the practical exam and
+  the practical held-out set are Leonardo's versions (sha256 in the
+  manifests); our held-out exam (norm-exam) is another version, and it,
+  the trap tests and the LexIA sets were filtered here, 508 articles and
+  numbers, a few dozen rows a file (1,639 of 66,542 in the largest). E1 on
+  Qwen3.8-27B queued on what remains, cases and explanations kept, LoRA
+  rank 64, two epochs (e1-q27, links 3034522-3034524; GGUF, closed book,
+  open book and regression 3034525-3034528).
 
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
