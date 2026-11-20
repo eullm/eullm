@@ -88,3 +88,12 @@ def test_answers_come_back_in_order_greedy_and_raw(tmp_path):
     assert body["raw"] is True and body["stream"] is False
     assert body["options"]["temperature"] == 0.0 and body["options"]["repeat_penalty"] == 1.0
     assert body["options"]["num_predict"] == 400
+
+
+def test_llama_server_takes_extra_options():
+    from eullm_forge.eval.gguf import LlamaServer
+    s = LlamaServer("m.gguf", binary="/bin/llama-server", parallel=8, ctx_per_slot=3072,
+                    extra_args=["--kv-unified"])
+    cmd = s.command()
+    assert cmd[-1] == "--kv-unified"
+    assert cmd[cmd.index("-c") + 1] == str(8 * 3072)

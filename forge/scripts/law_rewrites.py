@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import shlex
 import sys
 import threading
 import time
@@ -140,6 +141,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="one server per comma-separated entry; '0+1+2' is one server over "
                          "three GPUs, for a teacher no single GPU holds (Flash-Next)")
     ap.add_argument("--llama-server")
+    ap.add_argument("--server-args", default="",
+                    help="more llama-server options, commas between them, written with = so "
+                         "they reach it whole through LR_ARGS: "
+                         "--server-args=--kv-unified,--kv-unified-per-slot,3072 (the "
+                         "engine's own layout: one KV pool, each request capped at --ctx)")
     ap.add_argument("--engine", metavar="EULLM_BIN",
                     help="serve --serve with this EULLM Engine binary (`eullm serve`) instead "
                          "of llama-server: the same llama.cpp underneath, through the runtime "
@@ -202,7 +208,8 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     srv = LlamaServer(args.serve, binary=args.llama_server,
                                       parallel=args.parallel, ctx_per_slot=args.ctx,
-                                      devices=gpu.replace("+", ","), log_path=log)
+                                      devices=gpu.replace("+", ","), log_path=log,
+                                      extra_args=shlex.split(args.server_args.replace(",", " ")))
                 urls.append(stack.enter_context(srv).url)
             print(f"[rewrites] {len(urls)} teacher server(s) up after "
                   f"{time.monotonic() - t0:.0f} s", flush=True)
