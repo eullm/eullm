@@ -1,8 +1,10 @@
 //! Who may administer the Monitor's history, and who may scrape `/metrics`.
 //!
-//! Reading the Monitor is for whoever may use the API, as the chat is. Two
+//! Reading the Monitor is for whoever may use the API, as the chat is. Three
 //! things are not:
 //!
+//! - **Downloading, deleting and unloading models**, and a request's
+//!   `keep_alive`, once `EULLM_ADMIN_KEY` is set: see `api::managed`.
 //! - **Changing how long the history is kept, and deleting it**
 //!   (`PUT /api/monitor/storage`, `DELETE /api/monitor/history`), which need
 //!   `EULLM_ADMIN_KEY` in an `X-Admin-Key` header. The API keys cannot be that
@@ -149,7 +151,8 @@ impl MonitorAccess {
         (
             on(
                 &self.admin,
-                "off (EULLM_ADMIN_KEY not set): the Monitor's history can be read but not \
+                "off (EULLM_ADMIN_KEY not set): whoever may use the API may download, \
+                 delete and unload models; the Monitor's history can be read but not \
                  deleted or its retention changed over the API",
             ),
             on(
@@ -266,6 +269,55 @@ fn resolve(
         sha256: digest(&value),
         source,
     }))
+}
+
+/// Set on a request by code running in this process — a middleware an
+/// embedding program adds around the engine's routers — to say that its
+/// caller is an administrator, as the admin key would. A client cannot set
+/// it: request extensions do not travel over HTTP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdminGrant;
+
+/// Whether the request may do what only an administrator may: it carries
+/// an [`AdminGrant`], or the admin key in [`ADMIN_HEADER`]. `what` names the
+/// action for the log, and `disabled` is the answer when no admin key is
+/// configured. Every refusal is logged with the address it came from.
+pub fn require_admin(
+    access: &MonitorAccess,
+    ip: IpAddr,
+    headers: &axum::http::HeaderMap,
+    granted: bool,
+    what: &str,
+    disabled: &str,
+) -> Result<(), (axum::http::StatusCode, axum::Json<serde_json::Value>)> {
+    use axum::http::StatusCode;
+    if granted {
+        return Ok(());
+    }
+    let key = headers.get(ADMIN_HEADER).and_then(|v| v.to_str().ok());
+    let refusal = match access.check_admin(ip, key) {
+        Ok(()) => return Ok(()),
+        Err(r) => r,
+    };
+    let (status, reason, message) = match refusal {
+        Refusal::Disabled => (StatusCode::FORBIDDEN, "disabled", disabled.to_string()),
+        Refusal::Missing => (
+            StatusCode::FORBIDDEN,
+            "missing",
+            format!("Only an administrator may {what} on this server: send the admin key in an X-Admin-Key header."),
+        ),
+        Refusal::Wrong => (StatusCode::FORBIDDEN, "wrong", "Wrong admin key.".to_string()),
+        Refusal::Locked { retry_after_s } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "locked",
+            format!("Too many wrong admin keys from this address: try again in {retry_after_s} s."),
+        ),
+    };
+    tracing::warn!("Refused to {what} for {ip} ({reason} admin key)");
+    Err((
+        status,
+        axum::Json(serde_json::json!({ "error": message, "admin": reason })),
+    ))
 }
 
 /// `Authorization: Bearer <token>`'s token.

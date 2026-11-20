@@ -338,5 +338,18 @@
   <script src="/eullm-ui/app.js"></script>
   <script src="/eullm-ui/monitor.js"></script>
   <script src="/eullm-ui/about.js"></script>
+  <dialog id="admin-key-dialog" class="admin-dialog" aria-labelledby="admin-key-title">
+    <form method="dialog">
+      <h2 id="admin-key-title">Administrator</h2>
+      <p id="admin-key-why">Only an administrator may change the models on this server.</p>
+      <label class="field"><span>Admin key</span>
+        <input id="admin-key-input" type="password" autocomplete="off" spellcheck="false" required></label>
+      <p class="mon-dim">Kept by this page until it is reloaded, never stored.</p>
+      <div class="admin-dialog-actions">
+        <button type="submit" value="cancel" class="btn-secondary small" formnovalidate>Cancel</button>
+        <button type="submit" value="ok" class="btn-primary small">Continue</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

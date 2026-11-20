@@ -18,6 +18,7 @@
 
 pub(crate) mod admin;
 mod auth;
+pub(crate) mod managed;
 mod decision_policy;
 mod decision_traces;
 pub(crate) mod ip_allowlist;
@@ -241,6 +242,10 @@ pub struct AppState {
     /// Who may delete the Monitor's history or change its retention, and
     /// who may scrape `/metrics` — see `admin`.
     pub monitor_access: Arc<admin::MonitorAccess>,
+
+    /// The models a request may name (`EULLM_ALLOWED_MODELS`) — see
+    /// `managed`.
+    pub allowed_models: managed::AllowedModels,
 
     /// What the web tool is allowed to fetch — see `tools::guard`. Resolved
     /// once at startup so a request cannot pay for re-reading the environment,
@@ -3230,10 +3235,22 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     // goes where EULLM_METRICS_DIR says. Never fatal: see `monitor::history`.
     crate::monitor::history::init();
     crate::monitor::system::start();
+    let allowed_models = managed::AllowedModels::load();
     {
         let (admin, metrics) = monitor_access.describe();
-        tracing::info!("Monitor administration (EULLM_ADMIN_KEY): {admin}");
+        tracing::info!("Administration (EULLM_ADMIN_KEY): {admin}");
+        if monitor_access.admin_enabled() {
+            tracing::info!(
+                "Managed server: downloading, deleting and unloading models, and a request's \
+                 keep_alive, need the admin key (X-Admin-Key)"
+            );
+        }
         tracing::info!("Prometheus /metrics (EULLM_METRICS_TOKEN): {metrics}");
+        tracing::info!(
+            "Models a request may name: {}  [source: {}]",
+            allowed_models.describe(),
+            allowed_models.source()
+        );
     }
     match &decision_traces {
         Some(traces) => tracing::info!(
@@ -3387,6 +3404,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         api_keys,
         allowed_origins,
         monitor_access: monitor_access.clone(),
+        allowed_models: allowed_models.clone(),
         web_policy,
         allow_model_paths,
         launch_model: cfg.launch_model,
@@ -3587,6 +3605,7 @@ impl AppState {
             api_keys: Arc::new(api_keys),
             allowed_origins: origin::AllowedOrigins::load(absent),
             monitor_access: Arc::new(admin::MonitorAccess::disabled()),
+            allowed_models: managed::AllowedModels::default(),
             web_policy: crate::tools::guard::WebPolicy::default(),
             allow_model_paths: false,
             launch_model: None,
@@ -3932,6 +3951,12 @@ fn api_router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
+        // Innermost: the perimeter has let the request in by now. See
+        // `managed` for what only an administrator may do.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            managed::enforce_managed,
+        ))
         .layer(axum::middleware::from_fn(read_body_as_json))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
@@ -3971,6 +3996,10 @@ fn ui_router(state: Arc<AppState>) -> Router {
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
         .merge(crate::ui::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            managed::enforce_managed,
+        ))
         .layer(axum::middleware::from_fn(read_body_as_json))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)

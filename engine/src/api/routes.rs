@@ -2079,6 +2079,15 @@ async fn list_models(State(state): State<S>) -> Json<Value> {
         }));
     }
 
+    // With EULLM_ALLOWED_MODELS, the others are not offered: a request for
+    // one would be refused (`super::managed`).
+    if state.allowed_models.is_limited() {
+        models.retain(|m| {
+            m["name"]
+                .as_str()
+                .is_some_and(|n| n == super::route::AUTO || state.allowed_models.allows(n))
+        });
+    }
     Json(json!({ "models": models }))
 }
 
@@ -2170,46 +2179,25 @@ fn monitor_bad_request(message: String) -> (StatusCode, Json<Value>) {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
 }
 
-/// Whether the request carries the admin key (`X-Admin-Key`), which
-/// deleting the Monitor's history and changing its retention need on top of
-/// the API's own perimeter: see [`super::admin`]. Every refusal is logged
-/// with the address it came from.
+/// Whether the request may administer the Monitor's history: the admin key
+/// (`X-Admin-Key`) or an in-process grant, on top of the API's own
+/// perimeter. See [`super::admin`].
 fn monitor_admin(
     state: &S,
     ip: std::net::IpAddr,
     headers: &axum::http::HeaderMap,
+    grant: Option<axum::Extension<super::admin::AdminGrant>>,
     what: &str,
 ) -> Result<(), (StatusCode, Json<Value>)> {
-    use super::admin::Refusal;
-    let key = headers
-        .get(super::admin::ADMIN_HEADER)
-        .and_then(|v| v.to_str().ok());
-    let refusal = match state.monitor_access.check_admin(ip, key) {
-        Ok(()) => return Ok(()),
-        Err(r) => r,
-    };
-    let (status, reason, message) = match refusal {
-        Refusal::Disabled => (
-            StatusCode::FORBIDDEN,
-            "disabled",
-            "The Monitor's history is not administered over the API on this server: set \
-             EULLM_ADMIN_KEY to allow it, or use EULLM_METRICS_RETENTION_DAYS."
-                .to_string(),
-        ),
-        Refusal::Missing => (
-            StatusCode::FORBIDDEN,
-            "missing",
-            "This needs the admin key, in an X-Admin-Key header.".to_string(),
-        ),
-        Refusal::Wrong => (StatusCode::FORBIDDEN, "wrong", "Wrong admin key.".to_string()),
-        Refusal::Locked { retry_after_s } => (
-            StatusCode::TOO_MANY_REQUESTS,
-            "locked",
-            format!("Too many wrong admin keys from this address: try again in {retry_after_s} s."),
-        ),
-    };
-    tracing::warn!("Monitor history: refused to {what} for {ip} ({reason} admin key)");
-    Err((status, Json(json!({ "error": message, "admin": reason }))))
+    super::admin::require_admin(
+        &state.monitor_access,
+        ip,
+        headers,
+        grant.is_some(),
+        what,
+        "The Monitor's history is not administered over the API on this server: set \
+         EULLM_ADMIN_KEY to allow it, or use EULLM_METRICS_RETENTION_DAYS.",
+    )
 }
 
 /// `GET /api/monitor/history?from=<ms>&to=<ms>&step=<s>` — a row per minute
@@ -2260,9 +2248,10 @@ async fn monitor_delete_history(
     State(state): State<S>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
+    grant: Option<axum::Extension<super::admin::AdminGrant>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    monitor_admin(&state, addr.ip(), &headers, "delete history")?;
+    monitor_admin(&state, addr.ip(), &headers, grant, "delete the Monitor's history")?;
     let Some(text) = q.get("before") else {
         return Err(monitor_bad_request(
             "before=YYYY-MM-DD is required: the days before it are deleted".into(),
@@ -2316,9 +2305,10 @@ async fn monitor_set_storage(
     State(state): State<S>,
     axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
+    grant: Option<axum::Extension<super::admin::AdminGrant>>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    monitor_admin(&state, addr.ip(), &headers, "change the retention")?;
+    monitor_admin(&state, addr.ip(), &headers, grant, "change the Monitor's retention")?;
     let days = body
         .get("retention_days")
         .and_then(Value::as_u64)
@@ -3453,6 +3443,16 @@ async fn list_models_openai(State(state): State<S>) -> Json<Value> {
         }));
     }
 
+    // As on `/api/tags`: only what a request may name.
+    if state.allowed_models.is_limited() {
+        let allowed = |v: &Value, key: &str| {
+            v[key]
+                .as_str()
+                .is_some_and(|n| n == super::route::AUTO || state.allowed_models.allows(n))
+        };
+        data.retain(|m| allowed(m, "id"));
+        models.retain(|m| allowed(m, "name") || allowed(m, "id") || allowed(m, "model"));
+    }
     Json(json!({ "object": "list", "data": data, "models": models }))
 }
 
