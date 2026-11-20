@@ -801,6 +801,11 @@ JUPITER, named by its Slurm job id.
   g9prm-r6 and g4mv-r2 (the 4B had no E1) are affected unequally. The 27B
   trains on the cleaned corpus only. `memory_cpt.py prepare --keep-styles`
   keeps the checked cases and explanations our own corpus left out.
+  Sizes: v3s 184,657 rows (program and rewrites), gemma-ok 10,194 (cases,
+  explanations), gemma2-ok 11,829 (elements, questions). Leonardo measured
+  the overlap on its own models before cleaning and found that it had not
+  inflated its development results; ours concerns held-out sets and is
+  left open until a clean run measures it.
 
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
