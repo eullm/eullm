@@ -387,6 +387,8 @@ has each one with an example; `eullm --help` lists them too.
 | `EULLM_AUDIT_DIR` | `~/.eullm/audit` | Where the audit trail is written. Set and not writable, the server does not start |
 | `EULLM_METRICS_DIR` | `~/.eullm/metrics` | Where the Monitor's history goes, one file a day; `off` keeps it in memory only. Not writable, the history stays in memory and the server starts: see [`GET /api/monitor/history`](#get-apimonitorhistory) |
 | `EULLM_METRICS_RETENTION_DAYS` | `30` | Days of history kept, 1 to 366. A retention set from the Monitor page (`PUT /api/monitor/storage`) wins over it |
+| `EULLM_ADMIN_KEY` | (none) | Lets whoever sends it as `X-Admin-Key` change the Monitor's retention and delete its history. Not set, neither is possible over the network. At least 16 characters, or the server does not start; `EULLM_ADMIN_KEY_FILE` names a file holding it |
+| `EULLM_METRICS_TOKEN` | (none) | Serves [`GET /metrics`](#get-metrics) (Prometheus) to whoever sends it as a bearer token. Not set, `/metrics` is not served. At least 16 characters; `EULLM_METRICS_TOKEN_FILE` names a file holding it |
 | `EULLM_WEB_ALLOWED_DOMAINS` | any public host | With `--web`: fetch only from these domains and their subdomains, comma-separated |
 | `EULLM_WEB_ALLOW_HTTP` | off | With `--web`: fetch plain `http` pages too |
 | `EULLM_WEB_ALLOW_PRIVATE_HOSTS` | off | With `--web`: fetch from private and loopback addresses too, which turns the protection against requests into the local network off |
@@ -2038,8 +2040,66 @@ curl -X DELETE "http://localhost:11434/api/monitor/history?before=2026-11-01"
 - `DELETE` removes every day before `before` and answers with
   `deleted_files` and `freed_bytes`.
 
-All three are behind the same perimeter as the rest of `/api` (the API keys
-and the IP allowlist): whoever may use the API may change them.
+Reading (`GET`) is for whoever may use the API, as the chat is. `PUT` and
+`DELETE` need **`EULLM_ADMIN_KEY`** besides, in an `X-Admin-Key` header: the
+API keys cannot be that control, since on a local server they are off and
+everyone who opens the chat is let in, and where they are on the chat page
+holds one in the browser. Without `EULLM_ADMIN_KEY` set, both answer `403`
+with `"admin": "disabled"`, and the history is administered on the server
+only (`EULLM_METRICS_RETENTION_DAYS`, the files). A missing or wrong key is
+`403` with `"admin": "missing"` or `"wrong"`; five wrong keys (or `/metrics`
+tokens) from one address in 15 minutes lock that address out of both for 15
+minutes (`429`, `"admin": "locked"`). Every refusal is logged with the address,
+and every change is logged and kept as an `admin` event in the history. The
+Monitor page asks for the key and keeps it in memory until it is reloaded.
+
+```bash
+curl -X PUT http://localhost:11434/api/monitor/storage \
+  -H "X-Admin-Key: $EULLM_ADMIN_KEY" \
+  -H 'Content-Type: application/json' -d '{"retention_days": 365}'
+```
+
+`GET /api/monitor/storage` says whether the key is set, as `admin_enabled`.
+
+#### `GET /metrics`
+
+The Monitor in Prometheus's text format, for a Prometheus server (and Grafana
+behind it) that watches several machines. On the API port only, and only with
+**`EULLM_METRICS_TOKEN`** set: the scraper sends it as a bearer token, and is
+let in from any address, as a valid API key is; the IP allowlist and the API
+keys do not apply to it. Without the token set, `/metrics` answers `404`. The
+token is read-only and apart from the admin key, so a scraper's configuration,
+kept on another machine, cannot delete anything; the admin key is not accepted
+here.
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: eullm
+    scheme: http              # https behind a reverse proxy
+    authorization:
+      credentials_file: /etc/prometheus/eullm-token
+    static_configs:
+      - targets: ["gpu-box-1:11434", "gpu-box-2:11434"]
+```
+
+| Metric | Type | What |
+|---|---|---|
+| `eullm_build_info{version}` | gauge | 1, with the running version |
+| `eullm_generated_tokens_total` | counter | Answer tokens written since the start |
+| `eullm_prompt_tokens_total` | counter | Prompt tokens read, counted when each answer ends |
+| `eullm_requests_total{result="done"\|"failed"}` | counter | Requests ended; failed includes a client that left |
+| `eullm_model_loaded{model}` | gauge | 1 per generation model in memory |
+| `eullm_history_disk_bytes` | gauge | What the Monitor's history takes on disk |
+| `eullm_requests_active`, `eullm_requests_reading` | gauge | Requests running, and those not writing yet |
+| `eullm_generation_tokens_per_second` | gauge | Every request together, in the last second |
+| `eullm_cpu_usage_percent`, `eullm_cpu_cores` | gauge | The machine's CPU |
+| `eullm_memory_used_bytes`, `eullm_memory_total_bytes` | gauge | The machine's memory |
+| `eullm_process_resident_memory_bytes`, `eullm_process_disk_read_bytes_per_second` | gauge | This process |
+| `eullm_gpu_utilization_percent{gpu,name}` and `_memory_used_bytes`, `_memory_total_bytes`, `_temperature_celsius`, `_power_watts`, `_power_limit_watts`, `_pcie_rx_bytes_per_second`, `_pcie_tx_bytes_per_second` | gauge | Each GPU, where its driver says it |
+
+Gauges are the newest one-second sample. Counters count from the server's start,
+which `rate()` expects and copes with across a restart.
 
 #### `POST /api/unload`
 

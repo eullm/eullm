@@ -2170,6 +2170,48 @@ fn monitor_bad_request(message: String) -> (StatusCode, Json<Value>) {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
 }
 
+/// Whether the request carries the admin key (`X-Admin-Key`), which
+/// deleting the Monitor's history and changing its retention need on top of
+/// the API's own perimeter: see [`super::admin`]. Every refusal is logged
+/// with the address it came from.
+fn monitor_admin(
+    state: &S,
+    ip: std::net::IpAddr,
+    headers: &axum::http::HeaderMap,
+    what: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    use super::admin::Refusal;
+    let key = headers
+        .get(super::admin::ADMIN_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let refusal = match state.monitor_access.check_admin(ip, key) {
+        Ok(()) => return Ok(()),
+        Err(r) => r,
+    };
+    let (status, reason, message) = match refusal {
+        Refusal::Disabled => (
+            StatusCode::FORBIDDEN,
+            "disabled",
+            "The Monitor's history is not administered over the API on this server: set \
+             EULLM_ADMIN_KEY to allow it, or use EULLM_METRICS_RETENTION_DAYS."
+                .to_string(),
+        ),
+        Refusal::Missing => (
+            StatusCode::FORBIDDEN,
+            "missing",
+            "This needs the admin key, in an X-Admin-Key header.".to_string(),
+        ),
+        Refusal::Wrong => (StatusCode::FORBIDDEN, "wrong", "Wrong admin key.".to_string()),
+        Refusal::Locked { retry_after_s } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "locked",
+            format!("Too many wrong admin keys from this address: try again in {retry_after_s} s."),
+        ),
+    };
+    tracing::warn!("Monitor history: refused to {what} for {ip} ({reason} admin key)");
+    Err((status, Json(json!({ "error": message, "admin": reason }))))
+}
+
 /// `GET /api/monitor/history?from=<ms>&to=<ms>&step=<s>` — a row per minute
 /// (or per `step` seconds, rounded up to whole minutes) with the minimum, the
 /// mean and the maximum of every figure, and what happened in the range
@@ -2215,8 +2257,12 @@ async fn monitor_history(
 /// `DELETE /api/monitor/history?before=YYYY-MM-DD` — delete every day before
 /// that date (UTC), and say how many files and bytes went.
 async fn monitor_delete_history(
+    State(state): State<S>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    monitor_admin(&state, addr.ip(), &headers, "delete history")?;
     let Some(text) = q.get("before") else {
         return Err(monitor_bad_request(
             "before=YYYY-MM-DD is required: the days before it are deleted".into(),
@@ -2230,9 +2276,20 @@ async fn monitor_delete_history(
             .await
             .unwrap_or_default();
     tracing::info!(
-        "Monitor history: deleted {} day(s) before {before}, {} bytes, as asked from the API",
+        "Monitor history: deleted {} day(s) before {before}, {} bytes, as asked by {} with the \
+         admin key",
         freed.files,
-        freed.bytes
+        freed.bytes,
+        addr.ip()
+    );
+    crate::monitor::history::event(
+        "admin",
+        format!(
+            "{} day(s) before {before} deleted ({} bytes), from {}",
+            freed.files,
+            freed.bytes,
+            addr.ip()
+        ),
     );
     Ok(Json(
         json!({ "deleted_files": freed.files, "freed_bytes": freed.bytes }),
@@ -2241,21 +2298,27 @@ async fn monitor_delete_history(
 
 /// `GET /api/monitor/storage` — where the history is kept, for how many
 /// days and why, the space each day takes and what the retention would
-/// take at that size.
-async fn monitor_storage() -> Json<crate::monitor::history::Usage> {
-    Json(
-        tokio::task::spawn_blocking(|| crate::monitor::history::store().usage())
-            .await
-            .unwrap_or_else(|_| crate::monitor::history::store().usage()),
-    )
+/// take at that size, and whether it can be administered over the API
+/// (`admin_enabled`: `EULLM_ADMIN_KEY` is set).
+async fn monitor_storage(State(state): State<S>) -> Json<Value> {
+    let usage = tokio::task::spawn_blocking(|| crate::monitor::history::store().usage())
+        .await
+        .unwrap_or_else(|_| crate::monitor::history::store().usage());
+    let mut v = serde_json::to_value(usage).unwrap_or_else(|_| json!({}));
+    v["admin_enabled"] = json!(state.monitor_access.admin_enabled());
+    Json(v)
 }
 
 /// `PUT /api/monitor/storage {"retention_days": n}` — keep n days (1 to 366)
 /// from now on, saved in the folder so a restart keeps it; what is older is
 /// deleted at once, and the answer says what that freed.
 async fn monitor_set_storage(
+    State(state): State<S>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    monitor_admin(&state, addr.ip(), &headers, "change the retention")?;
     let days = body
         .get("retention_days")
         .and_then(Value::as_u64)
@@ -2265,12 +2328,91 @@ async fn monitor_set_storage(
         .await
         .map_err(|e| monitor_bad_request(e.to_string()))?
         .map_err(monitor_bad_request)?;
-    let usage = store.usage();
+    crate::monitor::history::event(
+        "admin",
+        format!(
+            "retention set to {days} days, {} day(s) deleted ({} bytes), from {}",
+            freed.files,
+            freed.bytes,
+            addr.ip()
+        ),
+    );
+    let mut usage = serde_json::to_value(store.usage()).unwrap_or_else(|_| json!({}));
+    usage["admin_enabled"] = json!(true);
     Ok(Json(json!({
         "storage": usage,
         "deleted_files": freed.files,
         "freed_bytes": freed.bytes,
     })))
+}
+
+/// `GET /metrics` — the Monitor in Prometheus's text format, on the API port,
+/// for a Prometheus server that brings `EULLM_METRICS_TOKEN` as a bearer
+/// token: see [`super::admin`] and [`crate::monitor::prometheus`]. Not served
+/// without the token configured.
+pub(crate) async fn prometheus_metrics(
+    State(state): State<S>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use super::admin::Refusal;
+    match state
+        .monitor_access
+        .check_metrics(addr.ip(), super::admin::bearer(&headers))
+    {
+        Ok(()) => {}
+        Err(Refusal::Disabled) => {
+            return (
+                StatusCode::NOT_FOUND,
+                "/metrics is not served: set EULLM_METRICS_TOKEN on the server, and give \
+                 Prometheus the same token as a bearer token\n",
+            )
+                .into_response();
+        }
+        Err(Refusal::Missing) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer")],
+                "send EULLM_METRICS_TOKEN as Authorization: Bearer <token>\n",
+            )
+                .into_response();
+        }
+        Err(Refusal::Wrong) => {
+            tracing::warn!("/metrics: wrong token from {}", addr.ip());
+            return (StatusCode::FORBIDDEN, "wrong token\n").into_response();
+        }
+        Err(Refusal::Locked { retry_after_s }) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, retry_after_s.to_string())],
+                "too many wrong tokens from this address\n",
+            )
+                .into_response();
+        }
+    }
+    let models: Vec<String> = state
+        .models
+        .read()
+        .await
+        .by_recent_use()
+        .into_iter()
+        .map(|m| m.name.clone())
+        .collect();
+    let history_bytes =
+        tokio::task::spawn_blocking(|| crate::monitor::history::store().usage().total_bytes)
+            .await
+            .unwrap_or(0);
+    let page = crate::monitor::prometheus::render(
+        crate::monitor::system::latest().as_ref(),
+        &crate::monitor::totals(),
+        &models,
+        history_bytes,
+    );
+    (
+        [(header::CONTENT_TYPE, crate::monitor::prometheus::CONTENT_TYPE)],
+        page,
+    )
+        .into_response()
 }
 
 /// `GET /api/about` — what the chat UI's About page shows: this build, the

@@ -73,7 +73,7 @@ use sha2::{Digest, Sha256};
 /// Minimum secret length. Not a policy flourish: a token short enough to guess
 /// makes every other control here decorative, and the operator who typed
 /// `key:test` is exactly the one who will not notice.
-const MIN_SECRET_LEN: usize = 16;
+pub(crate) const MIN_SECRET_LEN: usize = 16;
 
 /// Longest accepted key id, and the character set it may use. Bounded because
 /// the id is written into every audit record and into log lines.
@@ -370,7 +370,7 @@ impl ApiKeys {
 /// Fixed-time byte comparison. Written out rather than pulled from a crate: it
 /// is four lines, and the alternative is a new dependency on the audited path.
 /// `black_box` keeps the optimiser from turning the fold into an early exit.
-fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
     let mut diff = 0u8;
     for i in 0..32 {
         diff |= a[i] ^ b[i];

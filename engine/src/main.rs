@@ -144,6 +144,10 @@ file in the folder eullm starts from (the startup log says which was used):
   EULLM_METRICS_DIR              where the Monitor's history goes, a file a
                                  day; off keeps it in memory [~/.eullm/metrics]
   EULLM_METRICS_RETENTION_DAYS   days of history kept, 1 to 366 [30]
+  EULLM_ADMIN_KEY                lets whoever has it change the retention and
+                                 delete the Monitor's history (X-Admin-Key)
+  EULLM_METRICS_TOKEN            serves /metrics (Prometheus) to whoever sends
+                                 it as a bearer token
   EULLM_WEB_ALLOWED_DOMAINS      --web fetches from these domains only
   EULLM_WEB_ALLOW_HTTP=1         --web fetches http pages too, not only https
   EULLM_WEB_ALLOW_PRIVATE_HOSTS=1  --web fetches from private addresses too
