@@ -268,7 +268,7 @@ class Runner:
         # starts at once rather than at the next poll.
         self.wake = threading.Event()
         self.model_seen = set()
-        self.busy_s = {d: 0.0 for d in self.devices}
+        self.busy_s = dict.fromkeys(self.devices, 0.0)
         self.counts = {"done": 0, "failed": 0, "blocked": 0, "released": 0, "retry": 0}
         self.started = time.time()
         walltime = args.walltime_s
