@@ -830,10 +830,11 @@ def cmd_plan(args):
                   f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
             return 2
     for path, spec, points in expanded:
+        selected = points
         if args.group:
-            points = [p for p in points
-                      if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
-        added = [p for p in points if q.add(p)]
+            selected = [p for p in points
+                        if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
+        added = [p for p in selected if q.add(p)]
         name = os.path.basename(path)
         if args.round:
             name = name.replace(".json", f".{args.round}.json")
