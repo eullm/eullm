@@ -19,7 +19,7 @@ def _mod():
 
 def _w(p: Path, rows) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     return p
 
 
@@ -44,15 +44,15 @@ def test_uncovered_sets_are_filtered_and_damage_caught(tmp_path, capsys):
     other = _w(clean / "v3s" / "program.jsonl", [_row("4")])
     (clean / "v3s" / "manifest.json").write_text(json.dumps(
         {"sets": {"norm-exam": {"sha256": _sha(covered)}},
-         "files": {"rewrites.jsonl": _sha(good), "program.jsonl": "0" * 64}}))
+         "files": {"rewrites.jsonl": _sha(good), "program.jsonl": "0" * 64}}), encoding="utf-8")
     out = tmp_path / "ok"
     rc = mod.main(["--clean", str(clean), "--out", str(out),
                    "--sets", f"norm-exam={covered}", f"trap-test={trap}"])
     text = capsys.readouterr().out
     assert rc == 1                                  # program.jsonl does not match its sha256
     assert "norm-exam: covered" in text and "trap-test: NOT covered" in text
-    kept = [json.loads(ln)["articolo"] for ln in (out / "v3s" / "rewrites.jsonl").read_text()
-            .splitlines()]
+    kept = [json.loads(ln)["articolo"] for ln in (out / "v3s" / "rewrites.jsonl")
+            .read_text(encoding="utf-8").splitlines()]
     assert kept == ["1", "3"]                       # every form on the trap test's article goes
     assert not (out / "v3s" / "program.jsonl").exists()
     assert other.exists()
