@@ -999,8 +999,8 @@ impl AppState {
                 kv_v_mib: info.kv_v_mib,
                 web: self.web_enabled,
                 threads: self.threads,
-                n_batch: load_n_batch,
-                n_ubatch: load_n_ubatch,
+                n_batch: info.n_batch.unwrap_or(load_n_batch),
+                n_ubatch: info.n_ubatch.unwrap_or(load_n_ubatch),
                 rust_debug: self.rust_debug,
             }
             .print();

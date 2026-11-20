@@ -315,6 +315,13 @@ sampling: sampling took 2.7 ms per token, and 1.1 ms with
 vocabulary's candidates (about 248,000 here) in its table of recent tokens,
 for every token of every answer.
 
+Since 0.9.1 the repeat penalty is off by default on `/v1/chat/completions`
+and in the chat UI, as llama-server has it; `/api/chat` and `/api/generate`
+keep Ollama's 1.1, which their clients expect. Over the last 64 tokens it
+counts the newlines, `###` and `**` a Markdown answer repeats all the time,
+and pushed Gemma 4 into joins like "anal### Il problema". A request that
+sends `repeat_penalty` gets what it asks for.
+
 ## Security
 
 ### Restricting who can reach the engine (`EULLM_ALLOWED_IPS`, new in v0.6.29)
@@ -1342,9 +1349,19 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   `--batch-size` slots (new in 0.9.1; they used to be served one request
 >   at a time). A request with images reads them whole into its own slot,
 >   as llama-server does: the requests already answering wait for that one
->   step, then go on beside it. An image must fit in one micro-batch: with a
->   projector `--n-ubatch` is at least 512, or `EULLM_IMAGE_MAX_TOKENS` when
->   that is larger. A slot that read an image is not reused for the next
+>   step, then go on beside it. With a projector `--n-ubatch` is at least
+>   512, or `EULLM_IMAGE_MAX_TOKENS` when that is larger; one whose attention
+>   over an image is not causal (Gemma) needs each image whole in one
+>   micro-batch, which is raised to the most an image takes with it (1089
+>   tokens on Gemma 4 12B), so images keep their full resolution. It costs
+>   memory: the compute buffer (129 to 277 MiB on that model) and, on a
+>   model with sliding-window layers, each slot's window, which holds a
+>   micro-batch beside it (KV 2.4 to 3.4 GB with 4 slots at `-c 32768`).
+>   Where that does not fit, images are scaled down to the micro-batch, as
+>   llama-server does; `EULLM_IMAGE_MAX_TOKENS=512` asks for that from the
+>   start. Qwen-VL and other causal
+>   projectors read a large image a micro-batch at a time. A slot that read
+>   an image is not reused for the next
 >   turn's prompt, which is read whole again. `--mtp` does not draft for a
 >   model loaded with its projector. A multimodal model used for text alone
 >   (RAG, rewriting, grading) can be loaded without its projector with

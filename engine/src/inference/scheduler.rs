@@ -853,6 +853,11 @@ pub struct ModelReadyInfo {
     /// capacity: llama.cpp mentions it once, in a log line buried between two
     /// hundred others, and the flag that fixes it is not named there.
     pub n_ctx_train: u32,
+    /// The batch and micro-batch the context was built with, when the
+    /// scheduler built one: not always the flags', since a projector raises
+    /// the micro-batch to an image's (see `run_scheduler_loop`).
+    pub n_batch: Option<u32>,
+    pub n_ubatch: Option<u32>,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -1507,7 +1512,10 @@ fn admit_media(
         return None;
     }
     let n_ubatch = ctx.n_ubatch();
-    if prepared.max_media_tokens > n_ubatch {
+    // Only a projector whose attention over the image is not causal needs it
+    // in one micro-batch (`cap_image_tokens` keeps its images within it); a
+    // causal one's image is decoded a micro-batch at a time, as text is.
+    if mtmd.decode_use_non_causal() && prepared.max_media_tokens > n_ubatch {
         refuse(
             format!(
                 "this image encodes to {} tokens, past the {n_ubatch} the server reads in one \
@@ -1570,6 +1578,44 @@ fn admit_media(
     // The last decode was `eval_chunks`' own, of the prompt's last token,
     // with its logits: the answer's first token is sampled from them.
     begin_generation(model, ctx, seq, -1, idle_slots, checkpoints, sched_config)
+}
+
+/// A projector reloaded with the tokens of an image capped at `n_ubatch`,
+/// when its attention over an image is not causal and its largest image
+/// takes more than one micro-batch holds (see `super::image_token_ceiling`):
+/// larger images are then scaled down to fit, as llama-server does
+/// (`server-context.cpp`, "cap image_max_tokens"), rather than refused.
+/// `None` when nothing needs changing, or the reload failed (then the
+/// request that does not fit is refused, saying how to make it fit).
+/// `EULLM_IMAGE_MAX_TOKENS` set is left as it is: the micro-batch was already
+/// raised to it (`multimodal_batch_size`).
+#[cfg(feature = "multimodal")]
+fn cap_image_tokens(
+    mtmd: Option<&mut llama_cpp_2::mtmd::MtmdContext>,
+    config: &InferenceConfig,
+    model: &LlamaModel,
+    n_ubatch: u32,
+) -> Option<llama_cpp_2::mtmd::MtmdContext> {
+    let mtmd = mtmd?;
+    if !mtmd.decode_use_non_causal() || crate::settings::var("EULLM_IMAGE_MAX_TOKENS").is_some() {
+        return None;
+    }
+    let ceiling = super::image_token_ceiling(mtmd)?;
+    if ceiling <= n_ubatch {
+        return None;
+    }
+    tracing::warn!(
+        "Projector: an image takes up to {ceiling} tokens, and its attention needs it whole in \
+         one micro-batch of {n_ubatch}: larger images are scaled down to {n_ubatch} tokens, as \
+         llama-server does. --n-ubatch {ceiling} keeps them at full resolution, for more VRAM"
+    );
+    match super::InferenceEngine::init_mtmd(config, model, Some(n_ubatch as i32)) {
+        Ok(capped) => capped,
+        Err(e) => {
+            tracing::warn!("Projector: could not reload it with the cap ({e}); keeping it as it was");
+            None
+        }
+    }
 }
 
 /// The answer's first token, sampled from the logits of the prompt's last
@@ -2146,6 +2192,40 @@ fn run_scheduler_loop(
         config.n_ubatch = floor;
         config.n_batch = config.n_batch.max(floor);
     }
+    // A projector whose attention over an image is not causal (Gemma) needs
+    // each image whole in one micro-batch: the micro-batch is raised to the
+    // most an image takes with it, so that images are read at the resolution
+    // the sequential engine reads them at, as before 0.9.1. llama-server
+    // instead scales images down to its micro-batch, and on Gemma 4 12B that
+    // changed answers: a tall image read at 506 tokens instead of 653 came
+    // out "dark red and black" where it was "red and blue" (20-11-2026). It
+    // costs the compute buffer of the larger micro-batch (129 to 277 MiB on
+    // that model) and, with sliding-window layers, each slot's window, which
+    // holds a micro-batch beside it (KV 2.4 to 3.4 GB there with 4 slots at
+    // -c 32768), which sizing, done before the projector is read, does not
+    // see. Where that does not fit, the context falls back to the micro-batch
+    // asked for, and images are scaled down to it (`cap_image_tokens`).
+    // `EULLM_IMAGE_MAX_TOKENS` set decides instead (512: llama-server's way).
+    let text_batches = (config.n_batch, config.n_ubatch);
+    #[cfg(feature = "multimodal")]
+    let image_ubatch = mtmd
+        .as_mut()
+        .filter(|m| m.decode_use_non_causal())
+        .filter(|_| crate::settings::var("EULLM_IMAGE_MAX_TOKENS").is_none())
+        .and_then(super::image_token_ceiling)
+        .filter(|&ceiling| {
+            ceiling > config.text_ubatch() && ceiling <= super::MAX_MEDIA_TOKENS_PER_CHUNK
+        });
+    #[cfg(not(feature = "multimodal"))]
+    let image_ubatch: Option<u32> = None;
+    if let Some(ceiling) = image_ubatch {
+        tracing::info!(
+            "Projector: reading prompts {ceiling} tokens at a time (--n-ubatch), the most an \
+             image takes, which its attention needs whole"
+        );
+        config.n_ubatch = ceiling;
+        config.n_batch = config.n_batch.max(ceiling);
+    }
     if mtp_draft > 0 {
         config.rs_seq = config.rs_seq.max(mtp_draft);
         tracing::info!("MTP: the model's MTP head drafts up to {mtp_draft} tokens per step");
@@ -2185,7 +2265,24 @@ fn run_scheduler_loop(
         .with_n_seq_max(sched_config.max_batch_size as u32)
         .with_n_outputs_max(n_outputs_max);
 
-    let mut ctx = match model.new_context(&backend, ctx_params) {
+    // The larger micro-batch an image needs, when it does not fit: the one
+    // asked for, and images scaled down to it (see `image_ubatch` above).
+    let first = match (model.new_context(&backend, ctx_params), image_ubatch) {
+        (Err(e), Some(ceiling)) => {
+            tracing::warn!(
+                "Projector: no room for a micro-batch of {ceiling} tokens ({e}); reading \
+                 prompts {} at a time, and scaling images down to fit",
+                text_batches.1
+            );
+            (config.n_batch, config.n_ubatch) = text_batches;
+            let params = super::build_ctx_params(&config, ctx_size)
+                .with_n_seq_max(sched_config.max_batch_size as u32)
+                .with_n_outputs_max(n_outputs_max);
+            model.new_context(&backend, params)
+        }
+        (result, _) => result,
+    };
+    let mut ctx = match first {
         Ok(c) => c,
         Err(e) => {
             // Build a hint suggesting smaller ctx-size values to try.
@@ -2227,6 +2324,18 @@ fn run_scheduler_loop(
             }
         }
     };
+
+    // A projector whose attention over an image is not causal (Gemma) needs
+    // each image whole in one micro-batch: past it, decoding would abort.
+    // llama-server caps the tokens an image takes at the micro-batch, so
+    // larger images are scaled down rather than refused; so does this
+    // (`cap_image_tokens`). Measured on an RTX 5070 Ti (20-11-2026): a tall
+    // photo became 696 tokens on Gemma 4 12B, past the 512 of the default
+    // micro-batch, and was refused.
+    #[cfg(feature = "multimodal")]
+    if let Some(capped) = cap_image_tokens(mtmd.as_mut(), &config, model, ctx.n_ubatch()) {
+        mtmd = Some(capped);
+    }
 
     // llama.cpp's own log lines (CUDA graph warmup etc.) are routed once,
     // process-wide, when the shared backend is created, rather than per-load
@@ -2362,6 +2471,9 @@ fn run_scheduler_loop(
             kv_info.kv_v_mib = v;
         }
     }
+
+    kv_info.n_batch = Some(ctx.n_batch());
+    kv_info.n_ubatch = Some(ctx.n_ubatch());
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));
@@ -3632,6 +3744,7 @@ pub(crate) fn estimate_kv_memory(
             kv_k_mib: 0.0,
             kv_v_mib: 0.0,
             n_ctx_train: model.n_ctx_train(),
+            ..ModelReadyInfo::default()
         };
     }
 
@@ -3665,6 +3778,7 @@ pub(crate) fn estimate_kv_memory(
         kv_k_mib: kv_k_bytes / (1024.0 * 1024.0),
         kv_v_mib: kv_v_bytes / (1024.0 * 1024.0),
         n_ctx_train: model.n_ctx_train(),
+        ..ModelReadyInfo::default()
     }
 }
 

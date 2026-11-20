@@ -3880,6 +3880,9 @@ async fn cmd_run(
                     n_ctx_train = model_info.n_ctx_train;
                     kv_k_mib = model_info.kv_k_mib;
                     kv_v_mib = model_info.kv_v_mib;
+                    // What the context was built with, for the banner.
+                    n_batch = model_info.n_batch.unwrap_or(n_batch);
+                    n_ubatch = model_info.n_ubatch.unwrap_or(n_ubatch);
                     scheduler = Some(handle);
                     println!("Model loaded (continuous batching, max_batch_size={batch_size}).");
                 }
