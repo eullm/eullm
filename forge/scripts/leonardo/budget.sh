@@ -134,8 +134,10 @@ read -r PACE_LINE PACE_NEED DAYS_LEFT <<<"$(awk -v t="$TOTAL" -v c="$CONSUMED_CH
         printf "%.0f %.0f %.0f", t * done / d, (left > 0 ? (t - c) / left : 0), left }')"
 printf '\n  straight line   %8s core-h  = %8s node-h   (an even spend, today)\n' \
     "$PACE_LINE" "$(nodeh "$PACE_LINE")"
-printf '  ahead (+) / behind (-) %+.0f node-h; the rest needs %s node-h a day (%s GPUs round the clock) for %s days\n' \
-    "$(awk -v a="$CONSUMED_CH" -v b="$PACE_LINE" -v c="$CORES_PER_NODE" 'BEGIN {print (a-b)/c}')" \
+# rounded by awk, printed as text: bash's printf reads "%f" in the locale's
+# decimal comma (it_IT on the login nodes) and refused "-828.469"
+printf '  ahead (+) / behind (-) %s node-h; the rest needs %s node-h a day (%s GPUs round the clock) for %s days\n' \
+    "$(awk -v a="$CONSUMED_CH" -v b="$PACE_LINE" -v c="$CORES_PER_NODE" 'BEGIN {printf "%+.0f", (a-b)/c}')" \
     "$(nodeh "$PACE_NEED")" "$(awk -v v="$PACE_NEED" -v g="$CORES_PER_GPU" 'BEGIN {printf "%.0f", v/g/24}')" "$DAYS_LEFT"
 printf '\n  month           %8s core-h quota, %s used\n' "$MONTH_TOTAL" "$MONTH_USED"
 printf '  saldo settled   %8s core-h              (lags: cross-check only)\n' "$SETTLED"
