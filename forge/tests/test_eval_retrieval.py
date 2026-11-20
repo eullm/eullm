@@ -177,7 +177,7 @@ def test_a_text_that_does_not_fit_is_marked_as_cut():
 
 def test_from_files_reads_jsonl(tmp_path):
     path = tmp_path / "legislazione_codice_civile.chunks.jsonl"
-    path.write_text("\n".join(json.dumps(r) for r in RECORDS[:2]) + "\n")
+    path.write_text("\n".join(json.dumps(r) for r in RECORDS[:2]) + "\n", encoding="utf-8")
     assert len(NormIndex.from_files([path]).records) == 2
 
 
@@ -244,10 +244,10 @@ def test_the_summary_counts_grades_and_scores_partial_as_half():
 def test_grade_file_writes_the_graded_copy(tmp_path):
     src = tmp_path / "answers-x.jsonl"
     src.write_text(json.dumps({"id": "a", "question": "Q?", "answer": "A.",
-                               "reference": "R."}) + "\n")
+                               "reference": "R."}) + "\n", encoding="utf-8")
     grades = judge_answers.grade_file(src, ReferenceGrader(lambda p: "Grade: partial\nmeh"))
     assert [g.label for g in grades] == ["partial"]
-    line = json.loads((tmp_path / "answers-x.graded.jsonl").read_text())
+    line = json.loads((tmp_path / "answers-x.graded.jsonl").read_text(encoding="utf-8"))
     assert line["grade"] == "partial" and line["why"].startswith("Grade: partial")
 
 
@@ -259,12 +259,12 @@ def test_grade_file_under_v3_puts_the_three_outcome_rubric_in_the_prompt(tmp_pat
                                "answer": "Nei testi forniti non è presente l'art. 3434.",
                                "reference": "Non esiste l'art. 3434 del codice civile.",
                                "rubric": "Corretto solo se dice che l'articolo non esiste."})
-                   + "\n")
+                   + "\n", encoding="utf-8")
     seen = []
     judge_answers.grade_file(src, ReferenceGrader(lambda p: seen.append(p) or "Grade: correct"),
                              rubric="v3", out_dir=tmp_path / "v3")
     assert NONEXISTENT_RUBRIC in seen[0] and "Corretto solo se dice" not in seen[0]
-    line = json.loads((tmp_path / "v3" / "answers-x.graded.jsonl").read_text())
+    line = json.loads((tmp_path / "v3" / "answers-x.graded.jsonl").read_text(encoding="utf-8"))
     assert line["grade"] == "correct" and line["rubric"] == NONEXISTENT_RUBRIC
 
 
@@ -430,7 +430,7 @@ def test_the_retrieval_check_prints_counts_per_boost_and_no_question(tmp_path, c
     from eullm_forge.eval import EvalItem, save_eval_set
 
     norms = tmp_path / "legislazione_cpc.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in CITAZIONE) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in CITAZIONE) + "\n", encoding="utf-8")
     exam = tmp_path / "dev.jsonl"
     save_eval_set([EvalItem(
         id="norm-termine_argomento-codice_procedura_civile-163", domain="legal", lang="it",
@@ -457,7 +457,7 @@ def test_the_default_ranking_is_unchanged_until_a_boost_is_chosen():
 def test_the_retrieval_check_measures_the_teachers_topic_questions(tmp_path, capsys):
     """Paraphrased, the way people ask: the fairer test of a rubrica weight."""
     norms = tmp_path / "legislazione_cpc.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in CITAZIONE) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in CITAZIONE) + "\n", encoding="utf-8")
     pairs = tmp_path / "openbook-pairs.jsonl"
     rows = [
         {"task": "openbook_grounded", "named": False, "key": "ob-g-codice_procedura_civile-163",
@@ -469,7 +469,7 @@ def test_the_retrieval_check_measures_the_teachers_topic_questions(tmp_path, cap
         {"task": "openbook_missing", "key": "ob-m-codice_procedura_civile-900-1",
          "instruction": "Domanda: art. 900?", "output": "x"},
     ]
-    pairs.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    pairs.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     script = Path(__file__).resolve().parents[1] / "scripts" / "check_retrieval.py"
     spec = importlib.util.spec_from_file_location("check_retrieval", script)
     mod = importlib.util.module_from_spec(spec)
@@ -491,7 +491,7 @@ def test_the_pairs_limit_is_a_budget_per_file_not_a_prefix(tmp_path, capsys):
     submission takes.
     """
     norms = tmp_path / "legislazione_cpc.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in CITAZIONE) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in CITAZIONE) + "\n", encoding="utf-8")
 
     def pairs_file(tag):
         path = tmp_path / f"pairs-{tag}.jsonl"

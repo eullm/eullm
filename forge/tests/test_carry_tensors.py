@@ -46,7 +46,7 @@ def _base(tmp_path: Path) -> Path:
     (base / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {
         "model.layers.0.w": "model-00001-of-00002.safetensors",
         "mtp.fc.weight": "model-00001-of-00002.safetensors",
-        "mtp.layers.0.mlp.up_proj.weight": "model-00002-of-00002.safetensors"}}))
+        "mtp.layers.0.mlp.up_proj.weight": "model-00002-of-00002.safetensors"}}), encoding="utf-8")
     return base
 
 
@@ -59,7 +59,7 @@ def test_the_mtp_head_is_carried_into_a_single_file_merge(tmp_path):
     got = carry_missing_tensors(base, merged)
 
     assert got == ["mtp.fc.weight", "mtp.layers.0.mlp.up_proj.weight"]
-    index = json.loads((merged / "model.safetensors.index.json").read_text())["weight_map"]
+    index = json.loads((merged / "model.safetensors.index.json").read_text(encoding="utf-8"))["weight_map"]
     assert index == {"model.layers.0.w": "model.safetensors",
                      "mtp.fc.weight": "model-carried.safetensors",
                      "mtp.layers.0.mlp.up_proj.weight": "model-carried.safetensors"}
@@ -78,11 +78,11 @@ def test_a_sharded_merge_keeps_its_index_and_total_size(tmp_path):
     _write(merged / "model-00001-of-00001.safetensors", {"model.layers.0.w": b"\x00\x00" * 4})
     (merged / "model.safetensors.index.json").write_text(json.dumps({
         "metadata": {"total_size": 8},
-        "weight_map": {"model.layers.0.w": "model-00001-of-00001.safetensors"}}))
+        "weight_map": {"model.layers.0.w": "model-00001-of-00001.safetensors"}}), encoding="utf-8")
 
     carry_missing_tensors(base, merged)
 
-    index = json.loads((merged / "model.safetensors.index.json").read_text())
+    index = json.loads((merged / "model.safetensors.index.json").read_text(encoding="utf-8"))
     assert index["metadata"]["total_size"] == 8 + 12 + 6
     assert index["weight_map"]["model.layers.0.w"] == "model-00001-of-00001.safetensors"
     assert index["weight_map"]["mtp.fc.weight"] == "model-carried.safetensors"
@@ -105,5 +105,5 @@ def test_the_script_runs_on_its_own(tmp_path):
     merged.mkdir()
     _write(merged / "model.safetensors", {"model.layers.0.w": b"\x09\x09" * 4})
     out = subprocess.run([sys.executable, str(SCRIPT), str(base), str(merged)],
-                         capture_output=True, text=True, check=True).stdout
+                         capture_output=True, text=True, encoding="utf-8", check=True).stdout
     assert "2 tensors carried" in out

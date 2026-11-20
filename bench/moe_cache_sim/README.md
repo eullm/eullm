@@ -24,6 +24,8 @@ c++ -O2 -std=c++17 -o moe_cache_sim bench/moe_cache_sim/moe_cache_sim.cpp
 | `lfu-decay` | the one whose expert has the lowest count, counts kept for every expert (cached or not) and halved every 4 passes (`--half-life`) |
 | `stale-lfu` | `stale-mru` when a pass overflows; among the stale slots, the one whose expert has the lowest decayed count instead of the least recently used |
 | `lfu-pass` | `stale-lfu`, and when a pass overflows, the lowest count among the slots used earlier in this pass (the most recently used if there is none); `/32` compares at most 32 slots a miss, as llama.cpp could afford |
+| `classlru` | llama.cpp's `moe_cache_lru::plan` since #31233 (b12283 on), without its CPU share: each expert's uses decayed with a half-life of 128 tokens of its layer (CRF), one LRU list per class floor(log2(CRF)), and the victim is, among the least recently used slot of each list, the one with the largest age/2^class |
+| `classlru-pass` | `classlru` among the slots that went unused for a whole pass; when every slot was used within the pass, `lfu-pass`'s rule with the CRF as the count. llama.cpp patch `0008` since b12283 |
 | `belady (bound)` | the one whose expert is chosen again furthest in the future: needs the whole trace, so it is the best any policy could do |
 
 The layers come in the same order every step. When a step chooses more
@@ -34,11 +36,16 @@ step's experts fit, since a stale slot always exists then.
 
 ## Input
 
-`run TRACE` reads what llama.cpp writes with patch `0008` and
-`LLAMA_MOE_CACHE_TRACE=FILE`: a header (`MOEC`, version 1, the model's
+`run TRACE` reads what llama.cpp writes with `LLAMA_MOE_CACHE_TRACE=FILE`.
+Since b12283 that is llama.cpp's own trace (#30966): `MCT1`, every group of
+layers the cache holds, with the bytes of one expert, which give
+`--expert-mib`, and without the slots, which `--slots` gives; `--group G`
+(0 by default) chooses the group whose lookups are replayed. Before it,
+EuLLM's patch `0008` wrote its own: a header (`MOEC`, version 1, the model's
 layers, experts and experts per token, the cache's slots and its layers),
-then one record per layer planned: the layer, the number of ids, the ids,
-all int32. The cache's own slot count is used unless `--slots` says
+the first group only, then one record per layer planned: the layer, the
+number of ids, the ids, all int32; the traces of 16-10-2026 below are of
+this kind, and the cache's own slot count is used unless `--slots` says
 otherwise. A trace cut short by the end of a job is read up to its last
 whole record.
 
@@ -123,3 +130,40 @@ where it overflows: its victim is still the least recently used slot, of
 probation and then of the protected half, so a pass larger than the cache
 evicts the experts of the next layers just as the LRU did. Patches `0008` and
 `0009` therefore stay, ported onto the SLRU.
+
+## llama.cpp's ClassLRU (11-11-2026)
+
+Upstream replaced the SLRU with ClassLRU (#31233, b12283): the uses of an
+expert decayed with a half-life of 128 tokens rank it in one of eight
+classes, and a miss takes, among the oldest slot of each class, the one
+with the largest age/2^class. Replayed on the synthetic routing of
+15-10-2026, `--no-opt`, experts in VRAM:
+
+| model, sequences | `slru` | `classlru` | `lfu-pass` (`0008` until b12283) | `classlru-pass` (`0008` since) |
+|---|---:|---:|---:|---:|
+| 235B, 1 | 94.5% | 94.6% | 94.5% | 94.6% |
+| 235B, 8 | 90.6% | 91.7% | 91.1% | 91.7% |
+| 235B, 32 | 0% | 65.9% | 73.1% | 73.2% |
+| 480B, 1 | 80.7% | 81.4% | 80.8% | 81.4% |
+| 480B, 8 | 0% | 28.9% | 46.5% | 46.8% |
+| 480B, 32 | 0% | 0% | 21.1% | 21.8% |
+
+(235B: `--layers 94 --experts 128 --alpha 1.8 --keep 0.7 --own 0 --drift 0
+--slots 3900`; 480B: `--layers 62 --experts 160 --alpha 1.6 --keep 0.5
+--drift 1 --slots 1350`, with the defaults for the rest, which gives lower
+figures than the 27-10-2026 table, whose other options were not recorded.)
+
+The decayed counts make ClassLRU better than the SLRU everywhere, and better
+than `lfu-pass` where a step fits, by up to a point. Where a step overflows
+it still evicts slots used within the pass: its oldest slot of a high class
+can score below a recent slot of class 0, the expert one of the next layers
+wants, and it falls to 0% with the 480B at 32 sequences. `classlru-pass`
+keeps ClassLRU's choice whenever a stale slot exists, among the stale slots
+only, and takes `lfu-pass`'s rule when none does. Over ten more settings at
+8 and 32 sequences (`--alpha` 1.0-2.2, `--keep` 0.3-0.8, `--own` 0-0.5, the
+same prompt or `--independent`, `--drift 2`) it was at or above `lfu-pass`
+in all but one, 0.17 points below at `--alpha 2.2 --keep 0.8` with 8, and
+11-41 points above `classlru` at 32 sequences, where `classlru` was at 0%
+in four of the five. The real traces of 16-10-2026 are on LUMI and have
+not been replayed here.
+

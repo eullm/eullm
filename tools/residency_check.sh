@@ -267,7 +267,7 @@ dur=$(median "$OUT/4-during.ms")
 n=$(grep -cv failed "$OUT/4-during.ms")
 failed=$(cat "$OUT/4-alone.ms" "$OUT/4-during.ms" | grep -c failed)
 worst=$(grep -v failed "$OUT/4-during.ms" | sort -n | tail -1)
-loaded=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("done_reason"))' "$OUT/4-load.json" 2> /dev/null)
+loaded=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("done_reason"))' "$OUT/4-load.json" 2> /dev/null)
 if [ "$failed" -gt 0 ] || [ "$idle" = none ] || [ "$loaded" != load ]; then
     result FAIL "4 a load does not stall a resident model: $failed failed requests, load of $B '$loaded' (see $OUT/4.log)"
 elif [ "$n" -eq 0 ]; then

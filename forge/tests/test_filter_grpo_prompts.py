@@ -36,12 +36,12 @@ def _load(name):
 
 
 def _rows(path):
-    return [json.loads(ln) for ln in path.read_text().splitlines() if ln.strip()]
+    return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
 
 
 def test_no_prompt_is_on_an_article_of_the_trap_test(tmp_path, capsys):
     norms = tmp_path / "legislazione_test.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     # The real producers: GRPO prompts as make_premise_pairs.py writes them on
     # Leonardo, and a trap test drawn on the same articles.
     grpo = tmp_path / "prompts-premise.jsonl"
@@ -57,7 +57,7 @@ def test_no_prompt_is_on_an_article_of_the_trap_test(tmp_path, capsys):
 
     # A second file repeating the first: each prompt is kept once.
     again = tmp_path / "prompts-again.jsonl"
-    again.write_text(grpo.read_text())
+    again.write_text(grpo.read_text(encoding="utf-8"), encoding="utf-8")
     out = tmp_path / "prompts.jsonl"
     assert _load("filter_grpo_prompts").main(
         [str(grpo), str(again), "--exclude-exam", str(test), "--out", str(out)]) == 0
@@ -73,7 +73,7 @@ def test_no_prompt_is_on_an_article_of_the_trap_test(tmp_path, capsys):
     every.write_text("".join(json.dumps(
         {"id": f"t{i}", "domain": "legal", "lang": "it", "question": "?", "reference": "",
          "metadata": {"code": r["code"], "articolo": str(r["articolo"])}}) + "\n"
-        for i, r in enumerate(before)))
+        for i, r in enumerate(before)), encoding="utf-8")
     gone = tmp_path / "gone.jsonl"
     assert _load("filter_grpo_prompts").main(
         [str(grpo), "--exclude-exam", str(every), "--out", str(gone)]) == 1
@@ -87,7 +87,7 @@ def test_the_note_is_taken_out_as_on_leonardo(tmp_path):
              "tipo": "assente", "keywords": [], "code": "codice_civile", "articolo": "9"}
             for i in range(40)]
     src = tmp_path / "noted.jsonl"
-    src.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    src.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     ours, theirs = tmp_path / "ours.jsonl", tmp_path / "theirs.jsonl"
     assert _load("filter_grpo_prompts").main([str(src), "--out", str(ours)]) == 0
     assert _load("drop_prompt_notes").main([str(src), "--out", str(theirs)]) == 0

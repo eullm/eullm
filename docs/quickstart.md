@@ -49,7 +49,7 @@ eullm run ./my-model.gguf --daemon # loads the model and goes to the background
 
 With `serve`, the model a request names (`"model": "qwen3-8b"`) is loaded on
 the first request and swapped when another one is asked for. Models are
-looked up among the ones `eullm pull` downloaded.
+looked up among the ones `eullm list` shows.
 
 ## 3. The options you will actually use
 
@@ -66,7 +66,7 @@ options work for `run` and `serve`.
 | `--ui-port N` | 11435 | Port of the browser chat |
 | `--no-ui` | | Turn the browser chat off (`run` and `serve`; it is on by default for both) |
 | `--cli` | | `run`: chat in the terminal only, without opening the browser |
-| `-t`, `--threads N` | all cores | CPU threads |
+| `-t`, `--threads N` | one per physical core | CPU threads |
 | `--keep-alive 10m` | never | Unload the model after that long without requests, to free the GPU |
 
 ### GPU and memory
@@ -101,7 +101,8 @@ that do not fit in VRAM.
 | `--default-model NAME` | The model that answers requests that name none (`serve`) |
 | `--daemon` | Run in the background; the log goes to `~/.eullm/logs/eullm.log`, the PID to `/tmp/eullm.pid` |
 
-Every other option: `eullm run --help`.
+Every other option: `eullm run --help`, grouped by subject; `eullm --help`
+shows the ones above and the settings below.
 
 ## 4. Settings that are not options: the `.env` file
 
@@ -120,6 +121,9 @@ read them.
 | `HF_TOKEN` | `hf_...` | For gated or private Hugging Face models |
 
 The startup log says which settings are in effect and where each came from.
+The other settings (the web fetch's limits, download connections, the log
+level...) are in `eullm --help` and the
+[engine reference](engine.md#settings-in-the-environment-or-env).
 
 ## 5. Startup scripts
 
@@ -212,7 +216,7 @@ started with: start it with the largest context you want to allow.
 | Very slow | Check the startup banner: how many layers went to the GPU. A model much larger than the VRAM runs mostly on the CPU |
 | Another PC cannot connect | Only this machine is allowed by default: set `EULLM_ALLOWED_IPS` |
 | `401` from a client | `EULLM_API_KEYS` is set: give the client the key |
-| `address already in use` | Something already uses port 11434 (Ollama?): `--port 11500`, or `--replace` to replace a running EuLLM |
+| `address already in use` | Something already uses port 11434 (Ollama?): `--port 11500`, or stop the program using it |
 
 ## Going further
 

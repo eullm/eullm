@@ -23,7 +23,7 @@ def test_the_server_serves_the_gguf_with_one_slot_a_question(tmp_path):
 
 def _fake_engine(tmp_path, help_text):
     exe = tmp_path / "eullm"
-    exe.write_text(f"#!/bin/sh\necho '{help_text}'\n")
+    exe.write_text(f"#!/bin/sh\necho '{help_text}'\n", encoding="utf-8")
     exe.chmod(0o755)
     return str(exe)
 
@@ -37,6 +37,19 @@ def test_two_servers_on_a_node_open_no_chat_ui(tmp_path):
     (tmp_path / "old").mkdir()
     old = EullmServer(gguf, binary=_fake_engine(tmp_path / "old", "--port --batch-size"))
     assert "--no-ui" not in old.command()
+
+
+def test_text_work_leaves_the_projector_on_disk(tmp_path):
+    # Gemma 4's mmproj beside the weights made 0.9.0 sequential (2026-11-19).
+    gguf = tmp_path / "m.gguf"
+    gguf.write_bytes(b"GGUF")
+    new = _fake_engine(tmp_path, "--port --no-mmproj --no-mmproj-offload")
+    assert "--no-mmproj" in EullmServer(gguf, binary=new).command()
+    assert "--no-mmproj" not in EullmServer(gguf, binary=new, mmproj=True).command()
+    # 0.9.0 has --no-mmproj-offload only: not the same flag
+    (tmp_path / "old").mkdir()
+    old = _fake_engine(tmp_path / "old", "--port --no-mmproj-offload")
+    assert "--no-mmproj" not in EullmServer(gguf, binary=old).command()
 
 
 class _Engine(BaseHTTPRequestHandler):
@@ -75,3 +88,12 @@ def test_answers_come_back_in_order_greedy_and_raw(tmp_path):
     assert body["raw"] is True and body["stream"] is False
     assert body["options"]["temperature"] == 0.0 and body["options"]["repeat_penalty"] == 1.0
     assert body["options"]["num_predict"] == 400
+
+
+def test_llama_server_takes_extra_options():
+    from eullm_forge.eval.gguf import LlamaServer
+    s = LlamaServer("m.gguf", binary="/bin/llama-server", parallel=8, ctx_per_slot=3072,
+                    extra_args=["--kv-unified"])
+    cmd = s.command()
+    assert cmd[-1] == "--kv-unified"
+    assert cmd[cmd.index("-c") + 1] == str(8 * 3072)

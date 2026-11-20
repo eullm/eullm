@@ -17,7 +17,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -25,15 +25,15 @@ def _setup(tmp_path: Path, queued: str = "", serial: int = 0,
            packaging: str = "", jobs: str = "") -> tuple[dict, Path]:
     work = tmp_path / "work"
     (work / "eullm_runs" / "grpo").mkdir(parents=True)
-    (work / "eullm_runs" / "grpo" / "prompts-judge.jsonl").write_text("{}\n")
+    (work / "eullm_runs" / "grpo" / "prompts-judge.jsonl").write_text("{}\n", encoding="utf-8")
     judge = work / "gguf" / "qwen3-30b-a3b-instruct-2507" / "qwen3-30b-a3b-instruct-2507-q8_0.gguf"
     judge.parent.mkdir(parents=True)
-    judge.write_text("gguf")
+    judge.write_text("gguf", encoding="utf-8")
     (work / "eval").mkdir()
-    (work / "eval" / "practical-dev.jsonl").write_text("{}\n")
+    (work / "eval" / "practical-dev.jsonl").write_text("{}\n", encoding="utf-8")
     start = work / "start"
     start.mkdir()
-    (start / "config.json").write_text("{}")
+    (start / "config.json").write_text("{}", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     log = tmp_path / "sbatch.log"
@@ -63,7 +63,7 @@ esac
 
 def _run(env, *args):
     return subprocess.run(["bash", str(SCRIPT), *args], env=env, capture_output=True,
-                          text=True, timeout=30)
+                          text=True, encoding="utf-8", timeout=30)
 
 
 def test_the_round_is_queued_whole_and_in_order(tmp_path):
@@ -71,7 +71,7 @@ def test_the_round_is_queued_whole_and_in_order(tmp_path):
     start = Path(env["WORK"]) / "start"
     r = _run(env, "jg-x", str(start), "3", "750")
     assert r.returncode == 0, r.stderr + r.stdout
-    calls = [ln.split("|") for ln in log.read_text().splitlines()]
+    calls = [ln.split("|") for ln in log.read_text(encoding="utf-8").splitlines()]
     names = [next((a for a in c[1].split() if a.startswith("eullm-")), "judge") for c in calls]
     assert names == ["eullm-grpo-jg-x"] * 3 + ["eullm-package-jg-x", "eullm-cds-exam",
                                                "eullm-exam-jg-x", "eullm-exam-jg-x", "judge",
@@ -114,7 +114,7 @@ def test_links_zero_packages_and_examines_a_chain_already_queued(tmp_path):
     env, log = _setup(tmp_path, queued="555")
     r = _run({**env, "AFTER": "555"}, "jg-x", str(Path(env["WORK"]) / "start"), "0", "750")
     assert r.returncode == 0, r.stderr
-    calls = [ln.split("|") for ln in log.read_text().splitlines()]
+    calls = [ln.split("|") for ln in log.read_text(encoding="utf-8").splitlines()]
     assert "eullm-package-jg-x" in calls[0][1] and "--dependency=afterany:555" in calls[0][1]
     assert len(calls) == 10 and not any("eullm-grpo" in c[1] for c in calls)
 
@@ -130,7 +130,7 @@ def test_after_chains_on_a_previous_round_and_skips_the_start_check(tmp_path):
     env, log = _setup(tmp_path)
     r = _run({**env, "AFTER": "77", "NO_CDS": "1"}, "jg-y", "/not/yet/merged", "1", "10")
     assert r.returncode == 0, r.stderr
-    calls = [ln.split("|") for ln in log.read_text().splitlines()]
+    calls = [ln.split("|") for ln in log.read_text(encoding="utf-8").splitlines()]
     assert "--dependency=afterok:77" in calls[0][1]
     assert not any("eullm-cds-exam" in c[1] for c in calls)
 
@@ -146,7 +146,7 @@ def test_packaged_queues_only_the_exams_and_takes_no_serial_place(tmp_path):
     env, log = _setup(tmp_path, serial=10)
     r = _run({**env, "PACKAGED": "4242", "NO_CDS": "1"}, "jg-x", "/x", "0", "750")
     assert r.returncode == 0, r.stderr
-    calls = [ln.split("|") for ln in log.read_text().splitlines()]
+    calls = [ln.split("|") for ln in log.read_text(encoding="utf-8").splitlines()]
     assert not any("lrd_all_serial" in c[1] for c in calls)
     assert not any("eullm-grpo" in c[1] or "eullm-package" in c[1] for c in calls)
     assert "--dependency=afterok:4242" in calls[0][1]          # the statute exam
@@ -159,7 +159,7 @@ def test_a_round_already_packaged_is_not_submitted_again(tmp_path):
     env, log = _setup(tmp_path)
     gguf = Path(env["WORK"]) / "eullm_runs" / "grpo" / "jg-x" / "gguf" / "jg-x-q4_k_m.gguf"
     gguf.parent.mkdir(parents=True)
-    gguf.write_text("gguf")
+    gguf.write_text("gguf", encoding="utf-8")
     r = _run(env, "jg-x", str(Path(env["WORK"]) / "start"), "3", "750")
     assert r.returncode == 0 and "already packaged" in r.stdout
     assert not log.exists()
@@ -196,10 +196,10 @@ def test_the_trap_questions_are_examined_when_the_set_is_there(tmp_path):
     env, log = _setup(tmp_path)
     lexia = Path(env["WORK"]) / "eval" / "lexia"
     lexia.mkdir()
-    (lexia / "lexia-trappole.jsonl").write_text("{}\n")
+    (lexia / "lexia-trappole.jsonl").write_text("{}\n", encoding="utf-8")
     r = _run(env, "jg-x", str(Path(env["WORK"]) / "start"), "3", "750")
     assert r.returncode == 0, r.stderr + r.stdout
-    calls = [ln.split("|") for ln in log.read_text().splitlines()]
+    calls = [ln.split("|") for ln in log.read_text(encoding="utf-8").splitlines()]
     exam, judge = calls[-2], calls[-1]
     assert exam[7].endswith("lexia/lexia-trappole.jsonl")
     assert f"--dependency=afterok:{calls[3][0]}" in exam[1]          # after the packaging
@@ -209,7 +209,7 @@ def test_the_trap_questions_are_examined_when_the_set_is_there(tmp_path):
     log.unlink()
     (Path(env["WORK"]) / "eullm_runs" / "grpo" / "jg-y").mkdir()
     _run(env, "jg-y", str(Path(env["WORK"]) / "start"), "3", "750")
-    assert "lexia" not in log.read_text()
+    assert "lexia" not in log.read_text(encoding="utf-8")
 
 
 def test_the_merged_weights_nothing_needs_are_removed_from_the_scratch(tmp_path):
@@ -219,12 +219,12 @@ def test_the_merged_weights_nothing_needs_are_removed_from_the_scratch(tmp_path)
     root = tmp_path / "scratch" / "grpo-merged"
     for age, r in enumerate("fedcba"):            # a the oldest, f the newest
         (root / r).mkdir(parents=True)
-        (root / r / "config.json").write_text("{}")
+        (root / r / "config.json").write_text("{}", encoding="utf-8")
         (grpo / r).mkdir()
         (grpo / r / "merged").symlink_to(root / r)
         if r != "a":                               # a is not packaged yet
             (grpo / r / "gguf").mkdir()
-            (grpo / r / "gguf" / f"{r}-q4_k_m.gguf").write_text("gguf")
+            (grpo / r / "gguf" / f"{r}-q4_k_m.gguf").write_text("gguf", encoding="utf-8")
         os.utime(root / r, (1_000_000 - age * 1000,) * 2)
     r = _run({**env, "GRPO_MERGED_ROOT": str(root), "GRPO_KEEP_MERGED": "2",
               "GRPO_PRUNE_AT": "0"},
@@ -235,7 +235,7 @@ def test_the_merged_weights_nothing_needs_are_removed_from_the_scratch(tmp_path)
     # the symlink stays, where remerge_round.py writes the weights back
     assert (grpo / "d" / "merged").is_symlink() and (grpo / "d" / "gguf").is_dir()
     assert "merged weights of d removed" in r.stdout
-    assert (grpo / "jg-x" / "start").read_text().strip() == str(grpo / "b" / "merged")
+    assert (grpo / "jg-x" / "start").read_text(encoding="utf-8").strip() == str(grpo / "b" / "merged")
 
 
 def test_the_start_of_a_round_not_packaged_yet_is_kept(tmp_path):
@@ -246,17 +246,17 @@ def test_the_start_of_a_round_not_packaged_yet_is_kept(tmp_path):
     root = tmp_path / "scratch" / "grpo-merged"
     for age, r in enumerate("dcba"):
         (root / r).mkdir(parents=True)
-        (root / r / "config.json").write_text("{}")
+        (root / r / "config.json").write_text("{}", encoding="utf-8")
         (grpo / r / "gguf").mkdir(parents=True)
-        (grpo / r / "gguf" / f"{r}-q4_k_m.gguf").write_text("gguf")
+        (grpo / r / "gguf" / f"{r}-q4_k_m.gguf").write_text("gguf", encoding="utf-8")
         (grpo / r / "merged").symlink_to(root / r)
         os.utime(root / r, (1_000_000 - age * 1000,) * 2)
     (grpo / "r8b").mkdir()                          # queued, not packaged yet, from a
-    (grpo / "r8b" / "start").write_text(f"{grpo / 'a' / 'merged'}\n")
+    (grpo / "r8b" / "start").write_text(f"{grpo / 'a' / 'merged'}\n", encoding="utf-8")
     (grpo / "old").mkdir()                          # packaged: its start may go
-    (grpo / "old" / "start").write_text(f"{grpo / 'b' / 'merged'}\n")
+    (grpo / "old" / "start").write_text(f"{grpo / 'b' / 'merged'}\n", encoding="utf-8")
     (grpo / "old" / "gguf").mkdir()
-    (grpo / "old" / "gguf" / "old-q4_k_m.gguf").write_text("gguf")
+    (grpo / "old" / "gguf" / "old-q4_k_m.gguf").write_text("gguf", encoding="utf-8")
     r = _run({**env, "GRPO_MERGED_ROOT": str(root), "GRPO_KEEP_MERGED": "1",
               "GRPO_PRUNE_AT": "0"},
              "jg-x", str(grpo / "d" / "merged"), "1", "750")
@@ -272,7 +272,7 @@ def test_nothing_is_removed_while_the_scratch_has_room(tmp_path):
     for r in "ab":
         (root / r).mkdir(parents=True)
         (grpo / r / "gguf").mkdir(parents=True)
-        (grpo / r / "gguf" / f"{r}-q4_k_m.gguf").write_text("gguf")
+        (grpo / r / "gguf" / f"{r}-q4_k_m.gguf").write_text("gguf", encoding="utf-8")
     r = _run({**env, "GRPO_MERGED_ROOT": str(root), "GRPO_KEEP_MERGED": "0",
               "GRPO_PRUNE_AT": "101"}, "jg-x", str(Path(env["WORK"]) / "start"), "1", "750")
     assert r.returncode == 0, r.stderr + r.stdout

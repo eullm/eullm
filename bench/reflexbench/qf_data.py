@@ -234,7 +234,7 @@ def from_traces(directory):
         skipped[reason] = skipped.get(reason, 0) + 1
 
     decisions, feedback = [], []
-    for stem, paths in files.items():
+    for paths in files.values():
         for path in paths:
             rows, bad = read_jsonl(path)
             for _ in range(bad):

@@ -56,9 +56,9 @@ def test_every_question_is_asked_n_times_and_graded(tmp_path, monkeypatch, capsy
              "tipo": "termine", "keywords": ["60 giorni"]},
             {"id": "q2", "prompt": [{"role": "user", "content": "Domanda 2"}],
              "tipo": "contenuto", "keywords": []}]
-    prompts.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    prompts.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     system = tmp_path / "sys.txt"
-    system.write_text("Sei legal-it.\n")
+    system.write_text("Sei legal-it.\n", encoding="utf-8")
     out, keep = tmp_path / "samples.jsonl", tmp_path / "informative.jsonl"
     spec = importlib.util.spec_from_file_location("sample_answers", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
@@ -68,10 +68,10 @@ def test_every_question_is_asked_n_times_and_graded(tmp_path, monkeypatch, capsy
                      "--informative-out", str(keep)]) == 0
     assert seen["prompts"] == ["system:Sei legal-it.|user:Domanda 1"] * 3   # judged left out
     assert len(set(seen["seeds"])) == 3 and seen["temperature"] == 0.8
-    [r] = [json.loads(ln) for ln in out.read_text().splitlines()]
+    [r] = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert [s["score"] for s in r["samples"]] == [0.0, 1.0, 1.0]
     assert abs(r["pass_rate"] - 2 / 3) < 1e-9
-    [k] = [json.loads(ln) for ln in keep.read_text().splitlines()]
+    [k] = [json.loads(ln) for ln in keep.read_text(encoding="utf-8").splitlines()]
     assert "samples" not in k and k["id"] == "q1"
     printed = capsys.readouterr().out
     assert "Domanda" not in printed and "giorni" not in printed

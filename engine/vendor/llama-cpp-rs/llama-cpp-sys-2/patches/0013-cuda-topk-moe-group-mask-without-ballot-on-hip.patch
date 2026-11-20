@@ -17,7 +17,7 @@ EuLLM patch on llama.cpp b11925. Checked with ROCm 6.3.4's clang for
 gfx90a (compiled), gfx1100 and gfx1201.
 
 diff --git a/ggml/src/ggml-cuda/topk-moe.cu b/ggml/src/ggml-cuda/topk-moe.cu
-index 158b736f..37d96441 100644
+index e99b2e84a..20ded0a31 100644
 --- a/ggml/src/ggml-cuda/topk-moe.cu
 +++ b/ggml/src/ggml-cuda/topk-moe.cu
 @@ -115,6 +115,23 @@ __device__ void group_mask_warp_inplace(float (&vals)[experts_per_thread], const

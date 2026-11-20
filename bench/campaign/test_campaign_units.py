@@ -254,7 +254,7 @@ def test_sampler_window_per_device(tmp_path):
     w = s.window(0, 1e12, ["0", "1", "2"])
     assert w["0"]["vram_peak_mib"] == 32000 and w["0"]["use_mean"] == 97.0
     assert w["2"]["samples"] == 0
-    assert len((tmp_path / "n.jsonl").read_text().splitlines()) == 3
+    assert len((tmp_path / "n.jsonl").read_text(encoding="utf-8").splitlines()) == 3
 
 
 # ── budget ───────────────────────────────────────────────────────────────
@@ -344,7 +344,7 @@ def test_budget_prints_what_is_billed(capsys, monkeypatch, tmp_path):
     billed, the straight line to date, what is left and the rate a day."""
     monkeypatch.setattr(campaign.budget, "read_sacct", lambda start, account=None: [])
     alloc = tmp_path / "alloc.txt"
-    alloc.write_text(LUMI_ALLOCATIONS)
+    alloc.write_text(LUMI_ALLOCATIONS, encoding="utf-8")
     args = SimpleNamespace(start="2026-09-12", end="2027-03-12", account="project_465003366",
                            budget_node_hours=4500.0, json=False, allocations=str(alloc))
     assert campaign.cmd_budget(args) == 0
@@ -397,12 +397,12 @@ def test_shipped_campaigns_expand():
     import campaign
 
     root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
-    with open(os.path.join(root, "catalog", "v1", "catalog.json")) as f:
+    with open(os.path.join(root, "catalog", "v1", "catalog.json"), encoding="utf-8") as f:
         catalog = {m["id"] for m in json.load(f)["models"]}
     paths = sorted(glob.glob(os.path.join(root, "tools", "lumi", "campaigns", "*.json")))
     assert paths
     for path in paths:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             spec = json.load(f)
         points = expand(spec)
         assert points, path
@@ -633,6 +633,23 @@ def test_an_eullm_server_is_started_without_the_chat_ui_where_it_can_be(monkeypa
     assert point.no_ui_args(fake) == ["--no-ui"]
 
 
+def test_waiting_points_are_set_aside_by_label_round_and_group(tmp_path):
+    """A round an engine has made pointless leaves the queue whole, its points
+    kept beside it (r-v085 for r-v087, 03-11-2026); a point already claimed
+    stays with its job."""
+    q = Queue(str(tmp_path / "q"))
+    for pid, label, round_ in (("soak-node-1", "v087", "r-v087"), ("dense-1", "v085", "r-v085"),
+                               ("dense-2", "v085", "r-v085"), ("dense-3", "v087", "r-v087"),
+                               ("dense-4", "v085", "r-b12032")):
+        q.add({"id": pid, "kind": "throughput", "engine_label": label, "round": round_})
+    q.claim("dense-2", {"job": "j"})
+    dest = str(tmp_path / "q" / "dropped" / "2026-11-03")
+    assert q.set_aside(dest, label="v085", round_="r-v085") == ["dense-1"]
+    assert q.set_aside(dest, label="v087", prefixes=("soak-node", "moe-soak")) == ["soak-node-1"]
+    assert sorted(os.listdir(dest)) == ["dense-1.json", "soak-node-1.json"]
+    assert q.ids("todo") == ["dense-3", "dense-4"] and q.ids("running") == ["dense-2"]
+
+
 def test_status_gives_one_line_per_group_and_cause_not_the_server_logs():
     from campaign import stopped_lines
 
@@ -672,7 +689,8 @@ def test_a_load_records_the_file_system_its_model_is_on_through_links(tmp_path, 
     flash.mkdir()
     (flash / "m-00001-of-00002.gguf").write_bytes(b"GGUF")
     (store / "m" / "m-00001-of-00002.gguf").symlink_to(flash / "m-00001-of-00002.gguf")
-    (store / "m" / "manifest.json").write_text('{"gguf_file": "m-00001-of-00002.gguf"}')
+    (store / "m" / "manifest.json").write_text('{"gguf_file": "m-00001-of-00002.gguf"}',
+        encoding="utf-8")
     monkeypatch.setenv("EULLM_MODELS_DIR", str(store))
     root = "/" + os.path.realpath(tmp_path).split("/")[1]
     assert point.model_storage({"model": "m"}) == root
@@ -689,7 +707,7 @@ def test_a_cold_point_drops_every_part_of_its_model_from_the_page_cache(tmp_path
     d.mkdir(parents=True)
     for i, size in ((1, 10), (2, 7)):
         (d / f"M-0000{i}-of-00002.gguf").write_bytes(b"x" * size)
-    (d / "manifest.json").write_text('{"gguf_file": "M-00001-of-00002.gguf"}')
+    (d / "manifest.json").write_text('{"gguf_file": "M-00001-of-00002.gguf"}', encoding="utf-8")
     monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "store"))
     files = point.model_files({"model": "m"})
     assert [os.path.basename(f) for f in files] == ["M-00001-of-00002.gguf",
@@ -751,6 +769,25 @@ def test_the_report_tells_points_apart_by_their_environment():
     assert any("LLAMA_MOE_CACHE_EVICT=lru" in line and "12" in line for line in lines)
     assert any("LLAMA_MOE_CACHE_TRACE=" in line and "36" in line for line in lines)
     assert not any("STATS" in line for line in lines)
+
+
+def test_the_report_keeps_two_engines_of_one_round_apart():
+    """An old and a new binary measured in the same round (c15: 0.8.5 against
+    0.8.7, r-b12032) are two rows, not one average of both."""
+    import campaign
+    import report
+
+    def result(label, tok_s):
+        return campaign.row_of({"campaign": "c15", "group": "b12-moe", "kind": "throughput",
+                                "outcome": "measured",
+                                "params": {"model": "m", "batch": 8, "round": "r-b12032",
+                                           "engine_label": label},
+                                "throughput": {"aggregate_tok_s_mean": tok_s}})
+
+    lines = report.report([result("v085", 33.7), result("v087", 34.9)], {}, {"c15"}).splitlines()
+    assert lines[1].split()[0] == "engine_label"
+    assert any(line.split()[:2] == ["v085", "33.7"] for line in lines)
+    assert any(line.split()[:2] == ["v087", "34.9"] for line in lines)
 
 
 def test_leftover_servers_are_those_of_this_job_outside_every_running_point():
@@ -863,6 +900,34 @@ def test_a_throughput_point_is_read_by_its_decode_speed_first():
     assert "c01 / soak: 1 compared, tok/s new/old 1.02" in text
 
 
+def test_two_binaries_in_one_round_are_compared_side_by_side(tmp_path, capsys, monkeypatch):
+    """An A/B (16-11-2026, --cpu-moe on 0.8.9 and 0.9.0): the new label's
+    rows against the base label's in the same round, whichever ran first,
+    and not against the round before them."""
+    import report
+
+    rows = [
+        _measured("ram", "g", "r-v089", "2026-11-13T00:00:00", 0.9, engine_label="v089"),
+        _measured("ram", "g", "r-ab", "2026-11-17T02:00:00", 0.25, engine_label="v090"),
+        # The base ran later than the new rows: still their reference.
+        _measured("ram", "g", "r-ab", "2026-11-17T05:00:00", 0.8, engine_label="v089"),
+        _measured("ram", "h", "r-ab", "2026-11-17T01:00:00", 2.0, engine_label="v090"),
+        _measured("ram", "h", "r-ab", "2026-11-17T00:00:00", 2.0, engine_label="v089"),
+        # A third binary in the same round is neither.
+        _measured("ram", "g", "r-ab", "2026-11-17T03:00:00", 9.0, engine_label="v090c"),
+    ]
+    text = report.compare(rows, lambda r: r["round"] == "r-ab" and r["engine_label"] == "v090",
+                          is_old=lambda r: r["round"] == "r-ab" and r["engine_label"] == "v089")
+    line = next(line for line in text.splitlines() if "c01 / ram" in line)
+    assert "2 compared" in line and "slowest g 0.31 (0.8 -> 0.25, r-ab)" in line
+
+    # The same through the command line.
+    monkeypatch.setattr(campaign, "result_rows", lambda results: rows)
+    assert campaign.main(["compare", "--queue", str(tmp_path), "--round", "r-ab",
+                          "--label", "v090", "--base-label", "v089"]) == 0
+    assert "slowest g 0.31 (0.8 -> 0.25, r-ab)" in capsys.readouterr().out
+
+
 def test_a_job_is_compared_with_what_came_before_it_only():
     """A job's rows against measurements that ended before them: a later
     round of the same configuration is not its 'before'."""
@@ -915,7 +980,8 @@ def test_a_job_is_timed_from_how_long_its_points_took_before(tmp_path, capsys):
     os.makedirs(os.path.join(queue, "results", "c-time"))
     for p in expand(spec, "r-old"):
         params = {k: v for k, v in p.items() if k not in campaign.PARAM_SKIP}
-        with open(os.path.join(queue, "results", "c-time", f"{p['id']}.1.json"), "w") as f:
+        path = os.path.join(queue, "results", "c-time", f"{p['id']}.1.json")
+        with open(path, "w", encoding="utf-8") as f:
             json.dump({"schema": campaign.SCHEMA, "campaign": "c-time", "group": "g",
                        "params": dict(params, engine_label="old", duration_s=0),
                        "elapsed_s": 600}, f)
@@ -993,3 +1059,95 @@ def test_store_gguf_reads_a_manifest_of_utf8_text(tmp_path, monkeypatch):
     monkeypatch.setenv("EULLM_MODELS_DIR", str(tmp_path / "models"))
     # The sorted fallback would pick a.gguf: only the manifest names z\u00c1.gguf.
     assert point.store_gguf("m") == os.path.join(str(d), "z\u00c1.gguf")
+
+
+def test_smi_output_is_decoded_as_utf8(monkeypatch):
+    """The device reader asks for UTF-8 from nvidia-smi/rocm-smi, not the
+    host locale: a device name or a message in non-ASCII text is kept."""
+    import devices
+
+    class Out:
+        stdout = "0, 100, 1000, 50\n"
+        stderr = ""
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(devices.subprocess, "run", run)
+    assert devices.read_smi("cuda") == {
+        "0": {"used": 100 * 2**20, "total": 1000 * 2**20, "use": 50}}
+    assert seen[0].get("encoding") == "utf-8"
+
+
+def test_sacct_is_read_as_utf8(monkeypatch):
+    """A job's name is whatever its user submitted: sacct's output is read as
+    UTF-8, not with the host locale, so a non-ASCII name is kept as written."""
+    import budget
+
+    class Out:
+        returncode = 0
+        stderr = ""
+        stdout = "1|citt\u00e0-job|standard-g|COMPLETED|3600|1|cpu=1,gpu=1\n"
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(budget.subprocess, "run", run)
+    [job] = budget.read_sacct("2026-09-02")
+    assert job["name"] == "citt\u00e0-job"
+    assert seen[0].get("encoding") == "utf-8"
+
+
+def test_command_output_is_read_as_utf8(monkeypatch):
+    """sh() reads squeue/git/engine output as UTF-8: a path or a name in
+    non-ASCII text is kept, not mojibake'd or a decode failure."""
+    class Out:
+        stdout = "citt\u00e0\n"
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(campaign.subprocess, "run", run)
+    assert campaign.sh(["git"]) == "citt\u00e0\n"
+    assert seen[0].get("encoding") == "utf-8"
+
+
+def test_no_ui_help_is_read_as_utf8(monkeypatch):
+    """`serve --help` decides whether --no-ui is passed: read it as UTF-8,
+    not with the host locale, so it is never a decode failure at start-up."""
+    import point
+
+    class Out:
+        stdout = "usage: eullm serve [--no-ui] \u2014 citt\u00e0\n"
+        returncode = 0
+
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append(kwargs)
+        return Out()
+
+    monkeypatch.setattr(point.subprocess, "run", run)
+    monkeypatch.setattr(point, "_NO_UI", {})
+    assert point.no_ui_args("/bin/eullm") == ["--no-ui"]
+    assert seen[0].get("encoding") == "utf-8"
+
+
+def test_a_missing_model_is_recognised_from_a_404_or_the_error_text():
+    import point
+
+    assert point.is_missing_model(point.RequestError("gone", 404))
+    assert point.is_missing_model(point.RequestError("the model 'x' not found"))
+    assert not point.is_missing_model(point.RequestError("server error", 500))
+    assert not point.is_missing_model(point.RequestError("not found: index"))

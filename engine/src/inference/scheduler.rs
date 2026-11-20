@@ -94,6 +94,27 @@ impl Default for SchedulerConfig {
 pub(crate) struct ScheduledRequest {
     pub request: GenerateRequest,
     pub tx: mpsc::Sender<StreamEvent>,
+    /// Its images and audio, for a model loaded with its projector: see
+    /// [`SchedMedia`].
+    pub media: Option<SchedMedia>,
+}
+
+/// The attachments of a multimodal request: their bytes, oldest first, one
+/// per media marker in the prompt, and how many of the newest are the
+/// current turn's, never dropped to make room (`pinned`, see
+/// `super::prepare_media_prompt`).
+///
+/// Read whole into the request's own sequence when it is taken
+/// (`admit_media`), as llama-server reads an image into its slot: the other
+/// sequences wait for that one step, then decode beside it. Until
+/// 19-11-2026 a model with a projector was served by the sequential engine
+/// alone, one request at a time, text requests included: on Leonardo, Gemma 4
+/// 31B with 8 slots answered 20 of 200 text requests in 25 minutes, where
+/// llama-server answered 198 in 6.5.
+#[cfg_attr(not(feature = "multimodal"), allow(dead_code))]
+pub(crate) struct SchedMedia {
+    pub items: Vec<Vec<u8>>,
+    pub pinned: usize,
 }
 
 /// State for a single active sequence being decoded.
@@ -153,6 +174,9 @@ struct ActiveSequence {
     /// How long reading the prompt took, from `start`; the answer's own time
     /// is what follows it. Set when the prefill succeeds.
     prompt_time: std::time::Duration,
+    /// Its prompt carried images or audio (`admit_media`): its memory holds
+    /// positions no token stands for, so it is never offered for reuse.
+    media: bool,
 }
 
 /// A prompt read a chunk at a time, when there is more than one slot: in the
@@ -619,9 +643,18 @@ pub struct SchedulerHandle {
     /// (`SchedulerHandle::gate`).
     #[cfg_attr(not(test), allow(dead_code))]
     gate: Arc<std::sync::Mutex<()>>,
+    /// The model was loaded with its projector: requests with images or
+    /// audio can be queued (`try_submit_media`).
+    projector: bool,
 }
 
 impl SchedulerHandle {
+    /// Whether the model was loaded with its projector, and so reads the
+    /// images and audio a request carries.
+    pub fn has_projector(&self) -> bool {
+        self.projector
+    }
+
     /// Shut down the scheduler and wait for the thread to exit.
     ///
     /// Sets the shutdown flag, wakes the thread, and joins it to
@@ -688,8 +721,35 @@ impl SchedulerHandle {
         &self,
         request: GenerateRequest,
     ) -> Result<mpsc::Receiver<StreamEvent>, NotQueued> {
+        self.enqueue(request, None)
+    }
+
+    /// [`Self::try_submit`] for a request with images or audio: `media` oldest
+    /// first, one per media marker in the prompt, the newest `pinned` the
+    /// current turn's (see [`SchedMedia`]). Only for a model loaded with its
+    /// projector ([`Self::has_projector`]).
+    pub fn try_submit_media(
+        &self,
+        request: GenerateRequest,
+        media: Vec<Vec<u8>>,
+        pinned: usize,
+    ) -> Result<mpsc::Receiver<StreamEvent>, NotQueued> {
+        self.enqueue(
+            request,
+            Some(SchedMedia {
+                items: media,
+                pinned,
+            }),
+        )
+    }
+
+    fn enqueue(
+        &self,
+        request: GenerateRequest,
+        media: Option<SchedMedia>,
+    ) -> Result<mpsc::Receiver<StreamEvent>, NotQueued> {
         let (tx, rx) = mpsc::channel::<StreamEvent>(256);
-        match self.tx.try_send(ScheduledRequest { request, tx }) {
+        match self.tx.try_send(ScheduledRequest { request, tx, media }) {
             Ok(()) => {
                 // Wake up the scheduler thread.
                 let _lock = self.notify_mutex.lock().unwrap();
@@ -734,6 +794,7 @@ impl SchedulerHandle {
             shutdown: Arc::new(AtomicBool::new(false)),
             thread: Arc::new(std::sync::Mutex::new(None)),
             gate: Arc::new(std::sync::Mutex::new(())),
+            projector: false,
         };
         (handle, rx)
     }
@@ -792,6 +853,11 @@ pub struct ModelReadyInfo {
     /// capacity: llama.cpp mentions it once, in a log line buried between two
     /// hundred others, and the flag that fixes it is not named there.
     pub n_ctx_train: u32,
+    /// The batch and micro-batch the context was built with, when the
+    /// scheduler built one: not always the flags', since a projector raises
+    /// the micro-batch to an image's (see `run_scheduler_loop`).
+    pub n_batch: Option<u32>,
+    pub n_ubatch: Option<u32>,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -848,6 +914,9 @@ impl BatchScheduler {
 
         let config = self.config.clone();
         let sched_config = self.sched_config.clone();
+        // The loop fails to start rather than run without a projector it
+        // was given (`super::InferenceEngine::init_mtmd_optional`).
+        let projector = cfg!(feature = "multimodal") && self.config.mmproj_path.is_some();
 
         let join_handle = std::thread::Builder::new()
             .name("eullm-scheduler".into())
@@ -904,6 +973,7 @@ impl BatchScheduler {
                 shutdown,
                 thread: Arc::new(std::sync::Mutex::new(Some(join_handle))),
                 gate,
+                projector,
             },
             model_info,
         ))
@@ -1134,6 +1204,18 @@ fn finish_sequence_clean(
     checkpoints: &mut Vec<PromptCheckpoint>,
     sched_config: &SchedulerConfig,
 ) {
+    // An image's positions have no tokens: a later prompt could match the
+    // text around them and read on from an image it never sent. The slot
+    // goes back empty, and the next request to take it clears it.
+    if seq.media {
+        idle_slots.push(CachedSlot {
+            seq_id: seq.seq_id,
+            tokens: Vec::new(),
+            text: String::new(),
+            last_used: std::time::Instant::now(),
+        });
+        return;
+    }
     let tokens = resident_tokens(seq);
 
     if sched_config.ctx_checkpoints > 0 && !tokens.is_empty() {
@@ -1354,6 +1436,239 @@ fn fall_back_from_reuse(
 
     tracing::warn!("Seq {seq_id}: retrying prefill with reuse_len={effective_reuse_len}");
     effective_reuse_len
+}
+
+/// A request with images or audio, taken by the decode loop: its prompt and
+/// attachments read whole into the least recently used idle slot, with
+/// mtmd's `eval_chunks` (text through the model, images through the
+/// projector and then the model), as llama-server reads an image into its
+/// slot. The sequences already answering wait for that, then decode beside
+/// it. Returns the sequence, with its first token, if it goes on; an error
+/// goes to the client and the slot back to the idle ones.
+///
+/// Nothing is reused from the slot, and nothing is kept for reuse when the
+/// answer is over (`ActiveSequence::media`). A media chunk is decoded whole,
+/// and a vision encoder's attention is not causal, so llama.cpp needs it in
+/// one micro-batch: an image larger than the context's is refused, as
+/// decoding it would abort the process.
+#[cfg(feature = "multimodal")]
+#[allow(clippy::too_many_arguments)]
+fn admit_media(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext,
+    mtmd: &mut llama_cpp_2::mtmd::MtmdContext,
+    scheduled: ScheduledRequest,
+    media: SchedMedia,
+    per_seq_ctx: u32,
+    idle_slots: &mut Vec<CachedSlot>,
+    states: &mut StateCheckpoints,
+    checkpoints: &mut Vec<PromptCheckpoint>,
+    sched_config: &SchedulerConfig,
+) -> Option<ActiveSequence> {
+    let start = std::time::Instant::now();
+    let ScheduledRequest { request, tx, .. } = scheduled;
+    if idle_slots.is_empty() {
+        let _ = tx.try_send(StreamEvent::Error("No free slot for the request".into()));
+        return None;
+    }
+    let (seq_id, _) = pick_slot(idle_slots, &[]);
+    let _ = ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None);
+    if let Some(kept) = states.get_mut(seq_id as usize) {
+        kept.clear();
+    }
+    let refuse = |message: String, ctx: &mut LlamaContext, idle_slots: &mut Vec<CachedSlot>| {
+        let _ = tx.try_send(StreamEvent::Error(message));
+        finish_wiped(ctx, seq_id, idle_slots);
+    };
+
+    let effective_ctx = request
+        .num_ctx
+        .map_or(per_seq_ctx, |n| n.min(per_seq_ctx));
+    let budget = effective_ctx.saturating_sub(super::reply_reserve(request.max_tokens, effective_ctx));
+    let prepared = match super::prepare_media_prompt(
+        mtmd,
+        model,
+        &request.prompt,
+        &media.items,
+        media.pinned,
+        budget,
+    ) {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            refuse(e, ctx, idle_slots);
+            return None;
+        }
+    };
+    let tokens_prompt = prepared.chunks.total_tokens() as u32;
+    if tokens_prompt >= effective_ctx {
+        refuse(
+            format!(
+                "Multimodal prompt ({tokens_prompt} tokens) does not fit in context window \
+                 ({effective_ctx})"
+            ),
+            ctx,
+            idle_slots,
+        );
+        return None;
+    }
+    let n_ubatch = ctx.n_ubatch();
+    // Only a projector whose attention over the image is not causal needs it
+    // in one micro-batch (`cap_image_tokens` keeps its images within it); a
+    // causal one's image is decoded a micro-batch at a time, as text is.
+    if mtmd.decode_use_non_causal() && prepared.max_media_tokens > n_ubatch {
+        refuse(
+            format!(
+                "this image encodes to {} tokens, past the {n_ubatch} the server reads in one \
+                 micro-batch. Send a smaller image, lower the encoder's resolution with \
+                 EULLM_IMAGE_MAX_TOKENS, or start the server with a larger --n-ubatch.",
+                prepared.max_media_tokens
+            ),
+            ctx,
+            idle_slots,
+        );
+        return None;
+    }
+    let n_past = match prepared
+        .chunks
+        .eval_chunks(mtmd, ctx, 0, seq_id, n_ubatch as i32, true)
+    {
+        Ok(n_past) => n_past,
+        Err(e) => {
+            refuse(format!("mtmd eval_chunks failed: {e:?}"), ctx, idle_slots);
+            return None;
+        }
+    };
+    let max_tokens = request.max_tokens.min(effective_ctx - tokens_prompt);
+    tracing::info!(
+        "Seq {seq_id}: multimodal prompt, media={} ({}), dropped={}, prompt_tokens={tokens_prompt}, \
+         max_output={max_tokens}, effective_ctx={effective_ctx}",
+        media.items.len() - prepared.dropped,
+        match (prepared.has_image, prepared.has_audio) {
+            (true, true) => "image+audio",
+            (false, true) => "audio",
+            _ => "image",
+        },
+        prepared.dropped,
+    );
+
+    let seq = ActiveSequence {
+        seq_id,
+        tx,
+        sampler: super::sampling::build_sampler(model, &request, seq_id as u32),
+        decoder: encoding_rs::UTF_8.new_decoder(),
+        pending: request.response_prefix.clone(),
+        tokens_prompt,
+        tokens_generated: 0,
+        max_tokens,
+        n_past,
+        stop_sequences: request.stop_sequences.clone(),
+        filter_sequences: request.filter_sequences.clone(),
+        start,
+        prefilled: true,
+        last_token: None,
+        prompt_tokens: Vec::new(),
+        generated_tokens: Vec::new(),
+        prompt_text: String::new(),
+        raw_generated_pieces: Vec::new(),
+        mtp_drafted: 0,
+        mtp_accepted: 0,
+        prompt_time: start.elapsed(),
+        media: true,
+    };
+    // The last decode was `eval_chunks`' own, of the prompt's last token,
+    // with its logits: the answer's first token is sampled from them.
+    begin_generation(model, ctx, seq, -1, idle_slots, checkpoints, sched_config)
+}
+
+/// Whether a context whose micro-batch is `ubatch` tokens fits in the VRAM
+/// free now, the model already loaded, with `--vram-reserve` left: what the
+/// micro-batch raised to an image's (above, in `run_scheduler_loop`) costs is
+/// counted before it is tried, the KV cache of the sliding-window layers
+/// (each slot's window holds a micro-batch beside it, `fit::SlidingWindow`)
+/// and the larger compute buffer. Tried blind, a micro-batch that does not
+/// fit made llama.cpp log an out-of-memory ERROR before the context fell back
+/// and loaded, which read as a failed load: Gemma 4 31B with 16 slots on an
+/// A100 asked 28,800 MiB for the window layers (Leonardo, 20-11-2026). Says
+/// why when it does not fit. Without a GPU, or not knowing the free VRAM, it
+/// is tried, and the fall-back still catches it.
+fn larger_ubatch_fits(config: &InferenceConfig, slots: usize, ubatch: u32) -> bool {
+    if config.gpu_layers == 0 {
+        return true;
+    }
+    let Some((free, _)) = crate::fit::vram_bytes() else {
+        return true;
+    };
+    let info = crate::fit::read_gguf_info(&config.model_path).map(|info| {
+        info.with_kv_layout(crate::fit::KvLayout::new(slots, ubatch, config.kv_unified))
+    });
+    let needed = crate::fit::kv_cache_bytes(
+        info.as_ref(),
+        config.context_size,
+        cache_type_bytes_per_elem(&config.cache_type_k),
+        cache_type_bytes_per_elem(&config.cache_type_v),
+    )
+    .saturating_add(crate::fit::ubatch_reserve_bytes(ubatch))
+    .saturating_add(config.vram_reserve);
+    if needed <= free {
+        return true;
+    }
+    tracing::warn!(
+        "Projector: a micro-batch of {ubatch} tokens, the most an image takes, needs about {} \
+         MiB for the context and {} MiB are free: reading prompts {} at a time instead, with \
+         images scaled down to fit. Fewer --batch-size slots or a smaller --ctx-size leave room \
+         for images at full size",
+        needed >> 20,
+        free >> 20,
+        config.text_ubatch(),
+    );
+    crate::monitor::history::event(
+        "warning",
+        format!(
+            "Images scaled down: a micro-batch of {ubatch} tokens needs about {} MiB, {} MiB \
+             free",
+            needed >> 20,
+            free >> 20
+        ),
+    );
+    false
+}
+
+/// A projector reloaded with the tokens of an image capped at `n_ubatch`,
+/// when its attention over an image is not causal and its largest image
+/// takes more than one micro-batch holds (see `super::image_token_ceiling`):
+/// larger images are then scaled down to fit, as llama-server does
+/// (`server-context.cpp`, "cap image_max_tokens"), rather than refused.
+/// `None` when nothing needs changing, or the reload failed (then the
+/// request that does not fit is refused, saying how to make it fit).
+/// `EULLM_IMAGE_MAX_TOKENS` set is left as it is: the micro-batch was already
+/// raised to it (`multimodal_batch_size`).
+#[cfg(feature = "multimodal")]
+fn cap_image_tokens(
+    mtmd: Option<&mut llama_cpp_2::mtmd::MtmdContext>,
+    config: &InferenceConfig,
+    model: &LlamaModel,
+    n_ubatch: u32,
+) -> Option<llama_cpp_2::mtmd::MtmdContext> {
+    let mtmd = mtmd?;
+    if !mtmd.decode_use_non_causal() || crate::settings::var("EULLM_IMAGE_MAX_TOKENS").is_some() {
+        return None;
+    }
+    let ceiling = super::image_token_ceiling(mtmd)?;
+    if ceiling <= n_ubatch {
+        return None;
+    }
+    tracing::warn!(
+        "Projector: an image takes up to {ceiling} tokens, and its attention needs it whole in \
+         one micro-batch of {n_ubatch}: larger images are scaled down to {n_ubatch} tokens, as \
+         llama-server does. --n-ubatch {ceiling} keeps them at full resolution, for more VRAM"
+    );
+    match super::InferenceEngine::init_mtmd(config, model, Some(n_ubatch as i32)) {
+        Ok(capped) => capped,
+        Err(e) => {
+            tracing::warn!("Projector: could not reload it with the cap ({e}); keeping it as it was");
+            None
+        }
+    }
 }
 
 /// The answer's first token, sampled from the logits of the prompt's last
@@ -1839,6 +2154,23 @@ fn run_scheduler_loop(
         (false, _) => model.n_layer_nextn(),
     };
 
+    // The projector, when the model was loaded with one: requests with images
+    // or audio are read in this thread, into their own sequence of this
+    // context (`admit_media`). A projector that will not load fails the load,
+    // as on the sequential engine: whoever gave it wants images read.
+    #[cfg(feature = "multimodal")]
+    let mut mtmd = match super::InferenceEngine::init_mtmd_optional(&config, model) {
+        Ok(mtmd) => mtmd,
+        Err(e) => {
+            let msg = e.to_string();
+            let _ = ready_tx.send(Err(msg.clone()));
+            return Err(msg.into());
+        }
+    };
+    #[cfg(not(feature = "multimodal"))]
+    let mtmd: Option<()> = None;
+    let reads_media = mtmd.is_some();
+
     // Use context_size as the TOTAL KV cache budget, shared across all
     // sequences (matching Ollama / llama.cpp server behaviour).  Previous
     // code multiplied context_size × max_batch_size, which easily overflowed
@@ -1884,7 +2216,7 @@ fn run_scheduler_loop(
     // with logits, and may take back up to `mtp_draft` positions: the
     // recurrent rollback window of a hybrid model is raised to that, as
     // llama-server does (`need_n_rs_seq`).
-    let (mtp_draft, mtp_off) = mtp_drafts(
+    let (mut mtp_draft, mtp_off) = mtp_drafts(
         config.mtp,
         sched_config.max_batch_size,
         mtp_layers,
@@ -1892,10 +2224,71 @@ fn run_scheduler_loop(
     if let Some(reason) = mtp_off {
         tracing::warn!("{reason}");
     }
+    // An image read into the sequence is not read by the MTP head, whose
+    // drafts would then guess from a prompt it never saw: a model loaded
+    // with its projector does not draft (`models::store::choose_projector`
+    // leaves a projector found for it on disk when --mtp asks for drafts).
+    if mtp_draft > 0 && reads_media {
+        tracing::warn!("--mtp: a model loaded with its projector does not draft");
+        mtp_draft = 0;
+    }
     let mut config = config;
+    // An image is decoded whole, in one micro-batch: with a projector, the
+    // context's is at least what the sequential engine sizes one by
+    // (`multimodal_batch_size`: 512, or EULLM_IMAGE_MAX_TOKENS).
+    if reads_media && config.text_ubatch() < super::multimodal_batch_size() {
+        let floor = super::multimodal_batch_size();
+        tracing::info!(
+            "Projector: reading prompts {floor} tokens at a time (--n-ubatch), the most an \
+             image may take"
+        );
+        config.n_ubatch = floor;
+        config.n_batch = config.n_batch.max(floor);
+    }
+    // A projector whose attention over an image is not causal (Gemma) needs
+    // each image whole in one micro-batch: the micro-batch is raised to the
+    // most an image takes with it, so that images are read at the resolution
+    // the sequential engine reads them at, as before 0.9.1. llama-server
+    // instead scales images down to its micro-batch, and on Gemma 4 12B that
+    // changed answers: a tall image read at 506 tokens instead of 653 came
+    // out "dark red and black" where it was "red and blue" (20-11-2026). It
+    // costs the compute buffer of the larger micro-batch (129 to 277 MiB on
+    // that model) and, with sliding-window layers, each slot's window, which
+    // holds a micro-batch beside it (KV 2.4 to 3.4 GB there with 4 slots at
+    // -c 32768), which sizing, done before the projector is read, does not
+    // see. Where that does not fit, the context falls back to the micro-batch
+    // asked for, and images are scaled down to it (`cap_image_tokens`).
+    // `EULLM_IMAGE_MAX_TOKENS` set decides instead (512: llama-server's way).
+    let text_batches = (config.n_batch, config.n_ubatch);
+    #[cfg(feature = "multimodal")]
+    let image_ubatch = mtmd
+        .as_mut()
+        .filter(|m| m.decode_use_non_causal())
+        .filter(|_| crate::settings::var("EULLM_IMAGE_MAX_TOKENS").is_none())
+        .and_then(super::image_token_ceiling)
+        .filter(|&ceiling| {
+            ceiling > config.text_ubatch() && ceiling <= super::MAX_MEDIA_TOKENS_PER_CHUNK
+        })
+        .filter(|&ceiling| larger_ubatch_fits(&config, sched_config.max_batch_size, ceiling));
+    #[cfg(not(feature = "multimodal"))]
+    let image_ubatch: Option<u32> = None;
+    if let Some(ceiling) = image_ubatch {
+        tracing::info!(
+            "Projector: reading prompts {ceiling} tokens at a time (--n-ubatch), the most an \
+             image takes, which its attention needs whole"
+        );
+        config.n_ubatch = ceiling;
+        config.n_batch = config.n_batch.max(ceiling);
+    }
     if mtp_draft > 0 {
         config.rs_seq = config.rs_seq.max(mtp_draft);
         tracing::info!("MTP: the model's MTP head drafts up to {mtp_draft} tokens per step");
+        if super::few_row_mmq_off_for_mtp() {
+            tracing::info!(
+                "MTP: CUDA's few-row kernel off, so drafts are checked with one token's numbers \
+                 (GGML_CUDA_MMQ_FEW=1 keeps it)"
+            );
+        }
     }
     let n_outputs_max = (sched_config.max_batch_size as u32).max(mtp_draft + 1);
 
@@ -1926,7 +2319,29 @@ fn run_scheduler_loop(
         .with_n_seq_max(sched_config.max_batch_size as u32)
         .with_n_outputs_max(n_outputs_max);
 
-    let mut ctx = match model.new_context(&backend, ctx_params) {
+    // The larger micro-batch an image needs, when it does not fit: the one
+    // asked for, and images scaled down to it (see `image_ubatch` above).
+    let first = match (model.new_context(&backend, ctx_params), image_ubatch) {
+        (Err(e), Some(ceiling)) => {
+            tracing::warn!(
+                "Projector: a micro-batch of {ceiling} tokens did not fit after all ({e}; the \
+                 out-of-memory error above is that attempt, not a failed load). Reading \
+                 prompts {} at a time instead, with images scaled down to fit",
+                text_batches.1
+            );
+            crate::monitor::history::event(
+                "warning",
+                format!("Images scaled down: a micro-batch of {ceiling} tokens did not fit ({e})"),
+            );
+            (config.n_batch, config.n_ubatch) = text_batches;
+            let params = super::build_ctx_params(&config, ctx_size)
+                .with_n_seq_max(sched_config.max_batch_size as u32)
+                .with_n_outputs_max(n_outputs_max);
+            model.new_context(&backend, params)
+        }
+        (result, _) => result,
+    };
+    let mut ctx = match first {
         Ok(c) => c,
         Err(e) => {
             // Build a hint suggesting smaller ctx-size values to try.
@@ -1968,6 +2383,18 @@ fn run_scheduler_loop(
             }
         }
     };
+
+    // A projector whose attention over an image is not causal (Gemma) needs
+    // each image whole in one micro-batch: past it, decoding would abort.
+    // llama-server caps the tokens an image takes at the micro-batch, so
+    // larger images are scaled down rather than refused; so does this
+    // (`cap_image_tokens`). Measured on an RTX 5070 Ti (20-11-2026): a tall
+    // photo became 696 tokens on Gemma 4 12B, past the 512 of the default
+    // micro-batch, and was refused.
+    #[cfg(feature = "multimodal")]
+    if let Some(capped) = cap_image_tokens(mtmd.as_mut(), &config, model, ctx.n_ubatch()) {
+        mtmd = Some(capped);
+    }
 
     // llama.cpp's own log lines (CUDA graph warmup etc.) are routed once,
     // process-wide, when the shared backend is created, rather than per-load
@@ -2039,7 +2466,13 @@ fn run_scheduler_loop(
     let mut checkpoints: Vec<PromptCheckpoint> = Vec::new();
     // Every slot's recurrent-state checkpoints (`StateCheckpoint`), on a model
     // whose memory cannot be cut back to an earlier token.
-    let keeps_states = model.is_hybrid() || model.is_recurrent();
+    // And on a model with sliding-window layers (Gemma), whose window keeps
+    // only its last n_swa + n_ubatch tokens per slot (`swa_full = false`, see
+    // `build_ctx_params_with_cache`): a slot cut back further than its window
+    // reaches has lost what the next token must see, and its window kept at a
+    // checkpoint is what makes the cut possible (`prefill_setup`).
+    let n_swa = model.n_swa();
+    let keeps_states = model.is_hybrid() || model.is_recurrent() || n_swa > 0;
     let mut states: StateCheckpoints = (0..sched_config.max_batch_size)
         .map(|_| Vec::new())
         .collect();
@@ -2069,12 +2502,37 @@ fn run_scheduler_loop(
     );
 
     // Estimate KV cache memory from model dimensions and cache types.
-    let kv_info = estimate_kv_memory(
+    let mut kv_info = estimate_kv_memory(
         model,
         total_ctx as u64,
         &config.cache_type_k,
         &config.cache_type_v,
     );
+    // On a model with sliding-window layers, what this context really holds:
+    // the window layers keep only their window (`fit::SlidingWindow`), and
+    // the uniform estimate above charged Gemma 4 31B 42 GB where 13 were
+    // allocated.
+    if let Some(info) = crate::fit::read_gguf_info(&config.model_path).map(|info| {
+        info.with_kv_layout(crate::fit::KvLayout::new(
+            sched_config.max_batch_size,
+            ctx.n_ubatch(),
+            config.kv_unified,
+        ))
+    }) {
+        let mib = |k: f64, v: f64| {
+            info.windowed_kv_bytes(total_ctx, k, v)
+                .map(|bytes| bytes / (1024.0 * 1024.0))
+        };
+        let bpe_k = cache_type_bytes_per_elem(&config.cache_type_k);
+        let bpe_v = cache_type_bytes_per_elem(&config.cache_type_v);
+        if let (Some(k), Some(v)) = (mib(bpe_k, 0.0), mib(0.0, bpe_v)) {
+            kv_info.kv_k_mib = k;
+            kv_info.kv_v_mib = v;
+        }
+    }
+
+    kv_info.n_batch = Some(ctx.n_batch());
+    kv_info.n_ubatch = Some(ctx.n_ubatch());
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));
@@ -2113,7 +2571,36 @@ fn run_scheduler_loop(
         // ── 1. Drain new requests from the queue ────────────────────────
         while active.len() + prefilling.len() < sched_config.max_batch_size {
             match req_rx.try_recv() {
-                Ok(scheduled) => {
+                Ok(mut scheduled) => {
+                    // Images or audio: read whole, into a sequence of their
+                    // own, now (`admit_media`).
+                    if let Some(media) = scheduled.media.take() {
+                        #[cfg(feature = "multimodal")]
+                        if let Some(mtmd) = mtmd.as_mut() {
+                            if let Some(seq) = admit_media(
+                                model,
+                                &mut ctx,
+                                mtmd,
+                                scheduled,
+                                media,
+                                per_seq_ctx,
+                                &mut idle_slots,
+                                &mut states,
+                                &mut checkpoints,
+                                &sched_config,
+                            ) {
+                                active.push(seq);
+                            }
+                            continue;
+                        }
+                        drop(media);
+                        let _ = scheduled.tx.try_send(StreamEvent::Error(
+                            "This model was loaded without a projector: it cannot read images \
+                             or audio"
+                                .into(),
+                        ));
+                        continue;
+                    }
                     let prompt_text = scheduled.request.prompt.clone();
 
                     // Fast path: if some idle slot's cached text is an exact
@@ -2231,6 +2718,7 @@ fn run_scheduler_loop(
                         mtp_drafted: 0,
                         mtp_accepted: 0,
                         prompt_time: std::time::Duration::ZERO,
+                        media: false,
                     };
 
                     // Prefill the unreused suffix of the prompt into the context.
@@ -2268,6 +2756,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
+                            n_swa,
                             None,
                         );
                         if setup.is_err()
@@ -2289,6 +2778,7 @@ fn run_scheduler_loop(
                                 per_seq_ctx,
                                 &tokens,
                                 effective_reuse_len,
+                                n_swa,
                                 None,
                             );
                         }
@@ -2310,6 +2800,7 @@ fn run_scheduler_loop(
                                 per_seq_ctx,
                                 &tokens,
                                 effective_reuse_len,
+                                n_swa,
                                 None,
                             );
                         }
@@ -2344,6 +2835,7 @@ fn run_scheduler_loop(
                         per_seq_ctx,
                         &tokens,
                         effective_reuse_len,
+                        n_swa,
                         mtp_state.as_mut(),
                         keep_states.then_some(&mut *slot_states),
                     );
@@ -2367,6 +2859,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
+                            n_swa,
                             mtp_state.as_mut(),
                             Some(&mut *slot_states),
                         );
@@ -2384,6 +2877,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
+                            n_swa,
                             mtp_state.as_mut(),
                             keep_states.then_some(&mut *slot_states),
                         );
@@ -3048,6 +3542,7 @@ fn prefill_sequence(
     per_seq_ctx: u32,
     tokens: &[LlamaToken],
     reuse_len: usize,
+    n_swa: u32,
     mut mtp: Option<&mut MtpState<'_>>,
     mut states: Option<&mut Vec<StateCheckpoint>>,
 ) -> Result<(u32, i32, u32), String> {
@@ -3058,6 +3553,7 @@ fn prefill_sequence(
         per_seq_ctx,
         tokens,
         reuse_len,
+        n_swa,
         mtp.as_deref_mut(),
     )?;
 
@@ -3120,7 +3616,11 @@ fn prefill_sequence(
 /// check the prompt against the context, cap the answer to what is left of
 /// it, and drop what the slot holds past the reused prefix.
 ///
+/// `n_swa` is the model's sliding window (0 without one): see
+/// [`window_reaches_back`].
+///
 /// Returns `(prompt_tokens, effective_max_tokens)`.
+#[allow(clippy::too_many_arguments)]
 fn prefill_setup(
     ctx: &mut LlamaContext,
     request: &GenerateRequest,
@@ -3128,6 +3628,7 @@ fn prefill_setup(
     per_seq_ctx: u32,
     tokens: &[LlamaToken],
     reuse_len: usize,
+    n_swa: u32,
     mtp: Option<&mut MtpState<'_>>,
 ) -> Result<(u32, u32), String> {
     let n_tokens = tokens.len() as u32;
@@ -3200,6 +3701,17 @@ fn prefill_setup(
             seq.seq_id,
         ));
     }
+    // A sliding window accepts any cut and says nothing: whether it still
+    // holds what the next token sees is asked of it here.
+    if reuse_len > 0
+        && !window_reaches_back(ctx.kv_cache_seq_pos_min(seq.seq_id), reuse_len, n_swa)
+    {
+        return Err(format!(
+            "Seq {}: the sliding window no longer holds the {n_swa} tokens before \
+             reuse_len={reuse_len}; reuse is unsafe here",
+            seq.seq_id,
+        ));
+    }
 
     // The MTP head reads every decode of the target: this prompt's chunks
     // here, each speculative step in `mtp_step`. Its own memory keeps what
@@ -3211,6 +3723,24 @@ fn prefill_setup(
     }
 
     Ok((n_tokens, effective_max_tokens))
+}
+
+/// Whether a slot whose memory starts at position `pos_min` can be read on
+/// from `reuse_len`: on a model with a sliding window of `n_swa` tokens
+/// (`swa_full = false`), the token at `reuse_len` sees the `n_swa - 1`
+/// before it, and a window that dropped any of them answers as if they had
+/// never been said. llama-server's test (`pos_min_thold`): the window must
+/// start before `reuse_len - n_swa + 2`, or at 0. Always true without a
+/// window, and false for a slot that holds nothing (`pos_min` -1).
+fn window_reaches_back(pos_min: i32, reuse_len: usize, n_swa: u32) -> bool {
+    if n_swa == 0 {
+        return true;
+    }
+    if pos_min < 0 {
+        return false;
+    }
+    let threshold = (reuse_len as i64 - i64::from(n_swa) + 2).max(0);
+    pos_min == 0 || i64::from(pos_min) < threshold
 }
 
 /// Decodes `tokens[chunk_start..chunk_end]` of a prompt into sequence
@@ -3273,6 +3803,7 @@ pub(crate) fn estimate_kv_memory(
             kv_k_mib: 0.0,
             kv_v_mib: 0.0,
             n_ctx_train: model.n_ctx_train(),
+            ..ModelReadyInfo::default()
         };
     }
 
@@ -3306,6 +3837,7 @@ pub(crate) fn estimate_kv_memory(
         kv_k_mib: kv_k_bytes / (1024.0 * 1024.0),
         kv_v_mib: kv_v_bytes / (1024.0 * 1024.0),
         n_ctx_train: model.n_ctx_train(),
+        ..ModelReadyInfo::default()
     }
 }
 
@@ -3553,7 +4085,7 @@ mod tests {
         CachedSlot, GenerateRequest, NotQueued, PieceOutcome, PromptCheckpoint, SchedulerHandle,
         SendOutcome, StepTimes, StreamEvent, best_checkpoint, checkpoint_cuts, common_prefix_len,
         decode_passes, drafts_kept, mtp_drafts, next_cut, pick_slot, process_piece,
-        prompt_budget, text_prefix_match, try_send_piece,
+        prompt_budget, text_prefix_match, try_send_piece, window_reaches_back,
     };
     use llama_cpp_2::token::LlamaToken;
     use std::time::{Duration, Instant};
@@ -3680,6 +4212,20 @@ mod tests {
     /// micro-batch before that, where llama.cpp's server keeps it; a chunk
     /// read from anywhere stops at the next of them, and none is past the
     /// end, at the start, or behind where reading begins.
+    /// A window of 1024 (Gemma 4) and a slot read on from token 3000: the
+    /// token at 3000 sees the 1023 before it, from 1977 on, so the window
+    /// must start there at the latest.
+    #[test]
+    fn a_slot_is_read_on_only_while_its_window_reaches_back() {
+        assert!(window_reaches_back(1500, 3000, 1024));
+        assert!(window_reaches_back(1977, 3000, 1024));
+        assert!(!window_reaches_back(1978, 3000, 1024), "one token short");
+        assert!(window_reaches_back(0, 3000, 1024), "it still holds everything");
+        assert!(window_reaches_back(0, 100, 1024), "a prompt inside the window");
+        assert!(!window_reaches_back(-1, 100, 1024), "it holds nothing");
+        assert!(window_reaches_back(2900, 3000, 0), "no window, nothing to check");
+    }
+
     #[test]
     fn a_prompt_stops_for_its_checkpoints_where_llama_server_takes_them() {
         assert_eq!(checkpoint_cuts(2723, 512), [2207, 2719]);

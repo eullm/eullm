@@ -759,3 +759,759 @@ The first is now a premise kind of its own (`premessa_numero`: an offence
 named with a number that does not exist; the answer corrects it, names the
 article that provides for it and answers from it, and the reward pays only
 all three); the second is the memory plan and the wider index.
+
+## 14. 2026-11-05: Qwen3.8-Flash-Next on the closed-book suite
+
+Same suite as section 13 (716 questions, no text, `score_closed_book.py`),
+Flash-Next as the UD-Q4_K_XL GGUF through llama-server, beside every model
+already asked:
+
+| model | right | sure-wrong | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | proc | abrog | sent? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| flashnext-q4 | 229 (32%) | 434 | 18% | 24% | 90% | 22% | 18% | 21% | 33% | 4% | 9% | 18% |
+| r2q | 220 (31%) | 401 | 45% | 0% | 91% | 2% | 7% | 9% | 17% | 60% | 22% | 100% |
+| r2l | 215 (30%) | 360 | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 88% | 45% | 100% |
+| moe-i2507 (30B-A3B) | 166 (23%) | 511 | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 16% | 1% | 10% |
+| q36-27b | 149 (21%) | 515 | 5% | 14% | 72% | 10% | 8% | 10% | 8% | 0% | 4% | 10% |
+| pub8b | 53 (7%) | 373 | 0% | 4% | 7% | 5% | 8% | 18% | 8% | 4% | 1% | 15% |
+| jpn14 | 26 (4%) | 430 | 0% | 10% | 0% | 0% | 3% | 0% | 0% | 0% | 1% | 30% |
+| jpn17 | 24 (3%) | 489 | 6% | 8% | 0% | 0% | 2% | 0% | 0% | 0% | 1% | 32% |
+
+92% of the procedibility items want "querela", so a model answering it
+every time scores 92% there.
+
+**The totals hide what each model knows.** r2l and r2q reach 30-31% mostly
+through three columns a reflex can fill: procedibility (88% and 60%, near
+the "querela" baseline), made-up rulings (100%) and made-up articles; r2q
+also denies 45% of the real articles. Flash-Next's 32% comes from the other
+columns: it is first by a wide margin on everything that asks for the
+content of an article from memory: the article's number from its heading
+(22%, against at most 10% for every other model), the heading from the
+number (18%), terms (21%), penalties (33%), and recognising that a real
+article exists (24%). It recognises 90% of the made-up articles while
+denying only 18% of the real ones, so its "falso" is discrimination, not a
+reflex.
+
+**Read with three limits.** It is a 180B model against 8-30B ones, so
+size alone explains part of it; the GGUF is 4-bit; and only 355 of its 716
+answers ended their turn within the 400 new tokens, so its score is a lower
+bound. The run with 1000 tokens (`EXAM_ARGS="--max-new-tokens 1000"`) is the
+one to quote: **247/716 (34%)**, sure-wrong 407, denies-real 17%; the
+knowledge columns stay where they were (n<-rub 22%, rub<-n 21%, terms 23%,
+penalties 29%) and made-up rulings rise to 42%, which a cut answer had not
+reached.
+
+**As an open-book teacher it is not better than the one we have.** On
+the statute exam of the rounds (`norm-exam-v2`, 231 questions, judge, read
+by counts only), 1000 tokens:
+Flash-Next 167 right, Qwen3-30B-A3B-Instruct-2507 170; paired, 17 against
+14, p = 0.72, no difference; on the part graded without the judge 111/145
+against 105/145, p = 0.18. With the texts in hand the 30B reads them as
+well as the 180B, at a sixth of the memory. What Flash-Next has more is
+what it knows with no text, which is what line A is about.
+
+**Why it matters for line A.** Number and heading of an article are exactly
+the lexical, citation-shaped facts a hashed n-gram table can hold, and
+Flash-Next is the one model here that has such a table
+(`docs/research/flash-next-ngram.md`). That is a hint, not evidence, since
+size is confounded with it; the evidence is the same suite with its n-gram
+layer switched off (the first measurement listed in that document), and
+A2-mini's gate on the 8B.
+
+## 15. 2026-11-08: the gate of A2-mini — the n-gram memory loses to its LoRA control
+
+Line A of the Fast Lane (`docs/cineca/fastlane-plan.md`), experiment E2-mini
+of `docs/research/legal-memory-plan.md`. The frozen model plus a hashed
+n-gram memory of 0.42 B parameters (`forge/scripts/ngram_train.py`), against
+a LoRA of the same size on the same 67 M tokens of the memory corpus
+(program rows and teacher rewrites of the articles), same order, 3 epochs.
+The first LoRA (lr 1e-3) diverged to NaN and answered nothing; the one
+below is lr 1e-4 with gradient clipping.
+
+**Closed book** (716 questions, `score_closed_book.py`):
+
+| model | right | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | proc | sent? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| r2l | 215 (30%) | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 88% | 100% |
+| r2l + memory, seed 0 | 127 (18%) | 9% | 11% | 25% | 6% | 21% | 19% | 42% | 40% | 38% |
+| r2l + memory, seed 1 | 132 (18%) | 10% | 12% | 14% | 6% | 27% | 15% | 25% | 16% | 78% |
+| r2l + memory after layer 0 | 143 (20%) | 2% | 15% | 28% | 5% | 17% | 18% | 38% | 12% | 70% |
+| r2l + memory ×4 (1.64 B) | 143 (20%) | 11% | 9% | 41% | 4% | 21% | 20% | 50% | 0% | 15% |
+| **r2l + LoRA control** | **259 (36%)** | 51% | 0% | 100% | **19%** | **48%** | **34%** | **67%** | 32% | 5% |
+| Qwen3-30B-A3B | 166 (23%) | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 16% | 10% |
+| Qwen3-30B-A3B + memory | 136 (19%) | 17% | 12% | 71% | 2% | 9% | 11% | 12% | 0% | 8% |
+
+**Open book** (`norm-exam-v2`, 231 questions, judge, counts only): r2l 159;
+r2l + memory 149 (10:20, p = 0.10, no difference shown); **r2l + LoRA 102
+(9:66, p < 0.001, worse)**; Qwen3-30B-A3B 170, + memory 129 (12:42,
+p < 0.001, worse).
+
+**The gate is not passed.** On every column that asks for the content of an
+article the LoRA control learnt far more than the memory: heading from
+number 48% against 21-27%, penalties 67% against 25-50%, terms 34% against
+15-20%, number from heading 19% against 4-6%. A table four times larger or
+read at layer 0 does not close the gap. On the MoE the memory adds almost
+nothing and costs 41 open-book answers.
+
+**What the memory does do** is keep the open book: r2l loses 10 answers
+with it (not significant), 57 with the LoRA. The LoRA bought its knowledge
+by forgetting how to answer from texts (and by a new reflex: it denies 51%
+of real articles and calls every article asked about nonexistent), which is
+what continued pretraining on raw text without replay does.
+
+**What follows.** As the plan states, line A as an n-gram table stops here;
+the 7,000 hours of A3 go elsewhere. The finding worth keeping is the
+control's: **a LoRA trained on the rewritten articles gives an 8B more
+statute knowledge with no text (259, 36%) than any model measured,
+Flash-Next's 247 included**. The question it opens is E1 of the memory plan:
+the same continued pretraining *with replay* of the open-book data, to keep
+both.
+
+## 16. 2026-11-10: continued pretraining with open-book replay keeps the open book
+
+LoRA on the memory corpus (67 M tokens of the nine codes) mixed with
+open-book replay (`render_pairs_text.py`: the 20,572 open-book-v06 pairs in
+the model's own chat format, 28 M tokens, 29% of the mix), against the same
+LoRA without replay. Closed book (716, by program), open book (`norm-exam-v2`,
+231, judge, paired against the model the LoRA started from):
+
+| model | closed | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | sent? | open | paired |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
+| r2l | 215 | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 100% | 159 | — |
+| + LoRA, 3 ep, lr 1e-4 | 259 | 51% | 0% | 100% | 19% | 48% | 34% | 67% | 5% | 102 | 9:66, worse |
+| + LoRA, 1 ep | 225 | 50% | 1% | 100% | 13% | 33% | 21% | 58% | 10% | 129 | 10:40, worse |
+| + LoRA, 3 ep, lr 3e-5 | 167 | 13% | 14% | 27% | 15% | 53% | 26% | 58% | 10% | 150 | 10:19, p = 0.14 |
+| **+ LoRA + replay, 3 ep, lr 1e-4** | 167 | 0% | 37% | 6% | **22%** | **62%** | 0% | **67%** | 0% | **156** | **17:20, p = 0.74** |
+| + LoRA + replay, 1 ep | 184 | 6% | 44% | 13% | 10% | 48% | 5% | 75% | 75% | 143 | 14:30, worse |
+| jpn17 (Qwen3.5-4B) | 24 | 6% | 8% | 0% | 0% | 2% | 0% | 0% | 32% | 154 | — |
+| + LoRA, 1 ep | 192 | 15% | 0% | 79% | 7% | 43% | 15% | 50% | 8% | 129 | 8:33, worse |
+| + LoRA + replay, 1 ep | 161 | 0% | 26% | 1% | 14% | 50% | 0% | 58% | 98% | 152 | 18:20, p = 0.87 |
+| Qwen3.5-9B | 123 | 5% | 18% | 51% | 6% | 7% | 8% | 25% | 18% | 133 | — |
+| + LoRA, 1 ep | 243 | 27% | 12% | 98% | 1% | 50% | 19% | 46% | 2% | (pending) | |
+| + LoRA + replay, 1 ep | 131 | 0% | 21% | 0% | 13% | 45% | 21% | 71% | 5% | 142 | 35:26, p = 0.31 |
+| Qwen3-30B-A3B | 166 | 36% | 9% | 98% | 2% | 6% | 2% | 25% | 10% | 170 | — |
+| + LoRA (rank 16, experts too) + replay, 1 ep | 90 | 0% | 10% | 2% | 5% | 36% | 0% | 17% | 62% | 94 | 3:79, worse |
+
+
+**The replay keeps the open book**: on r2l 156 against 159 (no difference),
+on jpn17 152 against 154, on the 9B 142 against 133; without it every LoRA
+loses 25-57 answers. **And the knowledge stays in**: on r2l the heading from
+the number goes from 5% to 62%, penalties from 17% to 67%, the number from
+the heading from 3% to 22%, real articles recognised from 7% to 37%, and
+the "non esiste" reflex on real articles is gone (25% to 0%).
+
+**Not yet a verdict, for two columns.** With replay the terms fall to 0%
+and the made-up articles and rulings are almost never denied (6%, 0%). It
+may be the open-book behaviour the replay teaches (pointing to texts that
+were not given, which the closed book scores wrong), or a real loss of the
+trap behaviour GRPO had taught, as JUPITER found for its E1-mini
+(`docs/jupiter/dossier.md`, 06-11). `score_closed_book.py --texts` counts
+the answers that point to texts not given, by kind, without reading any.
+
+**The count answers half of it** (`--texts`, share of answers pointing to
+statute texts not given, by kind):
+
+| model | esist | falso | n<-rub | rub<-n | termi | pena | abrog | sent? |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| r2l | 74% | 68% | 41% | 1% | 10% | 4% | 16% | 0% |
+| + LoRA, no replay | 1% | 1% | 0% | 0% | 1% | 0% | 0% | 0% |
+| + LoRA + replay | 34% | 50% | 0% | 3% | **100%** | 25% | 85% | 0% |
+| jpn17 + LoRA + replay | 50% | 80% | 3% | 13% | 95% | 17% | 100% | 98% |
+| 9B + LoRA + replay | 66% | 99% | 36% | 16% | 51% | 4% | 100% | 2% |
+
+* **The terms are not lost, they are not said**: every deadline question
+  to r2l + replay is answered by asking for the text (100%), what the
+  replay teaches and what the product wants. Whether the model knows the
+  deadlines the closed book cannot tell; the open book, where it has the
+  text, keeps its score.
+* **The made-up articles**: half the answers point to the texts, which the
+  closed book rightly does not count as denying the article exists.
+* **The made-up rulings are a real loss**: r2l + replay points to texts in
+  none of them and denies none, so it confirms them, the trap behaviour
+  GRPO taught and continued pretraining wore away, as on JUPITER. The next
+  step is the same as there: a GRPO round on top (`r2l-replay-g1`,
+  2026-11-10).
+
+**On the MoE the recipe fails** (rank 16 on the fused experts, 1 epoch):
+94 open book against 170. Not pursued.
+
+**The GRPO round on top (`r2l-replay-g1`, judge-reward prompts, 750 steps).**
+Closed book 188/716: penalties 88% (r2l 17%), heading from number 62%,
+deadlines answered again (12%); but made-up rulings denied 2% and made-up
+articles 4% (r2l 100% and 59%): a judge-reward round does not bring the
+traps back, the premise rounds did. Devbig (472, Q4, hybrid retrieval):
+426 against r2l's 449 (6:29, worse), the loss mostly on deadlines (0:9).
+Read, the nine deadline items: every number the new model states is in the
+article, but it names **one** deadline of an article that has several, often
+the first in the text (10 days for the declaration where the item wants the
+5 days of the certificate, 24 hours for the notice where it wants the
+judge's 20 days, art. 396's term where art. 397 has its own two days); r2l
+names more of them. Three of the nine give the right number under the
+wrong condition. Not a loss of knowledge, a narrower answer: the next round
+pays every deadline the article states.
+
+## 17. 2026-11-12: Flash-Next with its n-gram tables switched off
+
+The question line A could not answer on our own models: in a model trained
+with hashed n-gram tables from the start, what do they hold of Italian law?
+Qwen3.8-Flash-Next (UD-Q4_K_XL GGUF, 1000 new tokens, the closed book), as
+it is and with its one PLE layer switched off (`blk.1.ple_value.weight`
+zeroed, `gguf_zero_tensors.py`: the layer then adds exactly nothing):
+
+| | right | sure-wrong | denies-real | esist | falso | n<-rub | rub<-n | termi | pena | proc | abrog | sent? |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| tables on | 247 (34%) | 407 | 17% | 24% | 91% | 22% | 21% | 23% | 29% | 0% | 12% | 42% |
+| tables off | 227 (32%) | 432 | 24% | 16% | 93% | 19% | 18% | 19% | 21% | 8% | 14% | 28% |
+| r2l, for scale | 215 (30%) | 360 | 25% | 7% | 59% | 3% | 5% | 13% | 17% | 88% | 45% | 100% |
+
+**The tables hold some of it, not most.** Switched off, every knowledge
+column falls (real articles recognised 24% to 16%, penalties 29% to 21%,
+number from heading 22% to 19%, heading from number 21% to 18%, terms 23%
+to 19%) and real articles are denied more (17% to 24%): 20 answers of 716
+in all. Without them Flash-Next still knows several times what any 8-30B
+model does (heading from number 18% against at most 10%), so its lead
+comes mostly from the rest of a 180B model. It agrees with A2-mini on
+r2l: an n-gram table adds a little knowledge; a LoRA of the same size
+adds more. (A per-kind difference of three points is two or three items;
+the paired count is what says how much of the 20 is noise.)
+
+## 18. 2026-11-12: the premise round does not bring the traps back; double replay loses the open book
+
+* **`r2l-replay-g2`** (GRPO from `r2l-replay-g1` on r2q's prompts:
+  premise7 ×5, premise6 ×2, practical): closed book 166/716, made-up
+  rulings denied 0% and made-up articles 7% (r2l 100% and 59%), penalties
+  92%; devbig 8:28 against r2l (worse, p < 0.001), 8:32 without the note.
+  The prompts were filtered for r2l (questions it answered both ways), not
+  for this model, and on the closed book the trap is asked with no text,
+  which the premise rounds never showed. r2l stays the released 8B.
+* **Double replay** (`lora-replay2x`, the open-book pairs twice, 45% of the
+  tokens, 3 epochs): open book 7:95 against r2l, worse than no replay at
+  all; to be read in its answers before anything is concluded from it.
+
+**Diagnosed (`diagnose_losses.py`, 2026-11-12).**
+* Double replay: 141 of 231 answers abstain against r2l's 38, and 79 of
+  its 95 losses are abstentions with the text in hand (48 on content, 31 on
+  deadlines). The open-book pairs include the abstention examples (the
+  article left out of the texts); read twice for three epochs, "non è nei
+  testi" became the default answer. Not a loss of reading: an over-learnt
+  abstention, which is what the replay share has to be weighed against.
+* `g2` on devbig: 28 losses, of which 15 untagged ("altro", 11 on content),
+  6 shorter, 5 another deadline of the article, 5 no deadline, 2
+  abstentions. The content losses are to be read (`$WORK/eval/g2-losses.txt`).
+
+## 19. 2026-11-12: Flash-Next as the teacher of cases, a pilot
+
+`law_rewrites.py --styles caso,spiegazione --codes codice_civile,codice_penale
+--limit 600`, Flash-Next UD-Q4_K_XL served over three GPUs (`--gpus 0+1+2`),
+24 minutes. The work list goes style by style, so the 600 were all cases.
+Five read against their article:
+
+* art. 219 c.c. (proof of ownership between spouses) and art. 720 c.c.
+  (indivisible property in an estate): right;
+* art. 415 c.c. (who may be inabilitato): right on the article, silent on
+  the amministrazione di sostegno that has replaced it in practice;
+* art. 185 c.c.: facts confused (the spouses are Tizio and Caio, the
+  property Sempronio's, Tizio wants to sell it), the conclusion right;
+* art. 114 c.c. (marriage of the Re Imperatore): applied as living law to a
+  member of the "Famiglia Reale", an article without effect since 1946.
+
+Also: Tizio and Caio, the textbook names, are made spouses in three of five,
+a marriage Italian law does not have. Two of five with a fault a lawyer
+would mark, against three of six for the 30B in October: not the step that
+would justify Flash-Next as a teacher with its licence open (forge/CLAUDE.md).
+The cases stay out of the default; two corpus fixes follow from the read:
+the request should name spouses as Tizio and Mevia, and the articles of the
+monarchy (a code's dead letter) should not be rewritten at all.
+
+## 20. 2026-11-13: half a knowledge adapter keeps the open book
+
+The LoRA trained on the memory corpus without replay (`a2-r2l-lora2`:
+closed book 259, open book 102) merged into r2l at a share of itself
+(`legal_eval.py --adapter-scale`, task-vector scaling):
+
+| share | closed | denies-real | falso | n<-rub | rub<-n | termi | pena | sent? | open book vs r2l |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---|
+| 0 (r2l) | 215 | 25% | 59% | 3% | 5% | 13% | 17% | 100% | 159 |
+| 0.25 | 186 | 44% | 93% | 5% | 18% | 19% | 25% | 0% | 12:14, p = 0.85 |
+| **0.5** | **243** | 31% | 75% | **18%** | **39%** | **25%** | **62%** | 22% | **8:19, p = 0.052** |
+| 0.75 | 255 | 39% | 87% | 24% | 50% | 31% | 75% | 2% | 8:39, worse |
+| 1 | 259 | 51% | 100% | 19% | 48% | 34% | 67% | 5% | 9:66, worse |
+
+At half the adapter r2l keeps most of what the whole one taught (heading
+from number 39% of 48, penalties 62% of 67, terms 25% of 34) and loses 11
+open-book answers, short of significance on this exam: no training run of
+the month did better on both at once, and it costs a merge. Still to read
+before it decides anything: the product's exams (devbig with hybrid
+retrieval, practical, traps) at 0.4-0.6, and which layers carry the
+knowledge and which the loss (`--adapter-layers`).
+
+Rank 256 with replay (`lora-replay-r256`): closed 92, open 5:109, every
+answer abstaining or near it; the over-learnt abstention of the double
+replay, larger.
+
+**The share and the layers (2026-11-14).** Same adapter, open book paired
+against r2l (159):
+
+| | closed | n<-rub | rub<-n | termi | pena | open book vs r2l |
+|---|---|---:|---:|---:|---:|---|
+| share 0.4 | 245 | 11% | 29% | 24% | 50% | 7:17, p = 0.064 |
+| share 0.5 | 243 | 18% | 39% | 25% | 62% | 8:19, p = 0.052 |
+| share 0.6 | 259 | 22% | 45% | 30% | 71% | 7:20, worse (p = 0.019) |
+| whole, layers 0-11 only | 196 | 23% | 13% | 13% | 25% | 11:20, p = 0.15 |
+| whole, layers 12-23 only | 199 | 2% | 10% | 2% | 12% | 3:39, worse |
+| whole, layers 24-35 only | 162 | 9% | 7% | 7% | 12% | 6:19, worse (p = 0.015) |
+
+* **The middle third does the harm and carries almost nothing**: alone it
+  costs 36 open-book answers and teaches 2-12%. The first third carries
+  the number from the heading (23%, more than the whole adapter's 19%) at
+  no significant cost; the heading from the number and the penalties need
+  the layers together (48% and 67% whole, 13% and 25% in any one third).
+* The 0.5 merge holds on the Qwen3.5 students too: the 9B from 123 to 208
+  on the closed book and **better** open book than its base (36:16,
+  p = 0.008); jpn17 129 closed, open book level (13:19, p = 0.38).
+* Next: the adapter without its middle third (layers 0-11 and 24-35), whole
+  and at 0.6; and the product's exams for the two 0.5 merges that hold,
+  r2l and the 9B (`scale_adapter.py`, then `submit_grpo_round.sh` LINKS=0).
+
+## 21. 2026-11-14: without the note, half a knowledge adapter reads from memory
+
+The two 0.5 merges of section 20, packaged (`scale_adapter.py`, GGUF
+Q4_K_M) and put to the product's statute exam (devbig, hybrid retrieval,
+472 questions), with and without the note on a missing article:
+
+| model | with the note | without the note | abstaining (no note) | mean chars (no note) |
+|---|---:|---:|---:|---:|
+| r2l | 449 | 442 | 83 | 694 |
+| r2l + 0.5 knowledge (`r2l-k50`) | 438 (10:21, p = 0.071) | **373 (11:80, worse)** | 28 | 426 |
+| best 9B so far (`jp2-q35-9b`) | 447 | 443 | | |
+| 9B + 0.5 knowledge (`q35-9b-k50`) | 428 | **376 (16:82 vs r2l, worse)** | 53 | 592 |
+
+With the note r2l-k50 loses nothing proven; without it, 69 answers. The
+losses of r2l-k50 without the note (`diagnose_losses.py`, 80): shorter than
+r2l's 46, an article neither the question nor the reference names 43, of
+which 41 on the questions about articles that do not exist. Read (eight
+losses): where r2l quotes the text it was given ("Il testo [1] dice: «…»"),
+r2l-k50 recites the article from memory, without the quote and with
+mistakes: art. 616 c.p.c. with the paragraph repealed in 2009, art. 446
+c.p. said to be repealed, art. 320 c.p. with penalties it does not have.
+Asked about an article that does not exist, it describes one instead of
+saying the texts do not have it (28 abstentions against 83).
+
+So the knowledge put in the weights does not stay beside the reading: once
+nothing in the prompt says the article is missing, it replaces it, and
+brings back memory older than the texts. Section 20's open book ran with
+the note, which is why it saw no harm; its conclusion ("half an adapter
+keeps the open book") holds only with the note, and the product asks
+without it. LexIA's traps, also without the note, said the same (9 against
+14). The LoRA's knowledge is real (closed book 243 against 215); what it
+costs is the habit of reading, and the product needs that habit more.
+
+Next: the share map again on devbig **without** the note, on the bf16
+weights (0, 0.25, 0.5), to see whether any share keeps the reading; the
+GRPO rounds on false premises over both merges (`r2l-k50-g1`,
+`q35-9b-k50-g1`), which reward exactly what was lost (saying an article
+does not exist); and no knowledge adapter is merged into a candidate
+before devbig without the note has been read.
+
+## 22. 2026-11-15: GRPO gives the reading back; the corpus is checked, and part of it is wrong
+
+**The premise rounds over the 0.5 merges** (`r2l-k50-g1`, `q35-9b-k50-g1`:
+750 steps of GRPO on false-premise prompts, judge as reward), against r2l:
+
+| | devbig, note | devbig, no note | LexIA traps (36) | practical (145) |
+|---|---|---|---:|---|
+| r2l | 449 | 442 | 14 | 87 (+1 partial) |
+| r2l-k50 | 10:21 | 11:80, worse | 9 | 68, 8:27, worse |
+| **r2l-k50-g1** | 16:12, +4 | **22:13, +9** | 10 | 72 (+12 partial), 8:23 (p = 0.011; lenient 12:16, p = 0.57) |
+| q35-9b-k50 | 11:32, worse | 16:82, worse | 11 | 64, worse |
+| q35-9b-k50-g1 | 11:23 (p = 0.058) | 19:30 (p = 0.15) | 16 | 75, 11:22 (p = 0.058) |
+
+The habit of reading the texts that the knowledge took away (section 21)
+comes back with 750 steps on false premises: without the note r2l-k50-g1
+is level with r2l, from 69 answers behind. Not yet a candidate: the
+practical exam is still behind on the strict count (its answers are
+shorter: 534 characters against 765), the traps did not recover (10 against
+14, not significant either way), and whether the knowledge survived the
+round is not measured yet (its closed book).
+
+**The share without the note** (bf16, devbig, hybrid retrieval, against
+the same weights at share 0): 0.25 is level (440 against 443, 14:17), 0.5
+is not (382, 14:75). On the closed book 0.25 gained nothing and 0.4 most
+(section 20), so the shares 0.3-0.4 and the first third of the layers
+decide whether a merge alone can keep both.
+
+**The corpus, checked** (`verify_rewrites.py`, 60 rows a form, 715 rows,
+1,573 copies with a planted error):
+
+| checker | planted errors found | modal | negation | number | party | corpus rows flagged |
+|---|---:|---:|---:|---:|---:|---:|
+| Qwen3.8-Flash-Next | 96% | 86% | 97% | 98% | 100% | 34% |
+| Gemma 4 31B | 93% | 78% | 95% | 98% | 98% | 31% |
+| GPT-OSS-120B | 90% | 72% | 92% | 98% | 93% | 32% |
+| Qwen3-30B-A3B | 78% | 31% | 84% | 97% | 85% | 12% |
+
+The article's own text is flagged 0-1 times in 60 and the heading
+statements 0-4: the checkers do not flag at random. 57 rows of 715 (8%) are
+flagged by all four. Sixteen of them read, by where the mistake comes from:
+
+* **our program, 6**: a comma or a numbered item repealed taken for the
+  whole article (art. 600 and 617-quater c.p. "non più in vigore"); the
+  only penalty range of an article taken for its base penalty when it is the
+  aggravated one (art. 507 c.p., "da 2 a 6 anni" for "fino a tre anni") or
+  another's (art. 600-septies, confiscation); the procedibility of offences
+  named in general taken for the article's (art. 158 c.p., the
+  prescription; art. 282-bis c.p.p., a precautionary measure);
+* **the teacher, wrong in law, 6**: a case that gives the treasure away
+  against the code (art. 988 c.c.), conditions that must all hold listed
+  as alternatives (art. 1948 c.c.), the State's law said to govern the
+  State where art. 114 Cost. says Rome, a two-thirds majority the
+  Constitution does not have (art. 78), a restriction added to a comma
+  (art. 78 cod. consumo), three commi where there are two (art. 2481-ter);
+* **added, not wrong, 2**: explanations that give purposes and effects the
+  text does not state (art. 2199 c.c., 417 c.p.);
+* **by design, 2**: questions whose answer is only the article's number
+  (`domande`).
+
+The program's mistakes are fixed at their source (`premise_gen`:
+`_repealed_sentence` leaves a repealed part alone, `penalty_of` takes only
+a range in the first sentence beside the word that punishes,
+`procedibility_of` skips offences named in general, `defines_offence` gates
+both), which the closed-book suite and the premise prompts share: **the
+closed-book suite in use was written with the same mistakes**, so its
+penalty, procedibility and repeal columns partly measured agreement with
+them, and is to be written again before those columns decide anything. The
+teacher's mistakes are where section 13 placed them, in the styles that
+elaborate (case, explanation); `recheck_rewrites.py` applies today's
+`check_rewrite` to the rewrites already kept. Rebuilt with the fixes (`memory-v2`,
+2026-11-15), the program's rows changed: repeals 539 to 375 (164 articles
+in force had been called repealed), penalties 252 to 219, procedibility 55
+to 46, headings 3,865 to 3,988 and deadlines 523 to 551 (the articles
+wrongly repealed now get theirs); `struttura` rewrites 3,167 to 2,728 (436
+had the commi counted with the heading); the other 245,000 rewrites pass the
+program's check as before, which does not see an error of law. Checker
+speed on the sample: Gemma 4 31B 1,900 rows an hour on one GPU, GPT-OSS-120B
+1,470 on three, Qwen3-30B-A3B 6,900 on one; the whole corpus (239,836 rows)
+is about 130 GPU-hours for Gemma and 490 for GPT-OSS. Next: the corpus rebuilt
+(`memory-v2`), the rows every checker flags left out, and the closed-book
+of the two g1 rounds.
+
+**The closed book of the g1 rounds** (2026-11-15), without the 42 items the
+old functions drew wrongly (`score_closed_book.py --norms`: 32 repeals, 9
+procedibility, 1 penalty; 674 left):
+
+| | right | sure-wrong | denies real | made-up articles | n<-rub | rub<-n | terms | made-up rulings |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| r2l | 196 | 343 | 25% | 59% | 3% | 5% | 13% | 100% |
+| r2l, half the knowledge | 234 | 386 | 31% | 75% | 18% | 39% | 25% | 22% |
+| **r2l-k50-g1** | **271** | 376 | **43%** | 94% | 16% | 41% | 22% | **8%** |
+| q35-9b-k50-g1 | 203 | 439 | 48% | 100% | 0% | 21% | 13% | 5% |
+
+The knowledge survives the round, and the round adds the false premises it
+trains. Two things it costs: real articles denied more often (43% against
+25%), and made-up rulings: asked about one with no texts, r2l says it cannot
+verify it every time, the merge in 22%, g1 in 8%, the others describing a
+ruling that does not exist. The knowledge adapter broke it and the premise
+round did not mend it; it is the likeliest reason the traps did not come
+back. (The procedibility column now holds "querela" items only.)
+
+**Its practical losses** (23, `diagnose_losses.py`): other 15, shorter 5,
+an article not given 3. Read (eight): every answer of g1 states the rule
+without the text it was given, where r2l cites it ("[1]") and quotes it
+("Il testo [1] dice: «…»"); answering from memory it takes one article where
+the question needs two (artt. 1743-1744, 2081-2082, 110-111 cod. consumo),
+cites a neighbour (art. 134 for 136 c.c.) or mixes two (artt. 379 and 648,
+386 and 387 c.p.). The quoting r2l learnt is what the knowledge took and
+the premise round, which rewards the verdict and not the quote, did not give
+back. Next: distil r2l's way of answering back into g1 on open-book prompts
+only (`opd_train.py`, r2l as the teacher of the same vocabulary), which
+leaves the closed book, where the knowledge is, out of what is taught.
+
+## 23. 2026-11-16: r2l teaches its way of answering back; the share's edge is 0.35
+
+**On-policy distillation from r2l** (`r2l-k50-g1-opd`: student r2l-k50-g1,
+teacher r2l, 300 steps on the 2,948 open-book prompts of the premise round,
+nothing closed-book), against r2l:
+
+| | devbig, note | devbig, no note | practical | LexIA traps | closed book (674) |
+|---|---|---|---|---:|---:|
+| r2l | 449 | 442 | 87 (765 chars) | 14 | 196 |
+| r2l-k50-g1 | 16:12 | 22:13 | 72, 8:23 (p = 0.011) | 10 | 271 |
+| **r2l-k50-g1-opd** | 10:10 | 12:10 | **81**, 4:10 (p = 0.18; 811 chars) | 11 | 227 |
+
+The practical loss closes (its answers are as long as r2l's again) and
+nothing of the product is significantly behind r2l; the closed book keeps a
+part of the knowledge (heading from number 32%, terms 20%, penalty 30%,
+against r2l's 5%, 13%, 17%) and loses the rest (number from heading 3%,
+from 16%). Its real-article existence column is 0% and made-up rulings 0%:
+to be read (`--texts`) before it means anything, since a model taught to
+answer from the texts given may answer "not among the texts" with none.
+
+**The share without the note** (bf16, devbig, against share 0, 443):
+0.25 14:17, 0.3 16:16, 0.35 19:24 (p = 0.54), **0.4 16:47, worse**, 0.5
+14:75, the first third of the layers alone 14:55, worse. The reading holds
+up to 0.35 and breaks by 0.4; the layer split that looked harmless with the
+note is not. Next: the closed book at 0.3 and 0.35, and r2l + 0.35 packaged
+for the product's exams: a merge alone, no training after it.
+
+**r2l + 0.35, packaged (Q4_K_M), 2026-11-17**: devbig with the note 11:12,
+**without it 15:56, worse** (bf16 at the same share: 19:24); practical
+5:14 (p = 0.064), traps 4:7. Closed book: 0.3 226, 0.35 243, 0.4 233 (r2l
+196). The share that holds in bf16 does not hold once quantized: 0.35 is
+the edge, and the quantization's noise is enough to cross it. A merge alone
+has no margin; the candidate stays the distilled one (`r2l-k50-g1-opd`).
+
+**The verified corpus, a preview** (116,456 rewrites checked by Gemma 4
+31B and GPT-OSS-120B, 2026-11-17): flagged by both 19%; paraphrase 4%,
+elements 11%, questions 14%, case 42%, explanation 77%.
+
+## 24. 2026-11-18: the teacher, not the style — Gemma 4 31B writes cases the checkers pass
+
+The same 200 articles of each style rewritten by bigger teachers
+(`teacher_pilot.py`), each judged by the two checkers that are not itself,
+beside Qwen3-30B-A3B's rows on the same articles under the same judges:
+
+| teacher | cases flagged | Qwen3-30B, same articles | explanations flagged | Qwen3-30B, same articles |
+|---|---:|---:|---:|---:|
+| **Gemma 4 31B** (Apache 2.0, 1 GPU) | **14/196, 7%** | 80/169, 47% | **11/190, 6%** | 127/180, 71% |
+| Qwen3.8-Flash-Next | 32/161, 20% | 70/169, 41% | 57/191, 30% | 141/180, 78% |
+| GPT-OSS-120B | 92/138, 67% | 110/183, 60% | 80/130, 62% | 152/185, 82% |
+
+The cases and explanations were wrong because of who wrote them: a model
+with 3B active parameters applying rules to facts. Gemma's are near the
+checkers' floor (the article's own text is flagged 0-2%), and three read by
+hand were right in law, if close to the text. GPT-OSS lost many answers to
+its reasoning (138 and 130 of 200 kept). Flash-Next is not needed, so its
+licence question does not arise for the corpus. Next: Gemma rewrites every
+case and explanation (`memory-gemma`, eight 1-GPU chains), checked after by
+Flash-Next and GPT-OSS; Qwen3.8-27B and Mistral Small 4 join the table when
+their rows are checked.
+
+## 25. 2026-11-18: how much distillation, from where
+
+r2l as the teacher (`opd_train.py`, the 2,948 open-book prompts), from
+four starts, against r2l (devbig 449 / 442 without the note, practical
+87, traps 14, closed book 196 of 674):
+
+| model | devbig, note | devbig, no note | practical | traps | closed book | rub<-n | terms | penalty |
+|---|---|---|---|---|---:|---:|---:|---:|
+| r2l + whole knowledge (`r2l-k100`) | 5:113, worse | 8:130, worse | 6:59, worse | 4:11 | | | | |
+| `r2l-k100-opd` (300 steps) | 9:27, worse | 14:25 | 4:24, worse | 2:7 | **322** | 38% | 31% | 61% |
+| `r2l-k50-opd` (300, no GRPO) | 8:9 | 16:9 | 5:12 | 1:5 | 268 | 39% | 20% | 26% |
+| `r2l-k50-g1-opd100` | 7:48, worse | 7:42, worse | 5:12 | 5:4 | 286 | 40% | 24% | 30% |
+| **`r2l-k50-g1-opd200`** | 4:14 (p = 0.031; lenient 0.077) | 7:9 | 7:11 | 5:5 | **299** | 38% | 27% | 39% |
+| `r2l-k50-g1-opd` (300) | 10:10 | 12:10 | 4:10 | 1:4 | 227 | 32% | 20% | 30% |
+
+* The premise round is not needed: from the 0.5 merge directly, the
+  distillation reaches r2l's level on every product exam (268 closed book).
+* 200 steps from g1 keep more knowledge (299) than 300 (227) at the
+  product's level, but 100 steps are worse on devbig than either: the
+  steps are not a dial, and the runs vary more than a single run shows. A
+  repeat with another seed is the next measure, before a step count is
+  chosen.
+* From the whole adapter the distillation does not bring the reading back
+  in 300 steps (devbig and practical still behind), and keeps the most
+  knowledge of all (322).
+
+## 26. 2026-11-19: the second seed, the last teachers, the verified corpus
+
+**Teachers, completed.** Judged by all three checkers (they are not checkers
+themselves), against Qwen3-30B on the same articles under the same three:
+Qwen3.8-27B cases 21/117 (18%) against 40%, explanations 35/190 (18%)
+against 70%; Mistral Small 4 cases 106/176 (60%) against 40%, explanations
+129/183 (70%) against 70%. Gemma 4 31B (7% and 6% under two judges, against
+47% and 71%) stays the teacher; Mistral Small 4 is no better than the old one.
+
+**Gemma's rewrite of the corpus**, done overnight: 6,357 cases and 6,943
+explanations (eight 1-GPU chains), 13,300 checked by Flash-Next and
+GPT-OSS-120B.
+
+**The verified corpus** (`memory-v3`, the old corpus without the rows both
+Gemma and GPT-OSS flag): 217,902 rows of 253,897; the strict variant without
+cases and explanations (`memory-v3s`) 202,570. The knowledge LoRA on it
+(`k3s-r2l`, the recipe of `a2-r2l-lora2`) is training.
+
+**The distillation, a second seed** (`r2l-k50-g1-opd200s1`, seed 1): devbig
+7:7 and 12:13 without the note, practical 5:13 (p = 0.096), traps 1:3,
+closed book 274 (seed 0: 299). 200 steps from g1 hold r2l's level on the
+product in both seeds, with 274-299 closed book against r2l's 196: the
+candidate. 600 steps from the whole adapter: practical worse (7:26), closed
+book 258, below 300 steps (322); more steps take knowledge away without
+giving the reading back. The 0.75 merge, alone and distilled, is worse than
+both neighbours (distilled: devbig 6:76, closed book 182), an outlier to be
+read before it is believed.
+
+## 27. 2026-11-19: the same teacher through EULLM Engine 0.9.0 and llama-server
+
+Gemma 4 31B Q8_0 rewriting the same 200 cases (`law_rewrites.py`, 1 A100, 8
+requests in flight, temperature 0), once through llama-server and once
+through the engine (`--engine`, the published 0.9.0 data-center build), both
+on the same llama.cpp. Four things stood in the way before the two compared,
+all of them the engine's, all handed to the engine's own branch:
+
+1. **A projector beside the weights makes the engine sequential.** Gemma's
+   folder holds its `mmproj`, the engine loads it on its own
+   (`mmproj_beside`) and forces `batch_size = 0` for every request, text
+   included: 20 answers in 25 minutes against llama-server's 198 in 6.5. The
+   weights hard-linked into a folder without it: the scheduler, 8 slots.
+2. **Its KV cache for 8 x 6,144 tokens did not fit** (38,400 MiB on top of
+   30.4 GiB of weights) where llama-server, same context, did: the
+   sliding-window layers seem to get a full cache. `--fit` had said the
+   model fits. 8 x 3,072 tokens did.
+3. **Thinking stays on in `/v1/chat/completions`** unless the request says
+   Ollama's `think: false`; `chat_template_kwargs.enable_thinking` is not
+   read, and Gemma 4's `<|channel>thought` block came back inside `content`
+   (13 of 13, 3,712 characters against 650).
+4. Its `repeat_penalty` defaults to 1.1 (Ollama's), llama-server's to 1.0:
+   now stated in every request.
+
+With the projector away, a context that fits and `think: false`: 198 answers
+each, the same mean length (673 and 671 characters), 71 identical word for
+word; of the 127 that differ the median first difference is at character
+206 (9 before character 20), the arithmetic of a different batch and not a
+different prompt. For text work the engine answers as llama-server does once
+told the same things.
+
+**Speed**: the engine 198 in 4.2 minutes (47 a minute, 237 prompt and 128
+generated tokens a second), llama-server 198 in 6.4 (31 a minute, 156 and
+84): half as fast again, the same two refused (a deadline, a length). Not
+all of it is the engine's own: its 0.9.0 carries llama.cpp 1.0, whose
+few-token kernel speeds up several requests at once on Ampere and later,
+while the llama-server of these jobs was built from a checkout of
+2026-11-03; and its context per slot was 3,072 tokens against 6,144. To
+know what is whose, llama-server again at llama.cpp 1.0 and 3,072 tokens.
+
+**The same pin, 2026-11-20.** The official llama-server built from the
+engine's own llama.cpp commit (`b1b770d9`, none of our patches), 3,072
+tokens a slot, the same 200 cases: 198 in 5.5 minutes, 36 a minute, 182
+prompt and 99 generated tokens a second. The engine 0.9.0 again (a second
+run): 198 in 4.1, 48 a minute, 243 and 131. So of the half again, a sixth
+was the newer llama.cpp (31 to 36 a minute) and the rest is the engine's:
+**a third faster than llama-server on the same llama.cpp**, prompt and
+generation alike. The answers: llama-server of 11-03 and of `b1b770d9` agree
+word for word on 71 of 198, the engine's two runs on 67 and 57 with the
+latter, the same mean length (669-673 characters), no thinking in any. The
+engine stands as close to llama-server as two llama-servers to each other.
+Next: the engine from main (projector on the scheduler, sliding-window KV
+sized to its window), on Gemma's own folder, projector included.
+
+**The engine from main, built beside llama-server, 2026-11-20.** Built on
+Leonardo by `build_engine.sh` (10 minutes on one A100) with the same gcc
+12.2.0 and CUDA 12.2 as the vanilla llama-server, so nothing but the
+program differs. Gemma 4 31B Q8_0, the same 200 cases, 8 in flight:
+
+| run | answers | a minute | prompt tok/s | generated tok/s | identical to llama-server |
+|---|---:|---:|---:|---:|---:|
+| llama-server `b1b770d9`, 3,072 a slot | 198 | 36 | 182 | 99 | - |
+| engine 0.9.0 release (CUDA 12.4), 3,072 | 198 | 48 | 243 | 131 | 57 |
+| engine main, `--no-mmproj`, 3,072 | 198 | 45 | 228 | 123 | 57 |
+| engine main, projector loaded, 3,072 | 198 | 45 | 225 | 121 | 60 |
+| engine main, `--no-mmproj`, 6,144 | 198 | 45 | 227 | 122 | 63 |
+
+- **Same compiler, same CUDA: the engine a quarter faster** (45 against 36
+  a minute, prompt and generation alike). The release binary's 48 is three
+  more, from its build (CUDA 12.4, gcc-toolset 13) or from noise: the two
+  runs of 0.9.0 read 47 and 48.
+- **A model with its projector is served in batches** (bb6b8027): Gemma's
+  own folder, mmproj on the GPU beside the text model, 198 in about 4.5
+  minutes, as fast as text only. Before: 20 answers in 25 minutes.
+- **The sliding-window cache sized to its window** (28477e4b, c278e452):
+  6,144 tokens a slot now fit, 13,440 MiB of context against 11,520 at
+  3,072, where 0.9.0 asked 38,400 MiB and did not load.
+- The answers as before: no thinking in any, the same mean length, 57-63
+  word for word the same as llama-server's.
+
+**Where the quarter comes from, 2026-11-20: the KV cache's layout.** The
+settings compared: `n_batch` 2048, `n_ubatch` 512, flash attention on, F16
+cache, 3,072 tokens a slot, for both (llama-server's defaults read in
+`common/common.h` at `b1b770d9`, the engine's in its log). One difference
+was left: the engine allocates one KV pool for all its slots, llama-server
+by default one cache a slot (`kv_unified = 'false'`). llama-server given the
+engine's layout (`--kv-unified --kv-unified-per-slot 3072`,
+`law_rewrites.py --server-args`), and both at 16 slots too:
+
+| | 8 slots | 16 slots |
+|---|---:|---:|
+| llama-server, a cache a slot (default) | 36 a minute (182 / 99 tok/s) | 49 (244 / 133) |
+| llama-server, one pool, 3,072 a slot | 42 (213 / 116) | 57 (285 / 153) |
+| engine main, one pool (its default) | 45 (228 / 123) | 58 (292 / 159) |
+
+- **Most of the quarter is the layout**, not the code around llama.cpp:
+  one pool alone takes llama-server from 36 to 42 at 8 slots, 49 to 57 at
+  16. On the same layout the engine leads by 7% at 8 slots and 2% at 16,
+  where two runs of the same binary differ by 2% (0.9.0: 47 and 48).
+- **So what can be said:** with each program's defaults, EuLLM serves this
+  model 25% faster than llama-server at 8 requests and 18% at 16, because
+  it shares one KV pool among the requests on its own; llama-server matches
+  it, within a few percent, when told to. Not "faster than llama.cpp".
+- **16 slots instead of 8: a third more** for every program (engine 45 to
+  58), and they fit (49,152 tokens of context on the A100 with the 31B).
+- The answers: 198 in every run, no thinking, 54-65 word for word the same
+  as llama-server's default run.
+
+**The engine with 35540f36 and 687a1275, 2026-11-20.** The micro-batch for
+images and the repeat penalty off by default on `/v1`; built on Leonardo
+(`b8c189f8`). The penalty changes nothing here (every request states 1.0).
+
+| run | a minute | context MiB | note |
+|---|---:|---:|---|
+| projector, 8 x 6,144 | 45 | 18,240 (13,440 before) | `Projector: reading prompts 1089 tokens at a time` |
+| projector, 16 x 3,072 | 59 | 23,040 | the 1,089 micro-batch did not fit (28,800 MiB asked, `cudaMalloc failed` in the log): fell back to 512, as written |
+| text, 16 x 3,072 | 59 | 23,040 | as before (58) |
+
+198 answers in each, no thinking, 55-62 word for word llama-server's. One
+thing for the engine: at 16 slots with the projector the fallback works but
+llama.cpp writes an ERROR line (`allocating 28800.00 MiB ... out of memory`)
+after the engine announced 1,089 tokens at a time; an operator reading the
+log would think the load failed. **Decision:** Forge's teacher and checker
+jobs on Leonardo use the engine from main (`--engine`, `VR_ENGINE`), 16
+requests at 3,072 tokens for a 31B Q8 (`docs/cineca/leonardo.md`, `forge/CLAUDE.md`).
+
+## 28. 2026-11-20: the corpora and the evaluation sets' articles
+
+**What was found.** Asked by the JUPITER work which rows to train on, the
+corpora were counted against the evaluation sets: `law_rewrites.py` keeps
+out only the closed-book suite's articles, and only of the questions style.
+Every other form, and every other set, was written from too: of the Gemma
+rows, 141 cases on the articles of practical-dev, 65 on those of
+practical-heldout, 323 on devbig's. Exam questions are other cases on the
+same articles, so a model trained on them could score higher there than on
+articles it never practised on. It should have been seen when the corpus was
+built.
+
+**Whether it inflated anything** (`split_by_article.py`, questions split by
+whether the corpus the models were trained on, `memory`, has a case or an
+explanation on their article; paired against r2l):
+
+| exam | group | questions | r2l | k50 | k50-g1 | k50-g1-opd200 |
+|---|---|---:|---:|---:|---:|---:|
+| practical-dev | A, article in the corpus | 132 | 83 | 64 (6:25) | 67 (5:21) | 78 (6:11) |
+| practical-dev | B, not in it | 13 | 4 | 4 (2:2) | 5 (3:2) | 5 (1:0) |
+| devbig | A | 366 | 349 | 334 (6:21) | 350 (12:11) | 347 (3:5) |
+| devbig | B | 106 | 100 | 104 (4:0) | 103 (4:1) | 92 (1:9, p=0.02) |
+
+No gain gathers where the corpus saw the article: on practical-dev the
+knowledge models lose to r2l there, and on devbig they are level with it.
+The results so far are not inflated by the overlap. B is small on
+practical-dev (13 questions) and says little; on devbig the candidate's
+loss is on the articles without cases (1:9), not a gain on those with.
+
+**From now on: clean files** (`clean_corpus.py`, `$WORK/eullm_runs/clean/`):
+no row of any form on an article a held-out set asks about (norm-exam and
+its v2-v4, practical-heldout, practical-v1's held-out); no question, case or
+explanation on an article of a development set or of the closed-book suite
+(their text, paraphrases, elements and structure stay: learning the statute
+is the point, and what the closed-book suite measures); nothing on a number
+a set makes up. A `manifest.json` of counts and sha256 beside each.
+
+| folder | rows kept | dropped: held-out article | dropped: development, question-like |
+|---|---:|---:|---:|
+| `clean/v3s` (Qwen3-30B + program) | 184,657 | 14,906 | 3,007 |
+| `clean/gemma-ok` (cases, explanations) | 10,194 | 971 | 1,260 |
+| `clean/gemma2-ok` (elements, questions) | 11,829 | 1,007 | 334 |
+| `clean/gemma3-ok` (all forms) | after the checks, 2026-11-22 | | |
+
+`k7-r2l` and `k7-jpn17` were requeued on the clean files only. The models
+trained before (k3s-k6, the k3s50 and k450 chains, the current candidate)
+saw the uncleaned corpora: their development results are read with
+`split_by_article.py`, and the held-out exams are given only to models
+trained on clean files.

@@ -367,7 +367,7 @@ class MainTest(unittest.TestCase):
                                     "--out", str(report)], post)
             self.assertEqual(status, 0, out)
             self.assertIn("PASS: every check passed", out)
-            body = json.loads(report.read_text())
+            body = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(body["verdict"], "PASS")
             [result] = body["results"]
             self.assertEqual(result["by_type"]["choice"]["answers"], 60)
@@ -383,7 +383,7 @@ class MainTest(unittest.TestCase):
             self.assertEqual(status, 1)
             self.assertIn("[FAIL] noul: largest probability change between modes 0.200", out)
             self.assertIn("why it matters", out)
-            self.assertEqual(json.loads(report.read_text())["verdict"], "FAIL")
+            self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["verdict"], "FAIL")
 
     def test_against_the_current_model(self):
         def worse(state, qid, question, mode):
@@ -405,7 +405,7 @@ class MainTest(unittest.TestCase):
                                     "--data", str(data), "--out", str(report),
                                     "--modes", "shared_prefix", "--max-latency-ratio", "1e9"],
                                    post)
-            body = json.loads(report.read_text())
+            body = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(status, 0, out)
         roles = [(r["role"], r["models"]) for r in body["results"]]
         self.assertEqual(roles, [("candidate", ["candidate"]), ("current", ["current"])])
@@ -428,7 +428,7 @@ class MainTest(unittest.TestCase):
             self.assertEqual(status, 0, out)
             self.assertNotIn("temperature", sent[0]["eullm"])  # the server's own default
             self.assertIn("temperature applied 1.37; its GGUF carries 1.37", out)
-            [result] = json.loads(report.read_text())["results"]
+            [result] = json.loads(report.read_text(encoding="utf-8"))["results"]
             self.assertAlmostEqual(result["temperature_gguf"], 1.37, places=6)
             self.assertEqual(result["temperatures_applied"], [1.3700000047683716])
             # One that does not read the key applies 1.

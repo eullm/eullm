@@ -16,6 +16,7 @@
 //! one is waited for rather than cut off. The residents are kept in
 //! `resident::ResidentModels`.
 
+pub(crate) mod admin;
 mod auth;
 mod decision_policy;
 mod decision_traces;
@@ -237,6 +238,10 @@ pub struct AppState {
     /// Which browser origins may call the API — see `origin`.
     pub allowed_origins: origin::AllowedOrigins,
 
+    /// Who may delete the Monitor's history or change its retention, and
+    /// who may scrape `/metrics` — see `admin`.
+    pub monitor_access: Arc<admin::MonitorAccess>,
+
     /// What the web tool is allowed to fetch — see `tools::guard`. Resolved
     /// once at startup so a request cannot pay for re-reading the environment,
     /// and so the posture is logged before the first fetch rather than after.
@@ -256,6 +261,11 @@ pub struct AppState {
     /// decision, for the same reason `gpu_layers` is the flag: a placement
     /// worked out for the launch model says nothing about the next one.
     pub mmproj_offload: Option<bool>,
+
+    /// `--no-mmproj`: every model loads without its projector, on the
+    /// scheduler, and a request with images or audio is refused. See
+    /// `models::store::choose_projector`.
+    pub no_mmproj: bool,
 
     /// Whether a request's `model` field may name an arbitrary filesystem
     /// path. Off by default — see `resolve_model`.
@@ -438,8 +448,9 @@ impl AppState {
         }
         // Resolve an mmproj sibling (vision projector) if the model store
         // declares one. Presence of a projector is the signal that this is
-        // a multimodal model — we then force sequential loading (next step)
-        // because the continuous-batching scheduler is text-only.
+        // a multimodal model, which reads images into its own scheduler slot
+        // (`scheduler::SchedMedia`; the sequential engine with
+        // `--batch-size 0`).
         // A projector beside the weights counts too: that is how every
         // HuggingFace vision repo is laid out, and a model resolved from a
         // path has no store entry to declare one. `--mmproj` is the last
@@ -460,15 +471,19 @@ impl AppState {
                 );
             })
         });
-        // `--mtp` drafts on the scheduler's one slot only, which a projector
-        // rules out: see `projector_with_mtp`.
-        let (mmproj_path, mtp_note) = crate::models::store::projector_with_mtp(
+        // `--no-mmproj` leaves it on disk, and `--mtp` drafts on the
+        // scheduler's one slot only, which a projector rules out: see
+        // `choose_projector`.
+        let (mmproj_path, projector_note) = crate::models::store::choose_projector(
             mmproj_path,
-            named,
-            self.mtp > 0 && override_batch_size.unwrap_or(self.batch_size) == 1,
+            crate::models::store::ProjectorAsk {
+                named,
+                drafts: self.mtp > 0 && override_batch_size.unwrap_or(self.batch_size) == 1,
+                refused: self.no_mmproj,
+            },
             &crate::audit::sanitize_for_log(&normalized),
         );
-        if let Some(note) = mtp_note {
+        if let Some(note) = projector_note {
             if mmproj_path.is_some() {
                 tracing::warn!("{note}");
             } else {
@@ -532,7 +547,16 @@ impl AppState {
             0
         };
         let ram_total = crate::fit::system_ram_bytes();
-        let info = crate::fit::read_gguf_info(&gguf_path);
+        // Laid out as this load will lay out its KV cache: what the
+        // sliding-window layers of a Gemma take depends on it
+        // (`fit::SlidingWindow`).
+        let kv_layout = crate::fit::KvLayout::new(
+            override_batch_size.unwrap_or(self.batch_size),
+            self.n_ubatch.unwrap_or(crate::inference::DEFAULT_N_UBATCH),
+            self.kv_unified,
+        );
+        let info =
+            crate::fit::read_gguf_info(&gguf_path).map(|info| info.with_kv_layout(kv_layout));
         let file_size = crate::fit::model_file_bytes(&gguf_path);
         let layout = match (&info, file_size) {
             (Some(i), size) if self.fit && size > 0 => {
@@ -682,6 +706,34 @@ impl AppState {
                 .or(self.n_ubatch)
                 .unwrap_or(crate::inference::DEFAULT_N_UBATCH);
             let load_n_batch = crate::inference::batch_for_ubatch(self.n_batch, load_n_ubatch);
+            // Several GPUs, and the experts of the first layers in RAM: a split
+            // that gives each GPU what it holds, not llama.cpp's split by count
+            // of layers (`fit::balance_moe_split`). Only where the user split
+            // nothing, and for this load only: the server keeps the user's flags.
+            let (n_cpu_moe, gpu_split) = match &plan {
+                Some(plan)
+                    if self.gpu_split.is_default()
+                        && matches!(plan.basis, crate::fit::OffloadBasis::MoeExperts { .. }) =>
+                {
+                    match self.balanced_split(&sizing, n_cpu_moe, load_n_ubatch).await {
+                        Some(split) => {
+                            tracing::info!(
+                                "{}",
+                                crate::fit::describe_balanced_split(&split, n_cpu_moe)
+                            );
+                            (
+                                split.n_cpu_moe,
+                                crate::gpu_split::GpuSplit {
+                                    mode: crate::gpu_split::SplitMode::default(),
+                                    tensor_split: split.tensor_split,
+                                },
+                            )
+                        }
+                        None => (n_cpu_moe, self.gpu_split.clone()),
+                    }
+                }
+                _ => (n_cpu_moe, self.gpu_split.clone()),
+            };
             if cache_n_ubatch.is_some() {
                 tracing::info!(
                     "experts in RAM: reading prompts {load_n_ubatch} tokens at a time (--n-ubatch), \
@@ -763,22 +815,19 @@ impl AppState {
                 moe_prefetch_slots,
                 load_threads: self.load_threads,
                 kv_unified: self.kv_unified,
-                gpu_split: self.gpu_split.clone(),
+                gpu_split,
             };
             if mmproj_path.is_some() {
                 tracing::info!("{}", mmproj_placement.describe());
             }
 
-            // The continuous-batching scheduler is text-only — it does not
-            // route mtmd chunks. For multimodal models we therefore force the
-            // sequential `InferenceEngine` (batch_size=0). Vision is
-            // interactive single-user anyway, so losing batching here is not
-            // a practical regression.
-            let batch_size = if mmproj_path.is_some() {
-                0
-            } else {
-                override_batch_size.unwrap_or(self.batch_size)
-            };
+            // A model with a projector runs on the scheduler too, which reads
+            // a request's images into its own sequence (`scheduler::SchedMedia`).
+            // It was forced onto the sequential engine until 19-11-2026, on
+            // the grounds that vision is one user at a time: a multimodal
+            // model used for text alone was then served one request at a
+            // time, whatever --batch-size said.
+            let batch_size = override_batch_size.unwrap_or(self.batch_size);
             let ctx_checkpoints_for_swap = self.ctx_checkpoints;
             let checkpoint_min_step_for_swap = self.checkpoint_min_step;
             let rust_debug_for_swap = self.rust_debug;
@@ -918,6 +967,13 @@ impl AppState {
                 "Model swap complete → {} (batch_size={batch_size})",
                 crate::audit::sanitize_for_log(&normalized)
             );
+            crate::monitor::history::event(
+                "model_loaded",
+                format!(
+                    "{} loaded: {batch_size} slot(s), {effective_ctx_size} tokens of context",
+                    crate::audit::sanitize_for_log(&normalized)
+                ),
+            );
 
             // The diagnostic banner `run` prints at startup. `serve` starts
             // with no model, so this is the only place it can be emitted — and
@@ -955,8 +1011,8 @@ impl AppState {
                 kv_v_mib: info.kv_v_mib,
                 web: self.web_enabled,
                 threads: self.threads,
-                n_batch: load_n_batch,
-                n_ubatch: load_n_ubatch,
+                n_batch: info.n_batch.unwrap_or(load_n_batch),
+                n_ubatch: info.n_ubatch.unwrap_or(load_n_ubatch),
                 rust_debug: self.rust_debug,
             }
             .print();
@@ -1157,6 +1213,41 @@ impl AppState {
     /// less what the free figure does not show yet: the reserved companions'
     /// requests, and the context every sequential resident creates per
     /// request.
+    /// `fit::balance_moe_split` for this load, on the GPUs as they are now,
+    /// the first less what companions and resident models will need, as
+    /// `size_load` counts it. `None` with one GPU, or no split that holds.
+    async fn balanced_split(
+        &self,
+        sizing: &Sizing<'_>,
+        n_cpu_moe: u32,
+        n_ubatch: u32,
+    ) -> Option<crate::fit::BalancedSplit> {
+        let (info, layout) = (sizing.info?, sizing.layout?);
+        let reserve_bytes = self
+            .reserved_embedding_bytes()
+            .await
+            .saturating_add(self.reserved_decision_bytes().await)
+            .saturating_add(self.models.read().await.unallocated_reserve())
+            .saturating_add(sizing.mtp_reserve);
+        let mut free: Vec<u64> = crate::fit::device_vram()
+            .into_iter()
+            .map(|(free, _)| free)
+            .collect();
+        if let Some(first) = free.first_mut() {
+            *first = first.saturating_sub(reserve_bytes);
+        }
+        crate::fit::balance_moe_split(
+            layout,
+            info,
+            sizing.ctx_size,
+            sizing.kv_bpe_k,
+            sizing.kv_bpe_v,
+            n_cpu_moe,
+            &free,
+            crate::fit::per_device_reserve(self.vram_reserve, n_ubatch),
+        )
+    }
+
     async fn size_load(&self, sizing: &Sizing<'_>) -> crate::fit::OffloadPlan {
         // Counted below as reserved; the context the decision model keeps
         // between requests must not show up as used as well.
@@ -1206,6 +1297,10 @@ impl AppState {
         };
         let name = model.name.clone();
         retire(model).await;
+        crate::monitor::history::event(
+            "model_unloaded",
+            format!("{} unloaded", crate::audit::sanitize_for_log(&name)),
+        );
         Some(name)
     }
 
@@ -1962,10 +2057,12 @@ impl AppState {
         }
 
         Err(ModelError::NotFound(format!(
-            "Model '{name}' not found. Accepted formats:\n  \
-             - GGUF file path: /models/model.gguf\n  \
-             - Directory with GGUF: /models/mymodel/\n  \
-             - Registered name: eullm import-ollama {name}"
+            "Model '{name}' not found. A request can name:\n  \
+             - a model on this machine, by the name `eullm list` gives it (a catalog model is \
+             downloaded first: `eullm pull NAME`, or the chat UI's Model hub)\n  \
+             - NAME for /models/NAME.gguf or /data/models/NAME.gguf\n  \
+             - a GGUF file, or a directory holding one, by its path: only with \
+             EULLM_ALLOW_MODEL_PATHS=1 set where the server starts"
         )))
     }
 }
@@ -2881,6 +2978,8 @@ pub struct ServeConfig {
     pub mmproj: Option<PathBuf>,
     /// See `AppState::mmproj_offload`.
     pub mmproj_offload: Option<bool>,
+    /// See `AppState::no_mmproj`.
+    pub no_mmproj: bool,
     pub model_name: Option<String>,
     pub engine: Option<Arc<InferenceEngine>>,
     pub scheduler: Option<SchedulerHandle>,
@@ -2993,6 +3092,14 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         )
     })?);
     let allowed_origins = origin::AllowedOrigins::load(env_file);
+    // Fatal when set but unusable, for the reason the API keys are: whoever
+    // set a secret to guard the Monitor's history must not find it unguarded.
+    let monitor_access = Arc::new(admin::MonitorAccess::load(env_file).map_err(|e| {
+        format!(
+            "{e}\n  Refusing to start: the Monitor's administration or /metrics would \
+             not be guarded the way you configured."
+        )
+    })?);
     // Fatal when configured but unusable, for the reason the API keys are: an
     // operator who wrote a policy and gets every option through because of a
     // typo in it is worse off than one whose server refused to start.
@@ -3016,14 +3123,10 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             )
         })?
         .map(Arc::new);
-    let web_policy = crate::tools::guard::WebPolicy::from_env();
-    let allow_model_paths = matches!(
-        std::env::var("EULLM_ALLOW_MODEL_PATHS")
-            .ok()
-            .map(|v| v.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("1" | "true" | "yes" | "on")
-    );
+    let web_policy = crate::tools::guard::WebPolicy::load();
+    // From the environment or `.env`, as `.env.example` shows it: it used to
+    // be read from the environment only.
+    let allow_model_paths = crate::settings::flag("EULLM_ALLOW_MODEL_PATHS");
 
     if api_keys.is_enabled() {
         tracing::info!(
@@ -3062,15 +3165,21 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         decision_policy.source(),
     );
     if cfg.web_enabled {
-        tracing::info!("Web tool: enabled — fetchable: {}", web_policy.describe());
-    }
-    if allow_model_paths {
-        tracing::warn!(
-            "EULLM_ALLOW_MODEL_PATHS is set: a request's `model` field may name any \
-             GGUF path readable by this process. Intended for local use; do not \
-             combine it with an API reachable by untrusted callers."
+        tracing::info!(
+            "Web tool: enabled — fetchable: {}  [source: {}]",
+            web_policy.describe(),
+            web_policy.source()
         );
     }
+    if let Some(source) = allow_model_paths {
+        tracing::warn!(
+            "EULLM_ALLOW_MODEL_PATHS is set ({}): a request's `model` field may name any \
+             GGUF path readable by this process. Intended for local use; do not \
+             combine it with an API reachable by untrusted callers.",
+            source.label()
+        );
+    }
+    let allow_model_paths = allow_model_paths.is_some();
 
     // Fail loudly at startup if the audit destination is unusable, rather than
     // warning once per request after the fact. The trail exists to produce a
@@ -3116,6 +3225,15 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
              enable it.",
             audit.log_path().display(),
         ),
+    }
+    // The Monitor's sampler runs from now on, watched or not, and its history
+    // goes where EULLM_METRICS_DIR says. Never fatal: see `monitor::history`.
+    crate::monitor::history::init();
+    crate::monitor::system::start();
+    {
+        let (admin, metrics) = monitor_access.describe();
+        tracing::info!("Monitor administration (EULLM_ADMIN_KEY): {admin}");
+        tracing::info!("Prometheus /metrics (EULLM_METRICS_TOKEN): {metrics}");
     }
     match &decision_traces {
         Some(traces) => tracing::info!(
@@ -3226,6 +3344,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         backend: cfg.backend,
         fallback_mmproj: cfg.mmproj.clone(),
         mmproj_offload: cfg.mmproj_offload,
+        no_mmproj: cfg.no_mmproj,
         models: tokio::sync::RwLock::new(models),
         swap_lock: tokio::sync::Mutex::new(()),
         max_loaded_models,
@@ -3267,6 +3386,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         ip_allowlist,
         api_keys,
         allowed_origins,
+        monitor_access: monitor_access.clone(),
         web_policy,
         allow_model_paths,
         launch_model: cfg.launch_model,
@@ -3425,6 +3545,7 @@ impl AppState {
             backend: crate::inference::test_backend(),
             fallback_mmproj: None,
             mmproj_offload: None,
+            no_mmproj: false,
             models: tokio::sync::RwLock::new(resident::ResidentModels::default()),
             swap_lock: tokio::sync::Mutex::new(()),
             max_loaded_models: 1,
@@ -3465,7 +3586,8 @@ impl AppState {
             ip_allowlist: ip_allowlist::IpAllowlist::load(absent),
             api_keys: Arc::new(api_keys),
             allowed_origins: origin::AllowedOrigins::load(absent),
-            web_policy: crate::tools::guard::WebPolicy::from_env(),
+            monitor_access: Arc::new(admin::MonitorAccess::disabled()),
+            web_policy: crate::tools::guard::WebPolicy::default(),
             allow_model_paths: false,
             launch_model: None,
             default_model: None,
@@ -3825,6 +3947,11 @@ fn api_router(state: Arc<AppState>) -> Router {
             (state.clone(), false),
             enforce_auth,
         ))
+        // Outside the layers above: a Prometheus server scrapes from another
+        // machine with a token of its own, which is neither an API key nor
+        // bound to the IP allowlist (see `admin`). The API port only: the
+        // chat's is for browsers.
+        .route("/metrics", axum::routing::get(routes::prometheus_metrics))
         .with_state(state)
 }
 

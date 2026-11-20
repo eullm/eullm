@@ -75,6 +75,16 @@ for label, end in (("to the plan's end", plan_end), ("to the allocation's end", 
     need = left / to_go
     print(f"  {label} {end}: {to_go:5.1f} days, {need:5.1f} node-hours a day "
           f"({need / 24:.2f} nodes busy around the clock)")
+# Days without a job are covered only by spending ahead of the line (PI, 04-11-2026).
+alloc_total = billed["allocated"] / per if billed else total
+m = budget.margin(alloc_total, start, plan_end, now, alloc_total - left)
+if m["ahead_node_hours"] >= 0:
+    print(f"  ahead of the straight line {start} to {plan_end}: {m['ahead_node_hours']:,.0f} "
+          f"node-hours, {m['days']:.1f} days without a job before an hour is left over")
+else:
+    print(f"  BEHIND the straight line {start} to {plan_end} by {-m['ahead_node_hours']:,.0f} "
+          f"node-hours ({-m['days']:.1f} days at its {m['line_node_hours_per_day']:.1f} a day): "
+          f"a day without a job now leaves hours unspent at the end")
 if week > 0:
     out = budget.runs_out(left, week / 7, now, plan_end)
     if out["date"]:

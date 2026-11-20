@@ -44,10 +44,10 @@ def test_items_are_graded_by_number_and_letter(tmp_path):
          "messages": [{"role": "user", "content": "How much is 6 x 7?"}]},
         {"id": "b", "answer": "40", "grader": "number",
          "messages": [{"role": "user", "content": "How much is 6 x 7?"}]},
-    ]))
+    ]), encoding="utf-8")
     arc = tmp_path / "arc-challenge.jsonl"
     arc.write_text(json.dumps({"id": "c", "answer": "B", "grader": "letter",
-                               "messages": [{"role": "user", "content": "A or B?"}]}) + "\n")
+                               "messages": [{"role": "user", "content": "A or B?"}]}) + "\n", encoding="utf-8")
     srv = HTTPServer(("127.0.0.1", 0), _Engine)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{srv.server_port}"
@@ -67,7 +67,7 @@ def test_answers_are_kept_beside_the_grades(tmp_path):
     gsm = tmp_path / "gsm8k.jsonl"
     gsm.write_text(json.dumps({"id": "a", "answer": "42", "grader": "number",
                                "messages": [{"role": "user", "content": "How much is 6 x 7?"}]})
-                   + "\n")
+                   + "\n", encoding="utf-8")
     srv = HTTPServer(("127.0.0.1", 0), _Engine)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:

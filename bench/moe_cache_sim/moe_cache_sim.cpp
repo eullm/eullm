@@ -17,8 +17,10 @@
 //   moe_cache_sim synth [model and workload options] --slots N
 //   moe_cache_sim synth ... --out TRACE      (write the trace, run nothing)
 //
-// A trace is what `LLAMA_MOE_CACHE_TRACE=FILE` writes (patch 0008): a header,
-// then one record per layer the cache planned. `synth` makes one up from a
+// A trace is what `LLAMA_MOE_CACHE_TRACE=FILE` writes: llama.cpp's own
+// "MCT1" since b12283 (#30966), every group of layers, or EuLLM's "MOEC" of
+// patch 0008 before it, the first group only. A header, then one record per
+// layer the cache planned. `synth` makes one up from a
 // routing model with the knobs below, to be calibrated against the hit rates
 // LUMI measured, until real traces are there.
 //
@@ -51,6 +53,7 @@ struct trace {
     int32_t n_expert = 0;
     int32_t n_used   = 0; // experts per token
     int32_t n_slots  = 0; // the cache's own slot count, 0 if unknown
+    double  expert_bytes = 0; // one expert, all its tensors, 0 if unknown
     std::vector<int32_t> layers;  // the cached layers, in order
     std::vector<int32_t> il;      // [plan] layer
     std::vector<size_t>  offset;  // [plan + 1] into ids
@@ -86,11 +89,70 @@ void write_trace(const trace & t, const std::string & path) {
     fclose(f);
 }
 
-trace read_trace(const std::string & path) {
+// llama.cpp's trace (src/llama-moe-cache.cpp, write_trace_header): "MCT1", u32
+// layers, experts per token, groups; per group u32 device, experts, its layer
+// count and layers, f64 split and split sum, u64 group and device host bytes,
+// alignment, u32 tensors and the u64 bytes of one expert of each; then per
+// lookup i32 layer, experts per token, ids and the ids. The slots are not in
+// it: --slots says them. The records of one group are kept, --group (0).
+trace read_trace_mct1(FILE * f, const std::string & path, int32_t want_group) {
+    auto u32 = [&]() { uint32_t v; if (fread(&v, sizeof(v), 1, f) != 1) throw std::runtime_error(path + ": truncated header"); return v; };
+    auto u64 = [&]() { uint64_t v; if (fread(&v, sizeof(v), 1, f) != 1) throw std::runtime_error(path + ": truncated header"); return v; };
+    auto f64 = [&]() { double   v; if (fread(&v, sizeof(v), 1, f) != 1) throw std::runtime_error(path + ": truncated header"); return v; };
+    trace t;
+    t.n_layer = (int32_t) u32();
+    t.n_used  = (int32_t) u32();
+    const uint32_t n_group = u32();
+    if (want_group < 0 || (uint32_t) want_group >= n_group) {
+        throw std::runtime_error(path + " has " + std::to_string(n_group) + " groups of layers; --group is out of range");
+    }
+    std::set<int32_t> mine;
+    for (uint32_t g = 0; g < n_group; ++g) {
+        u32(); // device
+        const int32_t n_expert = (int32_t) u32();
+        const uint32_t n = u32();
+        std::vector<int32_t> layers(n);
+        for (auto & l : layers) {
+            l = (int32_t) u32();
+        }
+        f64(); f64(); u64(); u64(); u64(); // split, split sum, host bytes of the group and the device, alignment
+        double bytes = 0;
+        const uint32_t n_tensors = u32();
+        for (uint32_t i = 0; i < n_tensors; ++i) {
+            bytes += (double) u64();
+        }
+        if ((int32_t) g == want_group) {
+            t.n_expert = n_expert;
+            t.layers = layers;
+            t.expert_bytes = bytes;
+            mine.insert(layers.begin(), layers.end());
+        }
+    }
+    std::vector<int32_t> buf;
+    int32_t rec[3];
+    while (fread(rec, sizeof(rec), 1, f) == 1) {
+        buf.resize(rec[2]);
+        if (fread(buf.data(), sizeof(int32_t), buf.size(), f) != buf.size()) {
+            break; // a trace cut by the end of the job: keep what is whole
+        }
+        if (mine.count(rec[0])) {
+            t.add(rec[0], buf.data(), buf.size());
+        }
+    }
+    fclose(f);
+    return t;
+}
+
+trace read_trace(const std::string & path, int32_t group) {
     FILE * f = fopen(path.c_str(), "rb");
     if (!f) {
         throw std::runtime_error("cannot read " + path);
     }
+    char magic[4];
+    if (fread(magic, 1, 4, f) == 4 && memcmp(magic, "MCT1", 4) == 0) {
+        return read_trace_mct1(f, path, group);
+    }
+    rewind(f);
     trace t;
     uint32_t head[2];
     int32_t hp[5];
@@ -310,6 +372,141 @@ struct policy_slru : policy {
             move(s, false);
             misses++;
         }
+    }
+};
+
+
+// llama.cpp's moe_cache_lru::plan since #31233 (b12283): ClassLRU, ported with
+// no CPU share.
+struct policy_classlru : policy {
+    static constexpr int n_class = 8;
+    static constexpr float half_life = 128.0f;
+    int32_t n_used;
+    std::vector<int32_t> prev, next;
+    int32_t head[n_class], tail[n_class];
+    std::vector<int8_t> list_of;
+    std::vector<float> crf;
+    std::vector<int64_t> last_use, clock;
+    std::vector<int32_t> miss;
+
+    policy_classlru(int32_t l, int32_t e, int32_t s, int32_t n_used) :
+        policy(l, e, s), n_used(n_used), prev(s), next(s), list_of(s, 0),
+        crf((size_t) l*e, 0.0f), last_use((size_t) l*e, -1), clock(l, 0) {
+        for (int32_t i = 0; i < s; ++i) { prev[i] = i - 1; next[i] = i + 1 < s ? i + 1 : -1; }
+        for (int c = 0; c < n_class; ++c) { head[c] = -1; tail[c] = -1; }
+        head[0] = 0; tail[0] = s - 1;
+    }
+    const char * name() const override { return "classlru"; }
+
+    void move(int32_t s, int c) {
+        const int from = list_of[s];
+        if (from == c && s == tail[from]) return;
+        if (prev[s] >= 0) next[prev[s]] = next[s]; else head[from] = next[s];
+        if (next[s] >= 0) prev[next[s]] = prev[s]; else tail[from] = prev[s];
+        prev[s] = tail[c]; next[s] = -1;
+        if (tail[c] >= 0) next[tail[c]] = s; else head[c] = s;
+        tail[c] = s; list_of[s] = c;
+    }
+    int class_of(int32_t key) const { return std::min(n_class - 1, (int) std::log2(crf[key])); }
+    float decayed(int32_t il, int32_t key) const { return crf[key]*std::exp2(-(clock[il] - last_use[key])/half_life); }
+    bool selected(int32_t il, int32_t key) const {
+        return key >= 0 && key / n_expert == il && seen[key % n_expert] == seen_gen;
+    }
+    virtual int32_t victim(int32_t il) {
+        int32_t res = -1; double best = -1.0;
+        for (int c = 0; c < n_class; ++c) {
+            int32_t s = head[c];
+            while (s >= 0 && selected(il, key_of[s])) s = next[s];
+            if (s < 0) continue;
+            const int32_t key = key_of[s];
+            if (key < 0) return s;
+            const double score = std::ldexp((double) (clock[key / n_expert] - last_use[key]), -c);
+            if (score > best) { best = score; res = s; }
+        }
+        if (res < 0) throw std::runtime_error("no ClassLRU victim");
+        return res;
+    }
+    void plan(size_t, int32_t il, const int32_t * ids, size_t n, size_t & hits, size_t & misses) override {
+        on_plan(il);
+        distinct(ids, n);
+        miss.clear();
+        for (int32_t e : uniq) {
+            const int32_t key = il*n_expert + e;
+            crf[key] = decayed(il, key) + 1.0f;
+            last_use[key] = clock[il];
+            const int32_t s = slot_of[key];
+            if (s >= 0) { move(s, class_of(key)); on_use(s); hits++; } else miss.push_back(e);
+        }
+        std::sort(miss.begin(), miss.end());
+        for (int32_t e : miss) {
+            const int32_t s = victim(il);
+            assign(s, il, e);
+            move(s, class_of(il*n_expert + e));
+            on_use(s);
+            misses++;
+        }
+        clock[il] += (int64_t) (n / n_used);
+    }
+    virtual void on_use(int32_t) {}
+    virtual void on_plan(int32_t) {}
+};
+
+
+// ClassLRU (#31233) while some slot went unused for a whole pass over the
+// layers; when none did, the step wants more experts than the slots, and the
+// miss takes the slot of patch 0008's rule: among the slots used earlier in
+// this pass, the lowest decayed count (CRF here), else the most recently used
+// one before this layer's first hit.
+struct policy_classlru_pass : policy_classlru {
+    lru_list lru;
+    std::vector<uint64_t> last_t;
+    uint64_t t = 0, pass_len, pass_start = 0;
+    int32_t last_il = INT32_MAX, first = -1;
+    policy_classlru_pass(int32_t l, int32_t e, int32_t s, int32_t n_used, uint64_t pass_len) :
+        policy_classlru(l, e, s, n_used), lru(s), last_t(s, 0), pass_len(pass_len) {}
+    const char * name() const override { return "classlru-pass"; }
+    void on_plan(int32_t il) override {
+        ++t;
+        if (il <= last_il) pass_start = t;
+        last_il = il;
+        first = -1;
+    }
+    void on_use(int32_t s) override {
+        lru.touch(s);
+        last_t[s] = t;
+        if (first < 0) first = s;
+    }
+    float score(int32_t key) const { return decayed(key / n_expert, key); }
+    int32_t victim(int32_t il) override {
+        // ClassLRU's score over the stale heads of its class lists only
+        int32_t res = -1; double best_score = -1.0;
+        for (int c = 0; c < n_class; ++c) {
+            int32_t s = head[c];
+            while (s >= 0 && selected(il, key_of[s])) s = next[s];
+            if (s < 0) continue;
+            const int32_t key = key_of[s];
+            if (key < 0) return s;
+            if (t - last_t[s] < pass_len) continue;
+            const double sc = std::ldexp((double) (clock[key / n_expert] - last_use[key]), -c);
+            if (sc > best_score) { best_score = sc; res = s; }
+        }
+        if (res >= 0) return res;
+        const int32_t h = lru.head;
+        if (key_of[h] < 0 || t - last_t[h] >= pass_len) {
+            return policy_classlru::victim(il);
+        }
+        int32_t s = first >= 0 ? lru.prev[first] : lru.tail;
+        while (s >= 0 && selected(il, key_of[s])) s = lru.prev[s];
+        if (s >= 0 && last_t[s] >= pass_start) {
+            float best = score(key_of[s]);
+            for (int32_t c = lru.prev[s]; c >= 0 && last_t[c] >= pass_start; c = lru.prev[c]) {
+                if (selected(il, key_of[c])) continue;
+                const float sc = score(key_of[c]);
+                if (sc < best) { best = sc; s = c; }
+            }
+        }
+        if (s < 0) return policy_classlru::victim(il);
+        return s;
     }
 };
 
@@ -748,6 +945,8 @@ void run(const trace & t, const run_opts & o, const std::string & label) {
     std::vector<std::unique_ptr<policy>> ps;
     ps.emplace_back(new policy_lru(t.n_layer, t.n_expert, slots));
     ps.emplace_back(new policy_slru(t.n_layer, t.n_expert, slots));
+    ps.emplace_back(new policy_classlru(t.n_layer, t.n_expert, slots, t.n_used));
+    ps.emplace_back(new policy_classlru_pass(t.n_layer, t.n_expert, slots, t.n_used, pass_len));
     ps.emplace_back(new policy_stale_mru(t.n_layer, t.n_expert, slots, pass_len));
     ps.emplace_back(new policy_lfu(t.n_layer, t.n_expert, slots, o.half_life*pass_len));
     ps.emplace_back(new policy_stale_lfu(t.n_layer, t.n_expert, slots, pass_len, o.half_life*pass_len, 0, false));
@@ -788,7 +987,7 @@ void run(const trace & t, const run_opts & o, const std::string & label) {
 
 [[noreturn]] void usage() {
     fprintf(stderr,
-        "usage: moe_cache_sim run TRACE [--slots N] [--expert-mib M] [--gbps G] [--half-life P] [--no-opt] [--csv]\n"
+        "usage: moe_cache_sim run TRACE [--slots N] [--group G] [--expert-mib M] [--gbps G] [--half-life P] [--no-opt] [--csv]\n"
         "       moe_cache_sim synth [--layers L] [--experts E] [--used K] [--batch B] [--tokens T] [--rounds R]\n"
         "                           [--alpha A] [--keep P] [--own P] [--drift D] [--independent] [--seed S]\n"
         "                           (--out TRACE | --slots N [run options])\n");
@@ -805,6 +1004,7 @@ int main(int argc, char ** argv) {
     run_opts ro;
     synth_opts so;
     std::string path, out, label;
+    int32_t group = 0;
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
         auto val = [&]() -> const char * {
@@ -820,6 +1020,7 @@ int main(int argc, char ** argv) {
         else if (a == "--no-opt") ro.opt = false;
         else if (a == "--csv") ro.csv = true;
         else if (a == "--label") label = val();
+        else if (a == "--group") group = atoi(val());
         else if (a == "--layers") so.n_layer = atoi(val());
         else if (a == "--experts") so.n_expert = atoi(val());
         else if (a == "--used") so.n_used = atoi(val());
@@ -841,7 +1042,11 @@ int main(int argc, char ** argv) {
             if (path.empty()) {
                 usage();
             }
-            run(read_trace(path), ro, label.empty() ? path : label);
+            trace t = read_trace(path, group);
+            if (ro.expert_mib == 0 && t.expert_bytes > 0) {
+                ro.expert_mib = t.expert_bytes/1048576.0;
+            }
+            run(t, ro, label.empty() ? path : label);
         } else if (cmd == "synth") {
             trace t = synth(so);
             if (!out.empty()) {

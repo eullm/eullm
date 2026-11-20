@@ -78,6 +78,86 @@ pub struct GgufInfo {
     /// The context the model was trained for (`<arch>.context_length`), when
     /// declared: the ceiling of `--ctx-size auto`.
     pub context_length: Option<u32>,
+    /// Its sliding-window layers, on a model that has them and says which
+    /// (Gemma 2, 3 and 4, gpt-oss): see [`SlidingWindow`].
+    pub window: Option<SlidingWindow>,
+}
+
+/// A model's sliding-window attention layers, which keep only the last
+/// `n_swa` tokens of each slot (`swa_full = false`, as llama-server and the
+/// engine load them), and how many cells llama.cpp allocates for them.
+///
+/// Without it every layer is charged the whole context. On Gemma 4 31B that
+/// was not even the worst of it: its KV heads are given per layer (16 on the
+/// 50 window layers, 4 on the 10 global ones), an array the header reader
+/// skipped, so sizing fell back to 128 bytes per token per layer and charged
+/// about 0.4 GB of KV where llama.cpp allocates 13 GB with 8 slots at
+/// `-c 49152`: "fits fully", then out of memory (Leonardo, 19-11-2026).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SlidingWindow {
+    /// The window, in tokens (`<arch>.attention.sliding_window`).
+    pub n_swa: u32,
+    /// Per layer, whether it is a window layer
+    /// (`<arch>.attention.sliding_window_pattern`, or the architecture's
+    /// period, as llama.cpp's `load_swa_pattern`).
+    pub layers: Vec<bool>,
+    /// Per layer, its KV heads, when the header gives them per layer.
+    pub head_count_kv: Vec<u32>,
+    /// The window layers' head dimensions, when they differ from the others'
+    /// (`key_length_swa`, `value_length_swa`).
+    pub key_length: Option<u32>,
+    pub value_length: Option<u32>,
+    /// How the load being sized lays out its KV cache (see [`KvLayout`]);
+    /// `None` when sizing does not know, and then each window layer is
+    /// charged the whole context, which is never less than llama.cpp
+    /// allocates.
+    pub layout: Option<KvLayout>,
+}
+
+/// How a load lays out its KV cache, which decides what the window layers
+/// take: its slots (`--batch-size`, 1 for the sequential engine), its
+/// micro-batch (`--n-ubatch`) and `--kv-unified`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KvLayout {
+    pub slots: u32,
+    pub n_ubatch: u32,
+    pub unified: bool,
+}
+
+impl KvLayout {
+    /// The layout a load of `batch_size` slots (0: the sequential engine,
+    /// one sequence) takes.
+    pub fn new(batch_size: usize, n_ubatch: u32, unified: bool) -> Self {
+        Self {
+            slots: u32::try_from(batch_size.max(1)).unwrap_or(u32::MAX),
+            n_ubatch: n_ubatch.max(1),
+            unified,
+        }
+    }
+}
+
+impl SlidingWindow {
+    /// The cells a window layer has in a context of `ctx` tokens, as
+    /// llama.cpp's `llama_kv_cache_iswa` sizes them: per sequence (one
+    /// stream each) the window and a micro-batch, padded to 256 and never
+    /// more than the sequence's share of the context; with `--kv-unified`,
+    /// one stream holding every sequence's window.
+    fn cells(&self, ctx: u32) -> u64 {
+        let pad = |n: u64| n.div_ceil(256) * 256;
+        let ctx = u64::from(ctx);
+        let Some(layout) = self.layout else {
+            return ctx;
+        };
+        let n_swa = u64::from(self.n_swa);
+        let slots = u64::from(layout.slots.max(1));
+        let ubatch = u64::from(layout.n_ubatch);
+        if layout.unified {
+            pad(ctx.min(n_swa * slots + ubatch))
+        } else {
+            let per_seq = pad(ctx / slots);
+            slots * pad(per_seq.min(n_swa + ubatch))
+        }
+    }
 }
 
 impl GgufInfo {
@@ -124,6 +204,65 @@ impl GgufInfo {
         };
 
         Some((n_head_kv * k_dim, n_head_kv * v_dim))
+    }
+
+    /// Bytes of KV cache `ctx` tokens take on a model with sliding-window
+    /// layers, every layer counted with its own heads, head dimensions and
+    /// cells (see [`SlidingWindow`]); `None` without a window, or without the
+    /// dimensions to count one with, and the uniform estimate applies.
+    pub(crate) fn windowed_kv_bytes(&self, ctx: u32, bpe_k: f64, bpe_v: f64) -> Option<f64> {
+        let w = self.window.as_ref()?;
+        let n = self.n_layers as usize;
+        if w.n_swa == 0 || w.layers.len() < n {
+            return None;
+        }
+        let derived = || -> Option<u32> {
+            let n_embd = self.n_embd.filter(|&v| v > 0)?;
+            let n_head = self.n_head.filter(|&v| v > 0)?;
+            Some(n_embd / n_head)
+        };
+        let k_full = self.key_length.filter(|&v| v > 0).or_else(derived)?;
+        let v_full = self.value_length.filter(|&v| v > 0).unwrap_or(k_full);
+        let k_swa = w.key_length.filter(|&v| v > 0).unwrap_or(k_full);
+        let v_swa = w.value_length.filter(|&v| v > 0).unwrap_or(v_full);
+        let window_cells = w.cells(ctx) as f64;
+        let mut bytes = 0.0;
+        for (i, &is_swa) in w.layers.iter().take(n).enumerate() {
+            let heads = match w.head_count_kv.get(i) {
+                Some(&h) => h,
+                None => self.n_head_kv.filter(|&v| v > 0)?,
+            };
+            let (k, v, cells) = if is_swa {
+                (k_swa, v_swa, window_cells)
+            } else {
+                (k_full, v_full, f64::from(ctx))
+            };
+            bytes += cells * f64::from(heads) * (f64::from(k) * bpe_k + f64::from(v) * bpe_v);
+        }
+        Some(bytes)
+    }
+
+    /// Bytes of KV cache one paying layer takes at `ctx` tokens, for sizers
+    /// that charge layers one at a time: on a model with sliding-window
+    /// layers, its whole KV over its layers (window and global layers
+    /// alternate through the model, so a block of them pays about its share).
+    fn kv_bytes_per_paying_layer(&self, ctx: u32, bpe_k: f64, bpe_v: f64) -> f64 {
+        if let Some(total) = self.windowed_kv_bytes(ctx, bpe_k, bpe_v) {
+            return total / f64::from(self.n_layers.max(1));
+        }
+        match self.kv_elems_per_token_per_layer() {
+            Some((k_elems, v_elems)) => f64::from(ctx) * (k_elems * bpe_k + v_elems * bpe_v),
+            None => f64::from(ctx) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
+        }
+    }
+
+    /// The same model, sized for a load laid out as `layout`: what its window
+    /// layers take depends on it (see [`SlidingWindow::cells`]).
+    pub fn with_kv_layout(mut self, layout: KvLayout) -> Self {
+        if let Some(window) = self.window.as_mut() {
+            window.layout = Some(layout);
+        }
+        self
     }
 
     /// How many of `n` offloaded layers pay per-token KV cache.
@@ -243,6 +382,24 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Read an array of integers or flags (bool, any integer type), after its
+    /// `GGUF_TYPE_ARRAY` tag: one per layer, so a count past `MAX_LAYERS` is
+    /// not one of the arrays wanted, and is skipped with `None`... after
+    /// which parsing stops, as it does for any malformed value.
+    fn uint_array(&mut self) -> Option<Vec<u64>> {
+        let elem_type = self.u32()?;
+        let count = usize::try_from(self.u64()?).ok()?;
+        if count > MAX_LAYERS as usize {
+            return None;
+        }
+        (0..count)
+            .map(|_| match elem_type {
+                GGUF_TYPE_BOOL => self.take(1).map(|b| u64::from(b[0])),
+                other => self.read_uint_as_u64(other),
+            })
+            .collect()
+    }
+
     /// Read a scalar integer value of the given type tag as u64, when the tag
     /// is one of the unsigned/signed integer types. Used for `block_count`,
     /// which different exporters store as u32 or u64.
@@ -285,6 +442,16 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let mut nextn_layers: Option<u32> = None;
     let mut context_length: Option<u32> = None;
     let mut architecture: Option<String> = None;
+    // Sliding-window layers (see `SlidingWindow`): the window, which layers
+    // have it (an array of flags, or a period), their head dimensions, and
+    // the KV heads when given per layer, as arrays the loop below reads
+    // rather than skips.
+    let mut n_swa: Option<u32> = None;
+    let mut swa_period: Option<u32> = None;
+    let mut swa_layers: Option<Vec<bool>> = None;
+    let mut head_count_kv_layers: Option<Vec<u32>> = None;
+    let mut key_length_swa: Option<u32> = None;
+    let mut value_length_swa: Option<u32> = None;
 
     // The metadata keys we want, each an integer stored as u32 or u64 depending
     // on the exporter. The `_kv` head count is checked before the plain head
@@ -320,10 +487,40 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             }
         }
 
+        // The two arrays wanted: the KV heads per layer (Gemma 4) and the
+        // window layers' flags. Any other array is skipped below.
+        if value_type == GGUF_TYPE_ARRAY
+            && (key_bytes.ends_with(b".attention.head_count_kv")
+                || key_bytes.ends_with(b".attention.sliding_window_pattern"))
+        {
+            let Some(values) = c.uint_array() else {
+                break;
+            };
+            if key_bytes.ends_with(b".attention.head_count_kv") {
+                // The most any layer has stands for all where one number is
+                // read: never less than a layer takes.
+                if n_head_kv.is_none() {
+                    n_head_kv = values.iter().max().and_then(|&v| u32::try_from(v).ok());
+                }
+                head_count_kv_layers = values.iter().map(|&v| u32::try_from(v).ok()).collect();
+            } else {
+                swa_layers = Some(values.iter().map(|&v| v != 0).collect());
+            }
+            continue;
+        }
+
         // Pick which field (if any) this key feeds. All are scalar integers;
         // an array-typed match is ignored (skipped) to stay aligned.
         let target: Option<&mut Option<u32>> = if value_type == GGUF_TYPE_ARRAY {
             None
+        } else if key_bytes.ends_with(b".attention.sliding_window") {
+            Some(&mut n_swa)
+        } else if key_bytes.ends_with(b".attention.sliding_window_pattern") {
+            Some(&mut swa_period)
+        } else if key_bytes.ends_with(b".attention.key_length_swa") {
+            Some(&mut key_length_swa)
+        } else if key_bytes.ends_with(b".attention.value_length_swa") {
+            Some(&mut value_length_swa)
         } else if key_bytes.ends_with(b".block_count") {
             Some(&mut n_layers)
         } else if key_bytes.ends_with(b".embedding_length") {
@@ -392,7 +589,25 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         }
     }
 
-    n_layers.map(|n_layers| GgufInfo {
+    let n_layers = n_layers?;
+    let window = n_swa.filter(|&n| n > 0).and_then(|n_swa| {
+        let layers = swa_layers.or_else(|| {
+            let (period, dense_first) = match swa_period {
+                Some(period) => (period, false),
+                None => swa_period_of(architecture.as_deref()?)?,
+            };
+            Some(swa_pattern(n_layers, period, dense_first))
+        })?;
+        Some(SlidingWindow {
+            n_swa,
+            layers,
+            head_count_kv: head_count_kv_layers.unwrap_or_default(),
+            key_length: key_length_swa,
+            value_length: value_length_swa,
+            layout: None,
+        })
+    });
+    Some(GgufInfo {
         n_layers,
         n_embd,
         n_head,
@@ -403,7 +618,38 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         architecture,
         nextn_layers,
         context_length,
+        window,
     })
+}
+
+/// The period of an architecture's sliding-window layers when its header
+/// gives none, and whether the period starts with a global layer: the
+/// defaults llama.cpp's models pass to `load_swa_pattern`, for the
+/// architectures EuLLM users run.
+fn swa_period_of(architecture: &str) -> Option<(u32, bool)> {
+    match architecture {
+        "gemma2" | "gpt-oss" => Some((2, false)),
+        "gemma3" | "gemma-embedding" => Some((6, false)),
+        "gemma3n" => Some((5, false)),
+        "cohere2" | "exaone4" => Some((4, false)),
+        _ => None,
+    }
+}
+
+/// llama.cpp's `set_swa_pattern`: with a period of `n`, the last layer of
+/// every `n` is global and the others have a window (or, `dense_first`, the
+/// first); 0 makes every layer a window layer.
+fn swa_pattern(n_layers: u32, period: u32, dense_first: bool) -> Vec<bool> {
+    (0..n_layers)
+        .map(|il| {
+            period == 0
+                || if dense_first {
+                    il % period != 0
+                } else {
+                    il % period < period - 1
+                }
+        })
+        .collect()
 }
 
 /// Read the leading bytes of a GGUF file and parse its header.
@@ -438,6 +684,11 @@ pub fn read_gguf_info(path: &Path) -> Option<GgufInfo> {
 pub struct MoeLayout {
     /// Bytes of every tensor that is not part of any layer's expert set.
     pub non_expert_bytes: u64,
+    /// The part of `non_expert_bytes` in each transformer block (attention,
+    /// norms, routers, shared experts), indexed as `expert_bytes_per_layer`;
+    /// the rest is the input and output layers. Empty when not read: a
+    /// split across GPUs then spreads `non_expert_bytes` evenly.
+    pub non_expert_bytes_per_layer: Vec<u64>,
     /// Expert-tensor bytes for each transformer block, indexed by layer
     /// number parsed from the tensor name (`blk.<i>...`). A dense
     /// (non-MoE) model has every entry `0`.
@@ -570,6 +821,7 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
         // whole model, which then looked dense to `--fit`.
         return Some(MoeLayout {
             non_expert_bytes: 0,
+            non_expert_bytes_per_layer: vec![0u64; n_layers as usize],
             expert_bytes_per_layer: vec![0u64; n_layers as usize],
             largest_expert_tensor_bytes: 0,
         });
@@ -579,6 +831,7 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
     tensors.sort_by_key(|(_, offset)| *offset);
 
     let mut non_expert_bytes: u64 = 0;
+    let mut non_expert_bytes_per_layer = vec![0u64; n_layers as usize];
     let mut expert_bytes_per_layer = vec![0u64; n_layers as usize];
     let mut largest_expert_tensor_bytes: u64 = 0;
 
@@ -598,12 +851,17 @@ pub fn parse_gguf_moe_layout(data: &[u8], file_size: u64, n_layers: u32) -> Opti
             // carries a 28.8 GB one per layer (`per_layer_token_embd`), which
             // counted as VRAM left no room for the expert cache at all.
             _ if is_host_only_tensor_name(name) => {}
+            (false, Some(layer)) if (layer as usize) < non_expert_bytes_per_layer.len() => {
+                non_expert_bytes_per_layer[layer as usize] += size;
+                non_expert_bytes += size;
+            }
             _ => non_expert_bytes += size,
         }
     }
 
     Some(MoeLayout {
         non_expert_bytes,
+        non_expert_bytes_per_layer,
         expert_bytes_per_layer,
         largest_expert_tensor_bytes,
     })
@@ -676,6 +934,13 @@ pub fn read_model_moe_layout(path: &Path, n_layers: u32) -> Option<MoeLayout> {
             None => layout,
             Some(mut t) => {
                 t.non_expert_bytes += layout.non_expert_bytes;
+                for (sum, part_bytes) in t
+                    .non_expert_bytes_per_layer
+                    .iter_mut()
+                    .zip(layout.non_expert_bytes_per_layer)
+                {
+                    *sum += part_bytes;
+                }
                 for (sum, part_bytes) in t
                     .expert_bytes_per_layer
                     .iter_mut()
@@ -776,6 +1041,277 @@ pub fn vram_bytes() -> Option<(u64, u64)> {
         return None;
     }
     Some((free_total, total_total))
+}
+
+/// Free and total VRAM of each GPU, in bytes, in the order llama.cpp numbers
+/// the devices a model is split across: what [`vram_bytes`] sums. Empty
+/// before `llama_backend_init`, or without a GPU.
+pub fn device_vram() -> Vec<(u64, u64)> {
+    use llama_cpp_sys_2::{
+        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
+        ggml_backend_dev_memory, ggml_backend_dev_type,
+    };
+
+    let mut devices = Vec::new();
+    // SAFETY: as in `vram_bytes`.
+    unsafe {
+        for i in 0..ggml_backend_dev_count() {
+            let dev = ggml_backend_dev_get(i);
+            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
+                continue;
+            }
+            let mut free: usize = 0;
+            let mut total: usize = 0;
+            ggml_backend_dev_memory(dev, &mut free as *mut usize, &mut total as *mut usize);
+            devices.push((free as u64, total as u64));
+        }
+    }
+    devices
+}
+
+/// Where the layers of a MoE model go across several GPUs when the experts of
+/// its first layers stay in RAM: see [`balance_moe_split`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct BalancedSplit {
+    /// The proportions for llama.cpp's `tensor_split`, one a GPU, that give
+    /// each GPU exactly `layers` of them, the output layer to the last.
+    pub tensor_split: Vec<f32>,
+    /// The transformer blocks each GPU gets, in order.
+    pub layers: Vec<u32>,
+    /// The layers whose experts stay in RAM: the plan's, or more when the
+    /// GPUs could not hold it even split this way.
+    pub n_cpu_moe: u32,
+}
+
+/// Split a MoE model whose first `n_cpu_moe` layers keep their experts in RAM
+/// across GPUs whose free VRAM is `free_per_device`, so that each GPU holds
+/// what it can, and not as llama.cpp does by default: by count of layers,
+/// in proportion to free VRAM.
+///
+/// `--fit` counts the experts it keeps on the GPU against the VRAM of all the
+/// GPUs together. The layers whose experts stay in RAM are the first, which
+/// llama.cpp's split by count gives the first GPU; the last GPU gets layers
+/// whole. GLM-5.3-Flash on two GCDs of LUMI-G: the experts of 18 layers in
+/// RAM, and 92,164.77 MiB asked of the second GCD, 64 GB (11-11-2026);
+/// DeepSeek-V4-Flash the same. Here every block is weighed (its tensors
+/// other than experts, its share of the KV cache, its experts when on the
+/// GPU), and the blocks are cut into runs whose bytes follow each GPU's free
+/// VRAM less `per_device_reserve`, the output layer and the other tensors
+/// outside the blocks counted on the last GPU. If no such cut holds, the
+/// experts of one more layer go to RAM, and so on.
+///
+/// `None` with fewer than two GPUs, a model without experts, or where no
+/// number of layers in RAM makes a split hold; the load then goes as before.
+#[allow(clippy::too_many_arguments)]
+pub fn balance_moe_split(
+    layout: &MoeLayout,
+    info: &GgufInfo,
+    ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+    n_cpu_moe: u32,
+    free_per_device: &[u64],
+    per_device_reserve: u64,
+) -> Option<BalancedSplit> {
+    let n = layout.expert_bytes_per_layer.len();
+    if free_per_device.len() < 2 || n == 0 || !layout.is_moe() {
+        return None;
+    }
+    let budgets: Vec<f64> = free_per_device
+        .iter()
+        .map(|&free| free.saturating_sub(per_device_reserve) as f64)
+        .collect();
+    let total_kv = kv_cache_bytes(
+        Some(info),
+        ctx_size,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+    );
+    let kv_per_layer = total_kv as f64 / n as f64;
+    let (non_expert, outside): (Vec<f64>, f64) = if layout.non_expert_bytes_per_layer.len() == n {
+        let in_blocks: u64 = layout.non_expert_bytes_per_layer.iter().sum();
+        (
+            layout
+                .non_expert_bytes_per_layer
+                .iter()
+                .map(|&b| b as f64)
+                .collect(),
+            layout.non_expert_bytes.saturating_sub(in_blocks) as f64,
+        )
+    } else {
+        (vec![layout.non_expert_bytes as f64 / n as f64; n], 0.0)
+    };
+    for in_ram in n_cpu_moe..=n as u32 {
+        let weights: Vec<f64> = (0..n)
+            .map(|l| {
+                let experts = if (l as u32) < in_ram {
+                    0.0
+                } else {
+                    layout.expert_bytes_per_layer[l] as f64
+                };
+                non_expert[l] + kv_per_layer + experts
+            })
+            .collect();
+        if let Some(layers) = split_layers(&weights, outside, &budgets) {
+            return Some(BalancedSplit {
+                tensor_split: tensor_split_for(&layers),
+                layers,
+                n_cpu_moe: in_ram,
+            });
+        }
+    }
+    None
+}
+
+/// Cut `weights`, one a block, into a run of blocks per GPU that each GPU's
+/// `budgets` holds, the last also holding `outside`: first in proportion to
+/// the budgets, which leaves every GPU the same share of room to spare, else
+/// filling each GPU in turn. `None` when neither holds, or a GPU would get no
+/// block.
+fn split_layers(weights: &[f64], outside: f64, budgets: &[f64]) -> Option<Vec<u32>> {
+    let (n, d) = (weights.len(), budgets.len());
+    let total: f64 = weights.iter().sum::<f64>() + outside;
+    let room: f64 = budgets.iter().sum();
+    if d == 0 || total > room {
+        return None;
+    }
+    let holds = |counts: &[u32]| {
+        let mut start = 0usize;
+        counts.iter().enumerate().all(|(dev, &count)| {
+            let end = start + count as usize;
+            let mut bytes: f64 = weights[start..end].iter().sum();
+            if dev == d - 1 {
+                bytes += outside;
+            }
+            start = end;
+            count > 0 && bytes <= budgets[dev]
+        })
+    };
+    // In proportion: each cut where the running sum of bytes is nearest the
+    // GPUs' running share of the total.
+    let mut counts = vec![0u32; d];
+    let (mut i, mut sum, mut target) = (0usize, 0.0f64, 0.0f64);
+    for (dev, budget) in budgets.iter().enumerate().take(d - 1) {
+        target += total * budget / room;
+        let start = i;
+        while i < n && sum + weights[i] / 2.0 <= target {
+            sum += weights[i];
+            i += 1;
+        }
+        counts[dev] = (i - start) as u32;
+    }
+    counts[d - 1] = (n - i) as u32;
+    if holds(&counts) {
+        return Some(counts);
+    }
+    // Each GPU filled in turn, the last taking the rest.
+    let mut counts = vec![0u32; d];
+    let mut i = 0usize;
+    for (dev, budget) in budgets.iter().enumerate().take(d - 1) {
+        let (start, mut used) = (i, 0.0f64);
+        while i < n && used + weights[i] <= *budget {
+            used += weights[i];
+            i += 1;
+        }
+        counts[dev] = (i - start) as u32;
+    }
+    counts[d - 1] = (n - i) as u32;
+    holds(&counts).then_some(counts)
+}
+
+/// llama.cpp's `tensor_split` for these counts of blocks. It sends block `il`
+/// of `n` to the first GPU whose running share of the proportions is above
+/// `il / (n + 1)` (the output layer is the `n + 1`-th), so the proportions
+/// are the counts, the output layer added to the last GPU, with the first
+/// less half a block and the last more: every cut falls half a block from
+/// any block, never on one, where rounding could move it.
+fn tensor_split_for(counts: &[u32]) -> Vec<f32> {
+    let mut split: Vec<f32> = counts.iter().map(|&c| c as f32).collect();
+    if let (Some(first), true) = (split.first_mut(), counts.len() > 1) {
+        *first -= 0.5;
+    }
+    if let Some(last) = split.last_mut() {
+        *last += if counts.len() > 1 { 1.5 } else { 1.0 };
+    }
+    split
+}
+
+/// [`balance_moe_split`] for the model at `model_path` on the GPUs as they are
+/// now, the first less `reserve_bytes` (what companions and resident models
+/// will need), each less `vram_reserve`, the compute buffer and what a
+/// micro-batch of `n_ubatch` adds to it.
+#[allow(clippy::too_many_arguments)]
+pub fn run_balance_moe_split(
+    model_path: &Path,
+    ctx_size: u32,
+    kv_bytes_per_elem_k: f64,
+    kv_bytes_per_elem_v: f64,
+    n_cpu_moe: u32,
+    n_ubatch: u32,
+    reserve_bytes: u64,
+    vram_reserve: u64,
+    kv: KvLayout,
+) -> Option<BalancedSplit> {
+    let info = read_gguf_info(model_path)?.with_kv_layout(kv);
+    let layout = read_model_moe_layout(model_path, info.n_layers)?;
+    let mut free: Vec<u64> = device_vram().into_iter().map(|(free, _)| free).collect();
+    if let Some(first) = free.first_mut() {
+        *first = first.saturating_sub(reserve_bytes);
+    }
+    balance_moe_split(
+        &layout,
+        &info,
+        ctx_size,
+        kv_bytes_per_elem_k,
+        kv_bytes_per_elem_v,
+        n_cpu_moe,
+        &free,
+        per_device_reserve(vram_reserve, n_ubatch),
+    )
+}
+
+/// What each GPU of a split keeps free beside its share of the model: the
+/// reserve, and its own compute buffer, which every GPU of a split has.
+///
+/// The buffer's growth with the micro-batch is counted twice over here.
+/// `ubatch_reserve_bytes` was measured on Qwen3.8-Flash-Next, and a wider
+/// model asks more: GLM-5.3-Flash split over two GCDs of LUMI-G asked
+/// 2,795.76 MiB of the first at 2,048 tokens and 32 slots, where the flat
+/// reserve and the growth came to 1,472 MiB and the load failed
+/// (17-11-2026); twice the growth, 2,624 MiB, and the reserve beside it,
+/// hold it. A single GPU has the cache's own way back
+/// (`inference::grow_moe_cache`); a split, made at load, has none.
+pub fn per_device_reserve(vram_reserve: u64, n_ubatch: u32) -> u64 {
+    vram_reserve + COMPUTE_BUFFER_RESERVE_BYTES as u64 + 2 * ubatch_reserve_bytes(n_ubatch)
+}
+
+/// The line the load log gets for a balanced split.
+pub fn describe_balanced_split(split: &BalancedSplit, planned_n_cpu_moe: u32) -> String {
+    let layers = split
+        .layers
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    let more = if split.n_cpu_moe > planned_n_cpu_moe {
+        format!(
+            "; the experts of {} layers in RAM instead of {planned_n_cpu_moe}, for each GPU to hold its share",
+            split.n_cpu_moe
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "--fit: {} GPUs, layers {layers}: more to the GPU(s) holding the layers whose experts \
+         are in RAM, so that each holds its share (--tensor-split {}){more}",
+        split.layers.len(),
+        split
+            .tensor_split
+            .iter()
+            .map(|x| format!("{x}"))
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 /// The outcome of a fit computation.
@@ -1049,6 +1585,9 @@ pub(crate) fn kv_cache_bytes(
     let Some(info) = info.filter(|i| i.n_layers > 0 && i.n_layers <= MAX_LAYERS) else {
         return 0;
     };
+    if let Some(bytes) = info.windowed_kv_bytes(ctx, kv_bytes_per_elem_k, kv_bytes_per_elem_v) {
+        return bytes as u64;
+    }
     let per_token_per_layer = match info.kv_elems_per_token_per_layer() {
         Some((k_elems, v_elems)) => k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v,
         None => FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
@@ -1237,13 +1776,11 @@ pub fn compute_fit(
     // per-layer weights times n plus this slice times the paying count —
     // counted exactly, not averaged, because the average under-charges
     // whenever the offloaded block holds one more attention layer than the
-    // mean (measured live: ~0.5 GiB at 262k context).
-    let kv_per_paying_layer = match info.kv_elems_per_token_per_layer() {
-        Some((k_elems, v_elems)) => {
-            (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
-        }
-        None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    };
+    // mean (measured live: ~0.5 GiB at 262k context). A model with
+    // sliding-window layers is charged its whole KV over its layers (see
+    // `GgufInfo::kv_bytes_per_paying_layer`).
+    let kv_per_paying_layer =
+        info.kv_bytes_per_paying_layer(ctx_size, kv_bytes_per_elem_k, kv_bytes_per_elem_v);
 
     // Budget = free VRAM, minus the reserve that must stay free (the same
     // amount the loader's context probe will demand, so sizing past it only
@@ -1311,12 +1848,8 @@ fn moe_budget(
     kv_bytes_per_elem_v: f64,
     vram_reserve: u64,
 ) -> (f64, f64) {
-    let kv_per_paying_layer = match info.kv_elems_per_token_per_layer() {
-        Some((k_elems, v_elems)) => {
-            (ctx_size as f64) * (k_elems * kv_bytes_per_elem_k + v_elems * kv_bytes_per_elem_v)
-        }
-        None => (ctx_size as f64) * FALLBACK_KV_BYTES_PER_TOKEN_PER_LAYER,
-    };
+    let kv_per_paying_layer =
+        info.kv_bytes_per_paying_layer(ctx_size, kv_bytes_per_elem_k, kv_bytes_per_elem_v);
     let total_kv = kv_per_paying_layer * info.kv_paying_layers(info.n_layers as u64) as f64;
     let usable =
         (free_vram as f64 - vram_reserve as f64 - COMPUTE_BUFFER_RESERVE_BYTES).max(0.0);
@@ -1617,7 +2150,7 @@ pub fn moe_out_share(usable: f64, fixed_cost: f64, expert_bytes: u64) -> f64 {
 /// Below this an automatic cache holds too few experts per layer to be worth
 /// the copies, and the usual sizing, which keeps whole layers of experts on
 /// the GPU, applies instead.
-const MOE_CACHE_MIN_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MOE_CACHE_MIN_BYTES: u64 = 512 * 1024 * 1024;
 
 /// The step a cache is sized in, so that a few megabytes more or less of free
 /// VRAM between two loads do not change the size the log reports.
@@ -2263,6 +2796,7 @@ pub fn run_fit(
     kv_bytes_per_elem_v: f64,
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -2273,6 +2807,7 @@ pub fn run_fit(
         kv_bytes_per_elem_v,
         reserve_bytes,
         vram_reserve,
+        kv,
         /* allow_prompt */ true,
         /* announce */ true,
     )
@@ -2294,6 +2829,7 @@ pub fn run_fit_headless(
     kv_bytes_per_elem_v: f64,
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -2304,6 +2840,7 @@ pub fn run_fit_headless(
         kv_bytes_per_elem_v,
         reserve_bytes,
         vram_reserve,
+        kv,
         /* allow_prompt */ false,
         /* announce */ false,
     )
@@ -2331,12 +2868,13 @@ fn run_fit_impl(
     // `EmbeddingSlot::is_reserved_companion`).
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
     allow_prompt: bool,
     announce: bool,
 ) -> FitOutcome {
     let vram = vram_bytes().map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
     let free_vram = vram.map(|(free, _)| free);
-    let info = read_gguf_info(model_path);
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
 
     let decision = compute_fit(
@@ -2473,6 +3011,7 @@ fn run_fit_impl(
 /// `reserve_bytes`: see the identical parameter on `run_fit_impl` — same
 /// purpose (protect a launch-time embedding companion's footprint), applied
 /// here before the MoE decision instead of the dense one.
+#[allow(clippy::too_many_arguments)]
 pub fn run_moe_fit_plan(
     model_path: &Path,
     ctx_size: u32,
@@ -2481,8 +3020,9 @@ pub fn run_moe_fit_plan(
     reserve_bytes: u64,
     vram_reserve: u64,
     auto_n_ubatch: bool,
+    kv: KvLayout,
 ) -> MoeFitPlan {
-    let info = read_gguf_info(model_path);
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
     let layout = match (&info, file_size) {
         (Some(i), size) if size > 0 => read_model_moe_layout(model_path, i.n_layers),
@@ -2517,8 +3057,9 @@ pub fn run_moe_cache(
     n_cpu_moe: u32,
     auto_n_ubatch: bool,
     prefetch: MoePrefetch,
+    kv: KvLayout,
 ) -> Option<MoeCachePlan> {
-    let info = read_gguf_info(model_path);
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
     let layout = match (&info, file_size) {
         (Some(i), size) if size > 0 => read_model_moe_layout(model_path, i.n_layers),
@@ -3206,6 +3747,7 @@ mod tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -3489,6 +4031,7 @@ mod tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
         let file = 18_500_000_000;
@@ -3633,6 +4176,7 @@ mod plan_offload_tests {
             architecture: Some("qwen3".into()),
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -3789,6 +4333,7 @@ mod plan_offload_tests {
             non_expert_bytes: 2 * GIB,
             expert_bytes_per_layer: vec![400 * MIB; 48],
             largest_expert_tensor_bytes: 150 * MIB,
+            ..Default::default()
         };
         (attention(48, 4), layout, 2 * GIB + 48 * 400 * MIB)
     }
@@ -5286,6 +5831,7 @@ mod key_length_tests {
             architecture: Some("qwen35".to_string()),
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         // The reported case: 14.38 GiB free on a 15.92 GiB card, 15.66 GiB
         // of weights, 4096 context, F16 cache.
@@ -5377,6 +5923,7 @@ mod key_length_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         let hybrid = GgufInfo {
             full_attention_interval: Some(4),
@@ -5415,6 +5962,7 @@ mod key_length_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         };
         let assumed = GgufInfo {
             key_length: None,
@@ -5617,6 +6165,8 @@ mod moe_layout_tests {
         let layout = parse_gguf_moe_layout(&data, file_size, 2).expect("parses");
         assert!(layout.is_moe());
         assert_eq!(layout.non_expert_bytes, 1000 + 100 + 100 + 50);
+        // Each block's own, the embeddings and the output norm outside them.
+        assert_eq!(layout.non_expert_bytes_per_layer, vec![100, 100]);
         assert_eq!(layout.expert_bytes_per_layer, vec![9000, 12000]);
         assert_eq!(
             layout.expert_bytes_per_layer.iter().sum::<u64>(),
@@ -5750,6 +6300,7 @@ mod moe_fit_tests {
             architecture: None,
             nextn_layers: None,
             context_length: None,
+            window: None,
         }
     }
 
@@ -6085,5 +6636,334 @@ mod download_verdict_tests {
             classify_download(tiny, Some((600 * 1024 * 1024, 700 * 1024 * 1024)), None, DEFAULT_VRAM_RESERVE_BYTES),
             RunVerdict::Fits
         );
+    }
+}
+
+#[cfg(test)]
+mod balanced_split_tests {
+    use super::*;
+
+    const GB: u64 = 1_000_000_000;
+
+    fn info(n_layers: u32) -> GgufInfo {
+        GgufInfo {
+            n_layers,
+            n_embd: None,
+            n_head: None,
+            n_head_kv: None,
+            key_length: None,
+            value_length: None,
+            full_attention_interval: None,
+            architecture: None,
+            nextn_layers: None,
+            context_length: None,
+            window: None,
+        }
+    }
+
+    /// 40 blocks of 0.5 GB of attention and 3 GB of experts, 1 GB outside
+    /// them: a MoE model of 141 GB, for two 64 GB GPUs.
+    fn layout() -> MoeLayout {
+        MoeLayout {
+            non_expert_bytes: 21 * GB,
+            non_expert_bytes_per_layer: vec![GB / 2; 40],
+            expert_bytes_per_layer: vec![3 * GB; 40],
+            largest_expert_tensor_bytes: GB,
+        }
+    }
+
+    /// The GPU llama.cpp gives each block, and the output layer last, for a
+    /// `tensor_split`, as `llama_model::load_tensors` computes it in f32.
+    fn llama_devices(split: &[f32], n_layers: usize) -> Vec<usize> {
+        let mut cum = Vec::with_capacity(split.len());
+        let mut sum = 0.0f32;
+        for &s in split {
+            sum += s;
+            cum.push(sum);
+        }
+        for c in &mut cum {
+            *c /= sum;
+        }
+        (0..=n_layers)
+            .map(|il| {
+                let x = il as f32 / (n_layers + 1) as f32;
+                cum.iter().position(|&c| c > x).unwrap_or(split.len())
+            })
+            .collect()
+    }
+
+    /// Blocks a GPU gets: the count of each device in `llama_devices`, the
+    /// output layer left out.
+    fn counts(devices: &[usize], n_gpus: usize) -> Vec<u32> {
+        let mut c = vec![0u32; n_gpus];
+        for &d in &devices[..devices.len() - 1] {
+            c[d] += 1;
+        }
+        c
+    }
+
+    /// GLM-5.3-Flash on two GCDs (11-11-2026), in small: the experts of the
+    /// first layers in RAM, counted against both GPUs together, and llama.cpp
+    /// giving each GPU half the blocks overflowed the second. The balanced
+    /// split gives the first GPU more blocks, and each holds its share.
+    #[test]
+    fn the_gpus_holding_light_blocks_take_more_of_them() {
+        let (layout, info) = (layout(), info(40));
+        // 67 GB free each, 2 GB kept: 65 GB a GPU. On the sum, 35 blocks of
+        // experts stay: those of the first 5 in RAM.
+        let free = [67 * GB, 67 * GB];
+        let reserve = 2 * GB;
+        // llama.cpp by count: blocks 0-20 to the first, 21-39 and the output
+        // to the second, 19 * 3.5 + 1 = 67.5 GB for 65.
+        let by_count = llama_devices(&[1.0, 1.0], 40);
+        let second: f64 = (0..40)
+            .filter(|&l| by_count[l] == 1)
+            .map(|l| if l < 5 { 0.5 } else { 3.5 })
+            .sum::<f64>()
+            + 1.0;
+        assert!(second > 65.0, "{second}");
+
+        let split = balance_moe_split(&layout, &info, 4096, 2.0, 2.0, 5, &free, reserve).unwrap();
+        assert_eq!(split.n_cpu_moe, 5);
+        assert_eq!(split.layers, vec![22, 18]);
+        // llama.cpp sends exactly those blocks, and the output layer to the last.
+        let devices = llama_devices(&split.tensor_split, 40);
+        assert_eq!(counts(&devices, 2), split.layers);
+        assert_eq!(devices[40], 1);
+        let line = describe_balanced_split(&split, 5);
+        assert!(
+            line.contains("layers 22/18") && !line.contains("instead of"),
+            "{line}"
+        );
+    }
+
+    /// Each GPU keeps its own compute buffer and reserve, which the sum did
+    /// not count: where no cut holds, the experts of one more layer go to RAM.
+    #[test]
+    fn where_no_cut_holds_one_more_layer_of_experts_goes_to_ram() {
+        let (layout, info) = (layout(), info(40));
+        let split = balance_moe_split(
+            &layout,
+            &info,
+            4096,
+            2.0,
+            2.0,
+            6,
+            &[64 * GB, 64 * GB],
+            2 * GB,
+        )
+        .unwrap();
+        assert_eq!(split.n_cpu_moe, 7);
+        assert_eq!(split.layers, vec![23, 17]);
+        assert_eq!(
+            counts(&llama_devices(&split.tensor_split, 40), 2),
+            split.layers
+        );
+        assert!(describe_balanced_split(&split, 6).contains("7 layers in RAM instead of 6"));
+    }
+
+    /// Each GPU of a split keeps its reserve, the flat compute buffer and
+    /// twice the growth of a large micro-batch: GLM-5.3-Flash asked
+    /// 2,795.76 MiB at 2,048 tokens, which once the growth did not hold.
+    #[test]
+    fn a_split_gpu_keeps_room_for_a_wide_models_compute_buffer() {
+        const MIB: u64 = 1024 * 1024;
+        let reserve = per_device_reserve(1024 * MIB, 2048);
+        assert_eq!(reserve, 1024 * MIB + 320 * MIB + 2 * 1152 * MIB);
+        // GLM's 2,795.76 MiB, with half a GiB to spare.
+        assert!(reserve > 2796 * MIB + 512 * MIB);
+        // At the default micro-batch, the flat buffer alone.
+        assert_eq!(per_device_reserve(1024 * MIB, 512), 1344 * MIB);
+    }
+
+    /// The proportions land each block where meant for any counts, also on
+    /// eight GPUs, with no cut on a block for f32 to round across.
+    #[test]
+    fn the_proportions_give_llama_cpp_exactly_the_counts() {
+        for layers in [
+            vec![1u32, 1],
+            vec![30, 49],
+            vec![60, 18],
+            vec![10, 10, 10, 10, 10, 10, 10, 11],
+            vec![20, 9, 9, 9, 9, 9, 9, 4],
+        ] {
+            let n: u32 = layers.iter().sum();
+            let devices = llama_devices(&tensor_split_for(&layers), n as usize);
+            assert_eq!(counts(&devices, layers.len()), layers);
+            assert_eq!(
+                devices[n as usize],
+                layers.len() - 1,
+                "the output layer to the last"
+            );
+        }
+    }
+
+    /// Nothing to balance: one GPU, a dense model, or a model the GPUs cannot
+    /// hold however many experts go to RAM.
+    #[test]
+    fn one_gpu_a_dense_model_or_too_little_vram_split_nothing() {
+        let (layout, info) = (layout(), info(40));
+        assert_eq!(
+            balance_moe_split(&layout, &info, 4096, 2.0, 2.0, 5, &[66 * GB], GB),
+            None
+        );
+        let dense = MoeLayout {
+            non_expert_bytes: 100 * GB,
+            expert_bytes_per_layer: vec![0; 40],
+            ..Default::default()
+        };
+        assert_eq!(
+            balance_moe_split(&dense, &info, 4096, 2.0, 2.0, 0, &[66 * GB, 66 * GB], GB),
+            None
+        );
+        // 21 GB of attention and the rest for 2 * 8 GB.
+        assert_eq!(
+            balance_moe_split(
+                &layout,
+                &info,
+                4096,
+                2.0,
+                2.0,
+                5,
+                &[10 * GB, 10 * GB],
+                2 * GB
+            ),
+            None
+        );
+    }
+
+    /// A layout read before blocks were weighed spreads the tensors outside
+    /// the experts evenly, and still balances.
+    #[test]
+    fn without_per_block_weights_the_rest_is_spread_evenly() {
+        let mut layout = layout();
+        layout.non_expert_bytes_per_layer.clear();
+        let split = balance_moe_split(
+            &layout,
+            &info(40),
+            4096,
+            2.0,
+            2.0,
+            5,
+            &[66 * GB, 66 * GB],
+            2 * GB,
+        )
+        .unwrap();
+        assert!(split.layers[0] > split.layers[1], "{:?}", split.layers);
+    }
+}
+
+#[cfg(test)]
+mod sliding_window_tests {
+    use super::*;
+
+    const MIB: u64 = 1024 * 1024;
+
+    fn key(k: &[u8], tag: u32, b: &mut Vec<u8>) {
+        b.extend_from_slice(&(k.len() as u64).to_le_bytes());
+        b.extend_from_slice(k);
+        b.extend_from_slice(&tag.to_le_bytes());
+    }
+    fn put_u32(k: &[u8], v: u32, b: &mut Vec<u8>) {
+        key(k, GGUF_TYPE_UINT32, b);
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    fn put_u32s(k: &[u8], vs: &[u32], b: &mut Vec<u8>) {
+        key(k, GGUF_TYPE_ARRAY, b);
+        b.extend_from_slice(&GGUF_TYPE_UINT32.to_le_bytes());
+        b.extend_from_slice(&(vs.len() as u64).to_le_bytes());
+        for v in vs {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    fn put_bools(k: &[u8], vs: &[bool], b: &mut Vec<u8>) {
+        key(k, GGUF_TYPE_ARRAY, b);
+        b.extend_from_slice(&GGUF_TYPE_BOOL.to_le_bytes());
+        b.extend_from_slice(&(vs.len() as u64).to_le_bytes());
+        b.extend(vs.iter().map(|&v| u8::from(v)));
+    }
+
+    /// The header of ggml-org's gemma-4-31B-it Q8_0, as far as KV sizing
+    /// reads it: 60 layers, every sixth global with 4 KV heads of 512, the
+    /// rest a window of 1024 with 16 KV heads of 256.
+    fn gemma_4_31b() -> GgufInfo {
+        let global = |il: u32| il % 6 == 5;
+        let mut b = Vec::new();
+        b.extend_from_slice(&GGUF_MAGIC.to_le_bytes());
+        b.extend_from_slice(&3u32.to_le_bytes());
+        b.extend_from_slice(&0u64.to_le_bytes());
+        b.extend_from_slice(&11u64.to_le_bytes());
+        key(b"general.architecture", GGUF_TYPE_STRING, &mut b);
+        b.extend_from_slice(&6u64.to_le_bytes());
+        b.extend_from_slice(b"gemma4");
+        put_u32(b"gemma4.block_count", 60, &mut b);
+        put_u32(b"gemma4.embedding_length", 5376, &mut b);
+        put_u32(b"gemma4.attention.head_count", 32, &mut b);
+        let heads: Vec<u32> = (0..60).map(|il| if global(il) { 4 } else { 16 }).collect();
+        put_u32s(b"gemma4.attention.head_count_kv", &heads, &mut b);
+        put_u32(b"gemma4.attention.key_length", 512, &mut b);
+        put_u32(b"gemma4.attention.value_length", 512, &mut b);
+        put_u32(b"gemma4.attention.sliding_window", 1024, &mut b);
+        let pattern: Vec<bool> = (0..60).map(|il| !global(il)).collect();
+        put_bools(b"gemma4.attention.sliding_window_pattern", &pattern, &mut b);
+        put_u32(b"gemma4.attention.key_length_swa", 256, &mut b);
+        put_u32(b"gemma4.attention.value_length_swa", 256, &mut b);
+        parse_gguf_header(&b).expect("parsed")
+    }
+
+    #[test]
+    fn gemma_4s_per_layer_heads_and_window_are_read() {
+        let info = gemma_4_31b();
+        assert_eq!(info.n_layers, 60);
+        assert_eq!(info.n_head_kv, Some(16), "the most any layer has");
+        let w = info.window.as_ref().expect("a window");
+        assert_eq!(w.n_swa, 1024);
+        assert_eq!(w.layers.iter().filter(|&&s| s).count(), 50);
+        assert_eq!(w.head_count_kv.len(), 60);
+        assert_eq!((w.key_length, w.value_length), (Some(256), Some(256)));
+    }
+
+    /// Leonardo's load (19-11-2026): `-c 49152`, 8 slots, F16. llama.cpp
+    /// allocates 8 streams of 1536 cells in each window layer (9,600 MiB)
+    /// and the whole context in each global one (3,840 MiB). Sizing charged
+    /// about 360 MiB before, and said "fits fully".
+    #[test]
+    fn gemma_4s_kv_is_what_llama_cpp_allocates() {
+        let info = gemma_4_31b().with_kv_layout(KvLayout::new(8, 512, false));
+        assert_eq!(kv_cache_bytes(Some(&info), 49152, 2.0, 2.0), (9600 + 3840) * MIB);
+        // Not knowing the slots, every window layer is charged the whole
+        // context: what llama.cpp's own default (`swa_full`) allocates.
+        let unknown = gemma_4_31b();
+        assert_eq!(kv_cache_bytes(Some(&unknown), 49152, 2.0, 2.0), (38400 + 3840) * MIB);
+        // One slot: 1536 cells of window; the whole --kv-unified stream for 8.
+        let one = gemma_4_31b().with_kv_layout(KvLayout::new(1, 512, false));
+        assert_eq!(kv_cache_bytes(Some(&one), 49152, 2.0, 2.0), (1200 + 3840) * MIB);
+        let unified = gemma_4_31b().with_kv_layout(KvLayout::new(8, 512, true));
+        let cells = (1024 * 8 + 512) as u64; // 8704, a multiple of 256
+        assert_eq!(
+            kv_cache_bytes(Some(&unified), 49152, 2.0, 2.0),
+            50 * cells * 16 * 1024 + 3840 * MIB
+        );
+    }
+
+    /// A context shorter than the window: every layer holds it all.
+    #[test]
+    fn a_short_context_is_held_whole_by_the_window_layers_too() {
+        let info = gemma_4_31b().with_kv_layout(KvLayout::new(1, 512, false));
+        let all_full = 50 * 1024 * 16 * 1024 + 10 * 1024 * 4 * 2048;
+        assert_eq!(kv_cache_bytes(Some(&info), 1024, 2.0, 2.0), all_full);
+    }
+
+    /// Gemma 3 gives no pattern in its header: llama.cpp's period of 6 for
+    /// the architecture stands in for it.
+    #[test]
+    fn gemma_3s_pattern_is_the_architectures_period() {
+        assert_eq!(
+            swa_pattern(12, 6, false),
+            [true, true, true, true, true, false, true, true, true, true, true, false]
+        );
+        assert_eq!(swa_period_of("gemma3"), Some((6, false)));
+        assert_eq!(swa_period_of("llama"), None);
+        assert_eq!(swa_pattern(4, 2, true), [false, true, false, true]);
     }
 }

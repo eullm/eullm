@@ -258,6 +258,37 @@ jobs:
       - name: cargo deny
         run: cargo-deny --log-level warn --manifest-path ./Cargo.toml --all-features check advisories bans licenses sources
 
+  # Text read or written by Python names its encoding. Without it `open()`,
+  # `Path.read_text` and `subprocess` with `text=True` take the host's locale,
+  # and a job name, a path or a model's text in UTF-8 is garbled or fails to
+  # decode wherever the locale is not UTF-8. Gabriele (Gabriele06-local)
+  # found the bug and fixed it script by script; on 2026-11-15 the 125 places
+  # left were fixed at once and this job started refusing new ones. Ruff's
+  # PLW1514 (a preview rule: without --preview it checks nothing
+  # and passes) covers open() in .py files; tools/check_utf8.py covers
+  # subprocess, read_text/write_text on any object, the Python inside shell
+  # scripts and Slurm jobs however they name the interpreter ("$PY" too), and
+  # PowerShell's Get-Content and kin. Its first version saw only python3 by
+  # name and missed 485 places, found on 2026-11-18. Every Python folder, not
+  # only the four the lint jobs see.
+  utf8:
+    name: Text read and written as UTF-8
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        # No submodules: the vendored llama.cpp is not ours to check.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: pip install ruff==0.17.5 pytest==9.2.0
+      - name: open() and read_text/write_text in .py files (ruff PLW1514)
+        run: ruff check --isolated --preview --select PLW1514 --exclude engine/vendor .
+      - name: subprocess with text=True, and the Python of shell scripts
+        run: python3 tools/check_utf8.py
+      - name: The check's own tests
+        run: pytest -q tools/test_check_utf8.py
+
   # ── Engine ───────────────────────────────────────────────────────────
   engine:
     name: Engine (build + test)
@@ -532,13 +563,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install
-        run: pip install ruff==0.16.9 pytest==9.1.1
+        run: pip install ruff==0.16.9 pytest==9.1.1 aiohttp==3.14.5
       - name: Lint
         run: ruff check bench/reflexbench bench/campaign
       - name: Test
         run: pytest -q bench/reflexbench
       - name: Test (LUMI campaign runner)
         run: pytest -q bench/campaign
+      - name: Test (bench scripts)
+        run: pytest -q bench/test_turboquant_math_accuracy.py bench/test_turboquant_quality.py
 
   # ── Reflex MCP adapter ───────────────────────────────────────────────
   # adapters/reflex-mcp, a Python package of its own on the MCP SDK. Its
@@ -618,12 +651,15 @@ jobs:
         run: |
           pip install --upgrade pip setuptools
           pip install -r examples/decision-langgraph/requirements.txt
+          pip install pytest==9.1.1
       - name: Test the LangGraph graphs
         run: python -m unittest discover -s examples/decision-langgraph -v
       - name: Test the n8n workflow
         run: python -m unittest discover -s examples/decision-n8n -v
       - name: Test the Decision Desk
         run: python -m unittest discover -s examples/decision-desk -v
+      - name: Test the Decision Triage example
+        run: pytest -q examples/decision-triage
       - name: Audit dependencies
         # Blocking, as in the forge and reflex_mcp jobs: the requirements are
         # what a reader installs to run the example.

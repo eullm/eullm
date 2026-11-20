@@ -39,12 +39,18 @@ const CHUNK_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 /// A single TCP stream cannot saturate a high-latency link (the
 /// bandwidth-delay product is large on e.g. Starlink), so we fan out. Default
 /// 8 — the same ballpark `hf_transfer`/`aria2` use, and well within what the
-/// HuggingFace CDN tolerates. Override with `EULLM_DOWNLOAD_CONNECTIONS`
-/// (clamped to 1..=16; 1 forces the legacy single-stream path).
+/// HuggingFace CDN tolerates. Override with `EULLM_DOWNLOAD_CONNECTIONS`, in
+/// the environment or `.env` (clamped to 1..=16; 1 forces the legacy
+/// single-stream path).
 pub fn default_connections() -> usize {
-    std::env::var("EULLM_DOWNLOAD_CONNECTIONS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
+    connections_from(crate::settings::var("EULLM_DOWNLOAD_CONNECTIONS").as_deref())
+}
+
+/// [`default_connections`] from the setting's value: 8 when unset or not a
+/// number.
+fn connections_from(setting: Option<&str>) -> usize {
+    setting
+        .and_then(|s| s.trim().parse::<usize>().ok())
         .unwrap_or(8)
         .clamp(1, 16)
 }
@@ -875,6 +881,16 @@ fn format_size(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_connections_default_to_8_within_1_to_16() {
+        assert_eq!(connections_from(None), 8);
+        assert_eq!(connections_from(Some("4")), 4);
+        assert_eq!(connections_from(Some(" 12 ")), 12);
+        assert_eq!(connections_from(Some("0")), 1);
+        assert_eq!(connections_from(Some("64")), 16);
+        assert_eq!(connections_from(Some("many")), 8);
+    }
 
     fn write_temp_file(contents: &[u8]) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!("eullm-sha256-test-{}", uuid::Uuid::new_v4()));

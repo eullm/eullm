@@ -21,6 +21,8 @@
 # chain n waits for the n-th of them to end (afterany). To change the length
 # of a round's jobs, cancel the ones still waiting and submit again with the
 # running ones in AFTER, so that no chain stops when its running job ends.
+# One entry may name several jobs, `A:B`: a chain that starts when both end.
+# The last line printed names the last job of each chain, for that.
 #
 # TOP_UP=1 makes N the number of chains to have, not to add: the chains
 # already in the queue (a campaign job running, or waiting for anything but
@@ -99,6 +101,7 @@ if [ "${TOP_UP:-0}" = 1 ]; then
     [ "$NODES" -eq 0 ] && { echo "nothing to add"; exit 0; }
 fi
 
+LASTS=()
 for n in $(seq 1 "$NODES"); do
     prev="${AFTER_IDS[$((n - 1))]:-}"
     for i in $(seq 1 "$LINKS"); do
@@ -111,5 +114,8 @@ for n in $(seq 1 "$NODES"); do
         echo "chain $n, job $i/$LINKS: $jid${prev:+ (after $prev)}"
         prev="$jid"
     done
+    LASTS+=("$prev")
 done
+# For a chain that is to start when these end: AFTER="$(...last... | tr ' ' ':')".
+echo "last of each chain: ${LASTS[*]}"
 echo "watch: bash $EULLM_REPO/tools/lumi/status.sh"

@@ -101,7 +101,7 @@ def softmax(values):
 def probabilities(item, method, temperature=1.0):
     lp = item["logprobs"]
     if method in ("content_free", "cf+temperature"):
-        lp = [a - b for a, b in zip(lp, item["prior_logprobs"])]
+        lp = [a - b for a, b in zip(lp, item["prior_logprobs"], strict=True)]
     t = temperature if method in ("temperature", "cf+temperature") else 1.0
     return softmax([v / t for v in lp])
 
@@ -159,7 +159,7 @@ def metrics(items, probs):
     bins = [
         [0, 0.0, 0.0] for _ in range(ECE_BINS)
     ]  # count, sum confidence, sum correct
-    for item, p in zip(items, probs):
+    for item, p in zip(items, probs, strict=True):
         y = item["label"]
         top = max(range(len(p)), key=p.__getitem__)
         hit = 1.0 if top == y else 0.0
@@ -204,7 +204,11 @@ def selective(items, probs):
     """Share of items answered and accuracy on them, per confidence threshold."""
     rows = []
     for threshold in THRESHOLDS:
-        answered = [(item, p) for item, p in zip(items, probs) if max(p) >= threshold]
+        answered = [
+            (item, p)
+            for item, p in zip(items, probs, strict=True)
+            if max(p) >= threshold
+        ]
         if answered:
             hits = sum(
                 1
@@ -243,7 +247,7 @@ def main():
     args = parser.parse_args()
 
     url = args.url.rstrip("/") + "/v1/systemone"
-    with open(args.dataset) as f:
+    with open(args.dataset, encoding="utf-8") as f:
         rows = [json.loads(line) for line in f if line.strip()]
     if len(rows) < FOLDS * 2:
         print(
@@ -313,7 +317,7 @@ def main():
         print(f"{method:<15} {cells}")
 
     if args.json:
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump(
                 {
                     "url": args.url,

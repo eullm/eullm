@@ -164,12 +164,21 @@ else
     echo "[qstats] no priority_snapshot.py at $PRIO — skipping (update the checkout)" >&2
 fi
 
+# The queue as it is now, raw: node states and our own jobs with their
+# reasons and planned starts. The "nothing starts" days are told by these.
+{ date -Is; sinfo -p boost_usr_prod -h -o "%T %D"; echo "--";
+  squeue --me -h -o "%i|%j|%T|%b|%l|%V|%S|%r" ; } > "$OUT/queue_$STAMP.txt" 2>&1 || true
+
 # Re-arm, unless the allocation is over. Without this guard the chain would
 # keep trying past the end date and fill the directory with failures.
 if [ "$(date +%Y%m%d)" -lt "$ALLOC_END" ]; then
     cd "$OUT" || exit 1
-    if sbatch --begin=now+1day "$SELF"; then
-        echo "[qstats] re-armed for tomorrow"
+    # QSTATS_EVERY: how often (sbatch --begin syntax, e.g. 3hours). Daily by
+    # default; sprio and sinfo keep no history, so on days the queue misbehaves
+    # (the Fast Lane's 4-11-2026) a snapshot every few hours is the evidence.
+    EVERY="${QSTATS_EVERY:-1day}"
+    if sbatch --begin="now+$EVERY" "$SELF"; then
+        echo "[qstats] re-armed: next run in $EVERY"
     else
         # Exit non-zero so the break shows as FAILED in sacct. Silence is what
         # made the first failure cost a day.

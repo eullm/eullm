@@ -82,13 +82,13 @@ def test_the_script_copies_every_row_and_prints_counts_only(tmp_path, capsys):
     src = tmp_path / "v04.jsonl"
     rows = [_pair(ANSWER), {"instruction": "x", "output": "y", "task": "openbook_missing",
                             "key": "ob-m-codice_civile-9999-0"}]
-    src.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    src.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     out = tmp_path / "v05.jsonl"
     spec = importlib.util.spec_from_file_location("cite_openbook_pairs", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert mod.main([str(src), "--out", str(out)]) == 0
-    got = [json.loads(ln) for ln in out.read_text().splitlines()]
+    got = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert len(got) == 2 and "[2]" in got[0]["output"] and got[1] == rows[1]
     printed = capsys.readouterr().out
     assert "grounded:cited 1" in printed and "nullità" not in printed

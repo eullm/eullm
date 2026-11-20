@@ -30,7 +30,12 @@ import random
 import re
 from collections import defaultdict
 
-from ..datasets.premise_gen import _repealed_sentence, penalty_of, procedibility_of
+from ..datasets.premise_gen import (
+    _repealed_sentence,
+    defines_offence,
+    penalty_of,
+    procedibility_of,
+)
 from ..rl.rewards import abstains, denies_existence, mentioned_deadlines, score_answer
 from .dataset import EvalItem
 from .norm_exam import (
@@ -160,11 +165,12 @@ def build_suite(records: list[dict], per_kind: int = 15, n_rulings: int = 40,
         for a, (n, unit) in draw(timed):
             add("termine", code, a.number, Q_TERMINE.format(n=a.number, of=of),
                 _flat(a.text), [_deadline_keyword(n, unit)])
-        punished = [(a, p) for a in live if (p := penalty_of(a.text))]
-        for a, (kind_, lo, lo_unit, hi, unit, sentence, comma) in draw(punished):
+        punished = [(a, p) for a in live if defines_offence(a.text) and (p := penalty_of(a.text))]
+        for a, (_, lo, lo_unit, hi, unit, sentence, comma) in draw(punished):
             add("pena", code, a.number, Q_PENA.format(n=a.number, of=of, comma=comma),
                 sentence, [f"{hi} {unit}"], high=[hi, unit], low=[lo, lo_unit])
-        regimes = [(a, r) for a in live if (r := procedibility_of(a.text))]
+        regimes = [(a, r) for a in live
+                   if defines_offence(a.text) and (r := procedibility_of(a.text))]
         for a, (regime, sentence) in draw(regimes):
             add("procedibilita", code, a.number, Q_PROC.format(n=a.number, of=of),
                 sentence, [regime])

@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import shlex
 import sys
 import threading
 import time
@@ -48,6 +49,7 @@ from eullm_forge.datasets.law_corpus import (  # noqa: E402
     by_code,
     check_rewrite,
     clean_reply,
+    commi,
     excluded,
     rewritable,
     rewrite_messages,
@@ -65,8 +67,14 @@ def load_articles(paths: list[Path]):
 
 def ask(url: str, msgs: list[dict], max_tokens: int, temperature: float, seed: int,
         timeout: float = 600.0) -> dict:
+    # repeat_penalty 1.0 is llama-server's default and not EULLM's (1.1, as
+    # Ollama): said here, the two servers answer the same request
+    # thinking off said both ways: llama-server reads chat_template_kwargs,
+    # EULLM only Ollama's "think" (2026-11-19: Gemma 4 wrote its reasoning
+    # into every answer through the engine without it)
     body = {"messages": msgs, "temperature": temperature, "max_tokens": max_tokens,
-            "seed": seed, "chat_template_kwargs": {"enable_thinking": False}}
+            "seed": seed, "repeat_penalty": 1.0, "think": False,
+            "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(url.rstrip("/") + "/v1/chat/completions",
                                  data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
@@ -108,6 +116,8 @@ def work_list(articles, styles, samples: int, asked: set[tuple[str, str]]):
             for a in arts:
                 if style == "domande" and (a.code, a.number.lower()) in asked:
                     continue
+                if style == "struttura" and len(commi(a)) < 2:
+                    continue
                 todo.append((f"{a.code}|{a.number}|{style}|{k}", a, style, k))
     return todo
 
@@ -127,8 +137,23 @@ def main(argv: list[str] | None = None) -> int:
                     help="begin this far into the list (0-1), so more chains share it")
     ap.add_argument("--url", action="append", default=[])
     ap.add_argument("--serve", help="teacher GGUF: start one llama-server per --gpus entry")
-    ap.add_argument("--gpus", default="0")
+    ap.add_argument("--gpus", default="0",
+                    help="one server per comma-separated entry; '0+1+2' is one server over "
+                         "three GPUs, for a teacher no single GPU holds (Flash-Next)")
     ap.add_argument("--llama-server")
+    ap.add_argument("--server-args", default="",
+                    help="more llama-server options, commas between them, written with = so "
+                         "they reach it whole through LR_ARGS: "
+                         "--server-args=--kv-unified,--kv-unified-per-slot,3072 (the "
+                         "engine's own layout: one KV pool, each request capped at --ctx)")
+    ap.add_argument("--engine", metavar="EULLM_BIN",
+                    help="serve --serve with this EULLM Engine binary (`eullm serve`) instead "
+                         "of llama-server: the same llama.cpp underneath, through the runtime "
+                         "that ships, to compare the two on the same requests")
+    ap.add_argument("--engine-mmproj", action="store_true",
+                    help="with --engine, load the projector beside the weights too (by default "
+                         "the engine is started with --no-mmproj where it has it: the work is "
+                         "text); to measure the engine as a multimodal model is served")
     ap.add_argument("--parallel", type=int, default=16, help="requests in flight per server")
     ap.add_argument("--ctx", type=int, default=6144, help="context per request (tokens)")
     ap.add_argument("--max-tokens", type=int, default=1200)
@@ -173,11 +198,18 @@ def main(argv: list[str] | None = None) -> int:
     with contextlib.ExitStack() as stack:
         urls = list(args.url)
         if args.serve:
-            from eullm_forge.eval.gguf import LlamaServer
+            from eullm_forge.eval.gguf import EullmServer, LlamaServer
             for gpu in args.gpus.split(","):
-                srv = LlamaServer(args.serve, binary=args.llama_server, parallel=args.parallel,
-                                  ctx_per_slot=args.ctx, devices=gpu,
-                                  log_path=args.out.with_name(f"server-gpu{gpu}.log"))
+                log = args.out.with_name(f"server-gpu{gpu}.log")
+                if args.engine:
+                    srv = EullmServer(args.serve, binary=args.engine, parallel=args.parallel,
+                                      ctx_per_slot=args.ctx, devices=gpu.replace("+", ","),
+                                      log_path=log, mmproj=args.engine_mmproj)
+                else:
+                    srv = LlamaServer(args.serve, binary=args.llama_server,
+                                      parallel=args.parallel, ctx_per_slot=args.ctx,
+                                      devices=gpu.replace("+", ","), log_path=log,
+                                      extra_args=shlex.split(args.server_args.replace(",", " ")))
                 urls.append(stack.enter_context(srv).url)
             print(f"[rewrites] {len(urls)} teacher server(s) up after "
                   f"{time.monotonic() - t0:.0f} s", flush=True)

@@ -186,6 +186,14 @@ pub fn api_routes() -> Router<S> {
         .route("/tags", get(list_models))
         .route("/ps", get(list_running))
         .route("/monitor", get(monitor))
+        .route(
+            "/monitor/history",
+            get(monitor_history).delete(monitor_delete_history),
+        )
+        .route(
+            "/monitor/storage",
+            get(monitor_storage).put(monitor_set_storage),
+        )
         .route("/about", get(about))
         .route("/generate", post(generate))
         .route("/chat", post(chat))
@@ -732,14 +740,20 @@ fn parse_sampling_params(body: &Value, with_max_completion_tokens: bool) -> Samp
     let max_tokens = limit
         .and_then(|v| v.as_u64())
         .unwrap_or(u32::MAX as u64) as u32;
-    // Defaults match Ollama: temperature=0.8, top_k=40, top_p=0.9, repeat_penalty=1.1
+    // Defaults match Ollama: temperature=0.8, top_k=40, top_p=0.9, and
+    // repeat_penalty=1.1 on Ollama's endpoints (1.0 on /v1, below)
     let temperature = get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.8) as f32;
     let top_k = get("top_k").and_then(|v| v.as_i64()).unwrap_or(40) as i32;
     let top_p = get("top_p").and_then(|v| v.as_f64()).unwrap_or(0.9) as f32;
     let min_p = get("min_p").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+    // Off on /v1/chat/completions, as llama-server has it; Ollama's 1.1 on
+    // Ollama's endpoints, whose clients expect it. Over the last 64 tokens it
+    // counts the newlines, `###` and `**` a Markdown answer repeats all the
+    // time, and pushed Gemma 4 into joins like "anal### Il problema"
+    // (20-11-2026).
     let repeat_penalty = get("repeat_penalty")
         .and_then(|v| v.as_f64())
-        .unwrap_or(1.1) as f32;
+        .unwrap_or(if with_max_completion_tokens { 1.0 } else { 1.1 }) as f32;
     let repeat_last_n = get("repeat_last_n").and_then(|v| v.as_i64()).unwrap_or(64) as i32;
     let seed = get("seed").and_then(|v| v.as_u64()).map(|v| v as u32);
     let num_ctx = get("num_ctx").and_then(|v| v.as_u64()).map(|v| v as u32);
@@ -893,8 +907,21 @@ fn media_as_notes(mut messages: Vec<Value>, media: &ChatMedia) -> Vec<Value> {
 }
 
 /// The error for a turn whose own attachments the loaded model cannot read.
-fn cannot_read_media(model_name: &str) -> (StatusCode, Json<Value>) {
-    if cfg!(feature = "multimodal") {
+/// `no_mmproj`: the server was started with `--no-mmproj`, so the model may
+/// well have a projector, left on disk on purpose.
+fn cannot_read_media(model_name: &str, no_mmproj: bool) -> (StatusCode, Json<Value>) {
+    if cfg!(feature = "multimodal") && no_mmproj {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": format!(
+                    "`{model_name}` was loaded without its projector: this server was started \
+                     with --no-mmproj, which serves text only, in batches. Images and audio \
+                     need a server started without it."
+                )
+            })),
+        )
+    } else if cfg!(feature = "multimodal") {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -989,11 +1016,11 @@ fn with_media_markers(
 /// the picture and without anything said before it.
 #[cfg(feature = "multimodal")]
 fn multimodal_chat_prompt(
-    engine: &InferenceEngine,
+    rendered: Option<crate::inference::DynamicChatTemplate>,
     messages: &[(&str, &str)],
     think: bool,
 ) -> (String, Vec<String>, String) {
-    if let Some(dynamic) = engine.apply_jinja_chat_template(messages, think) {
+    if let Some(dynamic) = rendered {
         return (dynamic.prompt, Vec::new(), dynamic.preopened);
     }
     let gemma = crate::chat_template::ChatTemplate::Gemma;
@@ -1002,6 +1029,14 @@ fn multimodal_chat_prompt(
         gemma.stop_sequences(),
         String::new(),
     )
+}
+
+/// Who reads a request's images and audio (`chat_with`): the scheduler, or
+/// the sequential engine (`--batch-size 0`).
+#[cfg_attr(not(feature = "multimodal"), allow(dead_code))]
+enum MediaReader {
+    Engine(Arc<InferenceEngine>),
+    Scheduler(crate::inference::scheduler::SchedulerHandle),
 }
 
 /// Background mtmd-aware generation, mirroring `sequential_to_channel`.
@@ -2118,14 +2153,266 @@ fn running_model_entry(m: &RunningModel, now: chrono::DateTime<chrono::Utc>) -> 
 
 /// `GET /api/monitor` — what the chat UI's Monitor page shows: the requests
 /// running (oldest first) and the last ones answered (newest first), and the
-/// machine's samples of the last two minutes (oldest first). The models in
-/// memory are `/api/ps`. In memory only: see [`crate::monitor`].
-async fn monitor() -> Json<Value> {
+/// machine's samples (oldest first): the last two minutes, or with
+/// `?since=<ms>` every one after that time, up to the hour kept. The models
+/// in memory are `/api/ps`; the minutes before the hour are
+/// `/api/monitor/history`. See [`crate::monitor`].
+async fn monitor(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
+    let since = q.get("since").and_then(|v| v.parse::<u64>().ok());
     let (active, history) = crate::monitor::requests();
-    let system = tokio::task::spawn_blocking(crate::monitor::system::snapshot)
+    let system = tokio::task::spawn_blocking(move || crate::monitor::system::snapshot(since))
         .await
         .unwrap_or_default();
     Json(json!({ "active": active, "history": history, "system": system }))
+}
+
+fn monitor_bad_request(message: String) -> (StatusCode, Json<Value>) {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
+}
+
+/// Whether the request carries the admin key (`X-Admin-Key`), which
+/// deleting the Monitor's history and changing its retention need on top of
+/// the API's own perimeter: see [`super::admin`]. Every refusal is logged
+/// with the address it came from.
+fn monitor_admin(
+    state: &S,
+    ip: std::net::IpAddr,
+    headers: &axum::http::HeaderMap,
+    what: &str,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    use super::admin::Refusal;
+    let key = headers
+        .get(super::admin::ADMIN_HEADER)
+        .and_then(|v| v.to_str().ok());
+    let refusal = match state.monitor_access.check_admin(ip, key) {
+        Ok(()) => return Ok(()),
+        Err(r) => r,
+    };
+    let (status, reason, message) = match refusal {
+        Refusal::Disabled => (
+            StatusCode::FORBIDDEN,
+            "disabled",
+            "The Monitor's history is not administered over the API on this server: set \
+             EULLM_ADMIN_KEY to allow it, or use EULLM_METRICS_RETENTION_DAYS."
+                .to_string(),
+        ),
+        Refusal::Missing => (
+            StatusCode::FORBIDDEN,
+            "missing",
+            "This needs the admin key, in an X-Admin-Key header.".to_string(),
+        ),
+        Refusal::Wrong => (StatusCode::FORBIDDEN, "wrong", "Wrong admin key.".to_string()),
+        Refusal::Locked { retry_after_s } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "locked",
+            format!("Too many wrong admin keys from this address: try again in {retry_after_s} s."),
+        ),
+    };
+    tracing::warn!("Monitor history: refused to {what} for {ip} ({reason} admin key)");
+    Err((status, Json(json!({ "error": message, "admin": reason }))))
+}
+
+/// `GET /api/monitor/history?from=<ms>&to=<ms>&step=<s>` — a row per minute
+/// (or per `step` seconds, rounded up to whole minutes) with the minimum, the
+/// mean and the maximum of every figure, and what happened in the range
+/// (models loaded, requests failed). `to` defaults to now and `from` to a
+/// day before it; with no `step`, one that gives at most 720 rows. Read from
+/// the days on disk: see [`crate::monitor::history`].
+async fn monitor_history(
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<crate::monitor::history::History>, (StatusCode, Json<Value>)> {
+    let number = |key: &str| -> Result<Option<u64>, (StatusCode, Json<Value>)> {
+        q.get(key)
+            .map(|v| {
+                v.trim().parse::<u64>().map_err(|_| {
+                    monitor_bad_request(format!("{key} must be a whole number, got {v:?}"))
+                })
+            })
+            .transpose()
+    };
+    let to = number("to")?.unwrap_or_else(crate::monitor::now_ms);
+    let from = number("from")?.unwrap_or(to.saturating_sub(86_400_000));
+    let step = number("step")?;
+    if from > to {
+        return Err(monitor_bad_request("from must not be after to".into()));
+    }
+    let days = u64::from(crate::monitor::history::MAX_RETENTION_DAYS) + 1;
+    if to - from > days * 86_400_000 {
+        return Err(monitor_bad_request(format!(
+            "a range of at most {days} days can be asked for"
+        )));
+    }
+    let history =
+        tokio::task::spawn_blocking(move || crate::monitor::history::store().read(from, to, step))
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": e.to_string() })),
+                )
+            })?;
+    Ok(Json(history))
+}
+
+/// `DELETE /api/monitor/history?before=YYYY-MM-DD` — delete every day before
+/// that date (UTC), and say how many files and bytes went.
+async fn monitor_delete_history(
+    State(state): State<S>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    monitor_admin(&state, addr.ip(), &headers, "delete history")?;
+    let Some(text) = q.get("before") else {
+        return Err(monitor_bad_request(
+            "before=YYYY-MM-DD is required: the days before it are deleted".into(),
+        ));
+    };
+    let before = crate::monitor::history::parse_date(text).ok_or_else(|| {
+        monitor_bad_request(format!("before must be a date as YYYY-MM-DD, got {text:?}"))
+    })?;
+    let freed =
+        tokio::task::spawn_blocking(move || crate::monitor::history::store().delete_before(before))
+            .await
+            .unwrap_or_default();
+    tracing::info!(
+        "Monitor history: deleted {} day(s) before {before}, {} bytes, as asked by {} with the \
+         admin key",
+        freed.files,
+        freed.bytes,
+        addr.ip()
+    );
+    crate::monitor::history::event(
+        "admin",
+        format!(
+            "{} day(s) before {before} deleted ({} bytes), from {}",
+            freed.files,
+            freed.bytes,
+            addr.ip()
+        ),
+    );
+    Ok(Json(
+        json!({ "deleted_files": freed.files, "freed_bytes": freed.bytes }),
+    ))
+}
+
+/// `GET /api/monitor/storage` — where the history is kept, for how many
+/// days and why, the space each day takes and what the retention would
+/// take at that size, and whether it can be administered over the API
+/// (`admin_enabled`: `EULLM_ADMIN_KEY` is set).
+async fn monitor_storage(State(state): State<S>) -> Json<Value> {
+    let usage = tokio::task::spawn_blocking(|| crate::monitor::history::store().usage())
+        .await
+        .unwrap_or_else(|_| crate::monitor::history::store().usage());
+    let mut v = serde_json::to_value(usage).unwrap_or_else(|_| json!({}));
+    v["admin_enabled"] = json!(state.monitor_access.admin_enabled());
+    Json(v)
+}
+
+/// `PUT /api/monitor/storage {"retention_days": n}` — keep n days (1 to 366)
+/// from now on, saved in the folder so a restart keeps it; what is older is
+/// deleted at once, and the answer says what that freed.
+async fn monitor_set_storage(
+    State(state): State<S>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    monitor_admin(&state, addr.ip(), &headers, "change the retention")?;
+    let days = body
+        .get("retention_days")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| monitor_bad_request("retention_days must be a whole number".into()))?;
+    let store = crate::monitor::history::store();
+    let freed = tokio::task::spawn_blocking(move || store.set_retention(days))
+        .await
+        .map_err(|e| monitor_bad_request(e.to_string()))?
+        .map_err(monitor_bad_request)?;
+    crate::monitor::history::event(
+        "admin",
+        format!(
+            "retention set to {days} days, {} day(s) deleted ({} bytes), from {}",
+            freed.files,
+            freed.bytes,
+            addr.ip()
+        ),
+    );
+    let mut usage = serde_json::to_value(store.usage()).unwrap_or_else(|_| json!({}));
+    usage["admin_enabled"] = json!(true);
+    Ok(Json(json!({
+        "storage": usage,
+        "deleted_files": freed.files,
+        "freed_bytes": freed.bytes,
+    })))
+}
+
+/// `GET /metrics` — the Monitor in Prometheus's text format, on the API port,
+/// for a Prometheus server that brings `EULLM_METRICS_TOKEN` as a bearer
+/// token: see [`super::admin`] and [`crate::monitor::prometheus`]. Not served
+/// without the token configured.
+pub(crate) async fn prometheus_metrics(
+    State(state): State<S>,
+    axum::extract::ConnectInfo(addr): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    headers: axum::http::HeaderMap,
+) -> axum::response::Response {
+    use super::admin::Refusal;
+    match state
+        .monitor_access
+        .check_metrics(addr.ip(), super::admin::bearer(&headers))
+    {
+        Ok(()) => {}
+        Err(Refusal::Disabled) => {
+            return (
+                StatusCode::NOT_FOUND,
+                "/metrics is not served: set EULLM_METRICS_TOKEN on the server, and give \
+                 Prometheus the same token as a bearer token\n",
+            )
+                .into_response();
+        }
+        Err(Refusal::Missing) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer")],
+                "send EULLM_METRICS_TOKEN as Authorization: Bearer <token>\n",
+            )
+                .into_response();
+        }
+        Err(Refusal::Wrong) => {
+            tracing::warn!("/metrics: wrong token from {}", addr.ip());
+            return (StatusCode::FORBIDDEN, "wrong token\n").into_response();
+        }
+        Err(Refusal::Locked { retry_after_s }) => {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, retry_after_s.to_string())],
+                "too many wrong tokens from this address\n",
+            )
+                .into_response();
+        }
+    }
+    let models: Vec<String> = state
+        .models
+        .read()
+        .await
+        .by_recent_use()
+        .into_iter()
+        .map(|m| m.name.clone())
+        .collect();
+    let history_bytes =
+        tokio::task::spawn_blocking(|| crate::monitor::history::store().usage().total_bytes)
+            .await
+            .unwrap_or(0);
+    let page = crate::monitor::prometheus::render(
+        crate::monitor::system::latest().as_ref(),
+        &crate::monitor::totals(),
+        &models,
+        history_bytes,
+    );
+    (
+        [(header::CONTENT_TYPE, crate::monitor::prometheus::CONTENT_TYPE)],
+        page,
+    )
+        .into_response()
 }
 
 /// `GET /api/about` — what the chat UI's About page shows: this build, the
@@ -2598,15 +2885,23 @@ async fn chat_with(
     // the conversation with each attachment replaced by a note.
     let media = collect_chat_media(&messages)
         .map_err(|e| (StatusCode::BAD_REQUEST, Json(json!({ "error": e }))))?;
-    let projector = snap
-        .engine
-        .as_ref()
-        .filter(|engine| !media.items.is_empty() && engine.has_projector())
-        .map(Arc::clone);
+    // Who reads the attachments: the scheduler, which reads them into the
+    // request's own sequence beside the others' (`scheduler::SchedMedia`),
+    // or the sequential engine (`--batch-size 0`).
+    let projector = if media.items.is_empty() {
+        None
+    } else if let Some(sched) = snap.scheduler.as_ref().filter(|s| s.has_projector()) {
+        Some(MediaReader::Scheduler(sched.clone()))
+    } else {
+        snap.engine
+            .as_ref()
+            .filter(|engine| engine.has_projector())
+            .map(|engine| MediaReader::Engine(Arc::clone(engine)))
+    };
     let messages = if media.items.is_empty() || projector.is_some() {
         messages
     } else if media.current_turn > 0 {
-        return Err(cannot_read_media(&snap.model_name).into());
+        return Err(cannot_read_media(&snap.model_name, state.no_mmproj).into());
     } else {
         tracing::info!(
             "`{}` cannot read attachments: {} from earlier turns become notes",
@@ -2617,7 +2912,7 @@ async fn chat_with(
     };
 
     #[cfg(feature = "multimodal")]
-    if let Some(engine) = projector {
+    if let Some(reader) = projector {
         let sp = parse_generate_params(&body);
         // Parsed here rather than reused from the text path below: the
         // multimodal branch returns before that code runs.
@@ -2631,7 +2926,11 @@ async fn chat_with(
             .iter()
             .map(|(role, content)| (role.as_str(), content.as_str()))
             .collect();
-        let (mm_prompt, mm_stops, mm_prefix) = multimodal_chat_prompt(&engine, &pairs, mm_think);
+        let rendered = match &reader {
+            MediaReader::Engine(engine) => engine.apply_jinja_chat_template(&pairs, mm_think),
+            MediaReader::Scheduler(sched) => sched.apply_jinja_chat_template(&pairs, mm_think),
+        };
+        let (mm_prompt, mm_stops, mm_prefix) = multimodal_chat_prompt(rendered, &pairs, mm_think);
         let mm_request = GenerateRequest {
             prompt: mm_prompt,
             max_tokens: sp.max_tokens,
@@ -2656,9 +2955,16 @@ async fn chat_with(
             cache_prompt: sp.cache_prompt,
             response_prefix: mm_prefix,
         };
+        let rx = match reader {
+            MediaReader::Engine(engine) => {
+                multimodal_to_channel(engine, mm_request, media.items, media.current_turn)
+            }
+            MediaReader::Scheduler(sched) => {
+                sched.try_submit_media(mm_request, media.items, media.current_turn)?
+            }
+        };
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
         if is_streaming(&body) {
-            let rx = multimodal_to_channel(engine, mm_request, media.items, media.current_turn);
-            let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
             return Ok(ndjson_stream_response(
                 rx,
                 model,
@@ -2669,8 +2975,6 @@ async fn chat_with(
                 split_thinking,
             ));
         }
-        let rx = multimodal_to_channel(engine, mm_request, media.items, media.current_turn);
-        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
         let Collected {
             text,
             tokens_generated,
@@ -3213,7 +3517,9 @@ async fn chat_completions_with(
     )
     .await;
 
-    let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
+    // `think`, `chat_template_kwargs.enable_thinking` or `reasoning_effort`:
+    // see `thinking::openai_think`.
+    let think = super::thinking::openai_think(&body);
     let model_name_ref: &str = &model;
     // ── Tool calling (issue #334): render through the model's own template
     // with the request's full OpenAI-format JSON, so tool definitions, tool
@@ -3332,7 +3638,15 @@ async fn chat_completions_with(
         );
 
         let (message, called_tools) = match tmpl.parse_output(&text) {
-            Some(parsed) => {
+            Some(mut parsed) => {
+                // A template parser that left the reasoning in the answer
+                // (Gemma 4's `<|channel>thought`): taken apart here, as the
+                // plain path does.
+                if parsed.reasoning_content.is_none() {
+                    let (reasoning, content) = super::thinking::split(&parsed.content);
+                    parsed.reasoning_content = reasoning;
+                    parsed.content = content;
+                }
                 let mut message = json!({ "role": "assistant" });
                 message["content"] =
                     if parsed.content.is_empty() && !parsed.tool_calls.is_empty() {
@@ -3361,7 +3675,7 @@ async fn chat_completions_with(
                 }
                 (message, called)
             }
-            None => (json!({ "role": "assistant", "content": text }), false),
+            None => (openai_message(text), false),
         };
         let finish_reason = if called_tools {
             "tool_calls"
@@ -3448,10 +3762,7 @@ async fn chat_completions_with(
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": text
-                    },
+                    "message": openai_message(text),
                     "finish_reason": stop_reason.as_api_str()
                 }],
                 "usage": {
@@ -3515,10 +3826,7 @@ async fn chat_completions_with(
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": result.text
-                    },
+                    "message": openai_message(result.text),
                     "finish_reason": result.stop_reason.as_api_str()
                 }],
                 "usage": {
@@ -3694,14 +4002,29 @@ fn stream_from_channel_sse(
     async_stream::stream! {
         let _lease = lease;
         let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+        // The OpenAI stream carries the reasoning apart, in
+        // `delta.reasoning_content` (see `super::thinking`).
+        let mut splitter = matches!(format, StreamFormat::OpenAI).then(ThinkingSplitter::new);
 
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::Token(piece) => {
-                    let data = format_token_event(&piece, &model, &completion_id, format);
-                    yield Ok(Event::default().data(data.to_string()));
+                    let parts = match splitter.as_mut() {
+                        Some(splitter) => splitter.push(&piece),
+                        None => vec![Part::Content(piece)],
+                    };
+                    for part in parts {
+                        let data = format_part_event(&part, &model, &completion_id, format);
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
                 }
                 StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason, stats } => {
+                    // What the splitter still held: the end of the answer, or
+                    // of reasoning the token budget cut short.
+                    for part in splitter.take().map(ThinkingSplitter::finish).unwrap_or_default() {
+                        let data = format_part_event(&part, &model, &completion_id, format);
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
                     // Audit log
                     audit.log(&model, format, tokens_prompt, tokens_generated, duration_ms, &stats);
 
@@ -3831,14 +4154,25 @@ fn format_part_event(part: &Part, model: &str, completion_id: &str, format: Stre
             let mut event = format_token_event("", model, completion_id, format);
             match format {
                 StreamFormat::OllamaChat => event["message"]["thinking"] = json!(piece),
-                // `/v1` never splits, so this is `/api/generate`.
-                StreamFormat::OllamaGenerate | StreamFormat::OpenAI => {
-                    event["thinking"] = json!(piece)
+                StreamFormat::OllamaGenerate => event["thinking"] = json!(piece),
+                StreamFormat::OpenAI => {
+                    event["choices"][0]["delta"] = json!({ "reasoning_content": piece })
                 }
             }
             event
         }
     }
+}
+
+/// `/v1/chat/completions`' `message`: the answer, and its reasoning apart in
+/// `reasoning_content` when it had any (see [`super::thinking`]).
+fn openai_message(text: String) -> Value {
+    let (reasoning, content) = super::thinking::split(&text);
+    let mut message = json!({ "role": "assistant", "content": content });
+    if let Some(reasoning) = reasoning {
+        message["reasoning_content"] = Value::String(reasoning);
+    }
+    message
 }
 
 /// `/api/chat`'s `message`: the answer, and its reasoning in `thinking` when
@@ -4212,6 +4546,22 @@ mod tests {
     fn max_tokens_defaults_to_unbounded_not_a_small_fixed_cap() {
         let sp = parse_generate_params(&json!({}));
         assert_eq!(sp.max_tokens, u32::MAX);
+    }
+
+    /// The repeat penalty is off on /v1 unless asked for, as llama-server has
+    /// it, and Ollama's 1.1 on Ollama's endpoints; a value sent is used.
+    #[test]
+    fn the_repeat_penalty_is_off_on_v1_and_ollamas_on_ollamas_endpoints() {
+        assert_eq!(parse_chat_completions_params(&json!({})).repeat_penalty, 1.0);
+        assert_eq!(parse_generate_params(&json!({})).repeat_penalty, 1.1);
+        assert_eq!(
+            parse_chat_completions_params(&json!({ "repeat_penalty": 1.2 })).repeat_penalty,
+            1.2
+        );
+        assert_eq!(
+            parse_generate_params(&json!({ "options": { "repeat_penalty": 1.0 } })).repeat_penalty,
+            1.0
+        );
     }
 
     /// #345: two quants of the same HuggingFace repo are different models.

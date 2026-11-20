@@ -16,7 +16,7 @@ case for the arrays the fast path must leave alone.
 EuLLM patch on llama.cpp b11925.
 
 diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
-index 9004efa2..f0eb5cd8 100644
+index 9004efa20..f0eb5cd88 100644
 --- a/src/llama-sampler.cpp
 +++ b/src/llama-sampler.cpp
 @@ -2961,26 +2961,45 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
@@ -79,7 +79,7 @@ index 9004efa2..f0eb5cd8 100644
  
      cur_p->sorted = false;
 diff --git a/tests/test-sampling.cpp b/tests/test-sampling.cpp
-index 353a5a1a..b9453683 100644
+index 353a5a1a1..b94536833 100644
 --- a/tests/test-sampling.cpp
 +++ b/tests/test-sampling.cpp
 @@ -188,6 +188,37 @@ static void test_penalties(

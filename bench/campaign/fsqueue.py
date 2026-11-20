@@ -15,6 +15,7 @@ which is how a project behind its calendar runs two nodes instead of one.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -28,13 +29,13 @@ ORPHAN_GRACE_S = 600
 
 def _write(path: str, data: dict) -> None:
     tmp = f"{path}.tmp.{os.getpid()}"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
 
 
 def _read(path: str) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -97,10 +98,8 @@ class Queue:
     def _leave_running(self, pid: str, state: str, point: dict) -> None:
         _write(self._path(state, pid), point)
         for path in (self._path("running", pid), self._owner_path(pid)):
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.remove(path)
-            except FileNotFoundError:
-                pass
 
     def release(self, pid: str) -> None:
         """Back to todo, as if never claimed: the job ended, not the point."""
@@ -182,6 +181,33 @@ class Queue:
             point["attempts"] = 0
             _write(self._path("todo", pid), point)
             os.remove(self._path("failed", pid))
+            moved.append(pid)
+        return moved
+
+    def set_aside(self, dest: str, label=None, prefixes=(), round_=None) -> list:
+        """Waiting points moved out of the queue into `dest` (a directory of
+        their own, beside the states), not deleted: those of engine label
+        `label`, of round `round_`, whose id starts with one of `prefixes`,
+        each filter only when given. A point a job claims meanwhile stays
+        with the job. For a round an engine has made pointless, or points
+        no job of the round's length can run (26-10-2026, 03-11-2026)."""
+        moved = []
+        for pid in self.ids("todo"):
+            if prefixes and not any(pid.startswith(p) for p in prefixes):
+                continue
+            try:
+                point = self.load("todo", pid)
+            except (OSError, ValueError):
+                continue
+            if label is not None and (point.get("engine_label") or "") != label:
+                continue
+            if round_ is not None and point.get("round") != round_:
+                continue
+            os.makedirs(dest, exist_ok=True)
+            try:
+                os.replace(self._path("todo", pid), os.path.join(dest, f"{pid}.json"))
+            except FileNotFoundError:
+                continue  # claimed by a job in between
             moved.append(pid)
         return moved
 

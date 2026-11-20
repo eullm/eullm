@@ -1,9 +1,14 @@
 //! The machine the server runs on, once a second, for the Monitor page: CPU,
-//! memory, what this process reads from disk, and each GPU.
+//! memory, what this process reads from disk, each GPU, and what the engine
+//! is doing (answer tokens per second, requests running and reading).
 //!
-//! The sampler is a thread of its own, started by the first [`snapshot`] and
-//! stopped when nobody has asked for [`IDLE`]: a server nobody watches pays
-//! nothing for it. It keeps the last [`SAMPLES`] samples, in memory only.
+//! The sampler is a thread of its own, started with the server ([`start`])
+//! and running for as long as it does, whether anyone watches or not: a
+//! monitor that only saw what happened while its page was open could not say
+//! when last night's peak was. It keeps the last [`SAMPLES`] samples (an
+//! hour) in memory, and hands each to [`super::history`], which writes a row
+//! a minute to disk. Outside the server (a test, or `snapshot` called first)
+//! [`snapshot`] starts it, and then it stops after [`IDLE`] without a reader.
 //!
 //! GPUs are read from what each vendor's driver offers, with no library linked
 //! at build time:
@@ -22,11 +27,14 @@ use serde::Serialize;
 
 use super::now_ms;
 
-/// How many samples are kept: two minutes, one a second.
-pub const SAMPLES: usize = 120;
+/// How many samples are kept: an hour, one a second.
+pub const SAMPLES: usize = 3600;
+/// How many `snapshot` returns when not asked for the ones since a time:
+/// two minutes, what the page drew before it could ask.
+pub const RECENT: usize = 120;
 /// Between two samples.
 const PERIOD: Duration = Duration::from_secs(1);
-/// How long the sampler runs on after the last [`snapshot`].
+/// How long a sampler [`snapshot`] started runs on after the last call.
 const IDLE: Duration = Duration::from_secs(30);
 
 /// The machine at one moment.
@@ -45,6 +53,17 @@ pub struct Sample {
     /// second: the model loading, or experts paged in through mmap.
     pub disk_read_bps: u64,
     pub gpus: Vec<Gpu>,
+    /// Answer tokens per second in the last second, every request together.
+    pub gen_tps: f64,
+    /// Answer and prompt tokens counted in the last second, and requests
+    /// answered and failed in it: what the minute rows add up.
+    pub gen_tokens: u64,
+    pub prompt_tokens: u64,
+    pub done: u64,
+    pub failed: u64,
+    /// Requests running, and those of them not yet writing their answer.
+    pub active: u32,
+    pub reading: u32,
 }
 
 /// One GPU at one moment. What its driver does not say is `None`.
@@ -68,6 +87,8 @@ struct State {
     samples: VecDeque<Sample>,
     asked: Instant,
     running: bool,
+    /// Started with the server: never stops.
+    always: bool,
 }
 
 static STATE: Mutex<Option<State>> = Mutex::new(None);
@@ -78,19 +99,24 @@ fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
         samples: VecDeque::with_capacity(SAMPLES),
         asked: Instant::now(),
         running: false,
+        always: false,
     }))
 }
 
-/// The samples so far, oldest first, and start the sampler if it is not
-/// running. The first call after a quiet spell returns what was left from the
-/// last time (or nothing); the next sample comes within a second.
-pub fn snapshot() -> Vec<Sample> {
+/// Start the sampler for good: called once by `api::serve`, so the history
+/// is gathered from the server's first second, watched or not.
+pub fn start() {
+    with_state(|s| s.always = true);
+    spawn_if_stopped();
+}
+
+/// Start the sampler thread unless it runs.
+fn spawn_if_stopped() {
     let start = with_state(|s| {
-        s.asked = Instant::now();
         if s.running {
             false
         } else {
-            // What is left is from before the quiet spell: a gap in the
+            // What is left is from before a quiet spell: a gap in the
             // chart, not a minute that looked idle.
             s.samples.clear();
             s.running = true;
@@ -105,20 +131,43 @@ pub fn snapshot() -> Vec<Sample> {
             with_state(|s| s.running = false);
         }
     }
-    with_state(|s| s.samples.iter().cloned().collect())
+}
+
+/// The samples after `since` (milliseconds since 1970), oldest first, or
+/// the last [`RECENT`] when `since` is none; and start the sampler if it is
+/// not running. A page that polls passes the time of the last sample it has,
+/// and gets the new ones only.
+pub fn snapshot(since: Option<u64>) -> Vec<Sample> {
+    with_state(|s| s.asked = Instant::now());
+    spawn_if_stopped();
+    with_state(|s| match since {
+        Some(t) => s.samples.iter().filter(|x| x.t_ms > t).cloned().collect(),
+        None => {
+            let skip = s.samples.len().saturating_sub(RECENT);
+            s.samples.iter().skip(skip).cloned().collect()
+        }
+    })
+}
+
+/// The newest sample, without starting the sampler or counting as a reader:
+/// what `/metrics` reports.
+pub fn latest() -> Option<Sample> {
+    with_state(|s| s.samples.back().cloned())
 }
 
 fn run() {
     let mut sampler = Sampler::new();
+    let mut recorder = super::history::Recorder::default();
     loop {
         let started = Instant::now();
         let sample = sampler.sample();
+        recorder.add(&sample);
         let go_on = with_state(|s| {
             s.samples.push_back(sample);
             while s.samples.len() > SAMPLES {
                 s.samples.pop_front();
             }
-            if s.asked.elapsed() > IDLE {
+            if !s.always && s.asked.elapsed() > IDLE {
                 s.running = false;
             }
             s.running
@@ -134,6 +183,8 @@ struct Sampler {
     system: Option<sysinfo::System>,
     pid: Option<sysinfo::Pid>,
     last: Instant,
+    /// The engine's counters at the last sample.
+    totals: super::Totals,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     nvml: Option<nvml_wrapper::Nvml>,
 }
@@ -144,6 +195,7 @@ impl Sampler {
             system: sysinfo::System::new().ok(),
             pid: sysinfo::get_current_pid().ok(),
             last: Instant::now(),
+            totals: super::totals(),
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             nvml: nvidia::open(),
         }
@@ -156,6 +208,15 @@ impl Sampler {
         };
         let seconds = self.last.elapsed().as_secs_f64().max(0.001);
         self.last = Instant::now();
+        let totals = super::totals();
+        let delta = totals.since(&self.totals);
+        self.totals = totals;
+        sample.gen_tokens = delta.generated;
+        sample.prompt_tokens = delta.prompt;
+        sample.done = delta.done;
+        sample.failed = delta.failed;
+        sample.gen_tps = delta.generated as f64 / seconds;
+        (sample.active, sample.reading) = super::load();
         if let Some(system) = self.system.as_mut() {
             system.refresh_cpu_usage();
             system.refresh_memory();

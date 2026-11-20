@@ -31,7 +31,7 @@ def test_rows_ask_past_the_end_of_each_code_as_the_exam_does(tmp_path):
                        _rec("codice_penale", 734, "Distruzione di bellezze naturali.")])
     exam = tmp_path / "exam.jsonl"
     exam.write_text(json.dumps({"id": "norm-inesistente-codice_civile-3434", "metadata": {
-        "tipo": "inesistente", "code": "codice_civile", "articolo": "3434"}}) + "\n")
+        "tipo": "inesistente", "code": "codice_civile", "articolo": "3434"}}) + "\n", encoding="utf-8")
     rows = mod.rows_for(index, 30, mod.asked([exam]), random.Random(0))
 
     by_code = {}
@@ -57,13 +57,13 @@ def test_the_script_appends_its_rows_after_the_mixed_ones(tmp_path):
     mod = _load()
     norms = tmp_path / "legislazione_x.chunks.jsonl"
     norms.write_text("".join(json.dumps(_rec("codice_civile", n, "Testo.")) + "\n"
-                             for n in (1, 2, 3)))
+                             for n in (1, 2, 3)), encoding="utf-8")
     mix = tmp_path / "prompts.jsonl"
     mix.write_text(json.dumps({"id": "c#1", "kind": "caselaw", "student": [],
-                               "teacher": []}) + "\n")
+                               "teacher": []}) + "\n", encoding="utf-8")
     out = tmp_path / "out.jsonl"
     assert mod.main(["--norms", str(norms), "--mix-with", str(mix), "--per-code", "5",
                      "--out", str(out)]) == 0
-    rows = [json.loads(ln) for ln in out.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert rows[0]["id"] == "c#1" and len(rows) == 6
     assert {r["kind"] for r in rows[1:]} == {"nonexistent"}

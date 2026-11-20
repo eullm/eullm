@@ -20,6 +20,7 @@ prompt cache is off, so an answer that changes under load is a finding.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -272,7 +273,8 @@ def no_ui_args(engine: str) -> list:
         if engine not in _NO_UI:
             try:
                 out = subprocess.run([engine, "serve", "--help"], capture_output=True,
-                                     text=True, timeout=60).stdout
+                                     text=True, timeout=60, encoding="utf-8",
+                                     errors="replace").stdout
             except (OSError, subprocess.SubprocessError):
                 out = ""
             _NO_UI[engine] = "--no-ui" in out
@@ -305,16 +307,15 @@ class Server:
                 + no_ui_args(self.engine) + self.args)
 
     def start(self) -> None:
-        log = open(self.log_path, "ab")
         # A session of its own, so stopping it stops whatever it started too.
         # Run beside its log: a server that crashes leaves its core dump (and
         # ROCm its gpucore.<pid>) in its working directory, which was the
         # job's, the checkout in /projappl with its 50 GB quota (17-10-2026).
-        self.proc = subprocess.Popen(
-            self.command(), stdout=log, stderr=subprocess.STDOUT, env=self.env,
-            start_new_session=True, cwd=os.path.dirname(os.path.abspath(self.log_path)),
-        )
-        log.close()
+        with open(self.log_path, "ab") as log:
+            self.proc = subprocess.Popen(
+                self.command(), stdout=log, stderr=subprocess.STDOUT, env=self.env,
+                start_new_session=True, cwd=os.path.dirname(os.path.abspath(self.log_path)),
+            )
 
     def wait_ready(self, timeout_s=READY_TIMEOUT_S, stop=None) -> None:
         deadline = time.time() + timeout_s
@@ -363,10 +364,8 @@ class Server:
     def kill(self) -> None:
         """Immediately, without waiting: for a job whose time is up."""
         if self.proc is not None and self.proc.poll() is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
     def log_tail(self, lines=40) -> str:
         try:
@@ -877,7 +876,7 @@ def run_workload(p: dict, servers: list, ctx: Context, answers_path=None) -> tup
     )
 
     if answers_path:
-        with open(answers_path, "w") as f:
+        with open(answers_path, "w", encoding="utf-8") as f:
             for r in sorted((r for r in ok if r["pass"] == 0), key=lambda r: r["i"]):
                 f.write(json.dumps({k: r[k] for k in ("item", "set", "correct", "text",
                                                        "ttft_ms", "total_ms", "eval")}))
@@ -917,10 +916,8 @@ class Job:
 
     def kill(self) -> None:
         if self.proc.poll() is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(self.proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
 
 
 # How `eullm finetune` says why it would not run, and what each means here.

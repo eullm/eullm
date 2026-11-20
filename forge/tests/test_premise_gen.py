@@ -161,12 +161,12 @@ def _load():
 
 def test_the_script_splits_sft_and_grpo_by_article_and_prints_counts_only(tmp_path, capsys):
     norms = tmp_path / "legislazione_test.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     sft, grpo = tmp_path / "sft.jsonl", tmp_path / "grpo.jsonl"
     assert _load().main(["--norms", str(norms), "--per-code", "10", "--out-sft", str(sft),
                          "--out-grpo", str(grpo)]) == 0
-    s = [json.loads(ln) for ln in sft.read_text().splitlines()]
-    g = [json.loads(ln) for ln in grpo.read_text().splitlines()]
+    s = [json.loads(ln) for ln in sft.read_text(encoding="utf-8").splitlines()]
+    g = [json.loads(ln) for ln in grpo.read_text(encoding="utf-8").splitlines()]
     assert s and g
     assert not {(r["source"], r["key"].split("-", 3)[3]) for r in s} & \
         {(r["code"], r["articolo"]) for r in g}
@@ -177,14 +177,14 @@ def test_the_script_splits_sft_and_grpo_by_article_and_prints_counts_only(tmp_pa
 
 def test_the_plain_run_writes_the_same_pairs_as_the_steps_run(tmp_path):
     norms = tmp_path / "legislazione_test.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     steps, plain = tmp_path / "steps.jsonl", tmp_path / "plain.jsonl"
     common = ["--norms", str(norms), "--per-code", "10"]
     assert _load().main(common + ["--out-sft", str(steps), "--out-grpo",
                                   str(tmp_path / "g.jsonl")]) == 0
     assert _load().main(common + ["--format", "plain", "--out-sft", str(plain)]) == 0
-    a = [json.loads(ln) for ln in steps.read_text().splitlines()]
-    b = [json.loads(ln) for ln in plain.read_text().splitlines()]
+    a = [json.loads(ln) for ln in steps.read_text(encoding="utf-8").splitlines()]
+    b = [json.loads(ln) for ln in plain.read_text(encoding="utf-8").splitlines()]
     assert [r["key"] for r in a] == [r["key"] for r in b]
     assert [r["instruction"] for r in a] == [r["instruction"] for r in b]
     assert all("Verifica della premessa" not in r["output"] for r in b)

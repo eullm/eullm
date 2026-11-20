@@ -441,10 +441,10 @@ cd forge && pip install -e . && cd ..
 ```bash
 # Use a different port
 eullm run ./model.gguf --port 8080
-
-# Or replace the existing service
-eullm run ./model.gguf --replace
 ```
+
+Or stop the program that uses the port: the error says whether it is an
+EuLLM already running.
 
 ## Next steps
 

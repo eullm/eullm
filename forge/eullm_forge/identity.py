@@ -266,6 +266,22 @@ def lora_target_modules(model: object) -> list[str] | str:
         return rf".*\.language_model\..*\.({'|'.join(LORA_TARGETS)})"
     return list(LORA_TARGETS)
 
+
+def lora_dropout_for(model: object, wanted: float = 0.05) -> float:
+    """``wanted``, or 0 when a LoRA target is a fused MoE expert tensor.
+
+    In transformers 5 the experts of a Qwen3-MoE are one 3-D parameter per
+    projection (``Qwen3MoeExperts.down_proj``), and peft 0.21 puts LoRA on
+    them through its ``ParamWrapper``, which refuses any dropout: every link
+    of the A1 chains on 2026-11-04 died at ``get_peft_model`` with
+    "lora.ParamWrapper does not work with lora_dropout != 0". Dense models
+    keep the dropout of the recipe.
+    """
+    for name, param in model.named_parameters():
+        if param.dim() == 3 and name.split(".")[-1] in LORA_TARGETS:
+            return 0.0
+    return wanted
+
 # Used only when a tokenizer ships without a chat template. ChatML because it
 # is what the Qwen family — every student this project trains — already
 # speaks, so the tokens it relies on exist in the vocabulary as single
@@ -637,7 +653,7 @@ def fine_tune_identity(config: IdentityConfig) -> str:
         task_type=TaskType.CAUSAL_LM,
         r=config.lora_rank,
         lora_alpha=config.lora_alpha,
-        lora_dropout=0.05,
+        lora_dropout=lora_dropout_for(model),
         target_modules=lora_target_modules(model),
         **extra,
     )

@@ -392,7 +392,7 @@ def prepare_dataset(
         console.print(f"[yellow]Not yet implemented:[/yellow] {e}")
     except RuntimeError as e:
         console.print(f"[red]Error:[/red] {e}")
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 
@@ -602,7 +602,7 @@ def decisions_import_rag(
                       f"{labels.get('answer', 0)} / {labels.get('retrieve_more', 0)} / "
                       f"{labels.get('abstain', 0)}")
     console.print(table)
-    for name, path in report["held_out"].items():
+    for path in report["held_out"].values():
         console.print(f"  Held out for ragbench.py: {Path(output) / path}")
     console.print(f"\nNext:\n  eullm-forge decisions build {output} -o <dataset>")
 

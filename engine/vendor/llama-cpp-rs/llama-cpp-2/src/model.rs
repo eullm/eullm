@@ -32,7 +32,7 @@ pub struct LlamaModel {
 
 // SAFETY: The model is immutable except for methods where it's passed as `&mut`.
 //
-// FIXME(madsmtm): Apart from `llama_new_context_with_model`, which mutates.
+// FIXME(madsmtm): Apart from `llama_init_from_model`, which mutates.
 unsafe impl Send for LlamaModel {}
 // SAFETY: Same as above.
 unsafe impl Sync for LlamaModel {}
@@ -228,12 +228,18 @@ pub fn chat_parse(
     }
 }
 
-/// The Rope type that's used within the model.
+/// The RoPE type that's used within the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RopeType {
+    /// Normal RoPE.
     Norm,
+    /// Neox-style dimension interleave.
     NeoX,
+    /// multi-section rotary embedding (MRoPE).
     MRope,
+    /// Interleaved MRoPE.
+    IMRope,
+    /// Vision RoPE.
     Vision,
 }
 
@@ -253,7 +259,7 @@ impl LlamaModel {
     /// platforms due to llama.cpp returning a `c_int` (i32 on most platforms) which is almost certainly positive.
     #[must_use]
     pub fn n_ctx_train(&self) -> u32 {
-        let n_ctx_train = unsafe { llama_cpp_sys_2::llama_n_ctx_train(self.model.as_ptr()) };
+        let n_ctx_train = unsafe { llama_cpp_sys_2::llama_model_n_ctx_train(self.model.as_ptr()) };
         u32::try_from(n_ctx_train).expect("n_ctx_train fits into an u32")
     }
 
@@ -287,7 +293,7 @@ impl LlamaModel {
     /// without issue.
     #[must_use]
     pub fn n_embd(&self) -> c_int {
-        unsafe { llama_cpp_sys_2::llama_n_embd(self.model.as_ptr()) }
+        unsafe { llama_cpp_sys_2::llama_model_n_embd(self.model.as_ptr()) }
     }
 
     /// The model's *output* embedding width (`n_embd_out`). This is the width
@@ -374,6 +380,15 @@ impl LlamaModel {
             .unwrap_or(0)
     }
 
+    /// EuLLM addition: the sliding window of the model's local attention
+    /// layers, in tokens — 0 for a model without any (Gemma 2, 3 and 4 and
+    /// gpt-oss have them).
+    #[must_use]
+    pub fn n_swa(&self) -> u32 {
+        u32::try_from(unsafe { llama_cpp_sys_2::llama_model_n_swa(self.model.as_ptr()) })
+            .unwrap_or(0)
+    }
+
     /// Returns the number of layers within the model.
     pub fn n_layer(&self) -> u32 {
         // It's never possible for this to panic because while the API interface is defined as an int32_t,
@@ -456,6 +471,7 @@ impl LlamaModel {
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_NORM => Some(RopeType::Norm),
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_NEOX => Some(RopeType::NeoX),
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_MROPE => Some(RopeType::MRope),
+            llama_cpp_sys_2::LLAMA_ROPE_TYPE_IMROPE => Some(RopeType::IMRope),
             llama_cpp_sys_2::LLAMA_ROPE_TYPE_VISION => Some(RopeType::Vision),
             rope_type => {
                 tracing::error!(rope_type = rope_type, "Unexpected rope type from llama.cpp");
@@ -518,7 +534,7 @@ impl LlamaModel {
 
         let cstr = CString::new(path)?;
         let llama_model =
-            unsafe { llama_cpp_sys_2::llama_load_model_from_file(cstr.as_ptr(), params.params) };
+            unsafe { llama_cpp_sys_2::llama_model_load_from_file(cstr.as_ptr(), params.params) };
 
         let model = Ptr::new(llama_model).ok_or(LlamaModelLoadError::NullResult)?;
 
@@ -571,12 +587,12 @@ impl LlamaModel {
     ) -> Result<LlamaContext<'a>, LlamaContextLoadError> {
         let context_params = params.context_params;
         // Constructing multiple contexts from a model in parallel is actually
-        // unsound, since `llama_new_context_with_model` mutates the model's
+        // unsound, since `llama_init_from_model` mutates the model's
         // `n_ctx_train` in some cases:
         // <https://github.com/ggml-org/llama.cpp/blob/f45576aa86c07d60d346b469651a098a15cc4f81/src/llama-context.cpp#L3751>
         // FIXME(madsmtm): Make this sound!
         let context = unsafe {
-            llama_cpp_sys_2::llama_new_context_with_model(
+            llama_cpp_sys_2::llama_init_from_model(
                 self.model.as_mut_ptr_unsound(),
                 context_params,
             )
@@ -608,7 +624,7 @@ impl LlamaModel {
         context_params.ctx_other = unsafe { ctx_other.context.as_mut_ptr_unsound() };
         // Unsoundness: See `LlamaMode::new_context`.
         let context = unsafe {
-            llama_cpp_sys_2::llama_new_context_with_model(
+            llama_cpp_sys_2::llama_init_from_model(
                 self.model.as_mut_ptr_unsound(),
                 context_params,
             )
@@ -671,7 +687,7 @@ impl LlamaModel {
 
         // Unsoundness: See `LlamaMode::new_context`.
         let context = unsafe {
-            llama_cpp_sys_2::llama_new_context_with_model(
+            llama_cpp_sys_2::llama_init_from_model(
                 self.model.as_mut_ptr_unsound(),
                 context_params,
             )
@@ -982,6 +998,6 @@ where
 
 impl Drop for LlamaModel {
     fn drop(&mut self) {
-        unsafe { llama_cpp_sys_2::llama_free_model(self.model.as_mut_ptr()) }
+        unsafe { llama_cpp_sys_2::llama_model_free(self.model.as_mut_ptr()) }
     }
 }

@@ -39,7 +39,7 @@ def _stub_hub(tmp_path: Path) -> Path:
     (stub / "huggingface_hub.py").write_text(
         "def hf_hub_download(**kw):\n"
         "    print('GOT', kw['repo_id'], kw['filename'], kw['local_dir'])\n"
-        "    return kw['local_dir'] + '/x.tar.gz'\n")
+        "    return kw['local_dir'] + '/x.tar.gz'\n", encoding="utf-8")
     return stub
 
 
@@ -64,7 +64,7 @@ PYTHON="python"
 {step}
 """
     proc = subprocess.run([shutil.which("bash"), "-c", run],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, encoding="utf-8")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"GOT stub/dataset legal_it_pretraining.tar.gz {data}" in proc.stdout, proc.stdout
 
@@ -85,7 +85,7 @@ PYTHON="python"
 {_step()}
 """
     proc = subprocess.run([shutil.which("bash"), "-c", run],
-                          capture_output=True, text=True,
+                          capture_output=True, text=True, encoding="utf-8",
                           env={**os.environ, "DATA_DIR": "", "TARBALL_NAME": ""})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"GOT stub/dataset legal_it_pretraining.tar.gz {data}" in proc.stdout, proc.stdout

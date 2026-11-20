@@ -481,3 +481,22 @@ def test_a_plain_causal_lm_keeps_the_target_list():
         num_attention_heads=2, num_key_value_heads=1, head_dim=8,
     ))
     assert lora_target_modules(model) == list(LORA_TARGETS)
+
+
+def test_lora_dropout_is_off_only_for_fused_moe_experts():
+    import torch
+
+    from eullm_forge.identity import lora_dropout_for
+
+    class Experts(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.down_proj = torch.nn.Parameter(torch.zeros(4, 8, 16))
+
+    dense = torch.nn.Module()
+    dense.down_proj = torch.nn.Linear(16, 8)
+    moe = torch.nn.Module()
+    moe.attn = torch.nn.Linear(16, 16)
+    moe.experts = Experts()
+    assert lora_dropout_for(dense) == 0.05
+    assert lora_dropout_for(moe) == 0.0

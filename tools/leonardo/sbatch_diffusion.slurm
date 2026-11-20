@@ -256,7 +256,7 @@ while IFS='|' read -r LABEL GGUF SCHED MAXLEN STEPS; do
 import json, os, re, sys
 from collections import defaultdict
 
-log = open(sys.argv[1], errors="replace").read()
+log = open(sys.argv[1], errors="replace", encoding="utf-8").read()
 
 # diffusion.cpp logs exactly one line with all three figures:
 #   total time: 12345.67ms, time per step: 48.22ms, sampling time per step: 1.10ms
@@ -281,7 +281,7 @@ secs = (total_ms or float(os.environ["WALL_MS"])) / 1000.0
 tok_s = round(generated / secs, 2) if secs else None
 
 per = defaultdict(list)
-for line in open(os.environ["UTIL_LOG"], errors="replace"):
+for line in open(os.environ["UTIL_LOG"], errors="replace", encoding="utf-8"):
     g = re.search(r"GPU\[(\d+)\]\s*util\s*(\d+)", line)
     if g:
         per[int(g.group(1))].append(int(g.group(2)))

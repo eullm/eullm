@@ -22,6 +22,8 @@
 #   LR_NORMS    legislation files (default $WORK/norms/legislazione_*.chunks.jsonl)
 #   LR_EXCLUDE  evaluation sets held out (default $WORK/eval/closed-book.jsonl)
 #   LR_TEACHER  teacher GGUF (default the judge's Q8_0)
+#   LR_GPUS     --gpus as law_rewrites.py takes it (default one server per GPU);
+#               "0+1+2" serves a teacher too big for one GPU over all three
 #   LR_ARGS     extra law_rewrites.py options, e.g. "--samples 2" or "--reverse"
 #   LR_REPO     checkout to run (default: the one this file was submitted from)
 #
@@ -86,5 +88,5 @@ heartbeat_start
 
 # shellcheck disable=SC2086
 python "$REPO/forge/scripts/law_rewrites.py" --norms "${NORMS[@]}" --exclude "${EXCLUDE[@]}" \
-    --out "$OUT" --serve "$TEACHER" --gpus "$DEVS" --llama-server "$SERVER" \
+    --out "$OUT" --serve "$TEACHER" --gpus "${LR_GPUS:-$DEVS}" --llama-server "$SERVER" \
     --stop-after 6300 ${LR_ARGS:-}

@@ -15,8 +15,13 @@
 # Cloning is for tools/lumi/build_engine.sh, which compiles against the ROCm the
 # machine actually has — the fallback when no published binary matches the site.
 #
-# Costs ~0.04 node-hours (dev-g bills 0.5 per GCD-hour, so one GCD for at most
-# 20 minutes is 0.17 GPU-hours). The account comes from SBATCH_ACCOUNT, so set it once
+# Costs ~0.04 node-hours (small-g bills 0.5 per GCD-hour, so one GCD for at most
+# 20 minutes is 0.17 GPU-hours). On small-g, not dev-g: since 05-11-2026 LUMI
+# runs one dev-g job per user and one per project, and its debug and dev-g
+# policy counts a test a script submits unattended, or one with a dependency,
+# as production, which belongs in the regular partitions; a 20-minute job of
+# one GCD starts in a backfill gap there. --mem stays within one GCD's share
+# (60 of 480 GB), so it bills one GCD. The account comes from SBATCH_ACCOUNT, so set it once
 # in ~/.bashrc rather than passing -A on every submission:
 #
 #     export SBATCH_ACCOUNT=project_46XXXXXXX    # sbatch reads this one
@@ -39,11 +44,12 @@
 # the GPU was never touched, whatever the banner said.
 
 #SBATCH --job-name=eullm-rocm-smoke
-#SBATCH --partition=dev-g
+#SBATCH --partition=small-g
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=7
+#SBATCH --mem=60G
 #SBATCH --time=00:20:00
 #SBATCH --output=eullm-rocm-smoke-%j.out
 

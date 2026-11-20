@@ -16,7 +16,13 @@
 # On a GPU node, not the serial partition: the check at the end needs the
 # GPU, and the build is a few minutes of one.
 #
+# LCPP_RPC=1 builds, into build-cuda-rpc instead, llama-server and rpc-server
+# with the RPC backend (-DGGML_RPC=ON): a model larger than one node served
+# over several (sbatch_rpc_rewrites.slurm). A directory of its own, so the
+# jobs running from build-cuda are not touched while it builds.
+#
 # Settable:
+#   LCPP_RPC      1 = the multi-node build (default: the one-node build)
 #   LCPP_MODULES  modules to load, in order (default "gcc cuda": each name
 #                 picks the site's default version; `module avail cuda` lists
 #                 the others)
@@ -38,7 +44,11 @@ EULLM_REPO="${EULLM_REPO:-$WORK/eullm}"
 source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 
 SRC="${LCPP_DIR:-$WORK/llama.cpp}"
-BUILD="$SRC/build-cuda"
+if [ "${LCPP_RPC:-0}" = 1 ]; then
+    BUILD="$SRC/build-cuda-rpc"; EXTRA="-DGGML_RPC=ON"; TARGETS="llama-server ggml-rpc-server"
+else
+    BUILD="$SRC/build-cuda"; EXTRA=""; TARGETS="llama-server"
+fi
 [ -f "$SRC/CMakeLists.txt" ] || { echo "[build] no llama.cpp checkout at $SRC" >&2; exit 1; }
 echo "[build] llama.cpp $(git -C "$SRC" log -1 --format='%h %cd' --date=short 2>/dev/null)"
 
@@ -52,16 +62,27 @@ echo "[build] $(g++ --version | head -1); $(nvcc --version | tail -1)"
 # A cache configured with another compiler keeps using it (see
 # quantize_to_gguf.sh): start clean.
 rm -rf "$BUILD"
+# shellcheck disable=SC2086
 cmake -S "$SRC" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON \
-    -DCMAKE_CUDA_ARCHITECTURES=80 -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF >/dev/null ||
+    -DCMAKE_CUDA_ARCHITECTURES=80 -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF $EXTRA >/dev/null ||
     { echo "[build] cmake configure failed" >&2; exit 1; }
-cmake --build "$BUILD" --config Release --target llama-server -j "${SLURM_CPUS_PER_TASK:-8}" \
+# shellcheck disable=SC2086
+cmake --build "$BUILD" --config Release --target $TARGETS -j "${SLURM_CPUS_PER_TASK:-8}" \
     >"$BUILD/build.log" 2>&1 || { tail -30 "$BUILD/build.log" >&2; echo "[build] failed" >&2; exit 1; }
 
 # Fully resolved names (gcc/12.2.0, not gcc), so the exam loads what this used.
 module -t list 2>&1 | grep -E "^(${MODULES// /|})(/|$)" > "$BUILD/modules.txt" ||
     echo "$MODULES" > "$BUILD/modules.txt"
 echo "[build] modules: $(tr '\n' ' ' < "$BUILD/modules.txt")"
+
+if [ "${LCPP_RPC:-0}" = 1 ]; then
+    # the target is ggml-rpc-server (tools/rpc, 2026-11); the job scripts call it rpc-server
+    [ -x "$BUILD/bin/rpc-server" ] || ln -sf "$(basename "$(ls "$BUILD"/bin/*rpc-server* | head -1)")" "$BUILD/bin/rpc-server"
+    [ -x "$BUILD/bin/rpc-server" ] || { echo "[build] no rpc-server in $BUILD/bin" >&2; exit 1; }
+    "$BUILD/bin/llama-server" --help 2>&1 | grep -q -- "--rpc" ||
+        { echo "[build] llama-server has no --rpc: the RPC backend is not in it" >&2; exit 1; }
+    echo "[build] ok: rpc-server and llama-server --rpc"
+fi
 
 "$BUILD/bin/llama-server" --list-devices 2>&1 | tail -5
 if "$BUILD/bin/llama-server" --list-devices 2>&1 | grep -q "CUDA0"; then

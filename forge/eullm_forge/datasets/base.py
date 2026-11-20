@@ -46,11 +46,11 @@ def http_get(
     """
     try:
         import requests
-    except ImportError:
+    except ImportError as e:
         raise RuntimeError(
             "requests is required for dataset preparation. "
             "Install with: pip install requests"
-        )
+        ) from e
 
     # Check local cache first
     if cache_key:

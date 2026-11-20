@@ -17,10 +17,10 @@ does the same since b11925 when the pool frees after a failed allocation
 (invalidate_cuda_graphs), and this patch calls it from its own flush.
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 558ba7c2..f5806942 100644
+index 1f08962d0..fe7814250 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -438,6 +438,25 @@ const ggml_cuda_device_info & ggml_cuda_info() {
+@@ -440,6 +440,25 @@ const ggml_cuda_device_info & ggml_cuda_info() {
  
  // #define DEBUG_CUDA_MALLOC
  
@@ -46,7 +46,7 @@ index 558ba7c2..f5806942 100644
  // buffer pool for cuda (legacy)
  struct ggml_cuda_pool_leg : public ggml_cuda_pool {
      static const int MAX_BUFFERS = 256;
-@@ -496,9 +515,11 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
+@@ -498,9 +517,11 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
  #endif
          size_t best_diff = 1ull << 36;
          int ibest = -1;
@@ -58,7 +58,7 @@ index 558ba7c2..f5806942 100644
  #ifdef DEBUG_CUDA_MALLOC
                  ++nnz;
                  if (b.size > max_size) max_size = b.size;
-@@ -531,6 +552,18 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
+@@ -533,6 +554,18 @@ struct ggml_cuda_pool_leg : public ggml_cuda_pool {
          size_t look_ahead_size = (size_t) (1.05 * size);
          look_ahead_size = 256 * ((look_ahead_size + 255)/256);
          ggml_cuda_set_device(device);
@@ -77,7 +77,7 @@ index 558ba7c2..f5806942 100644
          cudaError_t err = ggml_cuda_device_malloc(&ptr, look_ahead_size, device);
          if (err == cudaErrorMemoryAllocation) {
              (void)cudaGetLastError();
-@@ -741,6 +774,10 @@ static std::mutex ggml_cuda_lock;
+@@ -871,6 +904,10 @@ static std::mutex ggml_cuda_lock;
  static std::condition_variable ggml_cuda_lock_cv;
  static std::atomic<int> ggml_cuda_lock_counter;
  

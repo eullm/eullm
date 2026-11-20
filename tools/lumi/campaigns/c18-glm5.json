@@ -1,0 +1,137 @@
+{
+  "campaign": "c18-glm5",
+  "notes": [
+    "GLM-5.3-Flash (321B, 18B active, architecture glm5-next: sparse and linear attention, MIT),",
+    "unsloth's UD-Q4_K_XL (200 GB, 186 GiB), the GLM-5 family's first measurement here, on c17's",
+    "pattern for DeepSeek-V4-Flash. The repo ships a vision projector: the points run on the",
+    "text-only twin (tools/lumi/text_only_model.sh), which loads on the scheduler and batches.",
+    "One GCD with most experts in RAM (the expert cache, --cpu-moe, the engine's own choice); 2,",
+    "4 and 8 GCDs at 1, 8 and 32 requests; 0, 16,000 and 30,000 tokens of prompt on eight GCDs",
+    "(b12032's sparse attention on CDNA, #31259, and glm5-next's QSA, #31009); 300 gsm8k",
+    "questions at temperature 0; a soak of two to three hours at 16 requests. Queued on",
+    "11-11-2026 on 0.8.8 (label v088)."
+  ],
+  "pull": [
+    "hf.co/unsloth/GLM-5.3-Flash-GGUF:UD-Q4_K_XL"
+  ],
+  "text_only": [
+    "glm-5.3-flash-gguf-ud-q4_k_xl"
+  ],
+  "defaults": {
+    "kind": "throughput",
+    "repeats": 3,
+    "exclusive": true,
+    "cores": "reserved",
+    "slot_ctx": 4096,
+    "model": "glm-5.3-flash-gguf-ud-q4_k_xl-text"
+  },
+  "groups": [
+    {
+      "name": "glm-ram",
+      "priority": 125,
+      "est_s": 2400,
+      "set": {
+        "gcds": 1
+      },
+      "axes": {
+        "batch": [
+          1,
+          8,
+          32
+        ],
+        "extra_args": [
+          [
+            "--moe-cache",
+            "auto"
+          ],
+          [
+            "--cpu-moe"
+          ],
+          []
+        ]
+      }
+    },
+    {
+      "name": "glm-gcds",
+      "priority": 124,
+      "est_s": 1800,
+      "axes": {
+        "gcds": [
+          2,
+          4,
+          8
+        ],
+        "batch": [
+          1,
+          8,
+          32
+        ]
+      }
+    },
+    {
+      "name": "glm-long",
+      "priority": 123,
+      "est_s": 1800,
+      "set": {
+        "gcds": 8,
+        "batch": 1,
+        "slot_ctx": 49152,
+        "extra_args": [
+          "--fit-strict"
+        ]
+      },
+      "axes": {
+        "prompt_tokens": [
+          0,
+          16000,
+          30000
+        ]
+      }
+    },
+    {
+      "name": "glm-graded",
+      "priority": 122,
+      "est_s": 3600,
+      "set": {
+        "kind": "workload",
+        "gcds": 8,
+        "batch": 1,
+        "slot_ctx": 8192,
+        "sets": [
+          "gsm8k"
+        ],
+        "limit": 300,
+        "concurrency": 1,
+        "max_tokens": 768,
+        "think": false,
+        "extra_args": [
+          "--fit-strict"
+        ]
+      }
+    },
+    {
+      "name": "glm-soak",
+      "priority": 121,
+      "set": {
+        "kind": "workload",
+        "gcds": 8,
+        "batch": 16,
+        "concurrency": 16,
+        "sets": [
+          "gsm8k",
+          "arc-easy",
+          "arc-challenge"
+        ],
+        "min_duration_s": 7200,
+        "max_duration_s": 10800,
+        "interval_s": 60,
+        "extra_args": [
+          "--fit-strict"
+        ],
+        "env": {
+          "RUST_LOG": "eullm=info,llama-cpp-2=info"
+        }
+      }
+    }
+  ]
+}

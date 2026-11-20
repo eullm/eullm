@@ -222,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         ["sacct", "-S", alloc_start.strftime("%Y-%m-%d"), "-X", "-P",
          "--noheader", f"--format={FIELDS}"],
         capture_output=True, text=True, check=True,
+        encoding="utf-8", errors="replace",
     ).stdout
     jobs = parse(raw, now)
     if not jobs:

@@ -92,7 +92,7 @@ summarise_util() {
 import re, sys
 from collections import defaultdict
 per = defaultdict(list)
-for line in open(sys.argv[1], errors="replace"):
+for line in open(sys.argv[1], errors="replace", encoding="utf-8"):
     m = re.search(r"GPU\[(\d+)\].*?GPU use \(%\):\s*(\d+)", line)
     if m:
         per[int(m.group(1))].append(int(m.group(2)))
@@ -210,7 +210,7 @@ for name in sorted(os.listdir(work)):
     if not name.startswith("resp.") or name.startswith("resp.warmup"):
         continue
     try:
-        d = json.load(open(os.path.join(work, name)))
+        d = json.load(open(os.path.join(work, name), encoding="utf-8"))
     except Exception:
         failed += 1
         continue

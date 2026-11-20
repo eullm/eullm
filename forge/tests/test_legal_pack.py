@@ -60,7 +60,7 @@ def test_one_file_per_article_named_as_it_is_cited(tmp_path, capsys):
     text = (out / "articoli" / files[0]).read_text(encoding="utf-8")
     assert text.startswith("Codice penale, art. 54 (Stato di necessità)\n\n")
     assert "particolare dovere giuridico" in text          # the continuation chunk too
-    rows = [json.loads(ln) for ln in (out / "legal-pack.jsonl").read_text().splitlines()]
+    rows = [json.loads(ln) for ln in (out / "legal-pack.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {r["id"] for r in rows} == {"codice_penale-54", "codice_penale-624",
                                        "legge_procedimento_amministrativo-3"}
     assert all(r["vigente_al"] == "2026-09-15" for r in rows)
@@ -202,18 +202,18 @@ def test_the_exam_goes_through_the_api_and_resumes(server, tmp_path, monkeypatch
          "reference": "r", "rubric": "",
          "metadata": {"tipo": "contenuto", "code": "codice_penale", "articolo": "54"}},
         {"id": "norm-inesistente-codice_penale-9999", "question": "art. inesistente 9999?",
-         "reference": "r", "rubric": "", "metadata": {"tipo": "inesistente"}}]))
+         "reference": "r", "rubric": "", "metadata": {"tipo": "inesistente"}}]), encoding="utf-8")
     out = tmp_path / "answers-x.jsonl"
     base = ["ask", "--url", server, "--label", "x", "--items", str(items), "--out", str(out)]
     assert mod.main(base + ["--limit", "1"]) == 0
     assert mod.main(base) == 0                               # carries on, asks only the second
     assert len(_Stub.asked) == 2
-    rows = [json.loads(ln) for ln in out.read_text().splitlines()]
+    rows = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert [r["abstained"] for r in rows] == [False, True]
     assert rows[0]["sources_ok"] and rows[0]["question"] == "Cosa prevede l'art. 54?"
 
     graded = tmp_path / "answers-x.graded.jsonl"
-    graded.write_text("".join(json.dumps({**r, "grade": "correct"}) + "\n" for r in rows))
+    graded.write_text("".join(json.dumps({**r, "grade": "correct"}) + "\n" for r in rows), encoding="utf-8")
     capsys.readouterr()
     assert mod.main(["summary", str(graded)]) == 0
     printed = capsys.readouterr().out
@@ -234,7 +234,7 @@ def test_the_summary_reads_an_ungraded_file_and_names_the_code_as_the_pack_does(
         "answer": "L'art. 2875 del codice civile non è presente nei dati forniti [Filename].",
         "sources": ["Codice civile, art. 2475 - Amministrazione della societa'.txt",
                     "Codice penale, art. 2875.txt"],
-        "abstained": False, "sources_ok": False}) + "\n")
+        "abstained": False, "sources_ok": False}) + "\n", encoding="utf-8")
     assert mod.main(["summary", str(p)]) == 0
     out = capsys.readouterr().out
     assert "precision n/a (not graded; 0 answered)" in out
@@ -255,7 +255,7 @@ def test_the_summary_reads_the_pack_for_the_articles_the_sources_refer_to(tmp_pa
         "id": "norm-contenuto-codice_civile-1484", "question": "Che cosa prevede l'art. 1484 c.c.?",
         "metadata": {"tipo": "contenuto", "code": "codice_civile", "articolo": "1484"},
         "answer": "Rinvia all'art. 1480.",
-        "sources": ["Codice civile, art. 1484 - Evizione parziale.txt"]}) + "\n")
+        "sources": ["Codice civile, art. 1484 - Evizione parziale.txt"]}) + "\n", encoding="utf-8")
     assert mod.main(["summary", str(p)]) == 0
     assert "citing outside the sources 1" in capsys.readouterr().out
     assert mod.main(["summary", str(p), "--pack", str(pack)]) == 0

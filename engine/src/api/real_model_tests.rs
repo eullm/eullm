@@ -24,6 +24,23 @@
 //!     cargo test -p eullm-engine -- --ignored real_model_a_hybrid --test-threads=1
 //! ```
 //!
+//! The sliding-window test needs a model with local attention layers, such
+//! as Gemma 3 270M (a few seconds on four CPU cores):
+//!
+//! ```text
+//! EULLM_SWA_TEST_MODEL=/path/to/gemma-3-270m-it-Q8_0.gguf \
+//!     cargo test -p eullm-engine -- --ignored real_model_a_sliding --test-threads=1
+//! ```
+//!
+//! The multimodal test needs a vision model with its projector beside it as
+//! `mmproj*.gguf`, such as SmolVLM-256M-Instruct (about a minute on four CPU
+//! cores):
+//!
+//! ```text
+//! EULLM_VISION_TEST_MODEL=/path/to/SmolVLM-256M-Instruct-Q8_0.gguf \
+//!     cargo test -p eullm-engine -- --ignored real_model_a_multimodal --test-threads=1
+//! ```
+//!
 //! The reasoning test needs a model whose chat template opens the reasoning
 //! block at the end of the prompt, such as Spark-X2.5-1.7B (about a minute
 //! on four CPU cores):
@@ -66,6 +83,52 @@ fn hybrid_test_model() -> PathBuf {
     std::env::var("EULLM_HYBRID_TEST_MODEL")
         .expect("set EULLM_HYBRID_TEST_MODEL to a hybrid GGUF, such as Qwen3.5-0.8B")
         .into()
+}
+
+/// The GGUF the sliding-window test runs on: one with local attention
+/// layers, such as Gemma 3 270M (a window of 512 tokens).
+fn swa_test_model() -> PathBuf {
+    std::env::var("EULLM_SWA_TEST_MODEL")
+        .expect("set EULLM_SWA_TEST_MODEL to a GGUF with a sliding window, such as Gemma 3 270M")
+        .into()
+}
+
+/// The vision model the multimodal tests run on, with its projector beside
+/// it as `mmproj*.gguf`, such as SmolVLM-256M-Instruct.
+fn vision_test_model() -> (PathBuf, PathBuf) {
+    let model: PathBuf = std::env::var("EULLM_VISION_TEST_MODEL")
+        .expect("set EULLM_VISION_TEST_MODEL to a vision GGUF with its mmproj beside it")
+        .into();
+    let projector = crate::models::store::mmproj_beside(&model)
+        .expect("a projector beside the vision model, as mmproj*.gguf");
+    (model, projector)
+}
+
+/// A 32x32 BMP, its top half red and its bottom half blue: the least an
+/// image decoder reads, built here so the test carries no file.
+fn two_colour_bmp() -> Vec<u8> {
+    let (w, h) = (32u32, 32u32);
+    let row = w * 3;
+    let size = 54 + row * h;
+    let mut b = Vec::with_capacity(size as usize);
+    b.extend_from_slice(b"BM");
+    b.extend_from_slice(&size.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&54u32.to_le_bytes());
+    b.extend_from_slice(&40u32.to_le_bytes());
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&h.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&24u16.to_le_bytes());
+    b.extend_from_slice(&[0u8; 24]);
+    // Rows bottom-up, pixels BGR.
+    for y in 0..h {
+        let bgr = if y < h / 2 { [255, 0, 0] } else { [0, 0, 255] };
+        for _ in 0..w {
+            b.extend_from_slice(&bgr);
+        }
+    }
+    b
 }
 
 /// The GGUF the reasoning test runs on: one whose chat template opens the
@@ -426,7 +489,8 @@ async fn real_model_one_model_swaps_exactly_as_before() {
     }
 }
 
-/// A sequential engine — every multimodal model, and `--batch-size 0` — is
+/// A sequential engine — `--batch-size 0`, and every multimodal model until
+/// 0.9.1 — is
 /// freed when the last request running on it lets go. A swap used to take it
 /// out of the slot and load the next model at once, sized against VRAM that
 /// still held it. It waits now: the answer streaming from the old model is
@@ -1717,5 +1781,205 @@ async fn real_model_a_hybrid_models_next_turn_restores_its_kept_state() {
             "{slots} slots: the next turn read its prompt in {next_ns} ns, the whole one in \
              {whole_ns} ns: the kept state was not restored"
         );
+    }
+}
+
+/// `--no-mmproj`: a model with a projector beside its weights loads on the
+/// scheduler with every slot asked for, answers text, and refuses a request
+/// with an image, saying why. Without it, the projector would have sent the
+/// model to the sequential engine, one request at a time: on Leonardo, Gemma 4
+/// 31B with `--batch-size 8` answered 20 of 200 text requests in 25 minutes.
+/// The projector here is not a projector at all, which is the point: it is
+/// never opened.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a GGUF model in EULLM_GENERATION_TEST_MODEL"]
+async fn real_model_no_mmproj_serves_a_model_with_a_projector_in_batches() {
+    let server = start(&["tiny-mm"], |state| {
+        state.no_mmproj = true;
+        state.batch_size = 4;
+    })
+    .await;
+    std::fs::write(server.dir.join("tiny-mm").join("mmproj-F16.gguf"), b"GGUF").unwrap();
+
+    let (status, lines) = server
+        .generate(json!({
+            "model": "tiny-mm", "prompt": "Once upon a time", "stream": false,
+            "options": { "num_predict": 8 },
+        }))
+        .await;
+    assert_eq!(status, 200, "{lines:?}");
+    assert_finished(&lines);
+    {
+        let models = server.state.models.read().await;
+        let model = models.find("tiny-mm").expect("loaded");
+        assert!(model.scheduler.is_some(), "on the scheduler");
+        assert!(model.engine.is_none(), "not on the sequential engine");
+        assert_eq!(model.facts.batch_size, 4);
+    }
+
+    let (status, objects) = server
+        .post(
+            "/api/chat",
+            json!({
+                "model": "tiny-mm", "stream": false,
+                "messages": [{ "role": "user", "content": "what is this?",
+                               "images": ["/9j/4AAQSkZJRg=="] }],
+            }),
+        )
+        .await;
+    assert_eq!(status, 503, "{objects:?}");
+    let error = objects[0]["error"].as_str().expect("an error");
+    assert!(error.contains("--no-mmproj"), "{error}");
+}
+
+/// A conversation's next turn on a model with sliding-window layers (Gemma),
+/// whose window keeps only its last n_swa + n_ubatch tokens per slot. The
+/// first turn's answer runs long enough that the window no longer reaches
+/// back to where the next prompt parts from it, 4 tokens before the first
+/// prompt's end: read on from there, the next prompt's first token would miss
+/// what it must see, and answer as if it had never been said. The window kept
+/// at that point (`StateCheckpoint`) is restored instead, and the answer must
+/// be the one the whole prompt read from the start gets, with one slot and
+/// with two; and reading it must take a fraction of reading it whole, or
+/// nothing was restored.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs a GGUF with a sliding window in EULLM_SWA_TEST_MODEL"]
+async fn real_model_a_sliding_window_models_next_turn_restores_its_window() {
+    let configure = |slots: usize| {
+        move |state: &mut AppState| {
+            state.ctx_size = 4096 * slots as u32;
+            state.batch_size = slots;
+            state.n_batch = 128;
+            state.n_ubatch = Some(32);
+        }
+    };
+    let ask = |prompt: &str, cache_prompt: bool, num_predict: u32| {
+        json!({
+            "model": "swa", "prompt": prompt, "raw": true, "stream": false,
+            "cache_prompt": cache_prompt,
+            "options": { "temperature": 0, "seed": 1, "num_predict": num_predict },
+        })
+    };
+    let base = "The harbour office kept a ledger of every ship that entered the bay, \
+                with the hour, the cargo and the weather at the mouth of the river."
+        .repeat(30);
+    let first = format!("{base} alpha beta gamma delta");
+    let second = format!("{base} one two three four five six seven");
+
+    let fresh = start_on(&swa_test_model(), &["swa"], configure(1)).await;
+    let (status, whole) = fresh.generate(ask(&second, false, 16)).await;
+    assert_eq!(status, 200, "{whole:?}");
+    assert_finished(&whole);
+    let whole_ns = whole.last().unwrap()["prompt_eval_duration"].as_u64().unwrap();
+
+    for slots in [1, 2] {
+        let server = start_on(&swa_test_model(), &["swa"], configure(slots)).await;
+        let (status, lines) = server.generate(ask(&first, true, 600)).await;
+        assert_eq!(status, 200, "{lines:?}");
+        assert_finished(&lines);
+        let generated = lines.last().unwrap()["eval_count"].as_u64().unwrap();
+        assert!(generated > 600 / 2, "the first answer ran {generated} tokens: too short to slide the window past");
+        let (status, next) = server.generate(ask(&second, true, 16)).await;
+        assert_eq!(status, 200, "{next:?}");
+        assert_finished(&next);
+        assert_eq!(answer(&next), answer(&whole), "{slots} slots");
+        let next_ns = next.last().unwrap()["prompt_eval_duration"].as_u64().unwrap();
+        assert!(
+            next_ns * 4 < whole_ns,
+            "{slots} slots: the next turn read its prompt in {next_ns} ns, the whole one in \
+             {whole_ns} ns: the kept window was not restored"
+        );
+    }
+}
+
+/// A model with a projector on the scheduler (19-11-2026; it was served by
+/// the sequential engine alone before): text requests are answered together,
+/// in batches, and a request with an image, read into its own slot while
+/// they answer, gets the answer the sequential engine gives it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a vision GGUF with its mmproj in EULLM_VISION_TEST_MODEL"]
+async fn real_model_a_multimodal_model_answers_text_and_images_in_batches() {
+    use base64::Engine as _;
+    let (model, projector) = vision_test_model();
+    let image = base64::engine::general_purpose::STANDARD.encode(two_colour_bmp());
+    let ask_image = json!({
+        "model": "vision", "stream": false,
+        "messages": [{ "role": "user", "content": "What colours are in this image?",
+                       "images": [image] }],
+        "options": { "temperature": 0, "seed": 1, "num_predict": 24 },
+    });
+    let ask_text = |n: usize| {
+        json!({
+            "model": "vision", "stream": false,
+            "messages": [{ "role": "user", "content": format!("Count from {n} to {}.", n + 5) }],
+            "options": { "temperature": 0, "seed": 1, "num_predict": 24 },
+        })
+    };
+    let with_projector = |server: &TestServer| {
+        std::fs::copy(&projector, server.dir.join("vision").join("mmproj-test.gguf"))
+            .expect("copy the projector");
+    };
+
+    // The sequential engine's answer, the reference.
+    let sequential = start_on(&model, &["vision"], |state| {
+        state.batch_size = 0;
+        state.ctx_size = 4096;
+    })
+    .await;
+    with_projector(&sequential);
+    let (status, reference) = sequential.post("/api/chat", ask_image.clone()).await;
+    assert_eq!(status, 200, "{reference:?}");
+    let reference = reference[0]["message"]["content"].as_str().expect("an answer").to_string();
+    assert!(!reference.is_empty());
+    drop(sequential);
+
+    let server = start_on(&model, &["vision"], |state| {
+        state.batch_size = 4;
+        state.ctx_size = 4 * 4096;
+    })
+    .await;
+    with_projector(&server);
+    // Alone first: the same answer as the sequential engine's.
+    let (status, alone) = server.post("/api/chat", ask_image.clone()).await;
+    assert_eq!(status, 200, "{alone:?}");
+    assert_eq!(alone[0]["message"]["content"], reference.as_str(), "alone");
+    {
+        let models = server.state.models.read().await;
+        let loaded = models.find("vision").expect("loaded");
+        assert!(loaded.scheduler.is_some(), "on the scheduler");
+        assert!(loaded.scheduler.as_ref().unwrap().has_projector());
+    }
+
+    // Then among three text requests, all sent at once.
+    let gate = {
+        let models = server.state.models.read().await;
+        models.find("vision").unwrap().scheduler.as_ref().unwrap().gate()
+    };
+    let held = gate.lock().unwrap();
+    let mut asked = Vec::new();
+    for body in [ask_text(1), ask_image.clone(), ask_text(10), ask_text(20)] {
+        let base = server.base.clone();
+        asked.push(tokio::spawn(async move {
+            let response = reqwest::Client::new()
+                .post(format!("{base}/api/chat"))
+                .json(&body)
+                .send()
+                .await
+                .expect("request");
+            (response.status(), response.json::<Value>().await.expect("json"))
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drop(held);
+    let mut answers = Vec::new();
+    for task in asked {
+        let (status, answer) = task.await.expect("answered");
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(answer["done"], true, "{answer}");
+        answers.push(answer);
+    }
+    assert_eq!(answers[1]["message"]["content"], reference.as_str(), "among text requests");
+    for i in [0, 2, 3] {
+        assert!(!answers[i]["message"]["content"].as_str().unwrap_or("").is_empty());
     }
 }

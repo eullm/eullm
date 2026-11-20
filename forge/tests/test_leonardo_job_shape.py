@@ -45,6 +45,7 @@ WHOLE_NODE = {
     "sbatch_phase2.slurm": "30B teacher + student, four GPUs",
     "sbatch_phase2_cds.slurm": "30B teacher + student, four GPUs",
     "sbatch_phase2_split_graze.slurm": "split-node teacher/student, four GPUs",
+    "sbatch_rpc_rewrites.slurm": "a 1T teacher (605 GB) over four whole nodes, llama.cpp RPC",
 }
 
 
@@ -211,14 +212,15 @@ def test_the_whole_node_list_only_shrinks():
     for name in WHOLE_NODE:
         path = LEONARDO / name
         assert path.is_file(), f"{name} is gone: drop it from WHOLE_NODE"
-        assert _gpus(_headers(path)) == 4, f"{name} no longer asks for 4 GPUs"
+        h = _headers(path)
+        assert _gpus(h) == 4 * _nodes(h), f"{name} no longer asks for whole nodes"
 
 
 def test_the_checks_catch_the_2026_10_01_grpo_script(tmp_path):
     bad = tmp_path / "sbatch_bad.slurm"
     bad.write_text("#!/bin/bash\n#SBATCH --partition=boost_usr_prod\n"
                    "#SBATCH --time=24:00:00\n#SBATCH --gres=gpu:4\n"
-                   "#SBATCH --cpus-per-task=32\n#SBATCH --mem=450G\n")
+                   "#SBATCH --cpus-per-task=32\n#SBATCH --mem=450G\n", encoding="utf-8")
     with pytest.raises(AssertionError):
         test_two_hours_at_most(bad)
     with pytest.raises(AssertionError):

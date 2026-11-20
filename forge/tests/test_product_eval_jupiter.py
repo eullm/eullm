@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32" or shutil.which("bash") 
 
 
 def _exe(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
 
 
@@ -34,13 +34,13 @@ def _setup(tmp_path):
     data, runs, private = home / "datasets", home / "runs", home / "private-eval"
     for d in (data / "eval", data / "norms-src", private, runs / "m" / "merged"):
         d.mkdir(parents=True)
-    (runs / "m" / "merged" / "config.json").write_text("{}")
-    (runs / "m" / "m.gguf").write_text("gguf")
-    (data / "norms-src" / "legislazione_cc.chunks.jsonl").write_text("{}\n")
+    (runs / "m" / "merged" / "config.json").write_text("{}", encoding="utf-8")
+    (runs / "m" / "m.gguf").write_text("gguf", encoding="utf-8")
+    (data / "norms-src" / "legislazione_cc.chunks.jsonl").write_text("{}\n", encoding="utf-8")
     for f in (data / "eval" / "trap-test.jsonl", data / "eval" / "trap-test-para.jsonl",
               data / "eval" / "norm-exam.jsonl", data / "eval" / "closed-book.jsonl",
               private / "lexia-trappole.jsonl", private / "practical-dev.jsonl"):
-        f.write_text("{}\n")
+        f.write_text("{}\n", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     log = tmp_path / "python.log"
@@ -59,7 +59,7 @@ def _setup(tmp_path):
 
 
 def _run(env):
-    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True,
+    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, encoding="utf-8",
                           timeout=60)
 
 
@@ -67,10 +67,10 @@ def test_open_book_by_default(tmp_path):
     env, _, log = _setup(tmp_path)
     p = _run(env)
     assert p.returncode == 0, p.stdout + p.stderr
-    asks = [ln for ln in log.read_text().splitlines() if "legal_eval.py" in ln]
+    asks = [ln for ln in log.read_text(encoding="utf-8").splitlines() if "legal_eval.py" in ln]
     assert len(asks) == 5
     assert all("--norms" in a and "--no-note" in a and "-q4e" in a for a in asks)
-    assert "score_closed_book" not in log.read_text()
+    assert "score_closed_book" not in log.read_text(encoding="utf-8")
 
 
 def test_closed_book_asks_no_texts_and_scores_the_suite(tmp_path):
@@ -79,7 +79,7 @@ def test_closed_book_asks_no_texts_and_scores_the_suite(tmp_path):
     env["PE_SETS"] = f"closed-book={data / 'eval' / 'closed-book.jsonl'}"
     p = _run(env)
     assert p.returncode == 0, p.stdout + p.stderr
-    lines = log.read_text().splitlines()
+    lines = log.read_text(encoding="utf-8").splitlines()
     asks = [ln for ln in lines if "legal_eval.py" in ln]
     assert len(asks) == 1
     assert "--norms" not in asks[0] and "--embedder" not in asks[0]

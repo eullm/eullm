@@ -25,17 +25,18 @@ exit go to stderr as well while the statistics are on.
 
 EuLLM patch on llama.cpp b11925. Needs 0001 to pin.
 
+Regenerated on b12283, over upstream's rework of the cache: ClassLRU
+(#31233) and misses computed on the CPU (#30966). The destructor closes
+upstream's trace as well as unpinning, and the totals at exit keep the
+count of misses computed on the CPU.
+
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 6a343a76..34b9e6d0 100644
+index 965f6a177..ef8bb2ac6 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -7,10 +7,19 @@
- #include "ggml-cpp.h"
- 
- #include <algorithm>
-+#include <cstdio>
-+#include <cstdlib>
-+#include <cstring>
+@@ -12,9 +12,15 @@
+ #include <cstdlib>
+ #include <cstring>
  #include <stdexcept>
 +#include <string>
  #include <unordered_map>
@@ -48,8 +49,8 @@ index 6a343a76..34b9e6d0 100644
 +
  namespace {
  
- // SLRU of the experts of a group of layers, the slot of each expert is kept in the slot map of its layer
-@@ -183,6 +192,14 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
+ // ClassLRU: one LRU list per frequency class, over the experts of a group of layers
+@@ -315,6 +321,14 @@ static bool llama_moe_cache_is_host_weight(const ggml_tensor * t) {
          ggml_backend_buffer_is_host(t->buffer);
  }
  
@@ -64,7 +65,7 @@ index 6a343a76..34b9e6d0 100644
  }
  
  struct llama_moe_cache::impl {
-@@ -228,14 +245,61 @@ struct llama_moe_cache::impl {
+@@ -365,14 +379,61 @@ struct llama_moe_cache::impl {
          size_t bytes  = 0;
      };
  
@@ -126,7 +127,7 @@ index 6a343a76..34b9e6d0 100644
      std::vector<device> devices;
      std::vector<group> groups;
      std::vector<layer> layers;
-@@ -466,6 +530,13 @@ struct llama_moe_cache::impl {
+@@ -633,6 +694,13 @@ struct llama_moe_cache::impl {
                  }
              }
          }
@@ -140,10 +141,10 @@ index 6a343a76..34b9e6d0 100644
      }
  
      ggml_backend_t backend(int32_t il) const {
-@@ -474,6 +545,163 @@ struct llama_moe_cache::impl {
- 
-     ~impl() {
-         log_stats();
+@@ -682,6 +750,163 @@ struct llama_moe_cache::impl {
+         if (trace != nullptr) {
+             fclose(trace);
+         }
 +
 +        // llama_context synchronizes its backends before it frees anything, no upload is still reading these
 +        for (const pinned_range & r : pinned) {
@@ -303,8 +304,8 @@ index 6a343a76..34b9e6d0 100644
 +        fprintf(stderr, "%s\n", line.c_str());
      }
  
-     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used) const {
-@@ -540,6 +768,16 @@ struct llama_moe_cache::impl {
+     ggml_tensor * get_slot_map(int32_t il, int64_t n_tokens, int64_t n_expert_used, bool cpu_part) const {
+@@ -770,6 +995,16 @@ struct llama_moe_cache::impl {
  
          GGML_ASSERT(backend == devices[g.id].backend);
  
@@ -321,9 +322,9 @@ index 6a343a76..34b9e6d0 100644
          // the get_rows that looks up the slots of the selected experts
          const int n_nodes = ggml_graph_n_nodes(graph);
          const ggml_tensor * lookup = nullptr;
-@@ -596,17 +834,43 @@ struct llama_moe_cache::impl {
+@@ -852,17 +1087,43 @@ struct llama_moe_cache::impl {
          // the next copy synchronizes the backend before it changes the slot map again
-         ggml_backend_tensor_set_async(backend, dst, src->data, 0, ggml_nbytes(src));
+         ggml_backend_tensor_set_async(backend, dst, l.slot_map->data, 0, ggml_nbytes(l.slot_map));
  
 +        if (stats_every > 0) {
 +            if (cur.sampled && bytes > 0) {
@@ -357,9 +358,9 @@ index 6a343a76..34b9e6d0 100644
              if (n == 0) {
                  return;
              }
--            LLAMA_LOG_INFO("llama_moe_cache: %s: hits = %zu, misses = %zu, hit rate = %.2f%%, uploaded = %.2f MiB\n",
-+            const std::string line = format("llama_moe_cache: %s: hits = %zu, misses = %zu, hit rate = %.2f%%, uploaded = %.2f MiB\n",
-                 name, st.hits, st.misses, 100.0*st.hits/n, st.bytes/1024.0/1024.0);
+-            LLAMA_LOG_INFO("llama_moe_cache: %s: hits = %zu, misses = %zu (%zu on the CPU), hit rate = %.2f%%, uploaded = %.2f MiB\n",
++            const std::string line = format("llama_moe_cache: %s: hits = %zu, misses = %zu (%zu on the CPU), hit rate = %.2f%%, uploaded = %.2f MiB\n",
+                 name, st.hits, st.misses, st.cpu, 100.0*st.hits/n, st.bytes/1024.0/1024.0);
 +            LLAMA_LOG_INFO("%s", line.c_str());
 +            if (stats_every > 0) {
 +                fprintf(stderr, "%s", line.c_str());

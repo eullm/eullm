@@ -64,7 +64,7 @@ class SparseBM25:
         self.n = n
         self.docs = [np.asarray(r, dtype=np.int32) for r in rows]
         self.weights = []
-        for r, tf in zip(self.docs, tfs):
+        for r, tf in zip(self.docs, tfs, strict=True):
             tf = np.asarray(tf, dtype=np.float32)
             idf = math.log(1 + (n - len(r) + 0.5) / (len(r) + 0.5))
             norm = tf + k1 * (1 - b + b * lengths[r] / (avg or 1))
@@ -152,7 +152,7 @@ class RulingIndex:
         if self.reranker is not None and fused:
             head = fused[:self.rerank_depth]
             s = self.reranker.scores(question, [self.units[i].text[:3000] for i in head])
-            head = [i for _, i in sorted(zip(s, head), key=lambda x: -x[0])]
+            head = [i for _, i in sorted(zip(s, head, strict=True), key=lambda x: -x[0])]
             fused = head + fused[self.rerank_depth:]
         return fused
 

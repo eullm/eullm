@@ -28,6 +28,16 @@
 # the caller does not have to remember to.
 
 HEARTBEAT_INTERVAL="${HEARTBEAT_INTERVAL:-60}"
+# A job that fails (exit 1-127, not a signal) within this many seconds
+# cancels the jobs queued behind it, all the way down the chain; 0 turns it
+# off. A link of a chain waits on the one before with afterany, because a
+# 2 h link is meant to end in TIMEOUT, so a link that dies at start-up hands
+# over to the next one, which dies the same way: on 2026-11-04 the 24 links
+# of the two A1 chains all died in 1-4 minutes of the same error, one after
+# the other, and the day of A1 was gone before anyone read a log. A failure
+# that early is an error in the job, not in the run, and nothing behind it
+# can succeed until someone fixes it.
+HEARTBEAT_FAST_FAIL="${HEARTBEAT_FAST_FAIL:-600}"
 
 # Sum the resident memory of this job's python workers, in GiB. Reported as
 # a total rather than per-rank because the useful signal is "is it still
@@ -72,6 +82,37 @@ _heartbeat_loop() {
     done
 }
 
+# The jobs that wait on this one, and the ones that wait on those: the rest
+# of its chain. squeue's %E reads "afterany:63510238(unfulfilled)", with
+# several dependencies joined by "," or "?".
+_heartbeat_chain_behind() {
+    local table ids="$1" next found="" id
+    table="$(squeue --me -h -o '%i %E' 2>/dev/null)" || return 0
+    while [ -n "$ids" ]; do
+        next=""
+        for id in $ids; do
+            next="$next $(awk -v j="$id" '{
+                n = split($2, d, /[:,?&()]/)
+                for (i = 1; i <= n; i++) if (d[i] == j) { print $1; break }
+            }' <<<"$table")"
+        done
+        ids="$(echo $next)"
+        found="$found $ids"
+    done
+    echo $found
+}
+
+_heartbeat_stop_chain() {
+    local behind
+    [ -n "${SLURM_JOB_ID:-}" ] && command -v squeue >/dev/null 2>&1 || return 0
+    behind="$(_heartbeat_chain_behind "$SLURM_JOB_ID")"
+    [ -n "$behind" ] || return 0
+    printf '[hb] failed in the first %ds: cancelling the jobs queued behind it: %s\n' \
+        "$HEARTBEAT_FAST_FAIL" "$behind"
+    # shellcheck disable=SC2086
+    scancel $behind 2>/dev/null || printf '[hb] scancel failed; cancel them by hand\n'
+}
+
 # Runs however the job ends, and says so. A job that dies leaves a log whose
 # last line is whatever it happened to be printing, so telling "finished" from
 # "still running" meant polling squeue from another shell — and a failure
@@ -88,6 +129,10 @@ _heartbeat_end() {
         printf '[hb] JOB FAILED — exit %d after %ds (%dm)\n' \
             "$status" "$elapsed" "$((elapsed / 60))"
         printf '[hb] search upward for: Traceback, OutOfMemoryError, RuntimeError\n'
+        if [ "$status" -lt 128 ] && [ "${HEARTBEAT_FAST_FAIL:-0}" -gt 0 ] &&
+           [ "$elapsed" -lt "$HEARTBEAT_FAST_FAIL" ]; then
+            _heartbeat_stop_chain
+        fi
     fi
     printf '[hb] ============================================================\n'
     return "$status"

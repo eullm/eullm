@@ -138,7 +138,7 @@ case_() {  # LABEL RUNTIME [ARGS...]: start, time the first answer, stop
     # EuLLM's own figure for the load, from its answer.
     load=$("$PY" -c "import json, sys
 try:
-    d = json.load(open(sys.argv[1]))
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
     print(f\"{d['load_duration'] / 1e9:.1f}\" if d.get('load_duration') else '-')
 except Exception:
     print('-')" "$answer")
@@ -178,7 +178,7 @@ together() {  # LABEL [ARGS...]: four EuLLM servers, one per GPU, loading at onc
         t1=$(cat "$OUT/$label.$i.end" 2>/dev/null || echo "$t0")
         load=$("$PY" -c "import json, sys
 try:
-    d = json.load(open(sys.argv[1]))
+    d = json.load(open(sys.argv[1], encoding="utf-8"))
     print(f\"{d['load_duration'] / 1e9:.1f}\" if d.get('load_duration') else '-')
 except Exception:
     print('-')" "$OUT/$label.$i.answer.json")

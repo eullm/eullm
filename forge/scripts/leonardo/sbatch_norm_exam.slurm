@@ -33,12 +33,27 @@
 #                (each item's own article taken out of the texts); the
 #                closed-book run of the same job is its no-text half.
 #                abstain_summary.py counts both
+#   EXAM_ARGS    extra legal_eval.py options for every run of the job, e.g.
+#                "--max-new-tokens 1000" for a model that writes long answers
+#                (Flash-Next ended its turn in 355 of 716 closed-book answers
+#                at the default 400, 2026-11-05)
 #   EXAM_GGUF    space-separated label=file.gguf pairs: those labels of
 #                EXAM_MODELS answer with the GGUF through llama-server, the
 #                model's path giving the tokenizer (legal_eval.py --gguf), so
 #                "grpo-v04-q4=<merged>" with "grpo-v04-q4=<its q4_k_m.gguf>"
 #                is the shipped file asked exactly like the bf16 "grpo-v04".
-#                Needs the CUDA llama-server (sbatch_build_llama_server.slurm)
+#                Needs the CUDA llama-server (sbatch_build_llama_server.slurm).
+#                The value may be the GGUF's directory: the model is its one
+#                file, or the first part of a split one (-00001-of-), never the
+#                vision projector (mmproj-*.gguf), which llama-server refuses
+#                as a model (the Flash-Next exam of 2026-11-04 died on it)
+#   EXAM_MEMORY  space-separated label=dir pairs: those labels of EXAM_MODELS
+#                answer with this n-gram memory grafted on (ngram_train.py,
+#                <out>/memory; legal_eval.py --ngram-memory), so
+#                "r2l-mem=<merged r2l>" with "r2l-mem=<run>/memory" is the
+#                same model asked with its memory, beside a plain "r2l"
+#   EXAM_ADAPTER space-separated label=dir pairs: a LoRA adapter merged first
+#                (the control of ngram_train.py --mode lora, <out>/adapter)
 #   EXAM_REPO    checkout to run (default: the one this file was submitted from)
 #
 #SBATCH --job-name=eullm-exam
@@ -79,13 +94,37 @@ for pair in $EXAM_MODELS; do
     path="${pair#*=}"
     [ -f "$path/config.json" ] || { echo "[exam] no model at $path (${pair%%=*})" >&2; fail=1; }
 done
-gguf_of() {  # the GGUF EXAM_GGUF gives this label, or nothing
+pair_of() {  # pair_of LIST LABEL: the value LIST gives this label, or nothing
     local p
-    for p in ${EXAM_GGUF:-}; do [ "${p%%=*}" = "$1" ] && { echo "${p#*=}"; return; }; done
+    for p in $1; do [ "${p%%=*}" = "$2" ] && { echo "${p#*=}"; return; }; done
 }
+gguf_file() {  # the model file a GGUF path names: itself, or its directory's model
+    local d="$1" f
+    if [ -d "$d" ]; then
+        f="$(ls "$d"/*-00001-of-*.gguf 2>/dev/null | grep -v '/mmproj' | head -1)"
+        [ -n "$f" ] || f="$(ls "$d"/*.gguf 2>/dev/null | grep -v '/mmproj')"
+        [ "$(printf '%s\n' "$f" | grep -c .)" -eq 1 ] && echo "$f"
+        return 0
+    fi
+    echo "$d"
+}
+gguf_of() { local g; g="$(pair_of "${EXAM_GGUF:-}" "$1")"; [ -z "$g" ] || gguf_file "$g"; }
+for pair in ${EXAM_MEMORY:-}; do
+    [ -f "${pair#*=}/config.json" ] || { echo "[exam] no n-gram memory at ${pair#*=} (${pair%%=*})" >&2; fail=1; }
+done
+for pair in ${EXAM_ADAPTER:-}; do
+    [ -f "${pair#*=}/adapter_config.json" ] || { echo "[exam] no LoRA adapter at ${pair#*=} (${pair%%=*})" >&2; fail=1; }
+done
 SERVER="${LCPP_SERVER:-$LCPP_DIR/build-cuda/bin/llama-server}"
 for pair in ${EXAM_GGUF:-}; do
-    [ -f "${pair#*=}" ] || { echo "[exam] no GGUF at ${pair#*=} (${pair%%=*})" >&2; fail=1; }
+    g="$(gguf_file "${pair#*=}")"
+    if [ ! -f "$g" ]; then
+        echo "[exam] no GGUF model at ${pair#*=} (${pair%%=*})" >&2; fail=1
+    elif case "$(basename "$g")" in mmproj*) true ;; *) false ;; esac; then
+        echo "[exam] $g is the vision projector, not the model (${pair%%=*})" >&2; fail=1
+    else
+        echo "[exam] ${pair%%=*}: $g"
+    fi
     [ -x "$SERVER" ] || { echo "[exam] no llama-server at $SERVER -- sbatch_build_llama_server.slurm" >&2; fail=1; }
 done
 [ "$fail" -eq 0 ] || exit 1
@@ -104,6 +143,8 @@ heartbeat_start
 
 EVAL=(python "$REPO/forge/scripts/legal_eval.py" --items "$ITEMS" --quiet
       --csv "$OUT/keywords.csv")
+# shellcheck disable=SC2206
+EVAL+=(${EXAM_ARGS:-})
 # An answers file with one line per item is a finished run: legal_eval.py
 # writes the file only after the last answer, so it is either whole or absent.
 # Skipping those makes the job a link of a chain (sbatch_exam_round.slurm,
@@ -123,14 +164,18 @@ status=0
 for pair in $EXAM_MODELS; do
     label="${pair%%=*}"; path="${pair#*=}"
     echo "[exam] === $label ==="
-    GGUF=()
+    EXTRA=()
     g="$(gguf_of "$label")"
-    [ -z "$g" ] || GGUF=(--gguf "$g" --llama-server "$SERVER")
+    [ -z "$g" ] || EXTRA=(--gguf "$g" --llama-server "$SERVER")
+    m="$(pair_of "${EXAM_MEMORY:-}" "$label")"
+    [ -z "$m" ] || EXTRA+=(--ngram-memory "$m")
+    m="$(pair_of "${EXAM_ADAPTER:-}" "$label")"
+    [ -z "$m" ] || EXTRA+=(--adapter "$m")
     if [ "${EXAM_OPEN_ONLY:-0}" != "1" ]; then
         if done_already "$OUT/answers-$label.jsonl"; then
             echo "[exam] $label: answered already, skipped"
         else
-            "${EVAL[@]}" "$path" --label "$label" "${GGUF[@]}" \
+            "${EVAL[@]}" "$path" --label "$label" "${EXTRA[@]}" \
                 --answers "$OUT/answers-$label.jsonl" || status=1
         fi
     fi
@@ -139,7 +184,7 @@ for pair in $EXAM_MODELS; do
             echo "[exam] $label-$TAG: answered already, skipped"
         else
             # shellcheck disable=SC2086
-            "${EVAL[@]}" "$path" --label "$label-$TAG" --norms $EXAM_NORMS "${RETRIEVAL[@]}" "${GGUF[@]}" \
+            "${EVAL[@]}" "$path" --label "$label-$TAG" --norms $EXAM_NORMS "${RETRIEVAL[@]}" "${EXTRA[@]}" \
                 ${EXAM_OPEN_ARGS:-} --answers "$OUT/answers-$label-$TAG.jsonl" || status=1
         fi
     fi

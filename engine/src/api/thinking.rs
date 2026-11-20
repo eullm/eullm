@@ -10,9 +10,17 @@
 //! `think: true` the Ollama endpoints now take the answer apart, as it
 //! streams, with [`ThinkingSplitter`].
 //!
-//! Only when asked. Without `think`, the reasoning stays in the answer with
-//! its tags, as it always has, for the clients that render it from there;
-//! `/v1/chat/completions` keeps it there too.
+//! Only when asked, on the Ollama endpoints. Without `think`, the reasoning
+//! stays in the answer with its tags, as it always has, for the clients that
+//! render it from there.
+//!
+//! `/v1/chat/completions` always takes it apart, into `reasoning_content`
+//! (`delta.reasoning_content` as it streams), as llama-server does. It kept
+//! it in `content` until 19-11-2026, when Gemma 4 on Leonardo answered 13
+//! requests of 13 with `<|channel>thought…` at the head of `content`, 3,712
+//! characters on average against llama-server's 650 of answer alone: a client
+//! of the OpenAI API reads `content` as the answer. Whether the model reasons
+//! at all is [`openai_think`].
 
 use serde_json::Value;
 
@@ -30,6 +38,32 @@ pub(crate) fn wants_thinking(body: &Value) -> bool {
         Some(Value::String(level)) => !level.is_empty(),
         _ => false,
     }
+}
+
+/// Whether a `/v1/chat/completions` request lets the model reason, from the
+/// three ways clients say it: Ollama's `think` (as on the Ollama endpoints),
+/// llama-server's `chat_template_kwargs.enable_thinking`, which many OpenAI
+/// clients send, and OpenAI's `reasoning_effort`, where `"none"` turns it
+/// off. The first present decides, in that order; with none, the model
+/// reasons, as llama-server's default lets it. Only `think` was read until
+/// 19-11-2026: a request sending `enable_thinking: false` got the reasoning
+/// all the same.
+pub(crate) fn openai_think(body: &Value) -> bool {
+    match body.get("think") {
+        Some(Value::Bool(think)) => return *think,
+        Some(Value::String(level)) => return !level.is_empty() && level != "none",
+        _ => {}
+    }
+    if let Some(enabled) = body
+        .pointer("/chat_template_kwargs/enable_thinking")
+        .and_then(Value::as_bool)
+    {
+        return enabled;
+    }
+    if let Some(effort) = body.get("reasoning_effort").and_then(Value::as_str) {
+        return effort != "none";
+    }
+    true
 }
 
 /// A whole answer taken apart: its reasoning, when it had any, and the rest.
@@ -365,5 +399,43 @@ mod tests {
         assert!(!wants_thinking(&json!({ "think": null })));
         assert!(!wants_thinking(&json!({ "think": "" })));
         assert!(!wants_thinking(&json!({})));
+    }
+
+    /// `think` first, then llama-server's `enable_thinking`, then OpenAI's
+    /// `reasoning_effort`; with none, the model reasons. The case of
+    /// 19-11-2026: `enable_thinking: false` was ignored.
+    #[test]
+    fn an_openai_request_says_whether_to_reason_three_ways() {
+        assert!(openai_think(&json!({})));
+        assert!(!openai_think(
+            &json!({ "chat_template_kwargs": { "enable_thinking": false } })
+        ));
+        assert!(openai_think(
+            &json!({ "chat_template_kwargs": { "enable_thinking": true } })
+        ));
+        assert!(!openai_think(&json!({ "reasoning_effort": "none" })));
+        assert!(openai_think(&json!({ "reasoning_effort": "low" })));
+        assert!(!openai_think(&json!({ "think": false, "reasoning_effort": "high" })));
+        assert!(openai_think(&json!({
+            "think": true, "chat_template_kwargs": { "enable_thinking": false }
+        })));
+        assert!(!openai_think(&json!({
+            "chat_template_kwargs": { "enable_thinking": false }, "reasoning_effort": "high"
+        })));
+        assert!(openai_think(&json!({ "think": "high" })));
+        assert!(!openai_think(&json!({ "think": "none" })));
+    }
+
+    /// Gemma 4's reasoning, as Leonardo's answers carried it in `content`.
+    #[test]
+    fn gemma_4s_reasoning_comes_apart_from_its_answer() {
+        assert_eq!(
+            split("<|channel>thought\nThe user wants a summary.<channel|>The summary."),
+            (
+                Some("The user wants a summary.".to_string()),
+                "The summary.".to_string()
+            )
+        );
+        assert_eq!(split("No reasoning here."), (None, "No reasoning here.".to_string()));
     }
 }

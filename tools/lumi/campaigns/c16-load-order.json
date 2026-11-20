@@ -1,0 +1,143 @@
+{
+  "campaign": "c16-load-order",
+  "notes": [
+    "Why loads got slower on llama.cpp b12032 (0.8.7) on LUMI's Lustre: #31321 reads the tensors of",
+    "a model loaded without mmap biggest-first rather than in file order. Two Qwen3-235B loading",
+    "together took 160 s in r-v087 against 103-121 s in the four rounds before (c09). Patch 0014",
+    "reads them in file order again. The same cold loads (the model dropped from the page cache",
+    "first, the node alone) on 0.8.5 (v085, b11925), on 0.8.7 as released (v087, b12032), and on",
+    "0.8.7 with 0014 (v087fo), round r-load-order. --load-threads 0, as c09's, so EuLLM's own",
+    "readers are out of it; mmap left to EuLLM's default, which reads a model on Lustre whole.",
+    "The v087 half runs in r-v087's chains (priority above that round); v085 and v087fo have a job",
+    "each."
+  ],
+  "pull": [
+    "hf.co/Qwen/Qwen3-235B-A22B-GGUF:Q4_K_M",
+    "hf.co/Qwen/Qwen3-235B-A22B-GGUF:Q8_0",
+    "hf.co/unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF:Q4_K_M",
+    "hf.co/unsloth/Qwen3.8-27B-GGUF:UD-Q8_K_XL"
+  ],
+  "defaults": {
+    "kind": "throughput",
+    "repeats": 1,
+    "cold": true,
+    "exclusive": true,
+    "batch": 1,
+    "slot_ctx": 4096,
+    "extra_args": [
+      "--fit-strict",
+      "--load-threads",
+      "0"
+    ]
+  },
+  "groups": [
+    {
+      "name": "lo-together-235b",
+      "priority": 120,
+      "est_s": 600,
+      "set": {
+        "model": "qwen3-235b-a22b-gguf-q4_k_m",
+        "gcds": 8,
+        "replica_gcds": 4
+      },
+      "axes": {
+        "trial": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "name": "lo-235b",
+      "priority": 120,
+      "est_s": 600,
+      "set": {
+        "model": "qwen3-235b-a22b-gguf-q4_k_m",
+        "gcds": 4
+      },
+      "axes": {
+        "trial": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "name": "lo-235b-q8",
+      "priority": 119,
+      "est_s": 900,
+      "set": {
+        "model": "qwen3-235b-a22b-gguf-q8_0",
+        "gcds": 8
+      },
+      "axes": {
+        "trial": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "lo-480b",
+      "priority": 119,
+      "est_s": 900,
+      "set": {
+        "model": "qwen3-coder-480b-a35b-instruct-gguf-q4_k_m",
+        "gcds": 8,
+        "extra_args": [
+          "--fit-strict",
+          "--load-threads",
+          "0",
+          "--no-mmap"
+        ]
+      },
+      "axes": {
+        "trial": [
+          1,
+          2
+        ]
+      }
+    },
+    {
+      "name": "lo-tensor-32b",
+      "priority": 118,
+      "est_s": 600,
+      "set": {
+        "model": "qwen3-32b",
+        "gcds": 4,
+        "extra_args": [
+          "--fit-strict",
+          "--load-threads",
+          "0",
+          "--split-mode",
+          "tensor"
+        ]
+      },
+      "axes": {
+        "trial": [
+          1,
+          2,
+          3
+        ]
+      }
+    },
+    {
+      "name": "lo-27b",
+      "priority": 118,
+      "est_s": 300,
+      "set": {
+        "model": "qwen3.8-27b-gguf-ud-q8_k_xl",
+        "gcds": 1
+      },
+      "axes": {
+        "trial": [
+          1,
+          2,
+          3
+        ]
+      }
+    }
+  ]
+}

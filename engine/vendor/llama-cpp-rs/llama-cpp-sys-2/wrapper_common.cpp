@@ -335,8 +335,10 @@ extern "C" int llama_rs_fit_params(
     // extra: a second model fit alongside the main one (e.g. an MTP draft
     // context). We don't drive that path through this wrapper yet, so
     // nullptr — same as every other caller that isn't fitting a pair.
+    // EuLLM: a list of files since llama.cpp b12283 (#31185, a model's per-layer embeddings may be a file of
+    // their own); EuLLM fits one GGUF, whose split parts llama.cpp finds by itself.
     return static_cast<int>(common_fit_params(
-        path_model,
+        std::vector<std::string>{ path_model },
         mparams,
         cparams,
         tensor_split,

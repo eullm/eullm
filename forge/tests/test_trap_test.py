@@ -40,7 +40,7 @@ def _load(name):
 
 def _norms(tmp_path):
     norms = tmp_path / "legislazione_test.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS))
+    norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     return norms
 
 
@@ -51,7 +51,7 @@ def test_no_question_is_on_an_article_the_premise_pairs_trained_on(tmp_path, cap
     assert _load("make_premise_pairs").main(
         ["--norms", str(norms), "--per-code", "1", "--grpo-share", "0", "--out-sft", str(sft)]) == 0
     trained = {(r["source"], r["key"].split("-", 3)[3])
-               for r in map(json.loads, sft.read_text().splitlines())}
+               for r in map(json.loads, sft.read_text(encoding="utf-8").splitlines())}
     assert trained
     out = tmp_path / "trap-test.jsonl"
     assert _load("make_trap_test").main(
@@ -71,15 +71,15 @@ def test_answers_are_graded_by_kind_and_a_model_that_refuses_everything_fails_th
     out = tmp_path / "trap-test.jsonl"
     assert _load("make_trap_test").main(["--norms", str(norms), "--per-code", "10",
                                          "--out", str(out)]) == 0
-    items = [json.loads(ln) for ln in out.read_text().splitlines()]
+    items = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert {"premessa_termine", "premessa_vera"} <= {i["category"] for i in items}
     # Answers files as legal_eval.py writes them: the reference itself, and a refusal.
     right = tmp_path / "answers-trap-test-right.jsonl"
     right.write_text("".join(json.dumps({"id": i["id"], "answer": i["reference"]}) + "\n"
-                             for i in items))
+                             for i in items), encoding="utf-8")
     doubt = tmp_path / "answers-trap-test-doubt.jsonl"
     doubt.write_text("".join(json.dumps({"id": i["id"], "answer": "La premessa è errata."}) + "\n"
-                             for i in items))
+                             for i in items), encoding="utf-8")
     assert _load("score_trap_test").main([str(out), str(right), str(doubt)]) == 0
     rows = {ln.split()[0]: ln.split() for ln in capsys.readouterr().out.splitlines()
             if ln.startswith("trap-test-")}
@@ -120,7 +120,7 @@ def test_the_rewritten_test_is_graded_as_the_original(tmp_path, monkeypatch, cap
     assert para_mod.main([str(items), "--servers", "http://x",
                                                "--out", str(para)]) == 0
     rewritten = load_eval_set(para)
-    originals = {json.loads(ln)["id"]: json.loads(ln) for ln in items.read_text().splitlines()}
+    originals = {json.loads(ln)["id"]: json.loads(ln) for ln in items.read_text(encoding="utf-8").splitlines()}
     assert len(rewritten) == 3 * len(originals)
     for it in rewritten:
         src = originals[it.metadata["paraphrase_of"]]
@@ -130,6 +130,6 @@ def test_the_rewritten_test_is_graded_as_the_original(tmp_path, monkeypatch, cap
     # The same answers grade the same on the rewritten test.
     right = tmp_path / "answers-trap-test-para-right.jsonl"
     right.write_text("".join(json.dumps({"id": it.id, "answer": it.reference}) + "\n"
-                             for it in rewritten))
+                             for it in rewritten), encoding="utf-8")
     assert _load("score_trap_test").main([str(para), str(right)]) == 0
     assert "100.0%" in capsys.readouterr().out

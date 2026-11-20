@@ -123,19 +123,45 @@ user an `sbatch`, a chain or an `scontrol update`, check it against all of
 them, and look for what the scripts' headers already measured before
 proposing a new request shape.
 
-1. **Two hours, chained.** `--time=02:00:00`, as a chain of links
-   (`submit_chain.sh <script> N` or `--dependency=afterany`). A 2 h request is
-   backfilled into gaps; a 24 h one waits for a node to stay free for a day.
-   Every training script resumes from its checkpoint and exits at once when
-   its output is complete, so a link costs minutes. (Forgotten for GRPO on
-   2026-10-01: five 24 h jobs waited all afternoon.)
-2. **Three GPUs, 24 cores, 340 GB — all three numbers.** Never 4 GPUs, never
-   32 cores, never more than ~340 GB. Four GPUs or 32 cores make the job
-   exclusive, and an entirely idle node is rare: on 2026-09-23 two probes
-   differing only in `--gres` started in 87 s (3 GPUs) and not at all (4);
-   see sbatch_phase2_split.slurm. Forgotten for GRPO on 2026-10-01 (3253 of
-   3264 nodes busy, the whole-node chains never started). One-GPU jobs:
-   8 cores, 120 GB.
+**What the Fast Lane's queue does (AIFAC_F02_1400, `fastlane_probe.sh`, 3-11-2026):**
+the shapes of rules 1-2 were Playground measurements of September, and on the
+Fast Lane's first day they no longer held. 3-GPU jobs started in 13-20 s at
+**every** wall time up to 24 h, `boost_qos_lprod` too; a whole node for 2 h in
+7 min; 4 nodes for 2 h in 29 min; two 4-node jobs ran side by side (32 GPUs)
+98 s after submission; whole nodes for 8-24 h, 2, 4 and 8 nodes all started
+after 105-114 min. No limit of our own on GPUs, jobs or wall time; the
+partition caps a job at 24 h and 64 nodes. One day's reading, so the rules
+below are the starting point and the probe is run again when the queue
+seems to change (`docs/cineca/fastlane-plan.md`, "Il primo giorno").
+
+1. **Two-hour links by default; longer only on a day the queue says so.**
+   On 4-11-2026, a day after the probe above, 7,025 jobs were pending in
+   `boost_usr_prod` (3,688 on 2026-09-22), no node was idle, and our 3-GPU
+   jobs of 24 h got no planned start at all, although our priority (144,400)
+   was above the 90th percentile of the queue (143,054): the same backfill
+   problem as in September, so priority is not the lever, the wall time is.
+   Chains of 2 h links (`submit_chain.sh ... -t 02:00:00`, `save_steps` well
+   inside a link, e.g. 50) start; a 24 h link starts only when the machine is
+   quiet. Before giving the user a longer link, check that day's queue
+   (`squeue --me --start`, or `fastlane_probe.sh` with `FLP_HOLD=1`): planned
+   starts for long jobs, or the long probes started within minutes. Whole
+   nodes and multi-node jobs follow the same rule and wait longer.
+   The same afternoon a ladder of probes found the edge: **1-GPU jobs of
+   30 min, 1, 2 and 4 h started in 16-24 s, while 2- and 3-GPU jobs, even of
+   one hour, got no planned start.** On a day like that the work is cut into
+   1-GPU jobs (one teacher `llama-server` per job, 4B-9B models in bf16,
+   exams of small models), and the multi-GPU chains stay queued for the
+   holes that open later.
+   The evening after (probe of 4-11 20:37, after the storage outage): 3-GPU
+   jobs started in 10 min (2 h), 30 min (4-8 h) and **50 min (24 h)**; whole
+   nodes, from 1 to 8 and from 2 to 24 h, waited 9.5-10.3 h and all started
+   between 06:05 and 06:54. So multi-node work submitted in the evening runs
+   the next morning, and on a day like that 3-GPU links can be longer than
+   2 h; `docs/cineca/fastlane-infrastruttura.md` keeps the series.
+2. **Three GPUs, 24 cores, 340 GB — all three numbers — for a part of a
+   node.** Four GPUs or 32 cores make the job exclusive: ask for that only
+   when the whole node is meant (rule 1), never by accident through the
+   cores or the memory. One-GPU jobs: 8 cores, 120 GB.
 3. **Changing a queued job:** `scontrol update` takes memory in MB
    (`MinMemoryNode=348160`, not `340G`), and one invalid field fails the
    whole update silently for the others. Read the result back with
@@ -175,6 +201,18 @@ proposing a new request shape.
    to spend the hours; running out early with better models is fine, burning
    them on runs that answer nothing is not. `status.sh` flags an empty GPU
    queue with `[!!]`.
+   **A day left to the queue is sized from when each chain ends, not from
+   how much there is.** On 2026-11-05 the user left for the day with "the
+   day covered": a rewrite pass estimated at hours had 8,900 items left and
+   ended in 26 minutes, the other chains ended by 08:40, nothing was queued
+   behind them, and the GPUs stood idle for eleven hours. Before saying a
+   day is covered: write down when each queued chain ends (steps left ×
+   seconds a step, or items left ÷ items an hour, from its own log), and
+   queue useful work behind the earliest ends until the last one is past
+   the next time the user is back. And a run that diverges stops: the
+   trainers skip a non-finite loss and stop for good after a few in a row
+   (`ngram_train.py --max-bad-steps`), since the LoRA control of that night
+   trained on NaN for its last twenty hours.
 
 Rules 1 and 2 are also enforced by the build: `tests/test_leonardo_job_shape.py`
 fails CI for any `boost_usr_prod` script over 2 h, over three GPUs, or over
@@ -239,6 +277,36 @@ had its own passing test; nobody had run one after the other. Rules:
   a `[!!]` line for each thing that needs a human. If it finds a problem
   whose shape it did not know, teach it that shape.
 
+## The server that answers is part of the measurement
+
+Since 2026-11-20 Forge's jobs on Leonardo serve teachers and checkers with
+the EULLM Engine built from the checkout (`build_engine.sh`, `--engine`,
+`VR_ENGINE`; `docs/cineca/leonardo.md`, "The engine from main"), not with
+llama-server. It answers as llama-server does, but not word for word: of 198
+answers at temperature 0, 55-65 were identical between the two, as between
+two builds of llama-server. Rules:
+
+* **An exam series keeps one server.** Models compared with each other are
+  examined through the same server and the same build; moving a series to
+  the engine re-examines its baselines through it, or the series stays on
+  llama-server to its end. **PI, 2026-11-20: the exams stay on llama-server
+  to the end of the legal-it series** (no baselines re-examined for a
+  server change); a new series may start on the engine.
+* **Training rows come from `$WORK/eullm_runs/clean/`** (`clean_corpus.py`):
+  nothing on a held-out set's articles, no question-like row on a
+  development set's. The corpora were written from every article until
+  2026-11-20 (experiments log, section 28); a held-out exam is given only to
+  a model trained on clean files, and a new corpus is cleaned before
+  anything trains on it.
+* **The corpus says who served it.** A row keeps its teacher; a pass
+  through a new server or engine commit is named in the experiment log
+  beside its results.
+* **A speed is compared on the same settings.** Before saying one program
+  is faster, read both servers' settings (batch, micro-batch, KV layout,
+  context a slot, flash attention) from their logs or sources: on
+  2026-11-20 the engine's quarter over llama-server was its shared KV pool,
+  and llama-server matched it when told to (`--kv-unified`).
+
 ## A number decides nothing until the answers behind it are read
 
 Every grader we have -- the GRPO rewards, the exam's abstention check, the
@@ -282,5 +350,47 @@ Only fully permissive licenses:
   wrapper (`Gemma4ForConditionalGeneration`, text under `text_config`) and
   needs transformers 5.5+ (the 12B 5.10+): check the venv can load it
   before planning a run on it, and never upgrade the shared venv for it.
+
+**One exception, decided by the PI on 2026-11-04: Qwen3.8-Flash-Next**
+(`Qwen/Qwen3.8-Flash-Next`, 180B, 10 of 512 experts active, native hashed
+3-gram tables), under the **Qwen Community License 1.0**, not Apache 2.0.
+The licence allows use, fine-tuning, derivative works, distribution and sale,
+and does not forbid training other models on it or on its outputs. Its
+conditions: the copyright and licence notice travels with every copy and
+derivative; a licensee that runs a *Model as a Service* (third parties
+reach the model through an API or a hosted endpoint) or an *AI Work
+Assistant* business (coding or office productivity) needs a separate licence
+from Qwen for commercial use, derivatives included; internal use is exempt
+as long as nothing of the model, its outputs or its capabilities reaches a
+third party. So: allowed for research, as a teacher, and as the base of
+models sold on-premises; **before any of its derivatives, or a student it
+taught, is offered through an API, the separate licence is obtained first.**
+Every model card of a derivative says so.
+Read again on 2026-11-12, the licence text says less than this rule assumes,
+and the rule stays the cautious reading: it does not define "derivative
+works" and says nothing of training on outputs or of distillation; it has
+no pass-through clause binding downstream recipients (only the copyright
+notice travels with copies); and the separate licence is required of **the
+licensee** (I3K) "before Using the Software" for commercial purposes **if
+the licensee or an affiliate runs a Model as a Service** ("giving a third
+party access to language model inference or fine-tuning") or AI Work
+Assistant business, internal use exempt only if neither the Software nor
+its outputs reach a third party. So the question to settle before a
+Flash-Next-taught model ships is not only the customers' SaaS but whether
+I3K itself runs a hosted inference business. **The PI's answer
+(2026-11-17):** Flash-Next itself will never be served to third parties,
+but the verticals may be, by I3K, one day. Read with the clause above, that
+is the case it names: a licensee that runs a Model as a Service needs the
+separate licence before using Flash-Next commercially, whatever model it
+serves. So Flash-Next may teach, check and be measured now (the PI's
+decision of 11-04 stands); **before a vertical it taught, or any model,
+is served to third parties by I3K, the separate licence is obtained from
+Qwen**, or that vertical is rebuilt from Apache 2.0 teachers alone. Every
+corpus row and every pair keeps its teacher (`law_rewrites.py` writes
+`teacher` in each row), so a corpus without Flash-Next's rows can be
+rebuilt at any time; nothing taught by Flash-Next is mixed in without that
+label. Every other Qwen model used so far
+(Qwen3, 3.5, 3.6, 3.8-27B) is Apache 2.0; check each new one, the same family
+does not mean the same licence.
 
 Llama (Meta) is excluded from the default catalog due to "Built with Llama" branding requirement.

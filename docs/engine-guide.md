@@ -111,8 +111,15 @@ the reasoning arrives first, in lines whose `content` (or `response`) is empty,
 then the answer. The delimiters (`<think>`…`</think>`, Gemma 4's
 `<|channel>thought`…`<channel|>`) and the blank lines around them are dropped.
 An answer cut off by its token budget mid-thought has only `thinking`.
-`/v1/chat/completions` keeps the reasoning in the answer either way, except on a
-request with `tools`, where it comes back in `reasoning_content`.
+
+**`/v1/chat/completions` always returns the reasoning apart, in
+`reasoning_content`** (`delta.reasoning_content` as it streams), as
+llama-server does: `content` holds only the answer. Whether the model reasons
+at all follows the first of `think`, `chat_template_kwargs.enable_thinking`
+(llama-server's, which many OpenAI clients send) and `reasoning_effort`
+(`"none"` turns it off) that the request carries; with none of them, it
+reasons. Until this release the reasoning stayed in `content` there, and only
+`think` was read.
 
 ```bash
 curl -s http://localhost:11434/api/chat -H 'Content-Type: application/json' -d '{
@@ -226,7 +233,8 @@ eullm serve --daemon --logfile /var/log/eullm.log    # custom log file location
 
 ### Gated and private Hugging Face models (`HF_TOKEN`)
 
-Set `HF_TOKEN` to a Hugging Face access token and `eullm pull` / `eullm run
+Set `HF_TOKEN` to a Hugging Face access token, in the environment or in the
+`.env` file of the folder eullm starts from, and `eullm pull` / `eullm run
 hf.co/<owner>/<repo>[:<quant>]` — and the model catalog in the Chat UI — fetch
 gated and private repositories too, shards and projector included:
 
@@ -306,6 +314,13 @@ sampling: sampling took 2.7 ms per token, and 1.1 ms with
 `"repeat_penalty": 1.0`. llama.cpp's repeat penalty looks up each of the
 vocabulary's candidates (about 248,000 here) in its table of recent tokens,
 for every token of every answer.
+
+Since 0.9.1 the repeat penalty is off by default on `/v1/chat/completions`
+and in the chat UI, as llama-server has it; `/api/chat` and `/api/generate`
+keep Ollama's 1.1, which their clients expect. Over the last 64 tokens it
+counts the newlines, `###` and `**` a Markdown answer repeats all the time,
+and pushed Gemma 4 into joins like "anal### Il problema". A request that
+sends `repeat_penalty` gets what it asks for.
 
 ## Security
 
@@ -1036,9 +1051,10 @@ on `ggml-org/llama.cpp`, current as of July 2026):
 hatch for anyone who wants to reproduce or build on this, but is not a
 recommended path to KV reuse on hybrid/recurrent architectures. The
 practical mitigations today: use `--ctx-checkpoints` (below), keep
-conversations reasonably short, and use non-thinking mode (`--think off` /
-official `preserve_thinking: false` behavior) to bound how fast the
-re-prefill cost grows per turn.
+conversations reasonably short, and use non-thinking mode (`/no_think` in the
+terminal chat, `"think": false` in a request, or the official
+`preserve_thinking: false` behavior) to bound how fast the re-prefill cost
+grows per turn.
 
 ### The actual root cause of small/unstable reuse: retokenizing history every turn
 
@@ -1329,8 +1345,27 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   context fills up, the oldest attachments give way first, each replaced by
 >   a note telling the model one was there; the current turn's never do. Each
 >   turn with a picture in it encodes the picture again.
-> - Multimodal models load in **sequential mode** (the continuous-batching
->   scheduler is text-only); text-only models keep full batching.
+> - Multimodal models are served in batches like any other, with
+>   `--batch-size` slots (new in 0.9.1; they used to be served one request
+>   at a time). A request with images reads them whole into its own slot,
+>   as llama-server does: the requests already answering wait for that one
+>   step, then go on beside it. With a projector `--n-ubatch` is at least
+>   512, or `EULLM_IMAGE_MAX_TOKENS` when that is larger; one whose attention
+>   over an image is not causal (Gemma) needs each image whole in one
+>   micro-batch, which is raised to the most an image takes with it (1089
+>   tokens on Gemma 4 12B), so images keep their full resolution. It costs
+>   memory: the compute buffer (129 to 277 MiB on that model) and, on a
+>   model with sliding-window layers, each slot's window, which holds a
+>   micro-batch beside it (KV 2.4 to 3.4 GB with 4 slots at `-c 32768`).
+>   Where that does not fit, images are scaled down to the micro-batch, as
+>   llama-server does; `EULLM_IMAGE_MAX_TOKENS=512` asks for that from the
+>   start. Qwen-VL and other causal
+>   projectors read a large image a micro-batch at a time. A slot that read
+>   an image is not reused for the next
+>   turn's prompt, which is read whole again. `--mtp` does not draft for a
+>   model loaded with its projector. A multimodal model used for text alone
+>   (RAG, rewriting, grading) can be loaded without its projector with
+>   `--no-mmproj`, which refuses requests with images or audio.
 > - Web Chat UI accepts **both images and audio** as of v0.6.2 — 📎 attach or
 >   drag & drop. The engine itself reads `.wav`/`.mp3`/`.flac` and
 >   `.jpg`/`.png`/`.bmp`/`.gif`; since v0.6.43 anything else the browser can

@@ -38,11 +38,11 @@ def job(tmp_path):
     (work / "norms").mkdir()
     for name in ("eval/norm-exam-v3.jsonl", "eval/norm-exam-v4.jsonl",
                  "eval/norm-exam-devbig.jsonl", "norms/legislazione_a.chunks.jsonl"):
-        (work / name).write_text("{}\n")
+        (work / name).write_text("{}\n", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     py = bin_ / "python"
-    py.write_text(STUB)
+    py.write_text(STUB, encoding="utf-8")
     py.chmod(py.stat().st_mode | stat.S_IEXEC)
     calls = tmp_path / "calls"
     out = work / "grpo" / "prompts-hyb06.jsonl"
@@ -54,8 +54,8 @@ def job(tmp_path):
 
     def run(**extra):
         r = subprocess.run(["bash", str(SCRIPT)], cwd=tmp_path, env={**env, **extra},
-                           capture_output=True, text=True, timeout=60)
-        args = calls.read_text().split() if calls.exists() else []
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
+        args = calls.read_text(encoding="utf-8").split() if calls.exists() else []
         calls.unlink(missing_ok=True)
         return r, args
 
@@ -73,7 +73,7 @@ def test_prompts_are_drawn_hybrid_away_from_every_exam(job):
     assert args[args.index("--embedder") + 1] == "Qwen/Qwen3-Embedding-0.6B"
     assert args[args.index("--reranker") + 1] == "Qwen/Qwen3-Reranker-0.6B"
     assert args[args.index("--seed") + 1] == "1"
-    assert out.read_text().count("\n") == 2
+    assert out.read_text(encoding="utf-8").count("\n") == 2
 
 
 def test_a_failed_run_leaves_no_file_and_a_finished_one_is_kept(job):

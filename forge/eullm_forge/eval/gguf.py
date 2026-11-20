@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -45,10 +46,11 @@ def _has_flag(binary: str, command: str, flag: str) -> bool:
     """Whether ``binary command --help`` lists ``flag``."""
     try:
         out = subprocess.run([binary, command, "--help"], capture_output=True, text=True,
-                             timeout=60)
+                             timeout=60, encoding="utf-8", errors="replace")
     except (OSError, subprocess.SubprocessError):
         return False
-    return flag in out.stdout + out.stderr
+    # the whole flag, not a prefix of another: --no-mmproj is not --no-mmproj-offload
+    return re.search(re.escape(flag) + r"(?![\w-])", out.stdout + out.stderr) is not None
 
 
 def _free_port() -> int:
@@ -73,9 +75,11 @@ class LlamaServer:
 
     def __init__(self, gguf: str | Path, *, binary: str | None = None, parallel: int = 4,
                  ctx_per_slot: int = 16384, log_path: str | Path | None = None,
-                 start_timeout: float = 900.0, devices: str | None = None):
+                 start_timeout: float = 900.0, devices: str | None = None,
+                 extra_args: list[str] | None = None):
         self.gguf = Path(gguf)
         self.binary = binary or default_server_binary()
+        self.extra_args = list(extra_args or [])    # e.g. ["--kv-unified"], appended last
         self.parallel = parallel
         self.ctx_per_slot = ctx_per_slot
         self.log_path = Path(log_path) if log_path else self.gguf.with_suffix(".server.log")
@@ -91,7 +95,7 @@ class LlamaServer:
     def command(self) -> list[str]:
         return [self.binary, "-m", str(self.gguf), "--host", "127.0.0.1",
                 "--port", str(self.port), "-ngl", "999", "-np", str(self.parallel),
-                "-c", str(self.parallel * self.ctx_per_slot), "--no-webui"]
+                "-c", str(self.parallel * self.ctx_per_slot), "--no-webui", *self.extra_args]
 
     def log_tail(self, n: int = 15) -> str:
         try:
@@ -212,9 +216,11 @@ class EullmServer:
 
     def __init__(self, gguf: str | Path, *, binary: str | None = None, parallel: int = 4,
                  ctx_per_slot: int = 16384, log_path: str | Path | None = None,
-                 start_timeout: float = 900.0, devices: str | None = None):
+                 start_timeout: float = 900.0, devices: str | None = None,
+                 mmproj: bool = False):
         self.gguf = Path(gguf).resolve()
         self.binary = binary or os.environ.get("EULLM_BIN", "eullm")
+        self.mmproj = mmproj
         self.parallel = parallel
         self.ctx_per_slot = ctx_per_slot
         self.log_path = Path(log_path) if log_path else self.gguf.with_suffix(".eullm.log")
@@ -236,6 +242,15 @@ class EullmServer:
         # evaluation needs no UI; older engines have no such flag and no UI.
         if _has_flag(self.binary, "serve", "--no-ui"):
             cmd.append("--no-ui")
+        # Text only here, unless asked: a projector beside the weights (Gemma
+        # 4's mmproj) costs VRAM the KV cache could have, and made engines up
+        # to 0.9.0 serve one request at a time (20 answers in 25 minutes
+        # against llama-server's 198 in 6.5, 2026-11-19). Engines from
+        # 2026-11-19 leave it on disk with --no-mmproj; older ones need a
+        # folder without it. mmproj=True measures the engine as it serves a
+        # multimodal model.
+        if not self.mmproj and _has_flag(self.binary, "serve", "--no-mmproj"):
+            cmd.append("--no-mmproj")
         return cmd
 
     def __enter__(self) -> EullmServer:

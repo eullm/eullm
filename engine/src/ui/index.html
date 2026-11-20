@@ -114,7 +114,8 @@
     <header class="mon-head">
       <h2>Monitor</h2>
       <span id="mon-live" class="mon-live" title="Updated every second">Live</span>
-      <p class="mon-note">In memory on this machine only: the last 50 requests and two minutes of samples. Nothing is saved or sent.</p>
+      <div id="mon-ranges" class="mon-ranges" role="group" aria-label="Range shown"></div>
+      <p class="mon-note">Sampled every second since the engine started, watched or not. A minute-by-minute history, with its lowest and highest, stays on this machine; nothing is sent anywhere.</p>
     </header>
 
     <div id="mon-models" class="mon-models"></div>
@@ -139,6 +140,14 @@
 
     <div id="mon-gpus" class="mon-gpu-grid"></div>
 
+    <article class="panel" aria-labelledby="mon-events-title">
+      <header class="panel-head">
+        <h3 id="mon-events-title">Events</h3>
+        <span id="mon-events-count" class="panel-meta"></span>
+      </header>
+      <ol id="mon-events" class="mon-events"></ol>
+    </article>
+
     <article class="panel" aria-labelledby="mon-req-title">
       <header class="panel-head">
         <h3 id="mon-req-title">Requests</h3>
@@ -158,6 +167,14 @@
           <tbody id="mon-requests"></tbody>
         </table>
       </div>
+    </article>
+
+    <article class="panel" aria-labelledby="mon-storage-title">
+      <header class="panel-head">
+        <h3 id="mon-storage-title">History on disk</h3>
+        <span id="mon-storage-meta" class="panel-meta"></span>
+      </header>
+      <div id="mon-storage" class="mon-storage"></div>
     </article>
   </section>
 

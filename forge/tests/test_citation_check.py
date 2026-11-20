@@ -39,19 +39,19 @@ def test_wrong_articles_are_counted_by_kind(tmp_path, capsys):
             _item(2, ["codice_processo_amministrativo:107"]),
             _item(3, ["codice_civile:1120", "codice_civile:1136"]),
             _item(4, ["codice_civile:2001", "codice_civile:2002"])]
-    items.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    items.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     answers = tmp_path / "answers-practical-dev-m.jsonl"
     answers.write_text("".join(json.dumps(a) + "\n" for a in [
         {"id": "q1", "answer": "Secondo l'art. 197 del codice penale, l'ente paga."},   # near
         {"id": "q2", "answer": "Secondo l'art. 403 del codice di procedura civile, no."},  # code
         {"id": "q3", "answer": "Secondo l'art. 1120 del codice civile e l'art. 1136 c.c., sì."},
         {"id": "q4", "answer": "Il testo non lo dice."},                                 # none
-    ]))
+    ]), encoding="utf-8")
     graded_dir = tmp_path / "graded"
     graded_dir.mkdir()
     (graded_dir / "answers-practical-dev-m.graded.jsonl").write_text("".join(
         json.dumps({"id": i, "grade": g}) + "\n"
-        for i, g in [("q1", "wrong"), ("q2", "wrong"), ("q3", "correct"), ("q4", "partial")]))
+        for i, g in [("q1", "wrong"), ("q2", "wrong"), ("q3", "correct"), ("q4", "partial")]), encoding="utf-8")
     assert _mod().main([str(items), str(answers), "--graded-dir", str(graded_dir)]) == 0
     out = capsys.readouterr().out
     row = next(ln for ln in out.splitlines() if ln.startswith("practical-dev-m")).split()

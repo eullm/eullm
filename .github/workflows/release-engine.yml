@@ -2554,23 +2554,60 @@ jobs:
           # the CHANGELOG entry it summarises. If you are reading it on a
           # release it does not describe, that is the bug — delete it rather
           # than leave last version's announcement on this one.
+          #
+          # GitHub lists the Assets after the whole body, so what comes before
+          # them is kept short: the two one-line installers, then the table of
+          # binaries, the commands to download one by hand and the usage folded
+          # in <details>, then this release's news. Until 0.9.0 the body ran
+          # to some 140 lines before the first download.
           body: |
             ## EULLM Engine ${{ github.ref_name }}
 
-            LLM inference engine in Rust: one binary, any GGUF model, on CPU or GPU. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
+            A local runtime for GGUF models: one binary, on CPU or GPU, with OpenAI- and Ollama-compatible APIs. Continuous batching, quantized KV cache, zero telemetry, and an AI Act-ready audit trail.
 
-            ### This release: `eullm serve` starts when the chat UI's port is taken
-
-            **`eullm serve` starts when port 11435 is taken.** Since 0.8.5 `serve` opens the chat UI too, on port 11435, and 0.8.5 and 0.8.6 exited when another program held that port ("port 11435 is already in use"), so on a machine running more than one server only the first one started. 0.8.7 leaves the chat UI off for that server, says so in the log, and serves the API; `--ui-port` gives its chat another port and `--no-ui` turns the chat off. `eullm run` still stops when its chat port is taken, and now names `--ui-port`, not `--port`.
-
-            Everything else is 0.8.6: llama.cpp b12032, and the chat's sidebar, Model hub and About page.
-
-            ### Quick install
+            ### Install
 
             ```bash
             # Linux / macOS — one line, picks the right build, installs to ~/.local/bin
             curl -fsSL https://raw.githubusercontent.com/eullm/eullm/main/installer/install.sh | sh
+            ```
 
+            ```powershell
+            # Windows — one line, picks CPU, CUDA or Vulkan, adds eullm to PATH
+            irm https://raw.githubusercontent.com/eullm/eullm/main/installer/install.ps1 | iex
+            ```
+
+            Then `eullm run hf.co/Qwen/Qwen3-8B-GGUF:Q4_K_M` (or `eullm` alone, for the model picker) and open the chat on `http://localhost:11435/`. To take one binary by hand, the binaries are under **Assets** below, and the three sections under this say which one fits your machine and how to run it.
+
+            <details>
+            <summary><b>Which binary to download?</b></summary>
+
+            | Binary | GPU Support | Requirements |
+            |--------|-------------|--------------|
+            | `eullm-linux-x64` | CPU only | glibc 2.28+ — built on Rocky Linux 8, so it runs on RHEL/CentOS/Rocky/Alma/Oracle 8+ as well as current Ubuntu/Fedora/Arch |
+            | `eullm-linux-x64-vulkan` | Any GPU with a Vulkan driver (AMD, Intel, NVIDIA) | `libvulkan.so.1` and a working driver on the machine — mesa RADV, amdvlk, NVIDIA or Intel ANV. Nothing is bundled |
+            | `eullm-linux-x64-cuda-13.1` | NVIDIA **consumer** GPU (RTX 3000/4000/5000, sm_86/89/120) | NVIDIA driver 580+. Does **not** run on A100/H100 — those need the data-center build below |
+            | `eullm-linux-x64-cuda-12.4-datacenter` | NVIDIA **data-center** GPU (A100 sm_80, H100 sm_90) | NVIDIA driver 550+. Built on CUDA 12.4, not 13.1, on purpose: these cards live in HPC centres and enterprise fleets that freeze drivers for years, and CUDA 13 needs an August-2025 driver. Does **not** run on RTX cards |
+            | `eullm-linux-x64-rocm-consumer` | AMD **Radeon**: RDNA 3 (RX 7900/7800/7700/7600), RDNA 3.5 (Ryzen AI integrated Radeons), RDNA 4 (RX 9000) | ROCm 7.2.x installed on the machine — nothing is bundled, the binary links the system's own libamdhip64/rocblas/hipblas. RX 6000 (RDNA 2) is **not** included: use the Vulkan binary there |
+            | `eullm-linux-x64-rocm-gfx90a` | AMD **Instinct** MI250X / MI210 (CDNA 2) | ROCm 6.3.x installed on the machine, the version EuroHPC sites run. Check `hipconfig --version` before assuming it fits yours |
+            | `eullm-linux-arm64` | CPU only | ARM64 Linux — generic baseline, runs on Raspberry Pi, Graviton, Jetson, any ARM64 SoC |
+            | `eullm-linux-arm64-cuda-13.1` | NVIDIA GPU on an ARM64 host (sm_86/89/120) | ARM64 Linux + NVIDIA driver 580+. For a discrete NVIDIA card in an ARM board's PCIe slot |
+            | `eullm-linux-arm64-cix-p1` | CPU only | **Armv9.2-A with SVE2, BF16, I8MM and DotProd only** — a tuned CPU profile for the CIX P1 (Radxa Orion O6). These instructions are compiled in, so it crashes with SIGILL on any ARM64 host without them, Raspberry Pi included. If you are not on a CIX P1, take `eullm-linux-arm64` |
+            | `eullm-macos-x64` | CPU only | macOS Intel |
+            | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
+            | `eullm-windows-x64.zip` | CPU only | Windows 10/11 x64. ZIP bundles eullm.exe + the Visual C++ runtime DLLs — run from the extracted folder |
+            | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 with the Visual C++ Redistributable already installed (otherwise it fails with "MSVCP140.dll was not found" — take the ZIP) |
+            | `eullm-windows-x64-cuda-13.1.zip` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 580+ for Windows. ZIP bundles eullm.exe + CUDA and Visual C++ runtime DLLs — run from the extracted folder |
+            | `eullm-windows-x64-vulkan.zip` | Any GPU with a Vulkan driver: AMD Radeon (cards and Ryzen integrated graphics), Intel Arc, and NVIDIA cards the CUDA build does not cover (GTX 1000, RTX 2000) | Windows 10/11 x64 and a current graphics driver, which installs the Vulkan loader. ZIP bundles eullm.exe + the Visual C++ runtime DLLs — run from the extracted folder |
+            | `eullm-windows-x64-rocm.zip` | AMD Radeon through ROCm 10.1: RX 7900 XTX/XT (gfx1100), RX 9070 XT/9070 and Radeon AI PRO R9700 (gfx1201). **Experimental: not yet run on a Radeon** | Windows 11 x64 and the AMD Software: Adrenalin Edition for ROCm 10.1 driver (26.10.41.05) or newer. ZIP bundles the HIP runtime, rocBLAS and hipBLASLt with the kernels of those cards, and the Visual C++ runtime, in ROCm's own layout: run `bin\eullm.exe` and keep `.kpack\` beside `bin\`. Not installed by `install.ps1` yet; `eullm update` updates it from 0.7.92 on |
+            | `eullm-windows-x64-store.msix` | CPU + NVIDIA GPU | **Not for direct install**: the unsigned package submitted to the Microsoft Store, which signs it. Use the ZIPs or `install.ps1` instead |
+
+            </details>
+
+            <details>
+            <summary><b>Download and run one binary by hand</b></summary>
+
+            ```bash
             # Linux x64 (CPU only)
             curl -L https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-linux-x64 -o eullm
             chmod +x eullm
@@ -2600,9 +2637,6 @@ jobs:
             ```
 
             ```powershell
-            # Windows — one line, picks CPU, CUDA or Vulkan, adds eullm to PATH
-            irm https://raw.githubusercontent.com/eullm/eullm/main/installer/install.ps1 | iex
-
             # Windows x64 (CPU only) — ZIP: eullm.exe + the Visual C++ runtime,
             # so it also runs on a Windows without the VC++ Redistributable
             Invoke-WebRequest -Uri https://github.com/eullm/eullm/releases/download/${{ github.ref_name }}/eullm-windows-x64.zip -OutFile eullm.zip
@@ -2634,55 +2668,28 @@ jobs:
             .\eullm-rocm\bin\eullm.exe run model.gguf
             ```
 
-            ### Which binary to download?
+            </details>
 
-            | Binary | GPU Support | Requirements |
-            |--------|-------------|--------------|
-            | `eullm-linux-x64` | CPU only | glibc 2.28+ — built on Rocky Linux 8, so it runs on RHEL/CentOS/Rocky/Alma/Oracle 8+ as well as current Ubuntu/Fedora/Arch |
-            | `eullm-linux-x64-vulkan` | Any GPU with a Vulkan driver (AMD, Intel, NVIDIA) | `libvulkan.so.1` and a working driver on the machine — mesa RADV, amdvlk, NVIDIA or Intel ANV. Nothing is bundled |
-            | `eullm-linux-x64-cuda-13.1` | NVIDIA **consumer** GPU (RTX 3000/4000/5000, sm_86/89/120) | NVIDIA driver 580+. Does **not** run on A100/H100 — those need the data-center build below |
-            | `eullm-linux-x64-cuda-12.4-datacenter` | NVIDIA **data-center** GPU (A100 sm_80, H100 sm_90) | NVIDIA driver 550+. Built on CUDA 12.4, not 13.1, on purpose: these cards live in HPC centres and enterprise fleets that freeze drivers for years, and CUDA 13 needs an August-2025 driver. Does **not** run on RTX cards |
-            | `eullm-linux-x64-rocm-consumer` | AMD **Radeon**: RDNA 3 (RX 7900/7800/7700/7600), RDNA 3.5 (Ryzen AI integrated Radeons), RDNA 4 (RX 9000) | ROCm 7.2.x installed on the machine — nothing is bundled, the binary links the system's own libamdhip64/rocblas/hipblas. RX 6000 (RDNA 2) is **not** included: use the Vulkan binary there |
-            | `eullm-linux-x64-rocm-gfx90a` | AMD **Instinct** MI250X / MI210 (CDNA 2) | ROCm 6.3.x installed on the machine, the version EuroHPC sites run. Check `hipconfig --version` before assuming it fits yours |
-            | `eullm-linux-arm64` | CPU only | ARM64 Linux — generic baseline, runs on Raspberry Pi, Graviton, Jetson, any ARM64 SoC |
-            | `eullm-linux-arm64-cuda-13.1` | NVIDIA GPU on an ARM64 host (sm_86/89/120) | ARM64 Linux + NVIDIA driver 580+. For a discrete NVIDIA card in an ARM board's PCIe slot |
-            | `eullm-linux-arm64-cix-p1` | CPU only | **Armv9.2-A with SVE2, BF16, I8MM and DotProd only** — a tuned CPU profile for the CIX P1 (Radxa Orion O6). These instructions are compiled in, so it crashes with SIGILL on any ARM64 host without them, Raspberry Pi included. If you are not on a CIX P1, take `eullm-linux-arm64` |
-            | `eullm-macos-x64` | CPU only | macOS Intel |
-            | `eullm-macos-arm64` | Metal (Apple GPU) | macOS Apple Silicon |
-            | `eullm-windows-x64.zip` | CPU only | Windows 10/11 x64. ZIP bundles eullm.exe + the Visual C++ runtime DLLs — run from the extracted folder |
-            | `eullm-windows-x64.exe` | CPU only | Windows 10/11 x64 with the Visual C++ Redistributable already installed (otherwise it fails with "MSVCP140.dll was not found" — take the ZIP) |
-            | `eullm-windows-x64-cuda-13.1.zip` | NVIDIA GPU (RTX 3000/4000/5000) | NVIDIA driver 580+ for Windows. ZIP bundles eullm.exe + CUDA and Visual C++ runtime DLLs — run from the extracted folder |
-            | `eullm-windows-x64-vulkan.zip` | Any GPU with a Vulkan driver: AMD Radeon (cards and Ryzen integrated graphics), Intel Arc, and NVIDIA cards the CUDA build does not cover (GTX 1000, RTX 2000) | Windows 10/11 x64 and a current graphics driver, which installs the Vulkan loader. ZIP bundles eullm.exe + the Visual C++ runtime DLLs — run from the extracted folder |
-            | `eullm-windows-x64-rocm.zip` | AMD Radeon through ROCm 10.1: RX 7900 XTX/XT (gfx1100), RX 9070 XT/9070 and Radeon AI PRO R9700 (gfx1201). **Experimental: not yet run on a Radeon** | Windows 11 x64 and the AMD Software: Adrenalin Edition for ROCm 10.1 driver (26.10.41.05) or newer. ZIP bundles the HIP runtime, rocBLAS and hipBLASLt with the kernels of those cards, and the Visual C++ runtime, in ROCm's own layout: run `bin\eullm.exe` and keep `.kpack\` beside `bin\`. Not installed by `install.ps1` yet; `eullm update` updates it from 0.7.92 on |
-            | `eullm-windows-x64-store.msix` | CPU + NVIDIA GPU | **Not for direct install**: the unsigned package submitted to the Microsoft Store, which signs it. Use the ZIPs or `install.ps1` instead |
-
-            ### Pick a model interactively
+            <details>
+            <summary><b>Usage and checksums</b></summary>
 
             ```bash
-            # Run with no arguments to open the model picker (local models + catalog)
-            ./eullm
-            ```
-
-            ### Web browsing
-
-            ```bash
-            # Enable transparent web fetch (URLs in messages are fetched and injected)
-            ./eullm run model.gguf --web
-            ```
-
-            ### Usage
-
-            ```bash
+            ./eullm                                     # No arguments: the model picker (local models + catalog)
             ./eullm run ./model.gguf                    # Run any GGUF model
             ./eullm run ./model.gguf --batch-size 16    # Continuous batching for RAG
-            ./eullm run ./model.gguf --web              # Enable web browsing
+            ./eullm run ./model.gguf --web              # Web browsing: URLs in messages are fetched and injected
+            sha256sum -c checksums.txt                  # Verify the downloads
             ```
 
-            ### Verify checksums
+            </details>
 
-            ```bash
-            sha256sum -c checksums.txt
-            ```
+            ### This release: vision models in batches, and Gemma in a third of the memory
+
+            **A model with a projector answers several requests at once.** Gemma 4, Gemma 3, Qwen-VL and the other vision models were served one request at a time, text requests included; they now run in batches like any other model, and a request with images reads them into its own slot while the others go on. On an RTX 5070 Ti, Gemma 4 12B writes 291 tokens/s with four requests against 93 with one. `--no-mmproj` loads such a model for text alone.
+
+            **Gemma's context takes much less memory.** Its sliding-window layers keep only their window, as llama-server has them: Gemma 4 31B at `-c 49152` with 8 slots needed 38 GB for them and now 9.6 GB, and sizing counts Gemma 4's KV as it really is.
+
+            **`/v1/chat/completions` returns the reasoning in `reasoning_content`** and honours `chat_template_kwargs.enable_thinking` and `reasoning_effort`; the repeat penalty is off there and in the chat, as on llama-server. The chat stops following the answer at the first turn of the wheel upward.
 
             ### What changed
 

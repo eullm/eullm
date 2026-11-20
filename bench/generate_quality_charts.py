@@ -16,6 +16,7 @@ import os
 import sys
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -24,9 +25,9 @@ RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results"
 
 # Display order + style for each known arm.
 ARM_STYLE = {
-    "F16":   {"color": "#6c757d", "label": "F16 (baseline)"},
-    "Q8_0":  {"color": "#212529", "label": "Q8_0 (8-bit native llama.cpp)"},
-    "Q4_0":  {"color": "#dc3545", "label": "Q4_0 (4-bit native llama.cpp)"},
+    "F16": {"color": "#6c757d", "label": "F16 (baseline)"},
+    "Q8_0": {"color": "#212529", "label": "Q8_0 (8-bit native llama.cpp)"},
+    "Q4_0": {"color": "#dc3545", "label": "Q4_0 (4-bit native llama.cpp)"},
     "TQ4_0": {"color": "#0d6efd", "label": "TQ4_0 (4-bit TurboQuant)"},
     "TQ3_0": {"color": "#198754", "label": "TQ3_0 (3-bit TurboQuant)"},
 }
@@ -40,7 +41,7 @@ def load_arms(pattern: str) -> dict:
     """Load every quality_*.json matching the pattern. Returns {label: data}."""
     arms = {}
     for path in sorted(glob.glob(pattern)):
-        with open(path) as fh:
+        with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         label = data.get("label", os.path.basename(path))
         arms[label.upper()] = data
@@ -80,17 +81,31 @@ def bar_chart(arms: dict, out_path: str) -> None:
     width = 0.8 / max(n_arms, 1)
     x = np.arange(len(cat_display))
 
-    fig, ax = plt.subplots(figsize=(15, 7.5))
+    _fig, ax = plt.subplots(figsize=(15, 7.5))
     for i, a in enumerate(labels):
         style = ARM_STYLE.get(a, {"color": "#888", "label": a})
         offset = (i - (n_arms - 1) / 2) * width
-        pcts = [p / t * 100 if t else 0 for p, t in zip(passed[a], totals[a])]
-        bars = ax.bar(x + offset, pcts, width, label=style["label"],
-                      color=style["color"], edgecolor="white")
-        for bar, p, t in zip(bars, passed[a], totals[a]):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
-                    f"{p}/{t}", ha="center", va="bottom",
-                    fontsize=9, fontweight="bold")
+        pcts = [
+            p / t * 100 if t else 0 for p, t in zip(passed[a], totals[a], strict=True)
+        ]
+        bars = ax.bar(
+            x + offset,
+            pcts,
+            width,
+            label=style["label"],
+            color=style["color"],
+            edgecolor="white",
+        )
+        for bar, p, t in zip(bars, passed[a], totals[a], strict=True):
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + 0.5,
+                f"{p}/{t}",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                fontweight="bold",
+            )
 
     # Metadata from any arm
     meta = next(iter(arms.values()))
@@ -102,7 +117,8 @@ def bar_chart(arms: dict, out_path: str) -> None:
     ax.set_title(
         f"KV Cache Quality Impact — {total_tests} Verified Tests\n"
         f"{model}, temperature={temp}",
-        fontsize=15, fontweight="bold",
+        fontsize=15,
+        fontweight="bold",
     )
     ax.set_xticks(x)
     ax.set_xticklabels(cat_display, fontsize=12)
@@ -125,7 +141,7 @@ def radar_chart(arms: dict, out_path: str) -> None:
     angles = np.linspace(0, 2 * np.pi, len(CATEGORIES), endpoint=False).tolist()
     angles += angles[:1]
 
-    fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+    _fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
     for a in labels:
         style = ARM_STYLE.get(a, {"color": "#888", "label": a})
         cats = arms[a].get("categories", {})
@@ -134,8 +150,15 @@ def radar_chart(arms: dict, out_path: str) -> None:
             v = cats.get(c, {"passed": 0, "total": 1})
             vals.append(v["passed"] / max(v["total"], 1) * 100)
         vals += vals[:1]
-        ax.plot(angles, vals, "o-", linewidth=2.5, label=style["label"],
-                color=style["color"], markersize=7)
+        ax.plot(
+            angles,
+            vals,
+            "o-",
+            linewidth=2.5,
+            label=style["label"],
+            color=style["color"],
+            markersize=7,
+        )
         ax.fill(angles, vals, alpha=0.08, color=style["color"])
 
     ax.set_xticks(angles[:-1])
@@ -149,7 +172,9 @@ def radar_chart(arms: dict, out_path: str) -> None:
     total_tests = meta.get("score", {}).get("total", "?")
     ax.set_title(
         f"Quality by Category — {total_tests} Tests, {model}",
-        fontsize=13, fontweight="bold", pad=20,
+        fontsize=13,
+        fontweight="bold",
+        pad=20,
     )
     ax.legend(loc="lower right", fontsize=10, bbox_to_anchor=(1.25, -0.05))
     ax.grid(True, alpha=0.3)
@@ -160,12 +185,18 @@ def radar_chart(arms: dict, out_path: str) -> None:
 
 
 def main() -> int:
-    pattern = sys.argv[1] if len(sys.argv) > 1 else os.path.join(RESULTS_DIR, "quality_*.json")
+    pattern = (
+        sys.argv[1]
+        if len(sys.argv) > 1
+        else os.path.join(RESULTS_DIR, "quality_*.json")
+    )
     arms = load_arms(pattern)
     if not arms:
         print(f"ERROR: no JSON files matched {pattern}", file=sys.stderr)
-        print("Run `bench/run_quality_arms.sh` first to produce per-arm results.",
-              file=sys.stderr)
+        print(
+            "Run `bench/run_quality_arms.sh` first to produce per-arm results.",
+            file=sys.stderr,
+        )
         return 1
 
     print(f"Loaded arms: {', '.join(ordered_arms(arms))}")

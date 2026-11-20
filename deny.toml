@@ -24,7 +24,14 @@ all-features = true
 version = 2
 # No blanket ignores. An advisory that cannot be fixed today gets its own line
 # here with the reason and the date, so it is reviewed rather than forgotten.
-ignore = []
+ignore = [
+    # 2026-11-17: chrono declared unmaintained, every version, no safe upgrade.
+    # Not a vulnerability. engine and hub use it for timestamps (audit trail,
+    # API "created_at", model expiry); the fix is moving them to jiff or time,
+    # a change to engine/ made in one branch on its own (see CLAUDE.md, "HPC
+    # sites"). Remove this line when chrono is gone from Cargo.lock.
+    { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no upgrade; migration to jiff/time pending" },
+]
 
 [licenses]
 version = 2

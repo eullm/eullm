@@ -24,7 +24,7 @@ def _load():
 def test_a_finished_run_is_not_trained_again(tmp_path, monkeypatch, capsys):
     mod = _load()
     (tmp_path / "adapter").mkdir()
-    (tmp_path / "adapter" / "adapter_config.json").write_text('{"r": 32}')
+    (tmp_path / "adapter" / "adapter_config.json").write_text('{"r": 32}', encoding="utf-8")
     monkeypatch.setattr(mod, "fine_tune_identity",
                         lambda config: (_ for _ in ()).throw(AssertionError("trained again")))
     assert mod.main(["--model", "m", "--pairs", "p.jsonl", "--out", str(tmp_path)]) == 0

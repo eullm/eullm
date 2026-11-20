@@ -88,9 +88,9 @@ class FakeTok:
 @pytest.fixture
 def server_bin(tmp_path, monkeypatch):
     script = tmp_path / "fake_server.py"
-    script.write_text(FAKE_SERVER)
+    script.write_text(FAKE_SERVER, encoding="utf-8")
     binary = tmp_path / "llama-server"
-    binary.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n")
+    binary.write_text(f"#!/bin/sh\nexec {sys.executable} {script} \"$@\"\n", encoding="utf-8")
     binary.chmod(0o755)
     gguf = tmp_path / "m-q4_k_m.gguf"
     gguf.write_bytes(b"GGUF")
@@ -110,12 +110,12 @@ def test_answers_come_back_in_order_with_their_endings(server_bin, tmp_path):
         out = generate_answers_gguf(server, FakeTok(), prompts, max_new_tokens=3,
                                     end_ids=[END], parallel=3)
     assert out == [("2 1 7", True), ("4 3", False), ("5 7", True), ("6 6 6", False)]
-    sent = [json.loads(line) for line in record.read_text().splitlines()]
+    sent = [json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()]
     assert sorted(r["prompt"] for r in sent) == sorted(
         [[7, 1, 2], [3, 4], [7, 5], [8, 6, 6, 6]])                # token ids, as tokenized
     assert all(r["temperature"] == 0 and r["cache_prompt"] is False and r["n_predict"] == 3
                and r["return_tokens"] is True for r in sent)
-    argv = json.loads(Path(str(record) + ".argv").read_text())
+    argv = json.loads(Path(str(record) + ".argv").read_text(encoding="utf-8"))
     assert argv[argv.index("-np") + 1] == "3" and argv[argv.index("-c") + 1] == "3000"
     assert argv[argv.index("-m") + 1] == str(gguf)
 
@@ -126,7 +126,7 @@ def test_sampling_sends_the_temperature_and_one_seed_per_prompt(server_bin, tmp_
                      log_path=tmp_path / "server.log") as server:
         generate_answers_gguf(server, FakeTok(), ["7 1", "7 2"], max_new_tokens=3,
                               end_ids=[END], parallel=2, temperature=0.8, seeds=[11, 12])
-    sent = sorted((json.loads(line) for line in record.read_text().splitlines()),
+    sent = sorted((json.loads(line) for line in record.read_text(encoding="utf-8").splitlines()),
                   key=lambda r: r["seed"])
     assert [r["seed"] for r in sent] == [11, 12]
     assert all(r["temperature"] == 0.8 and r["top_k"] == 0 and r["top_p"] == 1.0
@@ -162,7 +162,7 @@ def test_missing_binary_or_gguf_fail_before_starting(tmp_path):
     with pytest.raises(FileNotFoundError, match="llama-server"):
         LlamaServer(gguf, binary=str(tmp_path / "nope")).__enter__()
     binary = tmp_path / "llama-server"
-    binary.write_text("#!/bin/sh\n")
+    binary.write_text("#!/bin/sh\n", encoding="utf-8")
     binary.chmod(0o755)
     with pytest.raises(FileNotFoundError, match="no GGUF"):
         LlamaServer(gguf, binary=str(binary)).__enter__()
@@ -186,19 +186,19 @@ def test_legal_eval_answers_the_exam_with_the_gguf(server_bin, tmp_path):
     items = tmp_path / "exam-dev.jsonl"
     items.write_text("".join(json.dumps({"id": f"q{i}", "domain": "legal", "lang": "it",
                                          "question": q}) + "\n"
-                             for i, q in enumerate(["Che cosa prevede", "Che cosa"])))
+                             for i, q in enumerate(["Che cosa prevede", "Che cosa"])), encoding="utf-8")
     binary, gguf, record = server_bin
     answers = tmp_path / "answers-x-q4.jsonl"
     script = Path(__file__).resolve().parents[1] / "scripts" / "legal_eval.py"
     r = subprocess.run([sys.executable, str(script), str(model_dir), "--items", str(items),
                         "--gguf", str(gguf), "--llama-server", str(binary), "--quiet",
                         "--answers", str(answers), "--label", "x-q4"],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
-    rows = [json.loads(line) for line in answers.read_text().splitlines()]
+    rows = [json.loads(line) for line in answers.read_text(encoding="utf-8").splitlines()]
     assert [row["id"] for row in rows] == ["q0", "q1"]
     assert all(row["answer"] for row in rows)
-    sent = [json.loads(line)["prompt"] for line in record.read_text().splitlines()]
+    sent = [json.loads(line)["prompt"] for line in record.read_text(encoding="utf-8").splitlines()]
     assert sorted(sent) == sorted([tok(tok.apply_chat_template(
         [{"role": "user", "content": q}], tokenize=False, add_generation_prompt=True),
         add_special_tokens=False)["input_ids"] for q in ["Che cosa prevede", "Che cosa"]])

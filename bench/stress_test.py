@@ -594,7 +594,7 @@ async def main():
 
     # Write JSON
     if args.json:
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump({
                 "label": label,
                 "model": args.model,

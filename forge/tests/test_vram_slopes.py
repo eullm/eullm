@@ -37,8 +37,8 @@ def write_job(queue: Path, job: str) -> None:
         f"[{iso(T0 + 6 * 3600)}] failed   long-32b-aaaaaaaaaa after 21600s",
         f"[{iso(T0 + 6 * 3600)}] done     long-control-14b-bbbbbbbbbb after 21600s",
     ]
-    (queue / "logs" / f"eullm-campaign-{job}.out").write_text("\n".join(out) + "\n")
-    with open(queue / "results" / f"{job}.node.jsonl", "w") as f:
+    (queue / "logs" / f"eullm-campaign-{job}.out").write_text("\n".join(out) + "\n", encoding="utf-8")
+    with open(queue / "results" / f"{job}.node.jsonl", "w", encoding="utf-8") as f:
         for i in range(0, 6 * 3600 + 1, 60):
             t = T0 + i
             # Device 0 climbs 2 GiB an hour from 52 and its server dies at the
@@ -76,11 +76,11 @@ def test_a_server_stopped_at_a_normal_end_is_not_reported_as_emptied(tmp_path):
     zero is the normal stop, not a death."""
     write_job(tmp_path, "22973477")
     node = tmp_path / "results" / "22973477.node.jsonl"
-    rows = [json.loads(line) for line in node.read_text().splitlines()]
+    rows = [json.loads(line) for line in node.read_text(encoding="utf-8").splitlines()]
     for r in rows:
         if r["t"] == T0 + 6 * 3600:
             r["d"]["1"]["used"] = 0
-    node.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    node.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
     points = vram_slopes.points_of(str(tmp_path / "logs" / "eullm-campaign-22973477.out"))
     samples = vram_slopes.samples_of(str(node))
     out = {r[0]: r for r in vram_slopes.report(points, samples, settle_s=900, dead_gib=1.0)}
@@ -103,7 +103,7 @@ def test_another_sites_job_output_is_found(tmp_path, capsys):
     write_job(tmp_path, "2326571")
     logs = tmp_path / "logs"
     (logs / "eullm-campaign-2326571.out").rename(logs / "eullm-gh200-2326571.out")
-    (logs / "eullm-summary-2326571.out").write_text("nothing of the runner's here\n")
+    (logs / "eullm-summary-2326571.out").write_text("nothing of the runner's here\n", encoding="utf-8")
     assert vram_slopes.job_output(str(tmp_path), "2326571").endswith("eullm-gh200-2326571.out")
     assert vram_slopes.main(["2326571", "--queue", str(tmp_path)]) == 0
     assert "long-32b-aaaaaaaaaa" in capsys.readouterr().out

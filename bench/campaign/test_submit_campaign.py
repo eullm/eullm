@@ -34,7 +34,7 @@ def lumi(tmp_path):
                     "set": {"kind": "workload", "sets": ["gsm8k"], "limit": 100},
                     "axes": {"model": ["qwen3-8b", "qwen3-4b"],
                              "extra_args": [[], ["--mtp", "1"], ["--mtp", "2"],
-                                            ["--mtp", "3"]]}}]}))
+                                            ["--mtp", "3"]]}}]}), encoding="utf-8")
     queue = tmp_path / "campaign"
     subprocess.run([sys.executable, str(CAMPAIGN), "plan", "--queue", str(queue),
                     "--engine-label", "next26", "--engine", str(FAKE), str(spec)],
@@ -42,8 +42,9 @@ def lumi(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "sbatch.log"
-    (bin_dir / "sbatch").write_text(f'#!/bin/bash\necho "$*" >> {log}\necho 4242\n')
-    (bin_dir / "squeue").write_text("#!/bin/bash\nexit 0\n")
+    (bin_dir / "sbatch").write_text(f'#!/bin/bash\necho "$*" >> {log}\necho 4242\n',
+        encoding="utf-8")
+    (bin_dir / "squeue").write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
     for f in bin_dir.iterdir():
         f.chmod(0o755)
     env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
@@ -53,9 +54,9 @@ def lumi(tmp_path):
 
     def submit(*args, **extra):
         p = subprocess.run(["bash", str(SCRIPT), *args], env=dict(env, **extra),
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, encoding="utf-8", timeout=60)
         assert p.returncode == 0, p.stdout + p.stderr
-        return p.stdout, log.read_text().splitlines() if log.exists() else []
+        return p.stdout, log.read_text(encoding="utf-8").splitlines() if log.exists() else []
 
     return submit
 
@@ -117,7 +118,7 @@ def test_jobs_are_four_hours_at_most_by_default(lumi, tmp_path):
         "campaign": "c-long", "defaults": {"gcds": 8},
         "groups": [{"name": "long", "priority": 90, "est_s": 3600,
                     "set": {"kind": "workload", "sets": ["gsm8k"], "limit": 100},
-                    "axes": {"model": [f"m{i}" for i in range(20)]}}]}))
+                    "axes": {"model": [f"m{i}" for i in range(20)]}}]}), encoding="utf-8")
     subprocess.run([sys.executable, str(CAMPAIGN), "plan", "--queue",
                     str(tmp_path / "campaign"), "--engine-label", "long",
                     "--engine", str(FAKE), str(spec)], check=True, capture_output=True)
@@ -125,3 +126,11 @@ def test_jobs_are_four_hours_at_most_by_default(lumi, tmp_path):
     assert "time per job: 4:00:00" in out
     assert calls and all("--time=4:00:00" in c.split() for c in calls)
     assert len(calls) > 5
+
+
+def test_the_last_job_of_each_chain_is_printed_for_a_chain_to_follow(lumi):
+    out, _ = lumi("2", "2")
+    assert out.strip().splitlines()[-2] == "last of each chain: 4242 4242"
+    # A chain that starts when both end, as the long soaks of r-v087 did.
+    _, calls = lumi("1", "1", AFTER="111:222")
+    assert "--dependency=afterany:111:222" in calls[-1].split()

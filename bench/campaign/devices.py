@@ -38,14 +38,14 @@ def parse_devices(text: str) -> list:
     """'0-7', '0,1,4' or '0-3,6' → sorted device numbers."""
     out = set()
     for part in str(text).split(","):
-        part = part.strip()
-        if not part:
+        token = part.strip()
+        if not token:
             continue
-        if "-" in part:
-            lo, hi = part.split("-", 1)
+        if "-" in token:
+            lo, hi = token.split("-", 1)
             out.update(range(int(lo), int(hi) + 1))
         else:
-            out.add(int(part))
+            out.add(int(token))
     return sorted(out)
 
 
@@ -138,7 +138,8 @@ SMI = {
 def read_smi(backend: str) -> dict:
     cmd, parse = SMI[backend]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30).stdout
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                             encoding="utf-8", errors="replace").stdout
     except (OSError, subprocess.TimeoutExpired):
         return {}
     return parse(out)
@@ -173,7 +174,7 @@ class NodeSampler:
         with self._lock:
             self.samples.append((t, reading))
         if self.log_path:
-            with open(self.log_path, "a") as f:
+            with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps({"t": round(t, 1), "d": reading}, separators=(",", ":")))
                 f.write("\n")
 

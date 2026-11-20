@@ -42,15 +42,15 @@ def test_the_share_is_taken_out_by_id_and_other_rows_pass(tmp_path, capsys):
     rows.append({"id": "plain", "tipo": "termine",
                  "prompt": [{"role": "user", "content": open_book_prompt(q, [REC])}]})
     src = tmp_path / "p.jsonl"
-    src.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+    src.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     out = tmp_path / "o.jsonl"
     assert mod.main([str(src), "--share", "0.7", "--out", str(out)]) == 0
-    got = [json.loads(ln) for ln in out.read_text().splitlines()]
+    got = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
     assert len(got) == 201 and got[-1] == rows[-1]
     bare = sum(not r["prompt"][0]["content"].startswith("Nota:") for r in got[:200])
     assert 110 <= bare <= 170                     # about 70%, by hash
     # the same rows each time
     out2 = tmp_path / "o2.jsonl"
     mod.main([str(src), "--share", "0.7", "--out", str(out2)])
-    assert out2.read_text() == out.read_text()
+    assert out2.read_text(encoding="utf-8") == out.read_text(encoding="utf-8")
     assert "3434" not in capsys.readouterr().out

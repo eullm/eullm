@@ -5,8 +5,8 @@ plain and inside \\boxed{} -- inflating the pass rate this bench exists to
 measure. Same substring class as the contains_word fix in
 turboquant_quality.py; this mode is the number one.
 
-NOTE: CI collects no tests under bench/ root, so run this with
-`python -m pytest bench/test_turboquant_math_accuracy.py` locally.
+Run this with `python -m pytest bench/test_turboquant_math_accuracy.py`;
+the Bench job in CI runs it too.
 """
 
 from __future__ import annotations

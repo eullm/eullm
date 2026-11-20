@@ -87,7 +87,7 @@ class PowerSampler:
         if not self.sysfs_path:
             return False
         try:
-            with open(self.sysfs_path) as f:
+            with open(self.sysfs_path, encoding="utf-8") as f:
                 f.read()
             return True
         except OSError:
@@ -96,7 +96,7 @@ class PowerSampler:
     async def _run(self):
         while not self._stop:
             try:
-                with open(self.sysfs_path) as f:
+                with open(self.sysfs_path, encoding="utf-8") as f:
                     raw = float(f.read().strip())
                 self.samples.append(raw * self.scale_to_watts)
             except (OSError, ValueError):
@@ -171,7 +171,7 @@ async def run_prefill_sweep(session, args):
         # the prefill logits — see engine/src/inference/scheduler.rs), but a
         # single decode step is negligible next to prefilling thousands of
         # tokens on CPU.
-        ttft, total, prompt_tokens, gen_tokens, _ = await stream_generate(
+        ttft, _, prompt_tokens, _, _ = await stream_generate(
             session, args.url, args.model, prompt, max_tokens=1, timeout=args.timeout,
         )
         if ttft is None or not prompt_tokens:
@@ -189,7 +189,7 @@ async def run_decode_bench(session, args, power_sampler):
     for i in range(args.decode_repeats):
         if power_sampler:
             power_sampler.start()
-        ttft, total, prompt_tokens, gen_tokens, last_token_s = await stream_generate(
+        ttft, _, _, gen_tokens, last_token_s = await stream_generate(
             session, args.url, args.model, args.decode_prompt,
             max_tokens=args.decode_tokens, timeout=args.timeout,
         )
@@ -256,7 +256,7 @@ async def main_async(args):
             "decode_tok_s_avg": avg_decode_tok_s,
             "power_watts_avg": avg_watts,
         }
-        with open(args.json, "w") as f:
+        with open(args.json, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"\nWrote {args.json}")
 

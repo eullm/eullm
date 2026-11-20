@@ -200,8 +200,8 @@ def rows_for_set(args, dataset, answers, details):
     small_dev, large_dev = grades(dev, args.small), grades(dev, args.large)
     small_test, large_test = grades(test, args.small), grades(test, args.large)
     large_ms = [answers[answer_key(i, args.large)].total_ms for i in test]
-    ok_dev = [s or not lg for s, lg in zip(small_dev, large_dev)]
-    ok_test = [s or not lg for s, lg in zip(small_test, large_test)]
+    ok_dev = [s or not lg for s, lg in zip(small_dev, large_dev, strict=True)]
+    ok_test = [s or not lg for s, lg in zip(small_test, large_test, strict=True)]
     rows = []
 
     def row(router, routed, scores=None, latency=None, extra=None):
@@ -325,7 +325,9 @@ def e2e_rows(args, dataset, answers):
         )
         with ThreadPoolExecutor(concurrency) as pool:
             got = list(pool.map(lambda i: ask_auto(args, i), subset))
-        made = [(i, a) for i, a in zip(subset, got) if isinstance(a, ab_methods.Answer)]
+        made = [
+            (i, a) for i, a in zip(subset, got, strict=True) if isinstance(a, ab_methods.Answer)
+        ]
         errors = [str(a)[:200] for a in got if not isinstance(a, ab_methods.Answer)]
         same = small = right = 0
         reasons = {}
@@ -437,7 +439,9 @@ def leave_one_out(dev, k):
     scores = []
     for n, (vector, _) in enumerate(dev):
         others = dev[:n] + dev[n + 1 :]
-        near = sorted(others, key=lambda d: -sum(a * b for a, b in zip(vector, d[0])))[:k]
+        near = sorted(others, key=lambda d: -sum(a * b for a, b in zip(vector, d[0], strict=True)))[
+            :k
+        ]
         scores.append(sum(ok for _, ok in near) / len(near) if near else 0.0)
     return scores
 

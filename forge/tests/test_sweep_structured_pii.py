@@ -346,15 +346,15 @@ def test_star_field_scans_every_field_and_only_reports(tmp_path):
     f = tmp_path / "cards.jsonl"
     rows = [{"massima": "Il ricorrente, mario.rossi@example.com, propone ricorso."},
             {"massima": "Nessun dato."}]
-    f.write_text("".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-    before = f.read_text()
+    f.write_text("".join(_json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    before = f.read_text(encoding="utf-8")
     p = subprocess.run([_sys.executable, str(script), str(f), "--field", "*", "--quiet"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     assert p.returncode == 1 and "1 record" in p.stdout
-    assert f.read_text() == before                          # nothing rewritten
+    assert f.read_text(encoding="utf-8") == before                          # nothing rewritten
     p = subprocess.run([_sys.executable, str(script), str(f), "--field", "text", "--quiet"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     assert p.returncode == 0                                # 'text' alone misses it
     p = subprocess.run([_sys.executable, str(script), str(f), "--field", "*", "--apply"],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8")
     assert p.returncode != 0

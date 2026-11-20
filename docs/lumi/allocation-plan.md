@@ -706,6 +706,537 @@ already in use"`; `ram-480b`'s timeouts are not among them. 0.8.6 moves
 llama.cpp to b12032: the round after this one is on the release that
 carries the fix.
 
+02-11-2026, evening: the night's queue and the b12032 test.
+
+- 0.8.7 released the same evening (`EuLLM-v0.8.7`, tagged by the PI): 0.8.6
+  (llama.cpp b12032, 107 commits after b11925, `docs/llama-bump-b12032.md`)
+  with the chat UI port fix of `serve`. The release notes' "This release"
+  still described 0.8.0 on the 0.8.5 and 0.8.6 pages; rewritten for 0.8.7.
+- `r-v085` goes on in its two chains of 4-hour jobs (23401982 and 23401999
+  at their head, 28 behind), the runner on `--no-ui`, the 226 points back
+  in the queue. Its 7 soaks that need more than a 4-hour job (`soak-node`,
+  `moe-soak`, `moe-235b-soak-x2`, 4 to 6 hours at least) stay in the queue
+  and are skipped by these jobs, which end as soon as nothing else fits:
+  to run on 0.8.7 in the next round rather than on 0.8.5, about 56
+  node-hours saved.
+- llama.cpp b12032 on the MI250X, before that round, as the bump's notes
+  ask of LUMI-G (a smoke job and MTP, for `0013` beside upstream's new
+  `__ballot` on ROCm 6): `c15-llama-b12032`, round `r-b12032`, old 0.8.5
+  (`v085`, b11925) against new 0.8.7 (`v087`, built from the tag in
+  `eullm-v087`, `eullm-target/v087`), 21 points per binary, sized for jobs
+  of 4 hours:
+  1. `sbatch_smoke.slurm` with the new binary.
+  2. `b12-moe`, the whole node: the 235B's expert cache at 8 and 32
+     requests with `LLAMA_MOE_CACHE_STATS=64`.
+  3. `b12-tensor`: Qwen3-32B with `--split-mode tensor` on four GCDs, at
+     1 and 16 requests: `0012` was regenerated on upstream's new loader.
+     Beside the other points, not alone, to keep the test to one job.
+  4. `b12-mtp`: the six MTP twins without `--mtp` and with `--mtp 2`, 100
+     gsm8k questions at temperature 0; no rollback error from upstream's
+     stricter recurrent memory (#31368).
+  5. `b12-soak-*`: four soaks of two to two and a half hours at 32
+     requests on one GCD (the c14 ones, shorter), llama.cpp's log on.
+  6. `b12-pool-flush`: one of them with `GGML_CUDA_POOL_KEEP_FREE_MB=40000`,
+     so that `0011`'s flush runs at last (with the default 512 MiB the
+     soaks never came near full VRAM); its speed is not a result.
+  The `v085` half runs in `r-v085`'s chains, ahead of that round's points
+  (priorities 104-110); `v087` has a chain of its own.
+  7. `b12-dsa`, `b12-dsa-graded`: the sparse attention b12032 runs on CDNA
+     (#31259: the sparse flash-attention kernel, made for 64-wide
+     wavefronts; 0.8.5 reads these models with the dense kernel and its
+     mask), on DeepSeek-V4-Flash (284B, 13B active, architecture
+     `deepseek4`, MIT), unsloth's UD-Q4_K_XL, 155 GB, pulled for it, on
+     four GCDs: reading and writing at 0, 16,000 and 30,000 tokens of
+     prompt, and 100 gsm8k questions at temperature 0. GLM-5 (`glm-dsa`)
+     is 220-240 GB at two bits and waits.
+  25 points per binary.
+
+03-11-2026, morning. The build of the tag finished in the night: `eullm 0.8.7
+(ROCm) [03a7b55858f7]`, the tag's commit, device code `amdhsa--gfx90a`.
+DeepSeek-V4-Flash is in the store (145 GiB). The smoke job 23420290 (`dev-g`,
+07:43, 19 s) found the GCD (MI250X, 65,520 MiB) and loaded Qwen3-8B whole on
+it, 4,455 MiB of model, 576 of context, 108 of compute, as 0.8.0 did. The
+block had been started before the DeepSeek groups were added, so `c15` was
+planned with 21 points per binary, without `b12-dsa`: planned apart. No
+campaign job ran in the night: `r-v085`'s second jobs (23401982, 23401999)
+waited on priority until 10:24 and 10:34, and from then ran the `v085` half
+of `c15` first, all 21 points done by 12:50, none failed. The `v087` chain
+(head 23420293) waits on a maintenance reservation (`ReqNodeNotAvail,
+Reserved for maintenance`).
+
+03-11-2026, afternoon: the maintenance ended at 16:01 and 23420293 ran from
+17:06 (nid005779); `r-v085`'s chains went on (23401983, 23402000). The
+DeepSeek points were planned on their own (`GROUP='b12-dsa*'`); the
+30,000-token one failed on both binaries, its prompt 34,375 tokens to that
+tokenizer in a 32,768-token slot, and goes again as `b12-dsa-long` with a
+49,152-token slot. The report showed the two binaries of one round as one
+average; `engine_label` is now a report column (8bfa6734). Read so far, the
+table in `docs/llama-bump-b12032.md` section 5: the expert cache and MTP
+level (the same drafts kept to 0.1 point), tensor split 26% and 9% faster,
+DeepSeek-V4-Flash level with no gain from the sparse attention at 16,000
+tokens, and loads slower on 0.8.7 in five of six points, inside a spread of
+15 times on one binary, to check in the next round's `c09`. The 0.8.7 soaks
+and the pool flush are running.
+
+03-11-2026, evening: `c15` read whole (`docs/llama-bump-b12032.md` section
+5). b12032 is level with b11925 on the MI250X: the soaks the same within 1%
+with no death and no error in 0.8.7's logs, `0011`'s flush run at last
+(five times in each binary's soak with `GGML_CUDA_POOL_KEEP_FREE_MB=40000`,
+at the same speed), DeepSeek-V4-Flash at 30,000 tokens 338 against 330
+tokens/s reading. One `HSA_STATUS_ERROR` line in 0.8.5's tensor-split point
+(job 23401999), measured all the same.
+
+The night's queue: `r-v085` is set aside where it stood (its waiting points
+moved to `$CAMPAIGN_DIR/dropped/2026-11-03/` with `campaign.py set-aside`,
+not deleted): `c15` measured b11925 against b12032 directly and found them
+level, and the round on 0.8.7 measures every one of those points again, so
+finishing it would pay twice for the same configurations. Its chains'
+waiting jobs are cancelled; the running ones finish their points. `r-v087`
+on 0.8.7 (label `v087`, the same ten campaigns), in two chains of 4-hour
+jobs following the running ones, and its seven soaks that a 4-hour job
+cannot hold (`soak-node`, `moe-soak`, `moe-235b-soak-x2`, 4 to 6 hours at
+least, 7 whole-node points) under a label of their own, `v087-long`, in one
+chain of 8-hour jobs that starts when both chains have ended: two nodes at
+a time, never three.
+Submitted the same evening, after a first try that planned nothing for
+`v087-long`: `plan --group` wanted each pattern to name a group of every
+spec given, and `moe-soak` is c02's only (fixed, 23efa68c). `r-v085`'s
+waiting points set aside; `r-v087`: 835 points, 7 of them moved to
+`v087-long`, 826 of the other 828 timed from earlier runs; chain 1 of 14
+jobs of 4 hours from 23439595 (after 23401984), chain 2 from 23439609
+(after 23402001), their last jobs 23439608 and 23439622; the long chain,
+10 jobs of 8 hours from 23439623, after both (`afterany:23439608:23439622`).
+At most 112 + 80 node-hours; the jobs a chain does not need end at once.
+`squeue` gave the long chain's waiting jobs the reason `(Resources)`, not
+`(Dependency)`, as it had given `c15`'s `ReqNodeNotAvail`: on LUMI the reason
+shown is not the dependency. `squeue -o "%i %E"` is: `afterany:23439608
+(unfulfilled),afterany:23439622(unfulfilled)` for 23439623, and each later
+job after the one before it.
+
+04-11-2026, morning: the night of `r-v087`. The 0.8.5 jobs ended at 01:15,
+the 0.8.7 chains started at 01:38 and handed over in 2 to 5 minutes; 198
+points done by 13:00, 633 waiting, 2 failed: `load-together-235b` with
+`--mmap` (the warm-up timed out) and `rt-graded` on Ollama ("timed out
+waiting for llama-server to start", Ollama's own runner, not EuLLM). No
+point failed on the chat UI's port. The first job of each chain ended in
+`TIMEOUT` at 4:00:16: 23439595 had started `load-together-120b` at 03:03
+UTC with 35 minutes left, planned at 25 by earlier runs, and it was still
+loading when the time ran out (released, back in the queue). A load that
+overruns, not the job's summary.
+
+The loads are slower on 0.8.7, now past the noise: `load-together-235b`
+(two Qwen3-235B Q4_K_M at once, cold, the node alone, `--load-threads 0`)
+160 s, where the four rounds before took 103-121 s (`next8` 121, `next21`
+104, `v0794` 107, `v085` 103); its `--mmap` variant, 17 minutes before, ran
+past the warm-up's limit; Qwen3-Coder-480B without mmap 175 and 202 s
+against 168 and 161; and in `c15` Qwen3-32B split by tensor, the 235B with
+the expert cache and DeepSeek. The cause in llama.cpp: #31321 (in b12032)
+reads the tensors of a model loaded without mmap biggest-first instead of in
+file order, for the one staging buffer it now reuses; on ROCm every such
+load takes the async upload, which b12032 left as it was but for that
+order. On Lustre, read cold, the jumps cost: llama.cpp's sequential read was
+what beat EuLLM's own readers on this file system in October. Patch `0014`
+reads them in file order again (sorted by file and offset), the staging
+buffer growing to the largest tensor, the peak upstream's had anyway.
+
+`c16-load-order` measures it before anything is merged: the same cold loads
+on 0.8.5 (`v085`), 0.8.7 as released (`v087`) and 0.8.7 with `0014`
+(`v087fo`, built from this branch in `eullm-v087fo`), round `r-load-order`,
+16 points per binary: two 235B together, the 235B on four GCDs (Q4_K_M) and
+on eight (Q8_0), the Coder-480B without mmap, Qwen3-32B split by tensor,
+Qwen3.8-27B Q8 on one GCD, two or three trials each. The `v087` half in
+`r-v087`'s chains, ahead of that round's points; a job each for the other
+two.
+Submitted the same day: `eullm 0.8.7 (ROCm) [bc5498dc2ec9]`, the branch with
+`0014`, device code `amdhsa--gfx90a`, built in 6 m 34 s; `c16` planned with
+16 points for each label; jobs 23459449 (`v085`) and 23459452 (`v087fo`),
+the `v087` half in `r-v087`'s 23439598 and 23439612.
+
+04-11-2026, evening, the pace: 2,852 node-hours left (lumi-allocations,
+21:40), 22.8 a day to 09-03-2027; the last 7 days 23.6 a day, which spends
+them by 05-03. The PI's rule from today: always ahead of the straight line,
+never on it, so that days without a job (the maintenances of 02 and 03-11,
+the two days without a login of 29-30 October) leave no hour unspent at the
+end. `nodi.sh` now prints that margin: 1,648 node-hours spent against the
+line's 1,355 by now, 293 ahead, about 12 days of its 25.1 a day. After
+`r-v087` (about a day and a half on two nodes) and its long soaks (about
+two and a half on one), the next work goes in the queue before it empties.
+
+05-11-2026: LUMI limits `dev-g` to one running job per user and one per
+project, and its debug and dev-g policy (to all users the same day) counts as
+production any job with dependencies, a job that starts its successor, work
+submitted unattended by a script or an AI agent, and jobs moved into `debug`
+with `scontrol`. The campaigns run on `standard-g` and are untouched. Two
+things change: the smoke job moves to `small-g` (`sbatch_smoke.slurm`, the
+same 0.5 per GCD-hour, `--mem=60G` to bill one GCD), and no helper job goes to
+`debug` again, as 23253738 did on 28-10 to release `r-v0794`'s held chains
+after `c14`: chains follow each other by dependency (`AFTER`) instead.
+
+05-11-2026, evening, for a day without anyone at the terminal (06-11): the
+two-day soaks of `c12` (`days-*`, eight points of one GCD, 44 to 46 hours)
+planned for 0.8.7 under a label of their own, `v087-days`, round `r-v087`,
+and submitted as one 48-hour job, 23497732, which started at 18:50 on
+nid006141. The block was run a second time on 06-11 at 20:09 and submitted
+23526305 as well, with nothing left for it to run: cancelled. That evening:
+`r-v087` 807 points done, 4 waiting (the long soaks), 9 running (the eight
+two-day soaks and one long one, 23439625 from 19:23), 23 failed; `c16` done,
+48 points of 48. Left 2,778 node-hours, 22.6 a day to 09-03-2027, 317 ahead
+of the straight line (12.6 days); the last 7 days at 27.0 a day.
+
+`c16-load-order` read whole the same evening, median load seconds, cold,
+the node alone, 2-3 trials, 0.8.5 / 0.8.7 / 0.8.7 with `0014`:
+
+| load | `v085` | `v087` | `v087fo` |
+|---|---|---|---|
+| Qwen3.8-27B Q8, one GCD | 130 | 95 | 44 |
+| Qwen3-32B, `--split-mode tensor`, four GCDs | 101 | 107 | 31 |
+| Qwen3-235B Q8_0, eight GCDs | 686 | 652 | 261 |
+| Qwen3-Coder-480B, `--no-mmap`, eight GCDs | 183 | 185 | 149 |
+| Qwen3-235B Q4_K_M, four GCDs | 330 | 148 | 184 |
+| two Qwen3-235B Q4_K_M together | 186 | 164 | 188 |
+
+The slowdown read on 04-11 was not b12032's: side by side, 0.8.5 and 0.8.7
+load alike, and 0.8.5 itself took 155-265 s for the two 235B together this
+week where it took 103 in `r-v085` (Lustre slower for everyone, not the
+binary). Reading in file order is what makes the difference, against both:
+two to three times faster for the models up to 64 GiB and the 235B Q8_0,
+20% for the 480B, level for the 235B Q4_K_M, where trials spread two to
+three times. The likely reason: in some GGUF files the tensors do not lie
+in the order llama.cpp creates them, so neither earlier order reads the
+file in one pass. `0014`, already on `main` (#1260), stays, with its
+description, the README row and the changelog rewritten from these figures.
+
+The 24 failed points of `v087` (`failures.py --label v087`): `b12-dsa`'s
+30K prompt (03-11, known); `load-together-235b` with `--mmap` (warm-up timed
+out); `ram-671b` and `ram-480b`/`ram-prompt` (time limits and timeouts, as
+in every round); and twelve of `c07`'s `rt-prefill` and `rt-throughput`
+stopped after an hour, three times their estimate, between 20:51 and 23:23
+on 04-11, plus three earlier with Ollama's "timed out waiting for
+llama-server to start". Which runtime the twelve ran is not in the list:
+`failures.py` now names it (`--group rt-` to see them alone).
+
+08-11-2026: the queue ran out. The two-day soaks ended on 07-11 in the
+evening and the long soaks' chain around midday on 08-11 (one job left
+running at 13:13, 2.1 node-hours that day by then); the 0.8.8 load checks
+promised for after the soaks had not been queued. The week before: 33.3
+node-hours a day, 2,764 left, 289 ahead of the straight line (11.5 days).
+Queued that afternoon: `r-v088`, the release 0.8.8 (patch `0014`'s
+file-order loads, the help, `.env` read for every setting; no change to
+inference), on the campaigns where loading weighs: `c02`, `c07` (whose
+`rt-*` points failed on `v087`), `c09`, `c10`, `c11`, `c16`, in two chains of
+4-hour jobs, without the points no 4-hour job holds (`moe-soak`,
+`moe-235b-soak-x2`) and without `ram-671b` and `ram-prompt`, which run into
+their time limit or time out in every round and wait for a fix rather than
+another try.
+Submitted the same afternoon: `eullm 0.8.8 (ROCm) [d47b3fb3736a]`, the
+tag's commit; 376 points planned, 25 set aside (the soaks and `ram-671b`,
+`ram-prompt`), all 351 others timed from earlier runs; two chains of 9 jobs
+of 4 hours, 23538238 at once and 23538229 after 23439628, the long soaks'
+job running from 11:38 (its successor 23439629 holds the last of them). The
+queue lasts to about 10-11-2026 in the morning: the next work goes in
+before then.
+
+09-11-2026, midday: `r-v088` ran far shorter than its chains (both empty by
+the morning, nothing running or waiting at 12:39), so the queue was empty
+again within the day. 2,664 node-hours left, 357 ahead of the straight line
+(14.2 days), the last 7 days at 36.2 a day. Queued at once, for about two
+days on two nodes: `c17-deepseek-v4`, DeepSeek-V4-Flash measured as a
+product model (one GCD with most experts in RAM, by the expert cache, by
+`--cpu-moe` and by the engine's own choice; 2, 4 and 8 GCDs; 1, 8 and 32
+requests; 300 gsm8k questions; a soak of two to three hours), 20 points,
+first; then the rest of 0.8.8's round (`c01`, `c03`, `c06`, `c08`, `c13`), so
+that 0.8.8 has a whole round as 0.8.7 does, without `soak-node`, which no
+4-hour job holds. From now on every submission says how long the queue
+lasts, and the next work is queued a day before it ends.
+Submitted: `r-v088` had ended with 350 points done and one failed (the
+`rt-*` failures of `v087` did not come back); 495 points planned now, 3
+set aside (`soak-node`), 472 timed from earlier runs; two chains of 8 jobs
+of 4 hours, 23577110 to 23577117 and 23577118 to 23577125. At `r-v088`'s
+rate, half its estimate, they end on 10-11 between morning and midday; so
+behind them, by dependency (`afterany:23577117:23577125`), a chain of
+8-hour jobs under the label `v088-long`: `c17`'s `dsv4-soak-long`, four
+soaks of six to seven hours of DeepSeek-V4-Flash on four GCDs each, two to
+a node, about sixteen hours of one node, to 11-11 in the morning. GLM-5
+is prepared on 10-11 to follow.
+Submitted: the four soaks planned under `v088-long`; a chain of 4 jobs of 8
+hours from 23577660, after `afterany:23577117:23577125` as `squeue %E`
+shows it. Two jobs hold the four soaks; the two after them end at once.
+
+Where things stand on 10-11-2026, for the next session:
+
+- **In the queue**, to about 11-11 in the morning: the two chains of
+  `v088` (`c17` first, then `c01`, `c03`, `c06`, `c08`, `c13` of 0.8.8's
+  round), and behind both the `v088-long` chain of DeepSeek soaks
+  (23577660). Nothing is queued after it yet.
+- **Next, on 10-11: GLM-5.** Pick the model and quantization (GLM-5.1 or
+  5.2, unsloth's two-bit UD-IQ2_M, 220-240 GB, on four or eight GCDs), check
+  that b12032 loads its architecture (`glm-dsa` and `glm5-next` are in
+  `engine/src/llama_archs.rs`), pull it on a login node, write `c18` on
+  `c17`'s pattern, and queue it behind 23577660's chain by dependency
+  (`AFTER`), so the queue does not run dry on 11-11.
+- **To read**: `c17` (DeepSeek-V4-Flash: one GCD with experts in RAM, 2 to
+  8 GCDs, gsm8k, soaks) and the rest of 0.8.8's round against 0.8.7
+  (`campaign.py compare --round r-v088`); `r-v088`'s `c16` points, the
+  release's own check of patch `0014`.
+- **Waiting for a fix, not another try**: `ram-671b` (stops at three times
+  its estimate in every round) and `ram-prompt` (times out), set aside in
+  `r-v088`; `soak-node`, `moe-soak` and `moe-235b-soak-x2`, which need jobs
+  longer than 4 hours and go in a `-long` chain when they are wanted. The
+  twelve `rt-*` points of `c07` stopped on `v087` did not fail again on
+  `v088`.
+- **Rules learned this week**: always ahead of the straight line (`nodi`
+  prints the margin; 357 node-hours, 14.2 days, on 09-11); the next work is
+  queued a day before the queue ends, by dependency; nothing on `dev-g` or
+  `debug` (LUMI's policy of 05-11; the smoke job runs on `small-g`); a job
+  of ours never waits on `debug`; `squeue %E`, not the reason column, shows
+  a dependency; blocks for LUMI are run on LUMI (`fmarchet@uan18`), not on
+  Leonardo or JUPITER.
+
+11-11-2026, morning: the queue ran dry, as feared. Nothing was queued on
+10-11 (no session that day), and the DeepSeek soaks' chain ended in the
+night. Two lines of work go in at once:
+
+- **Now, on one node**: the soaks no 4-hour job holds, on 0.8.8 under
+  `v088-long` in 8-hour jobs: `soak-node` (Qwen3-8B, Qwen3-32B and
+  Qwen3.6-35B-A3B, eight replicas at 256 requests, six hours and more),
+  `moe-soak` (DeepSeek-V3.1, Qwen3-Coder-480B, Qwen3-235B Q8_0 on eight
+  GCDs, four hours and more) and `moe-235b-soak-x2`: seven points, one per
+  job, about two and a half days.
+- **After a 200 GB pull, on a second node**: `c18-glm5`, GLM-5.3-Flash
+  (321B, 18B active, `glm5-next`, MIT; unsloth's UD-Q4_K_XL), on `c17`'s
+  pattern, on its text-only twin since the repo carries a vision projector:
+  one GCD with experts in RAM three ways, 2/4/8 GCDs at 1/8/32 requests,
+  0/16K/30K tokens of prompt on eight GCDs, 300 gsm8k questions, a soak of
+  two to three hours; 23 points, about a day. The GLM-5.3 family is on
+  Hugging Face beside it (GLM-5, 5.1, 5.2, 5.3 at 220 GB and more at two
+  bits); Flash is the one that fits as DeepSeek-V4-Flash does.
+
+Two nodes to about 12-11, one to about 14-11: the next work is queued by
+12-11 in the evening.
+Submitted: the `v088-long` soaks, 3 points of `c01` and 4 of `c02`, a chain
+of 10 jobs of 8 hours, 23631934 to 23631943. The GLM-5.3-Flash pull ran on
+the login node behind it, 40 minutes and more for 200 GB; whether it ended,
+and `c18`'s chain, is read on 13-11.
+
+13-11-2026, evening: nothing was queued on 12-11 (no session that day), and
+the `v088-long` chain ends about now. 0.8.9 went out on 11-11 (llama.cpp
+b12283: upstream's expert cache rewritten on ClassLRU, #31233, EuLLM's
+`0008` adding the pass to it; `0011` and `0013` regenerated), built and
+smoke-tested on LUMI-G that day by the bump's own session (job 23648639,
+Qwen3-8B at 87.8 tokens/s on one GCD). It changes inference, so it gets a
+round. Three lines go in at once, the first without waiting for a build:
+
+- **At once, on 0.8.8**: `c19-llama-b12283`'s half on the binary already
+  built, round `r-b12283`, label `v088`: the expert cache of Qwen3-235B and
+  Qwen3-Coder-480B on one GCD at 8 and 32 requests (`b13-moe`, the hits
+  with `LLAMA_MOE_CACHE_STATS=64`), the 235B's cache at 32 requests for two
+  hours and more (`b13-moe-soak`), the pool's flush (`b13-pool-flush`,
+  `0011`) and a soak of Qwen3.6-35B-A3B; 7 points, one chain of 4 jobs of
+  4 hours by the estimates.
+- **After the build** (the tag `EuLLM-v0.8.9` in a worktree and a target
+  directory of its own, `eullm-v089` and `eullm-target/v089`, so no running
+  job changes binary): the same on 0.8.9, plus `b13-classlru` (upstream's
+  eviction alone, `LLAMA_MOE_CACHE_EVICT=classlru`) and `b13-trace` (the
+  experts each group of layers selected, upstream's `MCT1`, for
+  `bench/moe_cache_sim`); 15 points. The replay predicts the 235B at 32
+  requests 73.2% of experts in VRAM with `0008`, 65.9% with ClassLRU alone,
+  the 480B at 32 21.8% and 0%: these points say whether real routing agrees.
+- **And 0.8.9's round**, `r-v089`, label `v089`: `c01`-`c03`, `c06`-`c11`,
+  `c13`, `c16`, `c17`, `c18`, as `r-v087` and `r-v088`, without the points no
+  4-hour job holds (`soak-node`, `moe-soak`, `moe-235b-soak-x2`,
+  `dsv4-soak-long`), without `ram-671b` and `ram-prompt` (waiting for a fix),
+  and without `c10`'s `evict` and `evict2`, whose `LLAMA_MOE_CACHE_EVICT`
+  values (`lru`, `pass`) b12283's `0008` no longer has: `b13-classlru` is
+  their comparison now. `c19`'s points, priorities 110-114, go first in the
+  same chains. Two chains of 4-hour jobs.
+
+Read at 21:41 before submitting: nothing running or waiting; 2,554
+node-hours left, 364 ahead of the straight line (14.5 days), the last 7 days
+at 26.7 a day (22.0 on 11-11, 24.0 on 12-11, with the queue partly empty).
+What ran from 11-11: the `v088-long` soaks all done, none failed
+(`soak-node` 3, `moe-soak` 3, `moe-235b-soak-x2` 1). The pull ended and
+GLM-5.3-Flash loads on b12032: of `c18`'s 23 points 16 done (`glm-long` 3,
+`glm-graded` 1, `glm-soak` 1, `glm-gcds` 6, `glm-ram` 5) and 7 failed, 3 of
+`glm-gcds` and 4 of `glm-ram`, all `warm-up failed on server 0: HTTP 500:
+Failed to load model`, at the first request: which settings, and why the
+load gave up, is read from their notes (`failures.py --label v088 --group
+glm`). Three of `glm-gcds` is the shape of the two-GCD points (128 GB of
+VRAM for 200 GB of weights).
+Submitted: `c19`'s 0.8.8 half, 7 points, a chain of 4 jobs of 4 hours,
+23714114 to 23714117; the 0.8.9 build behind it on the login node.
+
+15-11-2026, 01:45: 0.8.9 built (`eullm 0.8.9 (ROCm) [9965640bd9c5]`), and
+its chains ran from the evening of 13-11. `c19` is done on both binaries,
+22 points of 22, none failed: `b13-moe` 4 and 4, `b13-classlru` 4,
+`b13-trace` 4, the two soaks and the pool's flush 1 each on each binary.
+`r-v089` has 803 points done, 10 failed, 16 running and 13 waiting: two jobs
+running from 21:26 on 14-11 (23714306, 23714324), the round over within
+hours. 386 node-hours ahead of the straight line (15.4 days).
+
+GLM-5.3-Flash's 7 failures on 0.8.8 are two faults of the engine's sizing,
+not of llama.cpp's support for `glm5-next`:
+
+- **One GCD, `glm-ram`, 4 points**: the expert cache took 52.00 GiB of the
+  GCD's VRAM, then the context of 8 slots (32,768 tokens, `n_batch` 2048,
+  since experts in RAM read prompts 2048 tokens at a time) asked 2,701.75 MiB
+  more for its compute buffers and the GCD had none left (`failed to
+  allocate compute pp buffers`). The cache is sized before the compute
+  buffers of the larger ubatch are counted.
+- **Two GCDs, `glm-gcds`, 3 points**: `--fit` kept the experts of the first
+  18 layers in RAM "so the rest fits in VRAM", reckoned on the two GCDs
+  together, and the layer split then asked 92,164.77 MiB of the second GCD,
+  64 GB. The layers whose experts stay in RAM are the first ones, which the
+  split gives to the first GCD; the second gets layers whole. The count has
+  to fit each device, not the sum.
+
+Both go to the engine as fixes, through `main`. 0.9.0 went out on 14-11
+(llama.cpp 1.0: the few-row MMQ kernel, #31533, off where MTP drafts;
+measured level on LUMI-G with one request, job 23735026; +13-44% with
+several requests on JUPITER's GH200). It changes inference, so it gets a
+round, `r-v090`, the same campaigns as `r-v089` and `c19` without
+`b13-trace`, in two chains of 4 hours; behind them by dependency, a chain of
+8-hour jobs under `v090-long` with the soaks no 4-hour job holds
+(`soak-node`, `moe-soak`, `moe-235b-soak-x2`, `dsv4-soak-long`), which have
+not run on llama.cpp 1.0's kernels. `r-v089` ran in about a day on two
+nodes, so `r-v090` lasts to about 16-11 and the long soaks about two and a
+half days after it, to about 19-11: the next work is queued by 18-11.
+Submitted: `eullm 0.9.0 (ROCm) [a9ee8e2cd330]`; two chains of 16 jobs of 4
+hours ending in 23746425 and 23746441, and the `v090-long` chain of 13 jobs
+of 8 hours, 23746442 to 23746454, after both.
+
+15-11-2026, 16:09: `r-v089` is over, 832 points done and 10 failed;
+`r-v090` has 424 done, 2 running, 428 waiting and 10 failed (23746413 and
+23746429 running from 13:42). 2,467 node-hours left, 407 ahead of the
+straight line (16.2 days), the last 7 days at 33.7 a day. The 10 failures
+are the same in both rounds: GLM-5.3-Flash's 7 (above) and 3 more of
+`c17`'s `dsv4-gcds`, DeepSeek-V4-Flash on two GCDs (145 GiB for 128 GB),
+the shape of the second fault. On 0.9.0 the cache of `glm-ram` with 32
+slots failed in the allocation of the cache itself (52,700 MiB, beside a
+context of 131,072 tokens), the first fault by another door.
+The first fault is fixed on this branch (`grow_moe_cache`: when the context
+cannot be made beside the planned cache, the cache shrinks, by bisection,
+to the largest with which it can); it reaches LUMI with the next release.
+The second, a split across GPUs that sizes `--n-cpu-moe` on their sum, is
+proposed: `--fit` computing a `--tensor-split` that gives each GPU what it
+holds.
+
+16-11-2026, 21:40: `r-v090` is over for `v090`, 842 points done and 11
+failed: the 10 above and one more, `ram-480b`, Qwen3-Coder-480B on one GCD,
+every request of its first repeat timed out (15-11 22:03). The `v090-long`
+chain runs (23746443 from 16:45, 11 jobs behind it): `dsv4-soak-long` 2
+done and 2 running, `soak-node` 3, `moe-soak` 3 and `moe-235b-soak-x2` 1
+waiting, about two days more, to 19-11. 2,422 node-hours left, 420 ahead of
+the straight line (16.7 days), the last 7 days at 33.7 a day.
+`compare --round r-v090`, 0.9.0 against 0.8.9: 842 configurations, median
+1.00 (0.22-1.50), 41 below 0.95. llama.cpp 1.0's new kernel is NVIDIA's
+(JUPITER's +13-44%), and on MI250X the round is level, as the bump's own
+measurement on one GCD said. Below it: experts computed by the CPU,
+`--cpu-moe` at 8 requests, GLM-5.3-Flash 0.9 -> 0.2 tokens/s (0.22) and
+DeepSeek-V4-Flash 1.7 -> 1.4 (0.82); the 235B's cache at 32 requests 0.93;
+Qwen3-32B split by tensor 0.96. The whole list of the 41, and whether
+`--cpu-moe` lost on the other models too, is read next. The cache fix of
+15-11 is on `main` (6cb3d6d): built tonight in its own worktree
+(`eullm-main1116`, `eullm-target/main1116`), to run GLM's failed points on it
+before the next release.
+Read the same evening: `build exit: 0`, `eullm 0.9.0 (ROCm) [6cb3d6dd6de0]`.
+The 41 below 0.95, by group's slowest configuration, fall in three kinds:
+
+- **Noise**, by the yardstick of the runtimes that did not change: `c07`'s
+  llama-server and Ollama, the same binaries in both rounds, came out at
+  0.89-0.92. Single configurations at 0.88-0.93 elsewhere (Mistral-Small-24B,
+  gpt-oss-20b, `--mtp 3`, the decision points, the 235B's cache) are that.
+- **Experts computed by the CPU** at 8-16 requests, in every model where it
+  was measured: gpt-oss-120b `--cpu-moe` at 16, 4.2 -> 3.3 tokens/s (0.79);
+  DeepSeek-V4-Flash at 8, 1.7 -> 1.4 (0.82); GLM-5.3-Flash at 8, 0.9 -> 0.2
+  (0.22). One direction in three models, which noise does not explain as
+  readily; but each figure is one point of each round, on another node and
+  day: a suspicion, not a measured regression, until the A/B below.
+- **The split by tensor across GCDs**: `rccl-235b` 0.94 as the group's
+  median (marked), its slowest at four GCDs and one request 24.4 -> 19.5
+  (0.80); `rccl-120b` 0.79, `rccl-batch` 0.88, `rccl-internal` 0.88,
+  `rccl-tensor` 0.89, `place-480b` by tensor 0.90.
+
+And `ram-480b`'s failure came with no server log, only the three timeouts.
+Both kinds are measured again as an A/B: the same groups (`glm-ram`,
+`dsv4-ram`, `ram-gpt-oss-120b`, `rccl-235b`, `rccl-120b`, 37 points) on 0.8.9
+and 0.9.0 side by side, round `r-ab090`, one chain each, started together so
+that both see the same days; `campaign.py compare --round r-ab090 --label
+v090 --base-label v089` reads one against the other whichever ran first
+(new: `compare` took only the measurements before the new ones). With them,
+`ram-480b`'s failed point again on 0.9.0, and the cache fix on `main1116`,
+label `v090c`, round `r-cachefix`: `glm-ram` (its four cache points failed
+on every binary so far) and `c19`'s `b13-moe` (the cache where it already
+loaded: the fix must not change it). Up to 21 node-hours a label by the
+estimates, 9 for `v090c`; behind the long soaks nothing yet.
+
+17-11-2026, 09:40: all of it ran in the night. 2,400 node-hours left, 430
+ahead of the straight line (17.1 days), the last 7 days at 34.2 a day.
+
+- **The A/B says there is no regression.** `compare --round r-ab090 --label
+  v090 --base-label v089`, 0.9.0 against 0.8.9 measured the same night: 33
+  configurations, median 1.00. The split by tensor is level (`rccl-120b`
+  1.01, 0.98-1.11; `rccl-235b` 1.01, 0.97-1.04), and so is gpt-oss-120b
+  with the CPU computing its experts (`ram-gpt-oss-120b` 1.00, its slowest
+  0.91). GLM-5.3-Flash's `--cpu-moe` at 8 requests, 0.9 -> 0.2 tokens/s
+  between the rounds, came out 4.5 times faster on 0.9.0 this time: the same
+  configuration swings between 0.2 and 0.9 tokens/s whichever binary runs
+  it, which is a fact about that configuration, not about llama.cpp 1.0.
+  DeepSeek-V4-Flash's `dsv4-ram` 0.95 (0.80-1.00), its slowest `--cpu-moe`
+  at 32 requests, 0.5 -> 0.4 tokens/s, at the resolution of the figure. The
+  drops `r-v090` showed were days and nodes, not the binary: an A/B in one
+  round is the test for a release, a comparison across rounds the alarm.
+- **The cache fix works.** On `main1116` (label `v090c`), `glm-ram`'s nine
+  points all done, the four with the expert cache for the first time on any
+  binary (on 0.8.8, 0.8.9 and 0.9.0 they failed every time); the log says
+  "no context fits beside the planned 52.00 GiB cache, the cache goes down
+  to 50.00 GiB" at 8 requests, and 51.50 to 44.50 GiB at 32. `b13-moe`,
+  where the cache already loaded, unchanged (4 compared, 1.00, 0.93-1.00).
+- `ram-480b`'s point failed again on 0.9.0 (8 done, 1 failed): its log is
+  read next.
+- The long soaks: `dsv4-soak-long` 4 done, `moe-235b-soak-x2` 1 done,
+  `moe-soak` 1 running and 2 waiting, `soak-node` 3 waiting, one a job of 8
+  hours (23746445 running from 07:54, 9 behind it): to about 19-11 midday.
+
+The second fault fixed the same day, on this branch (`fit::balance_moe_split`):
+with several GPUs and the experts of the first layers in RAM, `--fit` weighs
+every block (its tensors other than experts, its share of the KV cache, its
+experts when they stay on the GPU) and cuts the blocks into a run per GPU
+whose bytes follow each GPU's free VRAM, less its own reserve and compute
+buffer; the cut goes to llama.cpp as `--tensor-split`, its proportions half a
+block from any block so that f32 rounding cannot move one (tested against
+llama.cpp's own assignment, up to eight GPUs). Where no cut holds, the
+experts of one more layer go to RAM. Only where the user split nothing, and
+for that load. To run on LUMI: `glm-gcds` and `dsv4-gcds` at two GCDs, the
+seven points that failed on every binary.
+Submitted at 12:05: this branch built in its own worktree (`eullm-split1117`,
+`eullm-target/split1117`, `build exit: 0`, `eullm 0.9.0 (ROCm)
+[4c2c0a4c0fee]`), label `v090s`, round `r-splitfix`: `c17`'s `dsv4-gcds` and
+`c18`'s `glm-gcds`, 9 points each (two, four and eight GCDs at 1, 8 and 32
+requests: the two-GCD points are the test, the others must not change), a
+chain of 2 jobs of 4 hours, 23812860 and 23812861. The same split for dense
+models (each GPU's own reserve and compute buffer, the output layer on the
+last) waits for this result.
+
+19-11-2026, 10:47: the queue empty since the morning (nothing queued on 18-11,
+no session that day); the `v090-long` soaks all done, none failed
+(`dsv4-soak-long` 4, `moe-soak` 3, `soak-node` 3, `moe-235b-soak-x2` 1).
+2,345 node-hours left, 432 ahead of the straight line (17.2 days).
+`r-splitfix`: 17 points of 18 done. Five of the six two-GCD points that had
+failed on every binary load now: DeepSeek-V4-Flash's three (`--fit: 2 GPUs,
+layers 27/16`) and two of GLM-5.3-Flash's (`layers 32/14`, the experts of 19
+layers in RAM instead of 18). At four and eight GCDs nothing changed
+(`compare`: `dsv4-gcds` 1.00, 0.95-1.06; `glm-gcds` 1.00, 0.99-1.01). The
+sixth, GLM at 32 requests, split as meant, then its context asked 2,795.76
+MiB of compute buffer of the first GCD, where the split had kept 1,472 MiB
+and the 1 GiB reserve: `fit::per_device_reserve` now counts the growth of a
+2,048-token micro-batch twice for each GPU of a split (2,624 MiB beside the
+reserve). Both fixes were on `main` by then (54e3211).
+Queued the same morning: this branch (`main` and that change) built in its
+own worktree, label `v090f`, round `r-v090f`, the campaigns of `r-v090` with
+`c19` (without `b13-trace`) and the same points set aside, two chains of
+4-hour jobs; behind them by dependency, under `v090f-long`, the soaks no
+4-hour job holds, once more on the binary the next release is made from.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were

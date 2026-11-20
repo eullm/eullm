@@ -404,7 +404,7 @@ def test_the_script_prints_counts_and_refuses_to_redraw(tmp_path, capsys):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     out = tmp_path / "exam.jsonl"
     assert mod.main([str(norms), "--out", str(out), "--check-retrieval"]) == 0
     printed = capsys.readouterr().out
@@ -471,14 +471,14 @@ def test_the_script_excludes_trained_articles_and_says_only_how_many(tmp_path, c
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n")
+    norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
     pairs = tmp_path / "openbook-pairs.jsonl"
-    pairs.write_text(json.dumps({"key": "ob-g-codice_civile-2"}) + "\n")
+    pairs.write_text(json.dumps({"key": "ob-g-codice_civile-2"}) + "\n", encoding="utf-8")
     out = tmp_path / "exam.jsonl"
     assert mod.main([str(norms), "--out", str(out), "--exclude-pairs", str(pairs)]) == 0
     printed = capsys.readouterr().out
     assert "1 trained articles left out" in printed and "codice_civile-2" not in printed
-    drawn = [json.loads(x)["metadata"] for x in out.read_text().splitlines()]
+    drawn = [json.loads(x)["metadata"] for x in out.read_text(encoding="utf-8").splitlines()]
     assert not [m for m in drawn if (m["code"], m["articolo"]) == ("codice_civile", "2")]
 
 

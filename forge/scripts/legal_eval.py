@@ -203,6 +203,78 @@ def split_reasoning(text: str) -> tuple[str, str, bool]:
     return text, "", True
 
 
+def scale_lora(model, scale: float) -> int:
+    """Multiply every LoRA B matrix of a PEFT model by ``scale`` before merging.
+
+    The merged update is B·A·alpha/r, linear in B: at 0.5 the merged model is
+    halfway, weight by weight, between the base and the base with the whole
+    adapter (task arithmetic with one task vector). Returns how many tensors
+    were scaled; 1.0 changes nothing.
+    """
+    if scale == 1.0:
+        return 0
+    import torch
+
+    n = 0
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if "lora_B" in name:
+                p.mul_(scale)
+                n += 1
+    return n
+
+
+def parse_layers(spec: str) -> set[int]:
+    """ "0-11,30" -> {0, ..., 11, 30}."""
+    out: set[int] = set()
+    for part in filter(None, spec.split(",")):
+        lo, _, hi = part.partition("-")
+        out.update(range(int(lo), int(hi or lo) + 1))
+    return out
+
+
+def keep_lora_layers(model, spec: str) -> int:
+    """Zero the LoRA B matrices outside the decoder layers ``spec`` names.
+
+    With B at zero a LoRA adds nothing, so the merged model carries the
+    adapter in those layers only. Returns how many LoRA B tensors are kept.
+    """
+    import re
+
+    import torch
+
+    keep, kept = parse_layers(spec), 0
+    with torch.no_grad():
+        for name, p in model.named_parameters():
+            if "lora_B" not in name:
+                continue
+            m = re.search(r"\.layers\.(\d+)\.", name)
+            if m and int(m.group(1)) in keep:
+                kept += 1
+            else:
+                p.zero_()
+    return kept
+
+
+def switch_off_ple(model) -> int:
+    """Make every n-gram (PLE) layer of a Qwen3.8-Flash-Next add nothing.
+
+    The decoder layer adds the PLE layer's output to its hidden states
+    (``hidden_states + self.ple(...)``); a forward hook that returns zeros
+    leaves the rest of the model exactly as it is, so the same exam asked with
+    and without it measures what the 51 B parameters of hashed n-gram tables
+    contribute. Returns how many layers were switched off.
+    """
+    import torch
+
+    n = 0
+    for _, module in model.named_modules():
+        if type(module).__name__.endswith("PLELayer"):
+            module.register_forward_hook(lambda _m, _i, out: torch.zeros_like(out))
+            n += 1
+    return n
+
+
 def chat_prompt(tok, content: str, think: bool = False, system: str | None = None) -> str:
     """One user turn in the model's chat format, with thinking switched off.
 
@@ -331,6 +403,21 @@ def main() -> int:
                     help="with --gguf: questions decoded together")
     ap.add_argument("--server-ctx", type=int, default=16384,
                     help="with --gguf: context tokens per question (prompt + answer)")
+    ap.add_argument("--ple-off", action="store_true",
+                    help="switch off a Qwen3.8-Flash-Next's native n-gram tables (its PLE "
+                         "layers add nothing), to measure what they bring")
+    ap.add_argument("--ngram-memory", type=Path,
+                    help="graft this n-gram memory (forge/scripts/ngram_train.py, "
+                         "<out>/memory) onto the model before answering")
+    ap.add_argument("--adapter-scale", type=float, default=1.0,
+                    help="with --adapter: merge this share of it (0.5 = halfway between the "
+                         "model and the model with the adapter), a task-vector scaling")
+    ap.add_argument("--adapter-layers", default="",
+                    help="with --adapter: keep its LoRA only in these decoder layers "
+                         "(e.g. 0-11 or 12-23,30), the others dropped: where it does its work")
+    ap.add_argument("--adapter", type=Path,
+                    help="a PEFT LoRA adapter merged into the model before answering "
+                         "(the LoRA control of ngram_train.py, <out>/adapter)")
     ap.add_argument("--quiet", action="store_true",
                     help="print totals only, never a question or an answer: for the "
                          "held-out exam, whose questions nobody improving the models "
@@ -352,6 +439,8 @@ def main() -> int:
         ap.error("--retrieval-cache holds document embeddings: give --embedder")
     if args.gate and not args.norms:
         ap.error("--gate judges the retrieved texts: give --norms")
+    if (args.ngram_memory or args.adapter or args.ple_off) and args.gguf:
+        ap.error("--ngram-memory, --adapter and --ple-off change the HF model: not with --gguf")
 
     from transformers import AutoTokenizer
 
@@ -428,6 +517,30 @@ def main() -> int:
         cuda = torch.cuda.is_available()
         model = load_model(AutoModelForCausalLM, args.model, torch.cuda.device_count(),
                            fallback_cls=AutoModelForImageTextToText)
+        if args.adapter:
+            from peft import PeftModel
+            model = PeftModel.from_pretrained(model, args.adapter)
+            n = scale_lora(model, args.adapter_scale)
+            if args.adapter_layers:
+                kept = keep_lora_layers(model, args.adapter_layers)
+                print(f"[eval] LoRA kept in layers {args.adapter_layers}: {kept} tensors",
+                      flush=True)
+            model = model.merge_and_unload()
+            print(f"[eval] LoRA adapter {args.adapter} merged at {args.adapter_scale:g}"
+                  f" ({n} LoRA tensors scaled)", flush=True)
+        if args.ple_off:
+            n = switch_off_ple(model)
+            if not n:
+                raise SystemExit("[eval] --ple-off: the model has no n-gram (PLE) layer")
+            print(f"[eval] n-gram tables switched off: {n} PLE layer(s) add nothing", flush=True)
+        if args.ngram_memory:
+            from eullm_forge.memory import NGramMemory, attach, decoder_layers
+            memory = NGramMemory.load(args.ngram_memory)
+            layer = decoder_layers(model)[memory.config.layer]
+            attach(model, memory.to(next(layer.parameters()).device).eval())
+            print(f"[eval] n-gram memory {args.ngram_memory}: after layer {memory.config.layer}, "
+                  f"{memory.n_params() / 1e6:.1f}M parameters, scale "
+                  f"{memory.scale.item():.3g}", flush=True)
         model.eval()
         batch = args.batch_size or (16 if cuda else 1)
         print(f"[eval] {len(items)} items on {'GPU' if cuda else 'CPU'}, batch {batch}",

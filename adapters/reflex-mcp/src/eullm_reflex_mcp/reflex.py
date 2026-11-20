@@ -126,7 +126,7 @@ class Embedder:
         missing = [text for text in dict.fromkeys(texts) if text not in vectors]
         for start in range(0, len(missing), 32):
             batch = missing[start : start + 32]
-            for text, vector in zip(batch, await eullm.embeddings(self.model, batch)):
+            for text, vector in zip(batch, await eullm.embeddings(self.model, batch), strict=True):
                 vectors[text] = self.keep(text, unit(vector))
         query = unit((await eullm.embeddings(self.model, [self.query_prefix + request]))[0])
         return [dot(query, vectors[text]) for text in texts]
@@ -342,7 +342,7 @@ def merged(answers, names, temperature, has_none=True):
     top = max(values)
     weights = [math.exp((v - top) / temperature) for v in values]
     total = sum(weights)
-    probabilities = {k: w / total for k, w in zip(keys, weights)}
+    probabilities = {k: w / total for k, w in zip(keys, weights, strict=True)}
     # The probability, not the score it came from, and only when the option was
     # offered at all: with a tool called "none" among the names, that key in
     # `probabilities` is the tool's.

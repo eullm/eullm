@@ -43,6 +43,7 @@ measurement. The trained model is deleted unless the point keeps it.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import datetime as dt
 import fnmatch
@@ -117,7 +118,8 @@ def now_iso(t=None) -> str:
 
 def sh(cmd, timeout=60) -> str:
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                             encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return out.stdout if out.returncode == 0 else ""
@@ -146,7 +148,7 @@ def orphan_servers(ps_text: str, keep_pgids, job: str, cgroup_of) -> list:
 
 def read_cgroup(pid: int) -> str:
     try:
-        with open(f"/proc/{pid}/cgroup") as f:
+        with open(f"/proc/{pid}/cgroup", encoding="utf-8") as f:
             return f.read()
     except OSError:
         return ""
@@ -217,7 +219,7 @@ def runtime_info(backend: str) -> dict:
     if backend == "rocm":
         root = os.environ.get("ROCM_PATH", "/opt/rocm")
         try:
-            with open(os.path.join(root, ".info", "version")) as f:
+            with open(os.path.join(root, ".info", "version"), encoding="utf-8") as f:
                 return {"rocm": f.read().strip()}
         except OSError:
             return {"rocm": None}
@@ -266,7 +268,7 @@ class Runner:
         # starts at once rather than at the next poll.
         self.wake = threading.Event()
         self.model_seen = set()
-        self.busy_s = {d: 0.0 for d in self.devices}
+        self.busy_s = dict.fromkeys(self.devices, 0.0)
         self.counts = {"done": 0, "failed": 0, "blocked": 0, "released": 0, "retry": 0}
         self.started = time.time()
         walltime = args.walltime_s
@@ -443,7 +445,7 @@ class Runner:
             sub = "" if state == "done" else "failed"
             out = os.path.join(self.results, p["campaign"], sub, f"{p['id']}.{self.job}.json")
             os.makedirs(os.path.dirname(out), exist_ok=True)
-            with open(out, "w") as f:
+            with open(out, "w", encoding="utf-8") as f:
                 json.dump(result, f, indent=1)
             if state == "done":
                 print("BENCH_RESULT " + json.dumps(result, separators=(",", ":")), flush=True)
@@ -591,10 +593,9 @@ class Runner:
 
     def loop(self):
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1):
-            try:
+            # Not the main thread (the tests): stop is set directly.
+            with contextlib.suppress(ValueError):
                 signal.signal(sig, lambda *_: (self.stop.set(), self.wake.set()))
-            except ValueError:
-                pass  # not the main thread (the tests): stop is set directly
         released = self.queue.requeue_stale(alive_jobs(), time.time(), STALE_CLAIM_S)
         if released:
             print(f"[{now_iso()}] put back {len(released)} points left by ended jobs", flush=True)
@@ -669,7 +670,8 @@ class Runner:
             "engine": self.engine,
             "bench_rev": self.revision,
         }
-        with open(os.path.join(self.results, f"{self.job}.summary.json"), "w") as f:
+        path = os.path.join(self.results, f"{self.job}.summary.json")
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(doc, f, indent=1)
         print("JOB_SUMMARY " + json.dumps(doc, separators=(",", ":")), flush=True)
 
@@ -813,28 +815,36 @@ def cmd_plan(args):
     q = Queue(args.queue)
     os.makedirs(os.path.join(args.queue, "specs"), exist_ok=True)
     specs = load_specs(args.specs)
-    for path, spec in specs:
-        points = expand(spec, args.round, args.engine_label)
+    expanded = [(path, spec, expand(spec, args.round, args.engine_label))
+                for path, spec in specs]
+    if args.group:
+        # A pattern has to name a group of one of the specs, not of each: with
+        # c01 and c02, `soak-node` is c01's and `moe-soak` c02's, and asking
+        # for both planned nothing at all (03-11-2026). A pattern no spec has
+        # is still a typo, and stops before anything is queued.
+        names = {p["group"] for _, _, points in expanded for p in points}
+        unmatched = [g for g in args.group if not fnmatch.filter(names, g)]
+        if unmatched:
+            print(f"no group matches {', '.join(unmatched)} in "
+                  f"{', '.join(path for path, _, _ in expanded)} "
+                  f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
+            return 2
+    for path, spec, points in expanded:
+        selected = points
         if args.group:
-            names = {p["group"] for p in points}
-            unmatched = [g for g in args.group if not fnmatch.filter(names, g)]
-            if unmatched:
-                print(f"{path}: no group matches {', '.join(unmatched)} "
-                      f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
-                return 2
-            points = [p for p in points
-                      if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
-        added = [p for p in points if q.add(p)]
+            selected = [p for p in points
+                        if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
+        added = [p for p in selected if q.add(p)]
         name = os.path.basename(path)
         if args.round:
             name = name.replace(".json", f".{args.round}.json")
         if args.engine_label:
             name = name.replace(".json", f".{args.engine_label}.json")
-        with open(os.path.join(args.queue, "specs", name), "w") as f:
+        with open(os.path.join(args.queue, "specs", name), "w", encoding="utf-8") as f:
             json.dump(spec, f, indent=1)
         label = f" for jobs labelled {args.engine_label}" if args.engine_label else ""
         print(f"{path}{f' (round {args.round})' if args.round else ''}{label}: "
-              f"{len(points)} points, "
+              f"{len(selected)} points, "
               f"{len(added)} new, up to {node_hours(added):.0f} node-hours")
     print("queue:", q.counts())
     if args.engine:
@@ -898,7 +908,7 @@ def prefetch_finetune(name, out_dir) -> str:
     url, sha256 = FINETUNE_SETS[name]
     docs = gsm8k_train_text(ab_data.checked(fetch(url), sha256, url))
     path = os.path.join(out_dir, f"{name}.jsonl")
-    with open(path + ".tmp", "w") as f:
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
         for text in docs:
             f.write(json.dumps({"text": text}) + "\n")
     os.replace(path + ".tmp", path)
@@ -926,7 +936,7 @@ def cmd_prefetch(args):
             failed.append(f"{name}: {type(e).__name__}: {e}")
             continue
         path = os.path.join(out_dir, f"{name}.jsonl")
-        with open(path + ".tmp", "w") as f:
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
             for item in data.items:
                 row = {"id": item.id, "answer": item.answer, "grader": item.grader}
                 row.update({"prompt": item.prompt} if item.prompt is not None
@@ -1003,6 +1013,14 @@ def cmd_retry(args):
     return 0
 
 
+def cmd_set_aside(args):
+    dest = args.to or os.path.join(args.queue, "dropped", dt.date.today().isoformat())
+    moved = Queue(args.queue).set_aside(dest, args.engine_label, tuple(args.group or ()),
+                                        args.round)
+    print(f"{len(moved)} waiting points set aside in {dest}")
+    return 0
+
+
 def cmd_unblock(args):
     moved = Queue(args.queue).unblock()
     print(f"{len(moved)} points back in todo")
@@ -1021,6 +1039,7 @@ COLUMNS = (
     "dec_client_ms_p99", "dec_wait_ms_p50", "dec_decode_ms_p50", "dec_consistency",
     "extra_args", "trial", "vram_start_mib_max", "dec_together", "dec_same_choices",
     "dec_largest_shift", "dec_flipped", "env", "died", "stop_exit", "ended", "draft_accept_pct",
+    "engine_label",
 )
 
 
@@ -1115,7 +1134,7 @@ def cmd_collect(args):
     results = args.results or os.path.join(args.queue, "results")
     rows = result_rows(results)
     out = args.out or os.path.join(results, "summary.csv")
-    with open(out, "w", newline="") as f:
+    with open(out, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
@@ -1192,8 +1211,20 @@ def cmd_compare(args):
     campaigns = set(args.campaign or [])
     rows = [r for r in result_rows(results)
             if not campaigns or r.get("campaign") in campaigns]
-    print(report.compare(rows, lambda r: r.get("round") in rounds
-                         or str(r.get("job")) in jobs, args.threshold))
+
+    def picked(r):
+        return r.get("round") in rounds or str(r.get("job")) in jobs
+
+    def labelled(r, label):
+        return label is None or (r.get("engine_label") or "") == label
+
+    is_old = None
+    if args.base_label:
+        # An A/B: two binaries in the same rounds or jobs, whenever each ran.
+        def is_old(r):
+            return picked(r) and labelled(r, args.base_label)
+    print(report.compare(rows, lambda r: picked(r) and labelled(r, args.label),
+                         args.threshold, is_old))
     return 0
 
 
@@ -1251,7 +1282,8 @@ def cmd_budget(args):
     rec = budget.recovery(args.budget_node_hours, start, end, pace["behind_node_hours"], burn)
     billed = None
     if getattr(args, "allocations", None):
-        with (sys.stdin if args.allocations == "-" else open(args.allocations)) as f:
+        allocations = args.allocations
+        with (sys.stdin if allocations == "-" else open(allocations, encoding="utf-8")) as f:
             billed = budget.parse_allocations(f.read(), args.account)
     if args.json:
         out = None
@@ -1397,6 +1429,12 @@ def main(argv=None):
     p.add_argument("--each", action="store_true",
                    help="one line per failed or blocked point instead of one per group and cause")
     with_queue(sub.add_parser("unblock"))
+    p = with_queue(sub.add_parser("set-aside", help="move waiting points out of the queue"))
+    p.add_argument("--engine-label", help="only the points of this engine label")
+    p.add_argument("--round", help="only the points of this round")
+    p.add_argument("--group", action="append",
+                   help="only points whose id starts with this (repeatable)")
+    p.add_argument("--to", help="where they go (default: QUEUE/dropped/<today>)")
     p = with_queue(sub.add_parser("retry"))
     p.add_argument("--group", help="only points whose id starts with this, e.g. moe-671b")
     p.add_argument("--engine-label", help="only the points of this engine label, e.g. v085")
@@ -1428,6 +1466,10 @@ def main(argv=None):
     p.add_argument("--campaign", action="append", help="only this campaign (repeatable)")
     p.add_argument("--threshold", type=float, default=0.95,
                    help="a group whose median new/old ratio is below this is marked [!!]")
+    p.add_argument("--label", help="only the new rows of this engine label")
+    p.add_argument("--base-label",
+                   help="an A/B: against the rows of this engine label in the same rounds "
+                        "or jobs, whenever they ran, not the measurements before them")
     p = with_queue(sub.add_parser("collect"))
     p.add_argument("--results")
     p.add_argument("--out")
@@ -1445,6 +1487,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     commands = {"plan": cmd_plan, "pulls": cmd_pulls, "f32s": cmd_f32s, "prefetch": cmd_prefetch,
                 "run": cmd_run, "status": cmd_status, "unblock": cmd_unblock, "retry": cmd_retry,
+                "set-aside": cmd_set_aside,
                 "collect": cmd_collect, "report": cmd_report, "compare": cmd_compare,
                 "walltime": cmd_walltime,
                 "budget": cmd_budget}

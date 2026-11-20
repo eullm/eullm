@@ -375,7 +375,7 @@ async def collect(args):
     print()
 
     async with aiohttp.ClientSession() as session:
-        for i, test in enumerate(TESTS):
+        for test in TESTS:
             response = await send_prompt(session, args.url, args.model, test["prompt"], args.temperature)
             ok, detail = check_answer(test, response)
             status = "PASS" if ok else "FAIL"
@@ -427,7 +427,7 @@ async def collect(args):
     }
 
     if args.output:
-        with open(args.output, "w") as f:
+        with open(args.output, "w", encoding="utf-8") as f:
             json.dump(output, f, indent=2)
         print(f"\n  Saved: {args.output}")
 
@@ -438,7 +438,7 @@ def compare(args):
     files = args.files
     data = []
     for f in files:
-        with open(f) as fh:
+        with open(f, encoding="utf-8") as fh:
             data.append(json.load(fh))
 
     print(f"\n{'='*70}")

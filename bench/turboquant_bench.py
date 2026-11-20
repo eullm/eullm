@@ -325,7 +325,7 @@ async def run_warmup(url: str, model: str, count: int):
     """Send warmup requests to prime the engine."""
     print(f"  Sending {count} warmup request(s)...", end="", flush=True)
     async with aiohttp.ClientSession() as session:
-        for i in range(count):
+        for _ in range(count):
             await stream_request(
                 session=session,
                 url=url,
@@ -447,7 +447,7 @@ async def cmd_collect(args: argparse.Namespace):
         "results": all_rounds,
     }
 
-    with open(output_file, "w") as f:
+    with open(output_file, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2)
     print(f"\n  Results saved to: {output_file}")
 
@@ -456,7 +456,7 @@ async def cmd_collect(args: argparse.Namespace):
 
 def load_results(path: str) -> dict:
     """Load a JSON results file."""
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 

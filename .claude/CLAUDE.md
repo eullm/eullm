@@ -17,6 +17,7 @@
 - **Docs:** Every public API documented
 - **No vendor lock-in:** Abstract external services behind interfaces
 - **Records of public conversations**: the docs keep what was said in posts and comments elsewhere (Reddit, forums, other projects' pull requests and issues) and on which site, by its main domain only (reddit.com, github.com). No links to the posts or comments, and no subreddit or thread names; a pull request we build on is still named by its number.
+- **Python names the encoding of every text it reads or writes**: `open()` in text mode, `Path.read_text`/`write_text` and `subprocess` with `text=True` take `encoding="utf-8"` (and `errors="replace"` where the bytes may not be UTF-8: logs, other programs' output), in `.py` files and in the Python inside shell scripts and Slurm jobs alike, whatever the interpreter is called (`python3`, `"$PY"`); PowerShell's `Get-Content`/`Set-Content`/`Out-File` take `-Encoding UTF8`. Without it they take the host's locale, which is UTF-8 on our machines and so hides the bug. Gabriele found it and fixed it script by script; the 125 places left were fixed at once on 2026-11-15. The `utf8` CI job (ruff's PLW1514 and `tools/check_utf8.py`) refuses new ones.
 - **Always check latest versions**: When adding or updating any dependency (Rust crates, Python packages, GitHub Actions), look up the current latest stable version online and use that. Never guess or copy version numbers from memory — they go stale quickly.
 
 ## License
@@ -64,7 +65,11 @@ parts, a summary in its log), so the user only reads the result.
   inference and benchmarks only, on MI250X (gfx90a). Spent on what the
   work really needs, not held to the straight line: a round on each engine
   that touches inference, on as many nodes as it takes; if the hours run
-  out early, more are asked for (PI, 21-10-2026). `docs/lumi/allocation-plan.md`,
+  out early, more are asked for (PI, 21-10-2026). Always ahead of the
+  straight line to 09-03-2027, never on it: days without a job (a
+  maintenance, no way to log in) must leave no hour unspent at the end, and
+  `tools/lumi/nodi.sh` prints the margin in days (PI, 04-11-2026).
+  `docs/lumi/allocation-plan.md`,
   `docs/lumi/lumi-g.md`, `tools/lumi/`.
 - **JUPITER Booster** (EuroHPC EHPC-AIF-2026PG01-1434, JSC budget
   `e-aif-2026pg01-1434`, 5,000 GPU-hours): Forge, with the engine as
@@ -82,8 +87,10 @@ parts, a summary in its log), so the user only reads the result.
   ended 2026-11-02; the **Fast Lane EHPC-AIF-2026FL01-1400** (30,000
   GPU-hours, 2026-11-02 → 2027-02-02, no extension) carries on, and its pace,
   work packages and commitments are in `docs/cineca/fastlane-plan.md`.
-  Jobs of two hours at most and never a whole node: a job asking for part
-  of a node starts far sooner. `docs/cineca/leonardo.md`,
+  The queue changes from day to day: on 3-11-2026 3-GPU jobs of 24 h started
+  at once, on 4-11-2026 (7,025 jobs pending) they got no planned start, so
+  links are 2 h unless that day's queue says otherwise (rules in
+  `forge/CLAUDE.md`, "the shape of a job that starts"). `docs/cineca/leonardo.md`,
   `docs/leonardo-runbook.md`, `forge/scripts/leonardo/`, and the job-shape
   rules in `forge/CLAUDE.md`.
 

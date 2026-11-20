@@ -996,6 +996,73 @@ body {
 .row .chart-axis, .gstat .chart-axis { display: none; }
 .row .chart-top, .gstat .chart-top { display: none; }
 
+.chart-band { fill: var(--accent); opacity: 0.18; }
+.chart-peak {
+  position: absolute; width: 9px; height: 9px; margin: -5px 0 0 -5px; border-radius: 50%;
+  border: 2px solid var(--warn); background: var(--bg-elev); pointer-events: none;
+}
+.chart-peak-label {
+  position: absolute; top: -2px; font-size: 11px; color: var(--warn); white-space: nowrap;
+  pointer-events: none; padding: 0 4px;
+}
+.row .chart-peak-label, .gstat .chart-peak-label { display: none; }
+.chart-event {
+  position: absolute; top: 0; bottom: 0; width: 0; margin-left: -1px;
+  border-left: 1px dashed var(--text-faint); opacity: 0.7;
+}
+.chart-event::after {
+  content: ""; position: absolute; bottom: -3px; left: -4px; width: 7px; height: 7px;
+  border-radius: 50%; background: var(--text-faint);
+}
+.chart-event.request_failed, .chart-event.warning { border-color: var(--warn); }
+.chart-event.request_failed::after, .chart-event.warning::after { background: var(--warn); }
+.chart-event.model_loaded::after { background: var(--ok); }
+
+/* Range picker */
+.mon-ranges { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.mon-ranges button {
+  font: inherit; font-size: 12px; padding: 4px 10px; border: 0; cursor: pointer;
+  background: var(--bg-input); color: var(--text-dim); border-left: 1px solid var(--border);
+}
+.mon-ranges button:first-child { border-left: 0; }
+.mon-ranges button:hover { color: var(--text); }
+.mon-ranges button.on { background: var(--accent-strong); color: white; }
+.mon-ranges button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* Events */
+.mon-events { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; font-size: 13px; }
+.mon-events li { display: grid; grid-template-columns: auto auto minmax(0, 1fr); gap: 10px; align-items: baseline; padding: 6px 0; border-top: 1px solid var(--border); }
+.mon-events li:first-child { border-top: 0; }
+.mon-events li.mon-empty { display: block; }
+.mon-events time { color: var(--text-faint); white-space: nowrap; }
+.event-msg { min-width: 0; overflow-wrap: anywhere; color: var(--text); }
+.event-chip {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); white-space: nowrap;
+}
+.event-chip.model_loaded { color: var(--ok); border-color: currentColor; }
+.event-chip.request_failed, .event-chip.warning { color: var(--warn); border-color: currentColor; }
+.event-chip.admin { color: var(--accent); border-color: currentColor; }
+
+/* History on disk */
+.mon-storage { display: flex; flex-direction: column; gap: 14px; font-size: 13px; }
+.mon-kv > div { grid-template-columns: 8em minmax(0, 1fr); }
+.mon-days { display: flex; align-items: flex-end; gap: 2px; height: 36px; }
+.mon-days span { flex: 1 1 0; min-width: 2px; max-width: 14px; background: var(--accent); opacity: 0.55; border-radius: 2px 2px 0 0; }
+.mon-days span:hover { opacity: 1; }
+.mon-admin { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 12px 16px; align-items: end; }
+.mon-admin .field > span:first-child { font-size: 12px; color: var(--text-faint); }
+.mon-admin input {
+  background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+  font: inherit; font-size: 13px; padding: 7px 10px; border-radius: var(--radius-sm); width: 100%; min-width: 0;
+}
+.mon-inline { display: flex; gap: 8px; align-items: center; }
+.btn-secondary.danger { color: var(--danger); border-color: var(--danger); }
+.mon-msg { margin: 0; font-size: 13px; }
+.mon-msg.ok { color: var(--ok); }
+.mon-msg.err { color: var(--danger); }
+.mon-storage code { font-family: var(--mono); font-size: 12px; }
+
 /* Request log */
 .mon-table-wrap { overflow-x: auto; margin: 0 -16px -16px; border-top: 1px solid var(--border); }
 .mon-table { width: 100%; border-collapse: collapse; font-size: 13px; }

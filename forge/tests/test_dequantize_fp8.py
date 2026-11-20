@@ -42,14 +42,14 @@ def test_a_mistral_style_checkpoint_comes_out_in_bf16(tmp_path):
     st.save_file(shard2, str(src / "model-00002-of-00002.safetensors"))
     wm = {**{k: "model-00001-of-00002.safetensors" for k in shard1},
           **{k: "model-00002-of-00002.safetensors" for k in shard2}}
-    (src / "model.safetensors.index.json").write_text(json.dumps({"weight_map": wm}))
+    (src / "model.safetensors.index.json").write_text(json.dumps({"weight_map": wm}), encoding="utf-8")
     (src / "config.json").write_text(json.dumps(
-        {"model_type": "mistral3", "quantization_config": {"quant_method": "fp8"}}))
-    (src / "tokenizer.json").write_text("{}")
+        {"model_type": "mistral3", "quantization_config": {"quant_method": "fp8"}}), encoding="utf-8")
+    (src / "tokenizer.json").write_text("{}", encoding="utf-8")
 
     assert _load().main([str(src), str(dst)]) == 0
 
-    index = json.loads((dst / "model.safetensors.index.json").read_text())["weight_map"]
+    index = json.loads((dst / "model.safetensors.index.json").read_text(encoding="utf-8"))["weight_map"]
     assert set(index) == {"model.layers.0.self_attn.o_proj.weight", "model.norm.weight",
                           "model.layers.0.mlp.experts.gate_up_proj", "lm_head.weight"}
     out = {}
@@ -61,7 +61,7 @@ def test_a_mistral_style_checkpoint_comes_out_in_bf16(tmp_path):
     e = out["model.layers.0.mlp.experts.gate_up_proj"].float()
     assert torch.allclose(e[0], torch.full((2, 3), 0.02), rtol=1e-2)
     assert torch.allclose(e[1], torch.full((2, 3), -0.03), rtol=1e-2)
-    cfg = json.loads((dst / "config.json").read_text())
+    cfg = json.loads((dst / "config.json").read_text(encoding="utf-8"))
     assert "quantization_config" not in cfg and cfg["dtype"] == "bfloat16"
     assert (dst / "tokenizer.json").exists()
 
@@ -71,8 +71,8 @@ def test_an_fp8_tensor_without_a_scale_stops_the_conversion(tmp_path):
     src.mkdir()
     st.save_file({"w.weight": _fp8(torch.ones(2, 2))}, str(src / "m.safetensors"))
     (src / "model.safetensors.index.json").write_text(
-        json.dumps({"weight_map": {"w.weight": "m.safetensors"}}))
-    (src / "config.json").write_text("{}")
+        json.dumps({"weight_map": {"w.weight": "m.safetensors"}}), encoding="utf-8")
+    (src / "config.json").write_text("{}", encoding="utf-8")
     with pytest.raises(SystemExit):
         _load().main([str(src), str(tmp_path / "out")])
 
@@ -85,8 +85,8 @@ def test_the_output_is_written_in_parts(tmp_path):
     tensors.update({f"l{i}.weight_scale_inv": torch.tensor(0.01) for i in range(3)})
     st.save_file(tensors, str(src / "m.safetensors"))
     (src / "model.safetensors.index.json").write_text(
-        json.dumps({"weight_map": {k: "m.safetensors" for k in tensors}}))
-    (src / "config.json").write_text("{}")
+        json.dumps({"weight_map": {k: "m.safetensors" for k in tensors}}), encoding="utf-8")
+    (src / "config.json").write_text("{}", encoding="utf-8")
     mod.convert(src, tmp_path / "out", part_bytes=30)
-    index = json.loads((tmp_path / "out" / "model.safetensors.index.json").read_text())
+    index = json.loads((tmp_path / "out" / "model.safetensors.index.json").read_text(encoding="utf-8"))
     assert len(set(index["weight_map"].values())) == 3

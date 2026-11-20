@@ -64,7 +64,7 @@ def test_stage3_takes_the_prompt_from_a_file(tmp_path, monkeypatch):
     prompt = tmp_path / "system.txt"
     prompt.write_text("Sei legal-it.\n", encoding="utf-8")
     pairs = tmp_path / "p.jsonl"
-    pairs.write_text('{"instruction": "a", "output": "b"}\n')
+    pairs.write_text('{"instruction": "a", "output": "b"}\n', encoding="utf-8")
     try:
         mod.main(["--model", str(tmp_path), "--pairs", str(pairs), "--out", str(tmp_path / "o"),
                   "--default-system-file", str(prompt)])

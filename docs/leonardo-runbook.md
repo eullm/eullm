@@ -459,3 +459,40 @@ the evaluation sets, the anonymised rulings, the logs, and the published
 8B merged. The merged weights of the scratch (`grpo-merged`, 247 GB, every
 round still there) went to a temporary EU VPS, to be moved or deleted once
 the next allocation is known.
+
+## Moving data: datamovers and GridFTP
+
+From CINECA's data-storage page (read 2026-11-03), after the October copies
+ran on login nodes and were killed by their 10-minute CPU-time limit:
+
+* **Datamover nodes**, `data.leonardo.cineca.it` (`dmover1`-`dmover4`): no
+  CPU-time limit, no interactive shell, only `rsync`, `scp`, `sftp`, `wget`,
+  `curl`, `rclone` and `aws s3`. `$HOME`, `$WORK` and `$CINECA_SCRATCH` are
+  not defined there and `~/.ssh/config` is not read: absolute paths only.
+  From a login node they take host-based authentication, so a copy between
+  two projects' areas needs no job and no queue:
+  `ssh -xt <user>@data.leonardo.cineca.it rsync -a /leonardo_work/<OLD>/<dir> /leonardo_work/<NEW>/`.
+  Tried on 2026-11-03 for `hf_home/datasets` (34 GB, Playground to Fast
+  Lane): the first connection asks to accept the host key (131.175.44.53,
+  CINECA's network), then rsync prints nothing and returns; check the copy
+  with `du -sh` at the destination. A dry run for checking (`rsync -an
+  --out-format=...`) is refused there ("You are not permitted to execute
+  this command"), and the refusal prints nothing on stdout, so a count of
+  differences built on it reads 0 whatever is missing. The check runs as
+  `sbatch_copy_project.slurm` on the serial partition instead
+  (`COPY_HEAVY=1 COPY_DIRS="."`), which copies what is missing and then
+  prints TUTTO COPIATO only when its own dry run finds nothing.
+  To or from an outside server (the workstation, an I3K server, JUPITER),
+  rsync against the datamover instead of a login node.
+* **GridFTP**, the tool CINECA recommends for large transfers:
+  `globus-url-copy` runs on the outside machine (package
+  `globus-gass-copy-progs`), against
+  `sshftp://<user>@gftp.leonardo.cineca.it:22/<absolute path>`, with the
+  step-ca certificate; TCP ports 20000-25000 must be open; parallel streams
+  (`-p N`) are its advantage over a single rsync. The client machine stays on
+  for the whole transfer.
+* **Areas:** `$WORK` 1 TB by default per project, extended on request;
+  `$FAST` (the fast scratch) 1 TB per project, **fixed, not extendable**;
+  `$PUBLIC` 50 GB per user, readable by every user of the cluster: never
+  data of ours there. `chprj -l` lists the accounts and `chprj -d <account>`
+  changes the project `$WORK` points to.

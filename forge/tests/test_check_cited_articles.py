@@ -155,13 +155,13 @@ def test_more_acts_the_corpus_does_not_hold():
 def test_the_script_prints_counts_only(tmp_path, capsys):
     mod = _load()
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)))
+    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)), encoding="utf-8")
     ans = tmp_path / "answers-m.jsonl"
     ans.write_text("".join(json.dumps(r) + "\n" for r in [
         {"question": "Che cosa prevede l'art. 2 del codice civile?",
          "answer": "Art. 2 e art. 9 c.c."},
         {"question": "Che cosa prevede l'art. 3 del codice civile?",
-         "answer": "L'art. 3 c.c. ..."}]))
+         "answer": "L'art. 3 c.c. ..."}]), encoding="utf-8")
     assert mod.main([str(ans), "--norms", str(norms)]) == 0
     out = capsys.readouterr().out
     assert "answers-m.jsonl: 2 answers | citing an article that does not exist 1 (50.0%) | " \
@@ -172,10 +172,10 @@ def test_the_script_prints_counts_only(tmp_path, capsys):
 def test_show_prints_the_flagged_citation_with_its_context(tmp_path, capsys):
     mod = _load()
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)))
+    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)), encoding="utf-8")
     ans = tmp_path / "answers-m.jsonl"
     ans.write_text(json.dumps({"question": "Che cosa prevede l'art. 2 del codice civile?",
-                               "answer": "Art. 2 e art. 9 c.c. sul punto."}) + "\n")
+                               "answer": "Art. 2 e art. 9 c.c. sul punto."}) + "\n", encoding="utf-8")
     assert mod.main([str(ans), "--norms", str(norms), "--show", "5"]) == 0
     assert "    codice_civile art. 9 | art. 9 c.c. sul punto." in capsys.readouterr().out
 
@@ -183,8 +183,8 @@ def test_show_prints_the_flagged_citation_with_its_context(tmp_path, capsys):
 def test_show_refuses_held_out_answers(tmp_path):
     mod = _load()
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text(json.dumps(_rec("codice_civile", 1)) + "\n")
+    norms.write_text(json.dumps(_rec("codice_civile", 1)) + "\n", encoding="utf-8")
     ans = tmp_path / "answers-m-heldout.jsonl"
-    ans.write_text("")
+    ans.write_text("", encoding="utf-8")
     with pytest.raises(SystemExit):
         mod.main([str(ans), "--norms", str(norms), "--show", "3"])
