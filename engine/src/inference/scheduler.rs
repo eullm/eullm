@@ -853,6 +853,11 @@ pub struct ModelReadyInfo {
     /// capacity: llama.cpp mentions it once, in a log line buried between two
     /// hundred others, and the flag that fixes it is not named there.
     pub n_ctx_train: u32,
+    /// The batch and micro-batch the context was built with, when the
+    /// scheduler built one: not always the flags', since a projector raises
+    /// the micro-batch to an image's (see `run_scheduler_loop`).
+    pub n_batch: Option<u32>,
+    pub n_ubatch: Option<u32>,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -2194,10 +2199,13 @@ fn run_scheduler_loop(
     // instead scales images down to its micro-batch, and on Gemma 4 12B that
     // changed answers: a tall image read at 506 tokens instead of 653 came
     // out "dark red and black" where it was "red and blue" (20-11-2026). It
-    // costs the compute buffer of the larger micro-batch (129 to about 275
-    // MiB on that model); where that does not fit, the context falls back
-    // to the micro-batch asked for, and images are scaled down to it
-    // (`cap_image_tokens`). `EULLM_IMAGE_MAX_TOKENS` set decides instead.
+    // costs the compute buffer of the larger micro-batch (129 to 277 MiB on
+    // that model) and, with sliding-window layers, each slot's window, which
+    // holds a micro-batch beside it (KV 2.4 to 3.4 GB there with 4 slots at
+    // -c 32768), which sizing, done before the projector is read, does not
+    // see. Where that does not fit, the context falls back to the micro-batch
+    // asked for, and images are scaled down to it (`cap_image_tokens`).
+    // `EULLM_IMAGE_MAX_TOKENS` set decides instead (512: llama-server's way).
     let text_batches = (config.n_batch, config.n_ubatch);
     #[cfg(feature = "multimodal")]
     let image_ubatch = mtmd
@@ -2463,6 +2471,9 @@ fn run_scheduler_loop(
             kv_info.kv_v_mib = v;
         }
     }
+
+    kv_info.n_batch = Some(ctx.n_batch());
+    kv_info.n_ubatch = Some(ctx.n_ubatch());
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));
@@ -3733,6 +3744,7 @@ pub(crate) fn estimate_kv_memory(
             kv_k_mib: 0.0,
             kv_v_mib: 0.0,
             n_ctx_train: model.n_ctx_train(),
+            ..ModelReadyInfo::default()
         };
     }
 
@@ -3766,6 +3778,7 @@ pub(crate) fn estimate_kv_memory(
         kv_k_mib: kv_k_bytes / (1024.0 * 1024.0),
         kv_v_mib: kv_v_bytes / (1024.0 * 1024.0),
         n_ctx_train: model.n_ctx_train(),
+        ..ModelReadyInfo::default()
     }
 }
 

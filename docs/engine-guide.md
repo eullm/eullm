@@ -1346,9 +1346,13 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   512, or `EULLM_IMAGE_MAX_TOKENS` when that is larger; one whose attention
 >   over an image is not causal (Gemma) needs each image whole in one
 >   micro-batch, which is raised to the most an image takes with it (1089
->   tokens on Gemma 4 12B, about 150 MiB more of compute buffer), so images
->   keep their full resolution. Where that does not fit, images are scaled
->   down to the micro-batch, as llama-server does. Qwen-VL and other causal
+>   tokens on Gemma 4 12B), so images keep their full resolution. It costs
+>   memory: the compute buffer (129 to 277 MiB on that model) and, on a
+>   model with sliding-window layers, each slot's window, which holds a
+>   micro-batch beside it (KV 2.4 to 3.4 GB with 4 slots at `-c 32768`).
+>   Where that does not fit, images are scaled down to the micro-batch, as
+>   llama-server does; `EULLM_IMAGE_MAX_TOKENS=512` asks for that from the
+>   start. Qwen-VL and other causal
 >   projectors read a large image a micro-batch at a time. A slot that read
 >   an image is not reused for the next
 >   turn's prompt, which is read whole again. `--mtp` does not draft for a
