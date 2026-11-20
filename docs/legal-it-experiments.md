@@ -1465,3 +1465,53 @@ after the engine announced 1,089 tokens at a time; an operator reading the
 log would think the load failed. **Decision:** Forge's teacher and checker
 jobs on Leonardo use the engine from main (`--engine`, `VR_ENGINE`), 16
 requests at 3,072 tokens for a 31B Q8 (`docs/cineca/leonardo.md`, `forge/CLAUDE.md`).
+
+## 28. 2026-11-20: the corpora and the evaluation sets' articles
+
+**What was found.** Asked by the JUPITER work which rows to train on, the
+corpora were counted against the evaluation sets: `law_rewrites.py` keeps
+out only the closed-book suite's articles, and only of the questions style.
+Every other form, and every other set, was written from too: of the Gemma
+rows, 141 cases on the articles of practical-dev, 65 on those of
+practical-heldout, 323 on devbig's. Exam questions are other cases on the
+same articles, so a model trained on them could score higher there than on
+articles it never practised on. It should have been seen when the corpus was
+built.
+
+**Whether it inflated anything** (`split_by_article.py`, questions split by
+whether the corpus the models were trained on, `memory`, has a case or an
+explanation on their article; paired against r2l):
+
+| exam | group | questions | r2l | k50 | k50-g1 | k50-g1-opd200 |
+|---|---|---:|---:|---:|---:|---:|
+| practical-dev | A, article in the corpus | 132 | 83 | 64 (6:25) | 67 (5:21) | 78 (6:11) |
+| practical-dev | B, not in it | 13 | 4 | 4 (2:2) | 5 (3:2) | 5 (1:0) |
+| devbig | A | 366 | 349 | 334 (6:21) | 350 (12:11) | 347 (3:5) |
+| devbig | B | 106 | 100 | 104 (4:0) | 103 (4:1) | 92 (1:9, p=0.02) |
+
+No gain gathers where the corpus saw the article: on practical-dev the
+knowledge models lose to r2l there, and on devbig they are level with it.
+The results so far are not inflated by the overlap. B is small on
+practical-dev (13 questions) and says little; on devbig the candidate's
+loss is on the articles without cases (1:9), not a gain on those with.
+
+**From now on: clean files** (`clean_corpus.py`, `$WORK/eullm_runs/clean/`):
+no row of any form on an article a held-out set asks about (norm-exam and
+its v2-v4, practical-heldout, practical-v1's held-out); no question, case or
+explanation on an article of a development set or of the closed-book suite
+(their text, paraphrases, elements and structure stay: learning the statute
+is the point, and what the closed-book suite measures); nothing on a number
+a set makes up. A `manifest.json` of counts and sha256 beside each.
+
+| folder | rows kept | dropped: held-out article | dropped: development, question-like |
+|---|---:|---:|---:|
+| `clean/v3s` (Qwen3-30B + program) | 184,657 | 14,906 | 3,007 |
+| `clean/gemma-ok` (cases, explanations) | 10,194 | 971 | 1,260 |
+| `clean/gemma2-ok` (elements, questions) | 11,829 | 1,007 | 334 |
+| `clean/gemma3-ok` (all forms) | after the checks, 2026-11-22 | | |
+
+`k7-r2l` and `k7-jpn17` were requeued on the clean files only. The models
+trained before (k3s-k6, the k3s50 and k450 chains, the current candidate)
+saw the uncleaned corpora: their development results are read with
+`split_by_article.py`, and the held-out exams are given only to models
+trained on clean files.
