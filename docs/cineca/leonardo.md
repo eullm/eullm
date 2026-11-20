@@ -332,6 +332,59 @@ Two things worth fixing that this surfaced, neither blocking:
   30 GB model landed there unnoticed. One log line naming the target would
   have made it obvious.
 
+## The engine from main, in Forge's jobs (20 Nov 2026)
+
+What Forge's jobs use on Leonardo since 2026-11-20 to serve a teacher or a
+checker: the engine built from the checkout, not a release, and not
+llama-server. Measured against llama-server built at the engine's own
+llama.cpp commit, same gcc and CUDA, on Gemma 4 31B Q8_0 rewriting 200 cases
+on one A100 (`docs/legal-it-experiments.md`, section 27): the same answers
+(as close to llama-server's as two llama-servers are to each other), 25%
+faster at 8 requests and 18% at 16 with each program's defaults. The lead is
+the engine's KV layout (one pool for all requests, each capped at its share);
+llama-server given the same (`--kv-unified --kv-unified-per-slot N`) comes
+within a few percent.
+
+**Build** (login node, then one A100 for about 10 minutes):
+
+```bash
+cd $WORK/eullm && git pull
+b=$(bash forge/scripts/leonardo/build_engine.sh | tail -1)    # the build job's id
+EB=$WORK/eullm-engine/$(git rev-parse --short HEAD)/eullm      # where it lands
+```
+
+`build_engine.sh` installs Rust into `$WORK` once, fetches the crates (the
+compute nodes have no network), runs every environment check of the job on
+the login node (modules, nvcc, libclang and its libraries, gcc 12's headers,
+the static CUDA runtime and driver stub, cmake) and submits nothing if one
+fails; then `sbatch_build_engine.slurm` compiles offline with `gcc/12.2.0`
+and `cuda/12.2`, device code for sm_80, gcc 12's libstdc++ found through the
+rpath, and checks what the binary contains. One directory per commit: a job
+keeps the binary it started with. Two things learnt building it:
+
+- the `llvm` module cannot be loaded beside `gcc/12.2.0` (each wants its
+  own binutils): libclang's directory is read with `module show`, never
+  loaded;
+- the build-recipe section above still holds; the script is that recipe.
+
+**Use:**
+
+| Job | Option | Settings |
+|---|---|---|
+| `law_rewrites.py` (`sbatch_law_rewrites.slurm`) | `LR_ARGS="... --engine $EB"` | `--parallel 16 --ctx 3072` for a 31B Q8 on one A100 (16 x 3,072 fit, a third faster than 8) |
+| `verify_rewrites.py` (`sbatch_verify_rewrites.slurm`) | `VR_ENGINE=$EB` | `VR_PARALLEL`, `VR_CTX` |
+
+- A model with a projector beside its weights (Gemma 4's `mmproj`) is
+  started with `--no-mmproj` by Forge (`EullmServer`): the work is text,
+  and the projector's larger micro-batch costs KV memory. Loaded
+  (`law_rewrites.py --engine-mmproj`) it is served in batches too, as fast
+  (45 a minute at 8 requests, 59 at 16).
+- Requests state `repeat_penalty: 1.0` and turn thinking off with
+  `chat_template_kwargs.enable_thinking` (and `think`), which the engine
+  and llama-server both read.
+- Exams: one server for a whole series (see `forge/CLAUDE.md`); the
+  legal-it series stays on llama-server to its end (PI, 2026-11-20).
+
 ## Open items
 
 - Backlog **H4-H** (`docs/backlog-fix-e-hardening.md`), the `cudart_static`

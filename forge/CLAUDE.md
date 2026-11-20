@@ -277,6 +277,30 @@ had its own passing test; nobody had run one after the other. Rules:
   a `[!!]` line for each thing that needs a human. If it finds a problem
   whose shape it did not know, teach it that shape.
 
+## The server that answers is part of the measurement
+
+Since 2026-11-20 Forge's jobs on Leonardo serve teachers and checkers with
+the EULLM Engine built from the checkout (`build_engine.sh`, `--engine`,
+`VR_ENGINE`; `docs/cineca/leonardo.md`, "The engine from main"), not with
+llama-server. It answers as llama-server does, but not word for word: of 198
+answers at temperature 0, 55-65 were identical between the two, as between
+two builds of llama-server. Rules:
+
+* **An exam series keeps one server.** Models compared with each other are
+  examined through the same server and the same build; moving a series to
+  the engine re-examines its baselines through it, or the series stays on
+  llama-server to its end. **PI, 2026-11-20: the exams stay on llama-server
+  to the end of the legal-it series** (no baselines re-examined for a
+  server change); a new series may start on the engine.
+* **The corpus says who served it.** A row keeps its teacher; a pass
+  through a new server or engine commit is named in the experiment log
+  beside its results.
+* **A speed is compared on the same settings.** Before saying one program
+  is faster, read both servers' settings (batch, micro-batch, KV layout,
+  context a slot, flash attention) from their logs or sources: on
+  2026-11-20 the engine's quarter over llama-server was its shared KV pool,
+  and llama-server matched it when told to (`--kv-unified`).
+
 ## A number decides nothing until the answers behind it are read
 
 Every grader we have -- the GRPO rewards, the exam's abstention check, the

@@ -261,7 +261,7 @@ def verdict_of(reply: str) -> str | None:
 def ask(url: str, msgs: list[dict], timeout: float = 600.0) -> str:
     # room for a reasoning model's thinking before its verdict (gpt-oss reasons
     # by default; llama-server returns the reasoning apart from the content)
-    body = {"messages": msgs, "temperature": 0.0, "max_tokens": 1024,
+    body = {"messages": msgs, "temperature": 0.0, "max_tokens": 1024, "repeat_penalty": 1.0,
             "chat_template_kwargs": {"enable_thinking": False}}
     req = urllib.request.Request(url.rstrip("/") + "/v1/chat/completions",
                                  data=json.dumps(body).encode(),
@@ -376,6 +376,11 @@ def main(argv=None) -> int:
     c.add_argument("--serve", help="checker GGUF: one llama-server per --gpus entry")
     c.add_argument("--gpus", default="0", help="as law_rewrites.py: '0,1,2' or '0+1+2'")
     c.add_argument("--llama-server")
+    c.add_argument("--engine", metavar="EULLM_BIN",
+                   help="serve --serve with this EULLM Engine binary instead of llama-server "
+                        "(its projector, if any, left on disk)")
+    c.add_argument("--parallel", type=int, default=8, help="requests in flight per server")
+    c.add_argument("--ctx", type=int, default=8192, help="context per request")
     c.add_argument("--stop-after", type=float, default=0)
     c.add_argument("--shard", default="", help="'i/n': only the items of part i of n")
     r = sub.add_parser("report")
@@ -416,11 +421,17 @@ def main(argv=None) -> int:
     with contextlib.ExitStack() as stack:
         urls = list(a.url)
         if a.serve:
-            from eullm_forge.eval.gguf import LlamaServer
+            from eullm_forge.eval.gguf import EullmServer, LlamaServer
             for gpu in a.gpus.split(","):
-                srv = LlamaServer(a.serve, binary=a.llama_server, parallel=8, ctx_per_slot=8192,
-                                  devices=gpu.replace("+", ","),
-                                  log_path=a.out.with_name(f"server-{a.label}-gpu{gpu}.log"))
+                log = a.out.with_name(f"server-{a.label}-gpu{gpu}.log")
+                if a.engine:
+                    srv = EullmServer(a.serve, binary=a.engine, parallel=a.parallel,
+                                      ctx_per_slot=a.ctx, devices=gpu.replace("+", ","),
+                                      log_path=log)
+                else:
+                    srv = LlamaServer(a.serve, binary=a.llama_server, parallel=a.parallel,
+                                      ctx_per_slot=a.ctx, devices=gpu.replace("+", ","),
+                                      log_path=log)
                 urls.append(stack.enter_context(srv).url)
         return check(items, urls, a.out, a.label, stop_after=a.stop_after, shard=a.shard)
 

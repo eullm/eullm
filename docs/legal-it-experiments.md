@@ -1447,3 +1447,21 @@ engine's layout (`--kv-unified --kv-unified-per-slot 3072`,
   58), and they fit (49,152 tokens of context on the A100 with the 31B).
 - The answers: 198 in every run, no thinking, 54-65 word for word the same
   as llama-server's default run.
+
+**The engine with 35540f36 and 687a1275, 2026-11-20.** The micro-batch for
+images and the repeat penalty off by default on `/v1`; built on Leonardo
+(`b8c189f8`). The penalty changes nothing here (every request states 1.0).
+
+| run | a minute | context MiB | note |
+|---|---:|---:|---|
+| projector, 8 x 6,144 | 45 | 18,240 (13,440 before) | `Projector: reading prompts 1089 tokens at a time` |
+| projector, 16 x 3,072 | 59 | 23,040 | the 1,089 micro-batch did not fit (28,800 MiB asked, `cudaMalloc failed` in the log): fell back to 512, as written |
+| text, 16 x 3,072 | 59 | 23,040 | as before (58) |
+
+198 answers in each, no thinking, 55-62 word for word llama-server's. One
+thing for the engine: at 16 slots with the projector the fallback works but
+llama.cpp writes an ERROR line (`allocating 28800.00 MiB ... out of memory`)
+after the engine announced 1,089 tokens at a time; an operator reading the
+log would think the load failed. **Decision:** Forge's teacher and checker
+jobs on Leonardo use the engine from main (`--engine`, `VR_ENGINE`), 16
+requests at 3,072 tokens for a 31B Q8 (`docs/cineca/leonardo.md`, `forge/CLAUDE.md`).
