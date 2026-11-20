@@ -785,17 +785,17 @@ struct RuntimeOpts {
     #[arg(long, help_heading = HELP_MEDIA)]
     no_mmproj_offload: bool,
 
-    /// Load every model without its projector: text only, served in batches
+    /// Load every model without its projector: text only
     ///
     /// A model with a projector (one beside the weights as `mmproj*.gguf`, or
-    /// one the store recorded at pull) is served one request at a time,
-    /// whatever --batch-size says, because the continuous-batching scheduler
-    /// does not read images. For a multimodal model used for text alone
-    /// (RAG, rewriting, grading), that turns 8 parallel requests into a
-    /// queue: on an A100, Gemma 4 31B answered 20 of 200 in 25 minutes
-    /// where llama-server answered 198 in 6.5. With this flag the projector
-    /// is left on disk, the model runs on the scheduler with --batch-size
-    /// slots, and a request carrying images or audio is refused.
+    /// one the store recorded at pull) reads images and audio, and keeps the
+    /// projector's memory and the micro-batch an image needs. For a
+    /// multimodal model used for text alone (RAG, rewriting, grading), this
+    /// leaves the projector on disk and its memory to the context, and
+    /// refuses a request carrying images or audio. Until 0.9.1 a model with a
+    /// projector was also served one request at a time: on an A100, Gemma 4
+    /// 31B answered 20 of 200 text requests in 25 minutes where llama-server
+    /// answered 198 in 6.5.
     #[arg(long, conflicts_with = "mmproj", help_heading = HELP_MEDIA)]
     no_mmproj: bool,
 
@@ -3020,7 +3020,7 @@ fn gcd(a: u32, b: u32) -> u32 {
 
 /// Valid launch values for `--batch-size`.
 ///
-/// 0 is sequential mode (also forced for multimodal models); 1..=64 are the
+/// 0 is sequential mode (also forced for the one-shot `--image`); 1..=64 are the
 /// scheduler slots, the same ceiling request overrides already enforce.
 /// Anything past that truncates through `as u32` into values that panic
 /// divisions (`ctx_size / batch_size`) or size absurd queues, so refuse up
@@ -3420,14 +3420,6 @@ async fn cmd_run(
         store.gguf_path(stored_as.as_deref().unwrap_or(model))
     };
 
-    // The batch size actually used, which is not always the one asked for: a
-    // multimodal model forces the sequential engine below. This has to outlive
-    // the block, because both the startup banner and `ServeConfig` are built
-    // outside it — and until it did, a multimodal model printed
-    // "Multimodal model — falling back to sequential mode (batch_size=0)" and
-    // then a banner saying "continuous batching", while the API server was told
-    // it had a scheduler it did not have.
-    let mut batch_size = batch_size;
 
     if let Some(gguf_path) = gguf_path {
         model_name = canonical_name.clone();
@@ -3868,23 +3860,10 @@ async fn cmd_run(
             gpu_split: gpu_split.clone(),
         };
 
-        // The continuous-batching scheduler is text-only; multimodal models
-        // must be served by the sequential `InferenceEngine` so that
-        // `/api/chat` requests carrying `images` reach `generate_multimodal`.
-        // Force batch_size=0 when an mmproj is present (vision is single-user
-        // interactive — losing batching here is not a practical regression).
-        if mmproj_for_config.is_some() {
-            if batch_size > 0 {
-                println!("Multimodal model — falling back to sequential mode (batch_size=0).");
-            }
-            batch_size = 0;
-        }
-        // …for THIS model. The server keeps the batch size the user asked
-        // for, so a later swap to a text-only model gets the scheduler back:
-        // `load_generation_model` re-applies the same sequential fallback for whatever
-        // model actually carries a projector. Passing the zeroed value on
-        // pinned every subsequent model to sequential mode — the same shape
-        // of bug as handing the launch model's projector to its successors.
+        // A model with a projector runs on the scheduler too, which reads a
+        // request's images into its own sequence (`scheduler::SchedMedia`);
+        // until 19-11-2026 it was forced onto the sequential engine here.
+        // Only the one-shot `--image` still runs there (see above).
 
         if batch_size > 0 {
             // ── Continuous batching mode ────────────────────────────
@@ -4027,8 +4006,8 @@ async fn cmd_run(
     // Take the REPL's backend before both halves move into api::serve.
     //
     // The REPL used to accept only a `SchedulerHandle`, and a sequentially
-    // loaded model has none: every multimodal model, and anything run with
-    // --batch-size 0. So `--cli` and `--no-ui` on such a model printed "Type a
+    // loaded model has none: anything run with --batch-size 0, and until
+    // 0.9.1 every multimodal model. So `--cli` and `--no-ui` on such a model printed "Type a
     // message to chat", found no scheduler, fell out of the branch and ended
     // `main` — killing the API server that had just been spawned. Now the REPL
     // takes either backend and streams through the same channel, so the
@@ -4585,8 +4564,8 @@ struct ChatMessage {
 /// Where the terminal chat gets its tokens.
 ///
 /// The REPL used to take a `SchedulerHandle` and nothing else, so a model that
-/// loads sequentially — every multimodal one, and anything with
-/// `--batch-size 0` — had no terminal chat at all. Both sources emit
+/// loads sequentially — anything with `--batch-size 0`, and until 0.9.1
+/// every multimodal one — had no terminal chat at all. Both sources emit
 /// `StreamEvent`, so the loop is identical either way and only the submission
 /// differs.
 enum ChatBackend {

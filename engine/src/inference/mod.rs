@@ -260,7 +260,7 @@ fn required_media_batch(max_media_tokens: u32, floor: u32) -> Result<u32, u32> {
     Ok(floor.max(max_media_tokens))
 }
 
-fn multimodal_batch_size() -> u32 {
+pub(crate) fn multimodal_batch_size() -> u32 {
     let img_budget = crate::settings::var("EULLM_IMAGE_MAX_TOKENS")
         .and_then(|v| v.parse::<u32>().ok())
         .unwrap_or(0);
@@ -316,7 +316,7 @@ pub fn media_looks_like_audio(bytes: &[u8]) -> bool {
 /// filled the context and the reply got whatever was left over: a thinking
 /// model handed forty tokens stops inside its own reasoning.
 #[cfg(feature = "multimodal")]
-fn reply_reserve(max_tokens: u32, ctx: u32) -> u32 {
+pub(crate) fn reply_reserve(max_tokens: u32, ctx: u32) -> u32 {
     max_tokens.min(ctx / 4)
 }
 
@@ -1924,9 +1924,9 @@ fn context_alloc_error(err: &impl std::fmt::Display, ctx_size: u32, kv_mib: f64)
 impl InferenceEngine {
     /// The same load-time facts the scheduler reports, for the sequential
     /// path. Without this the startup banner silently prints less depending
-    /// on which loader ran: multimodal models always load sequentially, so
-    /// neither the KV cache size nor the model's trained context length was
-    /// ever shown for them.
+    /// on which loader ran: multimodal models always loaded sequentially until
+    /// 0.9.1, so neither the KV cache size nor the model's trained context
+    /// length was ever shown for them.
     pub fn ready_info(&self) -> scheduler::ModelReadyInfo {
         scheduler::estimate_kv_memory(
             &self.model,

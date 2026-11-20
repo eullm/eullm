@@ -1338,12 +1338,17 @@ is content-addressed and auto-detects image vs audio from the file bytes.
 >   context fills up, the oldest attachments give way first, each replaced by
 >   a note telling the model one was there; the current turn's never do. Each
 >   turn with a picture in it encodes the picture again.
-> - Multimodal models load in **sequential mode** (the continuous-batching
->   scheduler is text-only); text-only models keep full batching. A
->   multimodal model used for text alone (RAG, rewriting, grading) is
->   therefore served one request at a time, whatever `--batch-size` says:
->   `--no-mmproj` loads it without its projector, in batches, and refuses
->   requests with images or audio.
+> - Multimodal models are served in batches like any other, with
+>   `--batch-size` slots (new in 0.9.1; they used to be served one request
+>   at a time). A request with images reads them whole into its own slot,
+>   as llama-server does: the requests already answering wait for that one
+>   step, then go on beside it. An image must fit in one micro-batch: with a
+>   projector `--n-ubatch` is at least 512, or `EULLM_IMAGE_MAX_TOKENS` when
+>   that is larger. A slot that read an image is not reused for the next
+>   turn's prompt, which is read whole again. `--mtp` does not draft for a
+>   model loaded with its projector. A multimodal model used for text alone
+>   (RAG, rewriting, grading) can be loaded without its projector with
+>   `--no-mmproj`, which refuses requests with images or audio.
 > - Web Chat UI accepts **both images and audio** as of v0.6.2 — 📎 attach or
 >   drag & drop. The engine itself reads `.wav`/`.mp3`/`.flac` and
 >   `.jpg`/`.png`/`.bmp`/`.gif`; since v0.6.43 anything else the browser can

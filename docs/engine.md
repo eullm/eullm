@@ -128,7 +128,7 @@ eullm run ./model.gguf --cli --no-ui       # The terminal chat only
 | `--mmproj` | (auto) | Multimodal projector path, when it is not beside the weights |
 | `--mmproj-offload` | (sizing decides) | Keep the projector on the GPU, whatever sizing would decide |
 | `--no-mmproj-offload` | (sizing decides) | Keep the projector in system RAM: the most VRAM for the text model, images encoded on the CPU |
-| `--no-mmproj` | off | Load every model without its projector: text only, served in batches with `--batch-size` slots, and a request with images or audio refused. A model with a projector is otherwise served one request at a time, whatever `--batch-size` says. Cannot be combined with `--mmproj` |
+| `--no-mmproj` | off | Load every model without its projector: text only, its memory left to the context, and a request with images or audio refused. Cannot be combined with `--mmproj` |
 | `--ctx-checkpoints` | `0` | Prompt-prefix state snapshots for hybrid/recurrent models |
 | `--checkpoint-min-step` | `8192` | Minimum new tokens between checkpoints |
 | `--rs-seq` | `0` | Recurrent-state rollback window — leave off unless you know why |
@@ -430,7 +430,7 @@ curl http://localhost:11434/api/generate \
 **Behavior:**
 
 - With one model at a time (the default), a swap cuts off the requests the old model is still answering: they end with the error `Server shutting down`. To keep several models loaded instead, see [Several models at once](#several-models-at-once)
-- A model served sequentially — every multimodal model, and any with `--batch-size 0` — cannot be cut off, and is freed only when the requests running on it end, so a swap waits for them, up to 30 seconds, before the next model is sized against free VRAM
+- A model served sequentially — any with `--batch-size 0` — cannot be cut off, and is freed only when the requests running on it end, so a swap waits for them, up to 30 seconds, before the next model is sized against free VRAM
 - The new model loads on a blocking thread, then atomically replaces the slot
 - The model name is one `eullm list` shows (the models folder, the model libraries, a catalog model already downloaded), `NAME` for `/models/NAME.gguf` or `/data/models/NAME.gguf`, or, only with `EULLM_ALLOW_MODEL_PATHS=1`, a GGUF path
 
@@ -683,7 +683,7 @@ eullm run ./model.gguf --batch-size 8
 # More slots for high-throughput RAG workloads
 eullm run ./model.gguf --batch-size 16
 
-# Sequential mode: no scheduler thread (what a multimodal model runs in)
+# Sequential mode: no scheduler thread, one request at a time
 eullm run ./model.gguf --batch-size 0
 ```
 

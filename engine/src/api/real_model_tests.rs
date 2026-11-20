@@ -32,6 +32,15 @@
 //!     cargo test -p eullm-engine -- --ignored real_model_a_sliding --test-threads=1
 //! ```
 //!
+//! The multimodal test needs a vision model with its projector beside it as
+//! `mmproj*.gguf`, such as SmolVLM-256M-Instruct (about a minute on four CPU
+//! cores):
+//!
+//! ```text
+//! EULLM_VISION_TEST_MODEL=/path/to/SmolVLM-256M-Instruct-Q8_0.gguf \
+//!     cargo test -p eullm-engine -- --ignored real_model_a_multimodal --test-threads=1
+//! ```
+//!
 //! The reasoning test needs a model whose chat template opens the reasoning
 //! block at the end of the prompt, such as Spark-X2.5-1.7B (about a minute
 //! on four CPU cores):
@@ -82,6 +91,44 @@ fn swa_test_model() -> PathBuf {
     std::env::var("EULLM_SWA_TEST_MODEL")
         .expect("set EULLM_SWA_TEST_MODEL to a GGUF with a sliding window, such as Gemma 3 270M")
         .into()
+}
+
+/// The vision model the multimodal tests run on, with its projector beside
+/// it as `mmproj*.gguf`, such as SmolVLM-256M-Instruct.
+fn vision_test_model() -> (PathBuf, PathBuf) {
+    let model: PathBuf = std::env::var("EULLM_VISION_TEST_MODEL")
+        .expect("set EULLM_VISION_TEST_MODEL to a vision GGUF with its mmproj beside it")
+        .into();
+    let projector = crate::models::store::mmproj_beside(&model)
+        .expect("a projector beside the vision model, as mmproj*.gguf");
+    (model, projector)
+}
+
+/// A 32x32 BMP, its top half red and its bottom half blue: the least an
+/// image decoder reads, built here so the test carries no file.
+fn two_colour_bmp() -> Vec<u8> {
+    let (w, h) = (32u32, 32u32);
+    let row = w * 3;
+    let size = 54 + row * h;
+    let mut b = Vec::with_capacity(size as usize);
+    b.extend_from_slice(b"BM");
+    b.extend_from_slice(&size.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes());
+    b.extend_from_slice(&54u32.to_le_bytes());
+    b.extend_from_slice(&40u32.to_le_bytes());
+    b.extend_from_slice(&w.to_le_bytes());
+    b.extend_from_slice(&h.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes());
+    b.extend_from_slice(&24u16.to_le_bytes());
+    b.extend_from_slice(&[0u8; 24]);
+    // Rows bottom-up, pixels BGR.
+    for y in 0..h {
+        let bgr = if y < h / 2 { [255, 0, 0] } else { [0, 0, 255] };
+        for _ in 0..w {
+            b.extend_from_slice(&bgr);
+        }
+    }
+    b
 }
 
 /// The GGUF the reasoning test runs on: one whose chat template opens the
@@ -442,7 +489,8 @@ async fn real_model_one_model_swaps_exactly_as_before() {
     }
 }
 
-/// A sequential engine — every multimodal model, and `--batch-size 0` — is
+/// A sequential engine — `--batch-size 0`, and every multimodal model until
+/// 0.9.1 — is
 /// freed when the last request running on it lets go. A swap used to take it
 /// out of the slot and load the next model at once, sized against VRAM that
 /// still held it. It waits now: the answer streaming from the old model is
@@ -1841,5 +1889,97 @@ async fn real_model_a_sliding_window_models_next_turn_restores_its_window() {
             "{slots} slots: the next turn read its prompt in {next_ns} ns, the whole one in \
              {whole_ns} ns: the kept window was not restored"
         );
+    }
+}
+
+/// A model with a projector on the scheduler (19-11-2026; it was served by
+/// the sequential engine alone before): text requests are answered together,
+/// in batches, and a request with an image, read into its own slot while
+/// they answer, gets the answer the sequential engine gives it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a vision GGUF with its mmproj in EULLM_VISION_TEST_MODEL"]
+async fn real_model_a_multimodal_model_answers_text_and_images_in_batches() {
+    use base64::Engine as _;
+    let (model, projector) = vision_test_model();
+    let image = base64::engine::general_purpose::STANDARD.encode(two_colour_bmp());
+    let ask_image = json!({
+        "model": "vision", "stream": false,
+        "messages": [{ "role": "user", "content": "What colours are in this image?",
+                       "images": [image] }],
+        "options": { "temperature": 0, "seed": 1, "num_predict": 24 },
+    });
+    let ask_text = |n: usize| {
+        json!({
+            "model": "vision", "stream": false,
+            "messages": [{ "role": "user", "content": format!("Count from {n} to {}.", n + 5) }],
+            "options": { "temperature": 0, "seed": 1, "num_predict": 24 },
+        })
+    };
+    let with_projector = |server: &TestServer| {
+        std::fs::copy(&projector, server.dir.join("vision").join("mmproj-test.gguf"))
+            .expect("copy the projector");
+    };
+
+    // The sequential engine's answer, the reference.
+    let sequential = start_on(&model, &["vision"], |state| {
+        state.batch_size = 0;
+        state.ctx_size = 4096;
+    })
+    .await;
+    with_projector(&sequential);
+    let (status, reference) = sequential.post("/api/chat", ask_image.clone()).await;
+    assert_eq!(status, 200, "{reference:?}");
+    let reference = reference[0]["message"]["content"].as_str().expect("an answer").to_string();
+    assert!(!reference.is_empty());
+    drop(sequential);
+
+    let server = start_on(&model, &["vision"], |state| {
+        state.batch_size = 4;
+        state.ctx_size = 4 * 4096;
+    })
+    .await;
+    with_projector(&server);
+    // Alone first: the same answer as the sequential engine's.
+    let (status, alone) = server.post("/api/chat", ask_image.clone()).await;
+    assert_eq!(status, 200, "{alone:?}");
+    assert_eq!(alone[0]["message"]["content"], reference.as_str(), "alone");
+    {
+        let models = server.state.models.read().await;
+        let loaded = models.find("vision").expect("loaded");
+        assert!(loaded.scheduler.is_some(), "on the scheduler");
+        assert!(loaded.scheduler.as_ref().unwrap().has_projector());
+    }
+
+    // Then among three text requests, all sent at once.
+    let gate = {
+        let models = server.state.models.read().await;
+        models.find("vision").unwrap().scheduler.as_ref().unwrap().gate()
+    };
+    let held = gate.lock().unwrap();
+    let mut asked = Vec::new();
+    for body in [ask_text(1), ask_image.clone(), ask_text(10), ask_text(20)] {
+        let base = server.base.clone();
+        asked.push(tokio::spawn(async move {
+            let response = reqwest::Client::new()
+                .post(format!("{base}/api/chat"))
+                .json(&body)
+                .send()
+                .await
+                .expect("request");
+            (response.status(), response.json::<Value>().await.expect("json"))
+        }));
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    drop(held);
+    let mut answers = Vec::new();
+    for task in asked {
+        let (status, answer) = task.await.expect("answered");
+        assert_eq!(status, 200, "{answer}");
+        assert_eq!(answer["done"], true, "{answer}");
+        answers.push(answer);
+    }
+    assert_eq!(answers[1]["message"]["content"], reference.as_str(), "among text requests");
+    for i in [0, 2, 3] {
+        assert!(!answers[i]["message"]["content"].as_str().unwrap_or("").is_empty());
     }
 }
