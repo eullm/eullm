@@ -776,6 +776,45 @@ JUPITER, named by its Slurm job id.
   Qwen3.5-122B-A10B as a possible teacher or judge, on the five sets
   (3034281, 3034283, judge 3034284).
 
+  **21-11, what comes from Leonardo, and a contamination of ours.**
+  Leonardo has no Mistral Large 4 data yet (the pilot is queued); it will
+  say when it does. What it has, from the legislation only, is a cleaned
+  corpus (`eullm_runs/clean`): program rows and Qwen3-30B rewrites (v3s),
+  Gemma 4 31B cases, explanations, elements and questions (gemma-ok,
+  gemma2-ok; gemma3-ok, all six forms, on 22-11), each row checked by
+  program and then by Qwen3.8-Flash-Next and gpt-oss-120b, dropped when
+  both judge it unfaithful. Cleaned against Leonardo's sets: no row at all
+  on the articles of the held-out ones (norm-exam v2-v4, practical
+  held-out), no question, case or explanation on those of the development
+  ones and of the closed book, no row on their made-up numbers; each
+  folder's manifest.json gives the sha256 of every set and file.
+  `check_clean_corpus.py` accepts a set of ours as covered only if its
+  sha256 is in a manifest, drops every row on the articles of the others
+  (the trap tests, LexIA), and refuses a file whose sha256 does not match.
+  **Ours was not clean.** The nine codes' corpus every E1 run here trained
+  on (program rows and rewrites copied from Leonardo's memory folders, and
+  ours) leaves out only the questions on the evaluation articles: it holds
+  paraphrases, elements and the text of the held-out exam's and the
+  practical held-out set's articles. The open-book gains of the E1 lines
+  on those two sets (the held-out exam +5 to +10 over g9r-r2) may owe to
+  it and are not claimed until measured on a clean run; the candidates
+  g9prm-r6 and g4mv-r2 (the 4B had no E1) are affected unequally. The 27B
+  trains on the cleaned corpus only. `memory_cpt.py prepare --keep-styles`
+  keeps the checked cases and explanations our own corpus left out.
+  Sizes: v3s 184,657 rows (program and rewrites), gemma-ok 10,194 (cases,
+  explanations), gemma2-ok 11,829 (elements, questions). Leonardo measured
+  the overlap on its own models before cleaning and found that it had not
+  inflated its development results; ours concerns held-out sets and is
+  left open until a clean run measures it.
+  Checked here (21-11): devbig, the closed book, the practical exam and
+  the practical held-out set are Leonardo's versions (sha256 in the
+  manifests); our held-out exam (norm-exam) is another version, and it,
+  the trap tests and the LexIA sets were filtered here, 508 articles and
+  numbers, a few dozen rows a file (1,639 of 66,542 in the largest). E1 on
+  Qwen3.8-27B queued on what remains, cases and explanations kept, LoRA
+  rank 64, two epochs (e1-q27, links 3034522-3034524; GGUF, closed book,
+  open book and regression 3034525-3034528).
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
