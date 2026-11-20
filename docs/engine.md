@@ -2551,6 +2551,11 @@ fn main() {
   trail as the request's user. An `AdminGrant` lets the request do what the
   admin key allows ([a managed server](#a-managed-server-eullm_admin_key)).
   Clients cannot send either: they exist only inside the process.
+- `chat_script` is served as `/eullm-ui/extension.js`, which the chat page
+  loads after its own scripts (empty in eullm). It can add a page beside
+  Chat, Model hub, Monitor and About with `window.eullm.addView({name, title,
+  icon, node})`, switch to it with `window.eullm.showView(name)`, and send
+  the page's API key on its own requests with `window.eullm.headers()`.
 - `eullm_engine::extensions::axum` is the axum the routers are made with;
   `build_info()` gives the engine's version and commit for the
   distribution's own `--version`.

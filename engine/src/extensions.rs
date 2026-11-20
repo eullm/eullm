@@ -44,6 +44,11 @@ pub struct ExtensionRegistry {
     pub chat: Option<RouterWrap>,
     /// Wraps the API listener's router (`/api`, `/v1`, `/metrics`).
     pub api: Option<RouterWrap>,
+    /// A script the chat page loads after its own, as
+    /// `/eullm-ui/extension.js`. It can add a page with
+    /// `window.eullm.addView({name, title, icon, node})` and send the page's
+    /// API key with `window.eullm.headers()`.
+    pub chat_script: Option<String>,
 }
 
 impl std::fmt::Debug for ExtensionRegistry {
@@ -51,6 +56,7 @@ impl std::fmt::Debug for ExtensionRegistry {
         f.debug_struct("ExtensionRegistry")
             .field("chat", &self.chat.is_some())
             .field("api", &self.api.is_some())
+            .field("chat_script", &self.chat_script.is_some())
             .finish()
     }
 }
@@ -67,6 +73,11 @@ pub(crate) fn install(registry: ExtensionRegistry) -> bool {
 /// installed a registry before the server started.
 pub(crate) fn installed() -> &'static ExtensionRegistry {
     INSTALLED.get_or_init(ExtensionRegistry::default)
+}
+
+/// The chat page's extra script, if one is installed.
+pub(crate) fn chat_script() -> Option<&'static str> {
+    installed().chat_script.as_deref()
 }
 
 /// `router` as the installed registry wants it served on the chat listener.
@@ -117,7 +128,7 @@ mod tests {
         assert!(registry.chat.is_none() && registry.api.is_none());
         assert_eq!(
             format!("{registry:?}"),
-            "ExtensionRegistry { chat: false, api: false }"
+            "ExtensionRegistry { chat: false, api: false, chat_script: false }"
         );
     }
 

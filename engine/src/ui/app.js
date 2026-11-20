@@ -1675,6 +1675,30 @@
   document.querySelectorAll(".side-item").forEach((b) =>
     b.addEventListener("click", () => showView(b.dataset.view)));
 
+  // For a program that builds on the engine and adds a script of its own
+  // (/eullm-ui/extension.js, empty in eullm itself): a page beside Chat,
+  // Model hub, Monitor and About, and the headers the page's own requests
+  // need. Nothing else of this page is promised to stay as it is.
+  window.eullm = Object.freeze({
+    addView({ name, title, icon = "", node }) {
+      if (!name || VIEWS[name] || !(node instanceof HTMLElement)) return false;
+      VIEWS[name] = { title, nodes: () => [node] };
+      node.hidden = true;
+      $("about").after(node);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "side-item";
+      button.dataset.view = name;
+      button.innerHTML = `${icon}<span></span>`;
+      button.querySelector("span").textContent = title;
+      button.addEventListener("click", () => showView(name));
+      $("about-btn").after(button);
+      return true;
+    },
+    showView: (name) => showView(name),
+    headers: () => ({ ...(withAuth().headers || {}) }),
+  });
+
   // On a narrow screen the sidebar slides in over the page.
   function toggleSidebar(open) {
     document.body.classList.toggle("side-open", open);
