@@ -844,7 +844,7 @@ def cmd_plan(args):
             json.dump(spec, f, indent=1)
         label = f" for jobs labelled {args.engine_label}" if args.engine_label else ""
         print(f"{path}{f' (round {args.round})' if args.round else ''}{label}: "
-              f"{len(points)} points, "
+              f"{len(selected)} points, "
               f"{len(added)} new, up to {node_hours(added):.0f} node-hours")
     print("queue:", q.counts())
     if args.engine:
