@@ -75,9 +75,11 @@ class LlamaServer:
 
     def __init__(self, gguf: str | Path, *, binary: str | None = None, parallel: int = 4,
                  ctx_per_slot: int = 16384, log_path: str | Path | None = None,
-                 start_timeout: float = 900.0, devices: str | None = None):
+                 start_timeout: float = 900.0, devices: str | None = None,
+                 extra_args: list[str] | None = None):
         self.gguf = Path(gguf)
         self.binary = binary or default_server_binary()
+        self.extra_args = list(extra_args or [])    # e.g. ["--kv-unified"], appended last
         self.parallel = parallel
         self.ctx_per_slot = ctx_per_slot
         self.log_path = Path(log_path) if log_path else self.gguf.with_suffix(".server.log")
@@ -93,7 +95,7 @@ class LlamaServer:
     def command(self) -> list[str]:
         return [self.binary, "-m", str(self.gguf), "--host", "127.0.0.1",
                 "--port", str(self.port), "-ngl", "999", "-np", str(self.parallel),
-                "-c", str(self.parallel * self.ctx_per_slot), "--no-webui"]
+                "-c", str(self.parallel * self.ctx_per_slot), "--no-webui", *self.extra_args]
 
     def log_tail(self, n: int = 15) -> str:
         try:
