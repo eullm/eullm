@@ -1403,7 +1403,7 @@ program differs. Gemma 4 31B Q8_0, the same 200 cases, 8 in flight:
 |---|---:|---:|---:|---:|---:|
 | llama-server `b1b770d9`, 3,072 a slot | 198 | 36 | 182 | 99 | - |
 | engine 0.9.0 release (CUDA 12.4), 3,072 | 198 | 48 | 243 | 131 | 57 |
-| engine main, `--no-mmproj`, 3,072 | 198 | about 45 (its job 4:50, the other two 4:55 and 4:52) | | | 57 |
+| engine main, `--no-mmproj`, 3,072 | 198 | 45 | 228 | 123 | 57 |
 | engine main, projector loaded, 3,072 | 198 | 45 | 225 | 121 | 60 |
 | engine main, `--no-mmproj`, 6,144 | 198 | 45 | 227 | 122 | 63 |
 
