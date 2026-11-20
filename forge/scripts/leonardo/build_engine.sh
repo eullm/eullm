@@ -58,6 +58,11 @@ cd "$EULLM_REPO"
 cargo fetch --locked
 echo "[engine] crates fetched into $CARGO_HOME"
 
+# the job's environment checks, here and now: modules, compiler, CUDA,
+# libclang, cmake. A failure is said before anything is queued.
+( EB_PREFLIGHT=1 EB_LABEL="$LABEL" bash "$EULLM_REPO/forge/scripts/leonardo/sbatch_build_engine.slurm" ) >&2 ||
+    { echo "[engine] preflight failed: nothing submitted" >&2; exit 1; }
+
 mkdir -p "$EULLM_REPO/logs"
 sbatch --parsable -J "eullm-build-engine-$LABEL" \
     --export=ALL,EB_LABEL="$LABEL",RUSTUP_HOME="$RUSTUP_HOME",CARGO_HOME="$CARGO_HOME" \
