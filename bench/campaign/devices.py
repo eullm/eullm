@@ -38,14 +38,14 @@ def parse_devices(text: str) -> list:
     """'0-7', '0,1,4' or '0-3,6' → sorted device numbers."""
     out = set()
     for part in str(text).split(","):
-        part = part.strip()
-        if not part:
+        token = part.strip()
+        if not token:
             continue
-        if "-" in part:
-            lo, hi = part.split("-", 1)
+        if "-" in token:
+            lo, hi = token.split("-", 1)
             out.update(range(int(lo), int(hi) + 1))
         else:
-            out.add(int(part))
+            out.add(int(token))
     return sorted(out)
 
 
