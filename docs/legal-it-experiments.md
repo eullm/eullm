@@ -1393,3 +1393,29 @@ latter, the same mean length (669-673 characters), no thinking in any. The
 engine stands as close to llama-server as two llama-servers to each other.
 Next: the engine from main (projector on the scheduler, sliding-window KV
 sized to its window), on Gemma's own folder, projector included.
+
+**The engine from main, built beside llama-server, 2026-11-20.** Built on
+Leonardo by `build_engine.sh` (10 minutes on one A100) with the same gcc
+12.2.0 and CUDA 12.2 as the vanilla llama-server, so nothing but the
+program differs. Gemma 4 31B Q8_0, the same 200 cases, 8 in flight:
+
+| run | answers | a minute | prompt tok/s | generated tok/s | identical to llama-server |
+|---|---:|---:|---:|---:|---:|
+| llama-server `b1b770d9`, 3,072 a slot | 198 | 36 | 182 | 99 | - |
+| engine 0.9.0 release (CUDA 12.4), 3,072 | 198 | 48 | 243 | 131 | 57 |
+| engine main, `--no-mmproj`, 3,072 | 198 | 45 (4.8 min) | | | 57 |
+| engine main, projector loaded, 3,072 | 198 | 45 | 225 | 121 | 60 |
+| engine main, `--no-mmproj`, 6,144 | 198 | 45 | 227 | 122 | 63 |
+
+- **Same compiler, same CUDA: the engine a quarter faster** (45 against 36
+  a minute, prompt and generation alike). The release binary's 48 is three
+  more, from its build (CUDA 12.4, gcc-toolset 13) or from noise: the two
+  runs of 0.9.0 read 47 and 48.
+- **A model with its projector is served in batches** (bb6b8027): Gemma's
+  own folder, mmproj on the GPU beside the text model, 198 in about 4.5
+  minutes, as fast as text only. Before: 20 answers in 25 minutes.
+- **The sliding-window cache sized to its window** (28477e4b, c278e452):
+  6,144 tokens a slot now fit, 13,440 MiB of context against 11,520 at
+  3,072, where 0.9.0 asked 38,400 MiB and did not load.
+- The answers as before: no thinking in any, the same mean length, 57-63
+  word for word the same as llama-server's.
