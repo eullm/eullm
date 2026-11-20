@@ -2683,13 +2683,13 @@ jobs:
 
             </details>
 
-            ### This release: llama.cpp 1.0, and several requests at once answered faster
+            ### This release: vision models in batches, and Gemma in a third of the memory
 
-            **llama.cpp moves to its first major release, 1.0.** On NVIDIA GPUs from Ampere on, products of a few tokens at once have a kernel of their own, so several requests answered together write faster: on an H100, Qwen3.6-27B writes 44% faster with four requests, 35% with sixteen and 13% with thirty-two; on an RTX 5070 Ti, Qwen3-14B 6% faster with four and 10% with eight. One request at a time, and AMD GPUs, run as fast as on 0.8.9.
+            **A model with a projector answers several requests at once.** Gemma 4, Gemma 3, Qwen-VL and the other vision models were served one request at a time, text requests included; they now run in batches like any other model, and a request with images reads them into its own slot while the others go on. On an RTX 5070 Ti, Gemma 4 12B writes 291 tokens/s with four requests against 93 with one. `--no-mmproj` loads such a model for text alone.
 
-            **`--mtp` keeps its drafts.** The new kernel checks drafts with numbers other than those of one token, and Qwen3.5-9B kept fewer of them (61% instead of 68%), so EuLLM turns it off where MTP drafts: the drafts and speed of 0.8.9 stay. `GGML_CUDA_MMQ_FEW=0` turns it off everywhere, `GGML_CUDA_MMQ_FEW=1` keeps it with `--mtp`.
+            **Gemma's context takes much less memory.** Its sliding-window layers keep only their window, as llama-server has them: Gemma 4 31B at `-c 49152` with 8 slots needed 38 GB for them and now 9.6 GB, and sizing counts Gemma 4's KV as it really is.
 
-            Nothing changes in how EuLLM is used. Everything else is 0.8.9.
+            **`/v1/chat/completions` returns the reasoning in `reasoning_content`** and honours `chat_template_kwargs.enable_thinking` and `reasoning_effort`; the repeat penalty is off there and in the chat, as on llama-server. The chat stops following the answer at the first turn of the wheel upward.
 
             ### What changed
 
