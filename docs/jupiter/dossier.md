@@ -762,6 +762,20 @@ JUPITER, named by its Slurm job id.
   held-out 199-201, devbig 444-447, practical 72-75, practical held-out
   42-46. **Candidate 4B: g4mv-r2.**
 
+  **20-11, a 27B vertical, and Leonardo's teacher data.** The candidates
+  answer the articles above 93% and half of the practical cases in full;
+  more rounds of the same kind no longer move the practical exam. The next
+  step is a larger student, Qwen3.8-27B (dense, Apache 2.0, 56 GB; ~16 GB
+  in Q4, one 24 GB GPU), trained here on the teacher data Leonardo's Fast
+  Lane already produces with Mistral Large 4 (its work package C2), not
+  generated again on JUPITER: one home per experiment. The 27B then
+  teaches the 9B and the 4B. Its tokenizer is the Qwen3.5 4B's and 9B's
+  (the same 248,044-entry vocabulary and merges, every shared special
+  token at the same id; the 27B adds seven audio tokens), so the
+  distillation can be on the logits. First the 27B as released, and
+  Qwen3.5-122B-A10B as a possible teacher or judge, on the five sets
+  (3034281, 3034283, judge 3034284).
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
