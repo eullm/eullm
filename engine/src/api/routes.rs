@@ -206,6 +206,7 @@ pub fn api_routes() -> Router<S> {
         .route("/embed", post(embed))
         .route("/hf/search", get(hf_search))
         .route("/hf/repo", get(hf_repo))
+        .route("/documents/extract", post(extract_document))
 }
 
 /// `GET /api/hf/search?q=<text>&limit=<n>&sort=<order>` — search the
@@ -1468,6 +1469,213 @@ source URL when answering.\n\n---\n\n";
         "content": format!("{preamble}{}", injections.join("\n\n---\n\n"))
     });
     messages.insert(idx, web_message);
+    messages
+}
+
+// ── Documents attached in the chat ───────────────────────────────────────────
+
+/// Characters per token assumed for a document's text. Lower than the web
+/// tool's 4: Italian, German or French prose with a model's 32k–150k
+/// vocabulary runs nearer 3, and a document that overflows the context
+/// fails the whole request, where one cut a little short loses a passage.
+const DOCUMENT_CHARS_PER_TOKEN: usize = 3;
+
+/// Tokens kept free for the answer and the chat template's own markup.
+const DOCUMENT_ANSWER_RESERVE: usize = 1024;
+
+#[derive(serde::Deserialize)]
+struct ExtractQuery {
+    /// The file's name, which tells formats apart where the bytes do not.
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// `POST /api/documents/extract?name=<file name>`, the file as the body:
+/// its text, for the chat to attach to a message (`documents` on a chat
+/// message, see [`inject_documents`]). EuLLM's own endpoint; nothing is
+/// kept on the server. See `tools::documents` for the formats and limits.
+async fn extract_document(
+    Query(q): Query<ExtractQuery>,
+    body: axum::body::Bytes,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let name = q.name.unwrap_or_default();
+    let size = body.len();
+    if size > tools::documents::MAX_DOCUMENT_BYTES {
+        return Err((
+            StatusCode::PAYLOAD_TOO_LARGE,
+            Json(json!({ "error": format!(
+                "the file is {} MB; the largest accepted is {} MB",
+                size / (1024 * 1024),
+                tools::documents::MAX_DOCUMENT_BYTES / (1024 * 1024)
+            ) })),
+        ));
+    }
+    let file_name = name.clone();
+    let result = tokio::task::spawn_blocking(move || tools::documents::extract(&file_name, &body))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("the document could not be read: {e}") })),
+            )
+        })?;
+    match result {
+        Ok(doc) => {
+            let chars = doc.text.chars().count();
+            tracing::info!(
+                "Document read: {} ({} KB → {} characters{})",
+                doc.kind,
+                size / 1024,
+                chars,
+                if doc.truncated { ", cut" } else { "" }
+            );
+            Ok(Json(json!({
+                "name": name,
+                "kind": doc.kind,
+                "text": doc.text,
+                "chars": chars,
+                // About how many tokens it takes whole, by the same measure
+                // `inject_documents` uses to decide what fits.
+                "tokens": chars / DOCUMENT_CHARS_PER_TOKEN,
+                "parts": doc.parts,
+                "truncated": doc.truncated,
+            })))
+        }
+        Err(e) => {
+            tracing::info!("Document refused ({} KB): {e}", size / 1024);
+            Err((StatusCode::UNPROCESSABLE_ENTITY, Json(json!({ "error": e }))))
+        }
+    }
+}
+
+/// The text of a message's `content`: a string, or OpenAI's array of parts.
+fn content_text(message: &Value) -> String {
+    match message.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(parts)) => parts
+            .iter()
+            .filter_map(|p| p.get("text").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Documents on chat messages (`"documents": [{"name", "text"}]`, an EuLLM
+/// extension the chat sends; other clients never do), written into the
+/// text of the message that carries them, ahead of what it says.
+///
+/// Every document of the conversation goes in, on every turn, as an
+/// attached image does: a follow-up question still has the contract it is
+/// about. When they do not all fit the context left after the conversation
+/// itself, `tools::documents::fit` shares the room and keeps, of each long
+/// one, the passages that best match the newest question, marked as cut.
+/// A document with no room at all is replaced by a note saying so.
+fn inject_documents(mut messages: Vec<Value>, ctx_size: u32, batch_size: usize) -> Vec<Value> {
+    struct Doc {
+        message: usize,
+        name: String,
+        text: String,
+    }
+    let mut docs: Vec<Doc> = Vec::new();
+    for (i, m) in messages.iter().enumerate() {
+        let Some(list) = m.get("documents").and_then(Value::as_array) else {
+            continue;
+        };
+        for d in list {
+            let text = d.get("text").and_then(Value::as_str).unwrap_or("").trim();
+            if text.is_empty() {
+                continue;
+            }
+            let name = d
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .unwrap_or("document");
+            docs.push(Doc {
+                message: i,
+                name: name.chars().take(200).collect(),
+                text: text.to_string(),
+            });
+        }
+    }
+    if docs.is_empty() {
+        for m in &mut messages {
+            if let Some(o) = m.as_object_mut() {
+                o.remove("documents");
+            }
+        }
+        return messages;
+    }
+
+    // As the web tool: with continuous batching a slot has its share.
+    let effective_ctx = if batch_size > 1 {
+        ctx_size as usize / batch_size
+    } else {
+        ctx_size as usize
+    };
+    let conversation_chars: usize = messages.iter().map(|m| content_text(m).len()).sum();
+    let used = conversation_chars / DOCUMENT_CHARS_PER_TOKEN + DOCUMENT_ANSWER_RESERVE;
+    let budget = effective_ctx.saturating_sub(used) * DOCUMENT_CHARS_PER_TOKEN;
+    // Each document's own wrapping takes room too.
+    let budget = budget.saturating_sub(docs.len() * 200);
+
+    let query = messages
+        .iter()
+        .rev()
+        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+        .map(content_text)
+        .unwrap_or_default();
+    let texts: Vec<&str> = docs.iter().map(|d| d.text.as_str()).collect();
+    let fitted = tools::documents::fit(&texts, &query, budget);
+    let cut = fitted.iter().filter(|(_, c)| *c).count();
+    if cut > 0 {
+        tracing::info!(
+            "Documents: {} attached, {cut} cut to fit {} characters of context",
+            docs.len(),
+            budget
+        );
+    }
+
+    let mut prefixes: HashMap<usize, String> = HashMap::new();
+    for (doc, (text, was_cut)) in docs.iter().zip(fitted) {
+        let name = doc.name.replace('"', "'");
+        let block = if text.trim().is_empty() {
+            format!(
+                "[The document \"{name}\" is attached here, but it does not fit in what is left \
+                 of this conversation's context, so its text is not included. Say so if the \
+                 question needs it.]"
+            )
+        } else if was_cut {
+            format!(
+                "<document name=\"{name}\">\n[Only the parts of this document most relevant to the \
+                 latest question are included; {} marks text left out.]\n\n{text}\n</document>",
+                tools::documents::OMITTED
+            )
+        } else {
+            format!("<document name=\"{name}\">\n{text}\n</document>")
+        };
+        let prefix = prefixes.entry(doc.message).or_default();
+        prefix.push_str(&block);
+        prefix.push_str("\n\n");
+    }
+    for (i, m) in messages.iter_mut().enumerate() {
+        let Some(o) = m.as_object_mut() else { continue };
+        o.remove("documents");
+        let Some(prefix) = prefixes.remove(&i) else {
+            continue;
+        };
+        match o.get_mut("content") {
+            Some(Value::Array(parts)) => {
+                parts.insert(0, json!({ "type": "text", "text": prefix.trim_end() }));
+            }
+            Some(Value::String(s)) => *s = format!("{prefix}{s}"),
+            _ => {
+                o.insert("content".into(), Value::String(prefix.trim_end().to_string()));
+            }
+        }
+    }
     messages
 }
 
@@ -2865,6 +3073,7 @@ async fn chat_with(
         &state.web_policy,
     )
     .await;
+    let messages = inject_documents(messages, state.ctx_size, state.batch_size);
 
     // ── Attachments ────────────────────────────────────────────────────
     // A conversation carrying any goes through the sequential mtmd path,
@@ -3516,6 +3725,7 @@ async fn chat_completions_with(
         &state.web_policy,
     )
     .await;
+    let messages = inject_documents(messages, state.ctx_size, state.batch_size);
 
     // `think`, `chat_template_kwargs.enable_thinking` or `reasoning_effort`:
     // see `thinking::openai_think`.
@@ -4782,5 +4992,48 @@ mod tests {
                 "expected 400 for {body}"
             );
         }
+    }
+
+    #[test]
+    fn documents_go_into_their_own_message_ahead_of_its_text() {
+        let messages = vec![
+            json!({"role": "system", "content": "Sei utile."}),
+            json!({"role": "user", "content": "Riassumi.", "documents": [
+                {"name": "contratto.pdf", "text": "Art. 1 Oggetto."},
+                {"name": "", "text": "  "}
+            ]}),
+            json!({"role": "assistant", "content": "Fatto."}),
+            json!({"role": "user", "content": [{"type": "text", "text": "E la durata?"}],
+                   "documents": [{"name": "allegato \"B\"", "text": "Durata: 4 anni."}]}),
+        ];
+        let out = inject_documents(messages, 8192, 1);
+        assert!(out.iter().all(|m| m.get("documents").is_none()));
+        assert_eq!(
+            out[1]["content"],
+            "<document name=\"contratto.pdf\">\nArt. 1 Oggetto.\n</document>\n\nRiassumi."
+        );
+        assert_eq!(out[3]["content"][0]["text"], "<document name=\"allegato 'B'\">\nDurata: 4 anni.\n</document>");
+        assert_eq!(out[3]["content"][1]["text"], "E la durata?");
+        assert_eq!(out[0]["content"], "Sei utile.");
+    }
+
+    #[test]
+    fn a_document_too_long_for_the_context_is_cut_and_says_so() {
+        let mut long = String::new();
+        for i in 0..400 {
+            long.push_str(&format!("Paragrafo {i} sulle ferie e i permessi del personale.\n\n"));
+        }
+        long.push_str("Il preavviso di dimissioni è di trenta giorni.\n\n");
+        let messages = vec![json!({"role": "user", "content": "Quanto è il preavviso di dimissioni?",
+            "documents": [{"name": "ccnl.txt", "text": long}]})];
+        // 4096 tokens over 2 slots: 2048 each, half left after the reserve.
+        let out = inject_documents(messages.clone(), 4096, 2);
+        let content = out[0]["content"].as_str().unwrap();
+        assert!(content.contains("Only the parts of this document"), "{content}");
+        assert!(content.contains("trenta giorni"), "{content}");
+        assert!(content.len() < 2048 * DOCUMENT_CHARS_PER_TOKEN);
+        // No room at all: a note, not the text.
+        let out = inject_documents(messages, 1000, 1);
+        assert!(out[0]["content"].as_str().unwrap().contains("does not fit"));
     }
 }

@@ -81,6 +81,14 @@ anstyle-query = "1.1.5"
 # CPU, memory and the process's disk reads for the chat UI's Monitor page
 # (`monitor::system`). Only the `system` part; MIT.
 sysinfo = { version = "0.40.0", default-features = false, features = ["system"] }
+# Documents attached in the chat (`tools::documents`): the text of a PDF, a
+# Word, LibreOffice or PowerPoint file, a spreadsheet. All MIT. `zip` without
+# its default features: reading DEFLATE archives is all an Office file needs,
+# and the rest (AES, bzip2, zstd, xz, time) only adds C and crates.
+pdf-extract = "0.12.1"
+zip = { version = "9.8.1", default-features = false, features = ["deflate"] }
+quick-xml = "0.42.0"
+calamine = { version = "0.38.0", default-features = false }
 
 # NVIDIA GPU load, temperature, power and PCIe traffic for the Monitor page,
 # from the driver's NVML. Loaded at run time (libloading): a machine without
