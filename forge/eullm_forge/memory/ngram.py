@@ -287,8 +287,13 @@ class AttachedMemory:
         # A new sequence, or the next tokens of one being decoded? The cache
         # tells: transformers 5.22's generate passes past_key_values and no
         # cache_position, and its position_ids do not start at 0 on a
-        # left-padded row. No cache at all means a whole sequence every call.
+        # left-padded row. 5.24 renamed the argument to `cache` (seen
+        # 2026-11-21: with only the old name read, every decoding step
+        # looked like a new sequence and the history was lost). No cache at
+        # all means a whole sequence every call.
         past = kwargs.get("past_key_values")
+        if past is None:
+            past = kwargs.get("cache")
         pos = kwargs.get("cache_position")
         if past is not None and hasattr(past, "get_seq_length"):
             fresh = past.get_seq_length() == 0

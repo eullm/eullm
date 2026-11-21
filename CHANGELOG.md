@@ -13,6 +13,19 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.9.20 — 2026-11-21
+
+0.9.10 was tagged but never published: its release stopped before building
+anything, on a test of the Forge that a new transformers release had broken.
+0.9.20 is the first build with everything listed under 0.9.10, and adds what
+follows.
+
+### Added
+- **Documents in the chat.** The 📎 button (or dropping files on the chat) attaches PDF, Word (`.docx`), LibreOffice (`.odt`, `.odp`, `.ods`), PowerPoint (`.pptx`), Excel (`.xlsx`, `.xls`) and text files (`.txt`, `.md`, `.csv`, `.json`, `.html`, source code), several at once and beside an image or audio clip. The text stays with the message it came with and goes again with every later turn, so a follow-up question still has the document. When the documents do not fit the model's context, each long one keeps the passages that best match the newest question, marked as cut, and the model is told so: a 16-page regulation asked about one article in an 8k context keeps that article. Spreadsheets arrive as Markdown tables, which small models read far better than tab-separated rows. A scanned PDF has no text and says so (attach its pages as images); the old `.doc` and `.ppt` are refused with the same advice. Nothing is kept on the server. Other clients can do the same: `POST /api/documents/extract` returns a file's text, and a chat message carries it in `documents` (see "Documents in a conversation" in `docs/engine.md`).
+- **Edit a message, regenerate an answer.** A message of yours can be changed and answered again (what came after it is replaced), and the last answer regenerated, also after an error or a stop.
+- **Search, export and import chats.** The sidebar searches chats by title and text; a chat downloads as Markdown or as JSON, and a JSON one opens again with Import.
+- For programs that build their own binary on the engine: the chat page can keep its conversations somewhere other than the browser (`window.eullm.setChatStore`), for example on their server for the person logged in.
+
 ## 0.9.10 — 2026-11-21
 
 ### Added
