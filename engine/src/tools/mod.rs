@@ -18,6 +18,7 @@
 //! content type — lives in [`guard`], which is where to look before changing
 //! anything on this path.
 
+pub mod documents;
 pub mod guard;
 
 /// Tokens reserved for the model's response (never consumed by injected content).
@@ -122,7 +123,7 @@ fn remove_block_tag(html: &str, tag: &str) -> String {
 }
 
 /// Strip HTML to readable plain text: remove noisy blocks, tags, decode entities.
-fn html_to_text(html: &str) -> String {
+pub(crate) fn html_to_text(html: &str) -> String {
     // Remove entire noisy blocks (including their content)
     let mut text = remove_block_tag(html, "script");
     text = remove_block_tag(&text, "style");

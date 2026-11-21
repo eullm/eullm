@@ -31,6 +31,13 @@ ignore = [
     # a change to engine/ made in one branch on its own (see CLAUDE.md, "HPC
     # sites"). Remove this line when chrono is gone from Cargo.lock.
     { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no upgrade; migration to jiff/time pending" },
+    # 2026-11-21: ttf-parser declared unmaintained, no safe upgrade. Not a
+    # vulnerability. It reaches the engine through pdf-extract → lopdf 0.42,
+    # which reads the fonts embedded in a PDF attached in the chat
+    # (`tools::documents`); it is safe Rust, and a panic there is caught and
+    # becomes the file's error. The fix is pdf-extract moving to a lopdf that
+    # no longer needs it (lopdf 0.47 does not); remove this line then.
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained, via pdf-extract's lopdf 0.42; no upgrade yet" },
 ]
 
 [licenses]
