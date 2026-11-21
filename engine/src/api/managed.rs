@@ -161,7 +161,7 @@ pub async fn enforce_managed(
             }
             match vet_body(req, managed, &state.allowed_models).await {
                 Ok(req) => next.run(req).await,
-                Err(refusal) => refusal,
+                Err(refusal) => *refusal,
             }
         }
     }
@@ -186,16 +186,16 @@ async fn vet_body(
     req: axum::extract::Request,
     managed: bool,
     allowed: &AllowedModels,
-) -> Result<axum::extract::Request, Response> {
+) -> Result<axum::extract::Request, Box<Response>> {
     let (mut parts, body) = req.into_parts();
     let bytes = match axum::body::to_bytes(body, super::MAX_BODY_BYTES).await {
         Ok(b) => b,
         Err(e) => {
-            return Err((
+            return Err(Box::new((
                 StatusCode::PAYLOAD_TOO_LARGE,
                 axum::Json(json!({ "error": format!("could not read the body: {e}") })),
             )
-                .into_response());
+                .into_response()));
         }
     };
     let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(&bytes) else {
@@ -211,7 +211,7 @@ async fn vet_body(
                 "Refused a request for {}: not among EULLM_ALLOWED_MODELS",
                 crate::audit::sanitize_for_log(model)
             );
-            return Err((
+            return Err(Box::new((
                 StatusCode::FORBIDDEN,
                 axum::Json(json!({
                     "error": format!(
@@ -220,7 +220,7 @@ async fn vet_body(
                     )
                 })),
             )
-                .into_response());
+                .into_response()));
         }
     }
     if managed && object.remove("keep_alive").is_some() {
