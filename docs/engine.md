@@ -2616,7 +2616,9 @@ fn main() {
   empty what the browser kept, to move it into the new store.
 - `eullm_engine::extensions::axum` is the axum the routers are made with;
   `build_info()` gives the engine's version and commit for the
-  distribution's own `--version`.
+  distribution's own `--version`; `monitor_latest()` gives the Monitor's
+  latest sample (as `GET /api/monitor` has it), for the distribution's own
+  alerts.
 - Depend on the engine at an exact commit (`git = "...", rev = "<sha>"`)
   and commit `Cargo.lock`: the library's interface follows the engine's
   releases, with no promise of stability between them.

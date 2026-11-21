@@ -118,6 +118,16 @@ pub fn build_info() -> (&'static str, &'static str) {
     (env!("CARGO_PKG_VERSION"), env!("EULLM_GIT_HASH"))
 }
 
+/// The machine and the engine as the Monitor saw them last: CPU, memory,
+/// each GPU's load, VRAM, temperature and power, tokens a second, requests
+/// running and failed, as one sample of `GET /api/monitor` has them (its
+/// fields are that endpoint's, and change with it). None before the first
+/// sample, a second after start. For a distribution's own alerts, read
+/// in-process with no request to make and no perimeter to pass.
+pub fn monitor_latest() -> Option<serde_json::Value> {
+    crate::monitor::system::latest().and_then(|s| serde_json::to_value(s).ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
