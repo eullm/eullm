@@ -1063,6 +1063,20 @@ body {
 .mon-msg.err { color: var(--danger); }
 .mon-storage code { font-family: var(--mono); font-size: 12px; }
 
+/* Admin key dialog */
+.admin-dialog {
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev);
+  color: var(--text); padding: 20px; width: min(92vw, 380px); box-shadow: var(--shadow);
+}
+.admin-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+.admin-dialog h2 { margin: 0 0 6px; font-size: 17px; }
+.admin-dialog p { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); }
+.admin-dialog input {
+  background: var(--bg-input); border: 1px solid var(--border); color: var(--text);
+  font: inherit; font-size: 14px; padding: 8px 10px; border-radius: var(--radius-sm); width: 100%;
+}
+.admin-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+
 /* Request log */
 .mon-table-wrap { overflow-x: auto; margin: 0 -16px -16px; border-top: 1px solid var(--border); }
 .mon-table { width: 100%; border-collapse: collapse; font-size: 13px; }

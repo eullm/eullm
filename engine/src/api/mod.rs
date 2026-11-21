@@ -17,7 +17,8 @@
 //! `resident::ResidentModels`.
 
 pub(crate) mod admin;
-mod auth;
+pub(crate) mod auth;
+pub(crate) mod managed;
 mod decision_policy;
 mod decision_traces;
 pub(crate) mod ip_allowlist;
@@ -241,6 +242,10 @@ pub struct AppState {
     /// Who may delete the Monitor's history or change its retention, and
     /// who may scrape `/metrics` — see `admin`.
     pub monitor_access: Arc<admin::MonitorAccess>,
+
+    /// The models a request may name (`EULLM_ALLOWED_MODELS`) — see
+    /// `managed`.
+    pub allowed_models: managed::AllowedModels,
 
     /// What the web tool is allowed to fetch — see `tools::guard`. Resolved
     /// once at startup so a request cannot pay for re-reading the environment,
@@ -3128,6 +3133,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     // be read from the environment only.
     let allow_model_paths = crate::settings::flag("EULLM_ALLOW_MODEL_PATHS");
 
+    crate::extensions::set_api_keys_required(api_keys.is_enabled());
     if api_keys.is_enabled() {
         tracing::info!(
             "API authentication: enabled — keys: {}  [source: {}]",
@@ -3230,10 +3236,22 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
     // goes where EULLM_METRICS_DIR says. Never fatal: see `monitor::history`.
     crate::monitor::history::init();
     crate::monitor::system::start();
+    let allowed_models = managed::AllowedModels::load();
     {
         let (admin, metrics) = monitor_access.describe();
-        tracing::info!("Monitor administration (EULLM_ADMIN_KEY): {admin}");
+        tracing::info!("Administration (EULLM_ADMIN_KEY): {admin}");
+        if monitor_access.admin_enabled() {
+            tracing::info!(
+                "Managed server: downloading, deleting and unloading models, and a request's \
+                 keep_alive, need the admin key (X-Admin-Key)"
+            );
+        }
         tracing::info!("Prometheus /metrics (EULLM_METRICS_TOKEN): {metrics}");
+        tracing::info!(
+            "Models a request may name: {}  [source: {}]",
+            allowed_models.describe(),
+            allowed_models.source()
+        );
     }
     match &decision_traces {
         Some(traces) => tracing::info!(
@@ -3387,6 +3405,7 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
         api_keys,
         allowed_origins,
         monitor_access: monitor_access.clone(),
+        allowed_models: allowed_models.clone(),
         web_policy,
         allow_model_paths,
         launch_model: cfg.launch_model,
@@ -3587,6 +3606,7 @@ impl AppState {
             api_keys: Arc::new(api_keys),
             allowed_origins: origin::AllowedOrigins::load(absent),
             monitor_access: Arc::new(admin::MonitorAccess::disabled()),
+            allowed_models: managed::AllowedModels::default(),
             web_policy: crate::tools::guard::WebPolicy::default(),
             allow_model_paths: false,
             launch_model: None,
@@ -3692,6 +3712,16 @@ async fn enforce_auth(
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // Authenticated already by an embedding program's own middleware, which
+    // runs outside this one (see `crate::extensions`): a client cannot set a
+    // request extension, so this is code in this process speaking.
+    if req
+        .extensions()
+        .get::<Identity>()
+        .is_some_and(Identity::is_authenticated)
+    {
+        return next.run(req).await;
+    }
     let presented = extract_token(&req, allow_query_token);
     // `/v1/systemone` refusals, and its feedback's, carry the body its
     // clients parse (see `systemone::ApiError`); every other endpoint keeps
@@ -3929,9 +3959,15 @@ fn api_router(state: Arc<AppState>) -> Router {
     // Layers run outermost-last: `enforce_auth` is added last, so it sees the
     // request first. The order is load-bearing — see `enforce_ip_allowlist` for
     // why authentication must precede the address check rather than follow it.
-    Router::new()
+    let router = Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
+        // Innermost: the perimeter has let the request in by now. See
+        // `managed` for what only an administrator may do.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            managed::enforce_managed,
+        ))
         .layer(axum::middleware::from_fn(read_body_as_json))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
@@ -3952,7 +3988,8 @@ fn api_router(state: Arc<AppState>) -> Router {
         // bound to the IP allowlist (see `admin`). The API port only: the
         // chat's is for browsers.
         .route("/metrics", axum::routing::get(routes::prometheus_metrics))
-        .with_state(state)
+        .with_state(state);
+    crate::extensions::wrap_api(router)
 }
 
 /// Build the chat-UI router. Includes the same API routes (so the embedded
@@ -3967,10 +4004,14 @@ fn ui_router(state: Arc<AppState>) -> Router {
     // controls — exempting it would simply move the open door to another port.
     // It differs in one respect: a token may arrive as `?api_key=…`, because a
     // browser cannot set a header on its first navigation. See `enforce_auth`.
-    Router::new()
+    let router = Router::new()
         .nest("/api", routes::api_routes())
         .nest("/v1", routes::openai_routes())
         .merge(crate::ui::router())
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            managed::enforce_managed,
+        ))
         .layer(axum::middleware::from_fn(read_body_as_json))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .layer(cors)
@@ -3986,7 +4027,8 @@ fn ui_router(state: Arc<AppState>) -> Router {
             (state.clone(), true),
             enforce_auth,
         ))
-        .with_state(state)
+        .with_state(state);
+    crate::extensions::wrap_chat(router)
 }
 
 #[cfg(test)]
@@ -4637,6 +4679,81 @@ mod http_tests {
         let (status, body) = get_json(&format!("{base}/api/tags")).await;
         assert_eq!(status, 401);
         assert!(body["error"].is_string(), "{body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// Serve `app` on a free port, as `spawn_state` serves the API router.
+    async fn spawn_app(app: Router) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        tokio::spawn(async move {
+            let _ = axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await;
+        });
+        format!("http://{addr}")
+    }
+
+    /// An embedding program's middleware, outside the engine's perimeter,
+    /// names the caller (`crate::extensions`): the API keys let it through,
+    /// where the same request with no key and no name is refused.
+    #[tokio::test]
+    async fn an_identity_named_by_an_outer_middleware_passes_the_api_keys() {
+        let tmp = std::env::temp_dir().join(format!("eullm-ext-identity-{}", uuid::Uuid::new_v4()));
+        let keys = auth::ApiKeys::from_spec("ci:0123456789abcdef01").expect("keys");
+        let state = Arc::new(AppState::for_tests(ModelStore::at(tmp.clone()), keys));
+        let named = api_router(state.clone()).layer(axum::middleware::from_fn(
+            |mut req: axum::extract::Request, next: axum::middleware::Next| async move {
+                req.extensions_mut().insert(Identity::named("mario.rossi"));
+                next.run(req).await
+            },
+        ));
+        let base = spawn_app(named).await;
+        let (status, body) = get_json(&format!("{base}/api/tags")).await;
+        assert_eq!(status, 200, "{body}");
+        let plain = spawn_app(api_router(state)).await;
+        let (status, _) = get_json(&format!("{plain}/api/tags")).await;
+        assert_eq!(status, 401);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// With an admin key, unloading needs it, or an in-process grant.
+    #[tokio::test]
+    async fn a_managed_server_unloads_for_the_administrator_only() {
+        const KEY: &str = "an-admin-key-for-tests-0123";
+        let tmp = std::env::temp_dir().join(format!("eullm-managed-{}", uuid::Uuid::new_v4()));
+        let absent = std::path::Path::new("/nonexistent/eullm-test/.env");
+        let mut state = AppState::for_tests(
+            ModelStore::at(tmp.clone()),
+            auth::ApiKeys::load(absent).expect("no keys"),
+        );
+        state.monitor_access = Arc::new(admin::MonitorAccess::from_secrets(Some(KEY), None));
+        let state = Arc::new(state);
+        let base = spawn_app(api_router(state.clone())).await;
+        let client = reqwest::Client::new();
+        let r = client.post(format!("{base}/api/unload")).send().await.unwrap();
+        assert_eq!(r.status(), 403);
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["admin"], "missing", "{body}");
+        let r = client
+            .post(format!("{base}/api/unload"))
+            .header("X-Admin-Key", KEY)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200);
+
+        let granted = spawn_app(api_router(state).layer(axum::middleware::from_fn(
+            |mut req: axum::extract::Request, next: axum::middleware::Next| async move {
+                req.extensions_mut().insert(admin::AdminGrant);
+                next.run(req).await
+            },
+        )))
+        .await;
+        let r = client.post(format!("{granted}/api/unload")).send().await.unwrap();
+        assert_eq!(r.status(), 200);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

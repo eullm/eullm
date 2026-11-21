@@ -387,7 +387,8 @@ has each one with an example; `eullm --help` lists them too.
 | `EULLM_AUDIT_DIR` | `~/.eullm/audit` | Where the audit trail is written. Set and not writable, the server does not start |
 | `EULLM_METRICS_DIR` | `~/.eullm/metrics` | Where the Monitor's history goes, one file a day; `off` keeps it in memory only. Not writable, the history stays in memory and the server starts: see [`GET /api/monitor/history`](#get-apimonitorhistory) |
 | `EULLM_METRICS_RETENTION_DAYS` | `30` | Days of history kept, 1 to 366. A retention set from the Monitor page (`PUT /api/monitor/storage`) wins over it |
-| `EULLM_ADMIN_KEY` | (none) | Lets whoever sends it as `X-Admin-Key` change the Monitor's retention and delete its history. Not set, neither is possible over the network. At least 16 characters, or the server does not start; `EULLM_ADMIN_KEY_FILE` names a file holding it |
+| `EULLM_ADMIN_KEY` | (none) | Makes the server **managed**: only whoever sends it as `X-Admin-Key` downloads, deletes and unloads models, sets a request's `keep_alive`, changes the Monitor's retention and deletes its history. See [A managed server](#a-managed-server-eullm_admin_key). At least 16 characters, or the server does not start; `EULLM_ADMIN_KEY_FILE` names a file holding it |
+| `EULLM_ALLOWED_MODELS` | any model in the folder | The only models a request may name, comma-separated; others are refused with 403 before anything loads, and the model lists show only these. An administrator may name any |
 | `EULLM_METRICS_TOKEN` | (none) | Serves [`GET /metrics`](#get-metrics) (Prometheus) to whoever sends it as a bearer token. Not set, `/metrics` is not served. At least 16 characters; `EULLM_METRICS_TOKEN_FILE` names a file holding it |
 | `EULLM_WEB_ALLOWED_DOMAINS` | any public host | With `--web`: fetch only from these domains and their subdomains, comma-separated |
 | `EULLM_WEB_ALLOW_HTTP` | off | With `--web`: fetch plain `http` pages too |
@@ -1958,6 +1959,38 @@ curl "http://localhost:11434/api/monitor?since=1793280000000"
   (Metal, Vulkan, Intel) from llama.cpp's device list, VRAM only. What a
   driver does not report is `null`.
 
+#### A managed server (`EULLM_ADMIN_KEY`)
+
+Without an admin key, every caller the API admits (and so everyone who opens
+the chat) may download a model, delete one, unload the one others are using,
+or name any model in the folder, which loads it in place of the one in
+memory. Right for one person's machine; not for a server an office shares.
+
+With `EULLM_ADMIN_KEY` set, the server is managed:
+
+- `POST /api/pull`, `DELETE /api/delete` and `POST /api/unload` need the key
+  in an `X-Admin-Key` header, and answer `403` with `"admin": "missing"` or
+  `"wrong"` without it (`429`, `"locked"`, after five wrong keys from one
+  address in 15 minutes). The chat's Model hub asks for the key when the
+  server says so, and keeps it until the page is reloaded.
+- A request's `keep_alive` is honoured from an administrator only. Ollama
+  clients send one with every request, so for anyone else it is dropped, not
+  refused, and the server's own `--keep-alive` applies: nobody unloads the
+  model the office is using with `"keep_alive": 0`.
+
+`EULLM_ALLOWED_MODELS` (with or without the admin key) limits the models a
+request may name: `/api/generate`, `/api/chat`, `/api/embed`, `/api/route`,
+`/v1/chat/completions`, `/v1/embeddings` and `/v1/systemone` refuse another
+name with `403` before anything is loaded, and `/api/tags` and `/v1/models`
+list only the allowed ones. `auto` and a request that names no model are the
+server's own choice. A request with the admin key may name any model.
+
+```bash
+EULLM_ADMIN_KEY=$(openssl rand -hex 24) \
+EULLM_ALLOWED_MODELS=gemma-4-12b,qwen3-8b \
+eullm serve
+```
+
 #### `GET /api/monitor/history`
 
 The Monitor's history, minute by minute: every row has the minimum, the mean
@@ -2476,6 +2509,59 @@ curl http://localhost:11434/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model": "local", "messages": [{"role": "user", "content": "Ciao!"}]}'
 ```
+
+## Building on the engine (the `eullm_engine` library)
+
+The engine is a Rust library as well as the `eullm` binary, so that a
+distribution can build its own binary around it and add to the HTTP side
+without forking it. The `eullm` binary is three lines: it calls
+`eullm_engine::main()`. A distribution calls
+`eullm_engine::run_with_extensions(registry)` instead, and everything else,
+the command line included, is the engine's own.
+
+```rust
+use std::sync::Arc;
+use eullm_engine::extensions::{ExtensionRegistry, Identity, axum};
+
+fn main() {
+    let registry = ExtensionRegistry {
+        // The chat listener's finished router, perimeter and all.
+        chat: Some(Arc::new(|router: axum::Router| {
+            router.layer(axum::middleware::from_fn(
+                |mut req: axum::extract::Request, next: axum::middleware::Next| async move {
+                    // Your own login decided who this is:
+                    req.extensions_mut().insert(Identity::named("mario.rossi"));
+                    next.run(req).await
+                },
+            ))
+        })),
+        ..ExtensionRegistry::default()
+    };
+    eullm_engine::run_with_extensions(registry);
+}
+```
+
+- `chat` and `api` wrap the two listeners' routers: add routes with
+  `router.merge(...)`, and middleware with `router.layer(...)`, which runs
+  before the engine's API keys, address allowlist and origin checks. Routes
+  added this way are outside that perimeter, and are the distribution's to
+  protect.
+- An `Identity::named(user)` in a request's extensions is taken as
+  authenticated (the API keys are skipped for it) and written in the audit
+  trail as the request's user. An `AdminGrant` lets the request do what the
+  admin key allows ([a managed server](#a-managed-server-eullm_admin_key)).
+  Clients cannot send either: they exist only inside the process.
+- `chat_script` is served as `/eullm-ui/extension.js`, which the chat page
+  loads after its own scripts (empty in eullm). It can add a page beside
+  Chat, Model hub, Monitor and About with `window.eullm.addView({name, title,
+  icon, node})`, switch to it with `window.eullm.showView(name)`, and send
+  the page's API key on its own requests with `window.eullm.headers()`.
+- `eullm_engine::extensions::axum` is the axum the routers are made with;
+  `build_info()` gives the engine's version and commit for the
+  distribution's own `--version`.
+- Depend on the engine at an exact commit (`git = "...", rev = "<sha>"`)
+  and commit `Cargo.lock`: the library's interface follows the engine's
+  releases, with no promise of stability between them.
 
 ## Logging & Troubleshooting
 

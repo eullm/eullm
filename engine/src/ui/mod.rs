@@ -36,6 +36,7 @@ pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/eullm-ui/app.js", get(serve_js))
         .route("/eullm-ui/monitor.js", get(serve_monitor_js))
         .route("/eullm-ui/about.js", get(serve_about_js))
+        .route("/eullm-ui/extension.js", get(serve_extension_js))
         .route("/eullm-ui/logo-dark.png", get(serve_logo_dark))
         .route("/eullm-ui/logo-light.png", get(serve_logo_light))
         .route("/favicon.ico", get(serve_favicon))
@@ -59,6 +60,24 @@ async fn serve_monitor_js() -> Response {
 
 async fn serve_about_js() -> Response {
     text_asset(ABOUT_JS, "application/javascript; charset=utf-8")
+}
+
+/// What a program that builds on the engine adds to the page
+/// (`crate::extensions::ExtensionRegistry::chat_script`): nothing in eullm.
+async fn serve_extension_js() -> Response {
+    let script = crate::extensions::chat_script().unwrap_or("// No extension.\n");
+    let mut response = (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        script.to_string(),
+    )
+        .into_response();
+    // Never cached: it changes with the program serving the page, not with
+    // this engine's version.
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response
 }
 
 async fn serve_logo_dark() -> Response {

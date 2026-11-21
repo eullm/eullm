@@ -33,6 +33,44 @@
     return { ...init, headers: { ...(init.headers || {}), "X-Api-Key": apiKey } };
   };
 
+  // The admin key, for a server where only an administrator changes the
+  // models (EULLM_ADMIN_KEY). Asked for when the server says it is needed,
+  // kept in this page's memory only, never stored.
+  let adminKey = "";
+  const askAdminKey = (why) => new Promise((resolve) => {
+    const dialog = document.getElementById("admin-key-dialog");
+    const input = document.getElementById("admin-key-input");
+    if (!dialog?.showModal) { resolve(null); return; }
+    document.getElementById("admin-key-why").textContent = why;
+    input.value = "";
+    dialog.returnValue = "";
+    dialog.addEventListener("close", () => {
+      resolve(dialog.returnValue === "ok" && input.value.trim() ? input.value.trim() : null);
+    }, { once: true });
+    dialog.showModal();
+    input.focus();
+  });
+  /** fetch for what only an administrator may do: on the server's answer
+   * that the admin key is missing or wrong, ask for it and try once more. */
+  const adminFetch = async (url, init = {}) => {
+    const go = () => fetch(url, withAuth({
+      ...init,
+      headers: { ...(init.headers || {}), ...(adminKey ? { "X-Admin-Key": adminKey } : {}) },
+    }));
+    let r = await go();
+    if (r.status !== 403) return r;
+    const body = await r.clone().json().catch(() => ({}));
+    if (body.admin !== "missing" && body.admin !== "wrong") return r;
+    const key = await askAdminKey(body.admin === "wrong"
+      ? "That key was not right. Only an administrator may change the models on this server."
+      : "Only an administrator may change the models on this server.");
+    if (!key) return r;
+    adminKey = key;
+    r = await go();
+    if (r.status === 403 || r.status === 429) adminKey = "";
+    return r;
+  };
+
   const $ = (id) => document.getElementById(id);
   const els = {
     modelSelect: $("model-select"),
@@ -1637,6 +1675,30 @@
   document.querySelectorAll(".side-item").forEach((b) =>
     b.addEventListener("click", () => showView(b.dataset.view)));
 
+  // For a program that builds on the engine and adds a script of its own
+  // (/eullm-ui/extension.js, empty in eullm itself): a page beside Chat,
+  // Model hub, Monitor and About, and the headers the page's own requests
+  // need. Nothing else of this page is promised to stay as it is.
+  window.eullm = Object.freeze({
+    addView({ name, title, icon = "", node }) {
+      if (!name || VIEWS[name] || !(node instanceof HTMLElement)) return false;
+      VIEWS[name] = { title, nodes: () => [node] };
+      node.hidden = true;
+      $("about").after(node);
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "side-item";
+      button.dataset.view = name;
+      button.innerHTML = `${icon}<span></span>`;
+      button.querySelector("span").textContent = title;
+      button.addEventListener("click", () => showView(name));
+      $("about-btn").after(button);
+      return true;
+    },
+    showView: (name) => showView(name),
+    headers: () => ({ ...(withAuth().headers || {}) }),
+  });
+
   // On a narrow screen the sidebar slides in over the page.
   function toggleSidebar(open) {
     document.body.classList.toggle("side-open", open);
@@ -2076,14 +2138,11 @@
     state.hidden = false;
     state.textContent = "starting…";
     try {
-      const r = await fetch(
-        "/api/pull",
-        withAuth({
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: q.pull }),
-        }),
-      );
+      const r = await adminFetch("/api/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: q.pull }),
+      });
       if (!r.ok || !r.body) {
         const err = await r.json().catch(() => ({}));
         throw new Error(err.error || `HTTP ${r.status}`);
@@ -2331,9 +2390,9 @@
         b.disabled = true;
         state.textContent = "Unloading…";
         try {
-          const r = await fetch("/api/unload", withAuth({
+          const r = await adminFetch("/api/unload", {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m.name }),
-          }));
+          });
           if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
           state.textContent = "Unloaded: its memory is free again.";
           await loadModels();
@@ -2355,9 +2414,9 @@
         b.disabled = true;
         state.textContent = "Deleting…";
         try {
-          const r = await fetch("/api/delete", withAuth({
+          const r = await adminFetch("/api/delete", {
             method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model: m.name }),
-          }));
+          });
           const body = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
           selectedModel = null;

@@ -1,14 +1,26 @@
 [package]
 name = "eullm-engine"
-version = "0.9.1"
+version = "0.9.10"
 edition = "2024"
 description = "eullm — sovereign LLM inference engine"
 license = "AGPL-3.0-or-later"
+# The one binary is declared below; src/main.rs is the library's root.
+autobins = false
 repository = "https://github.com/eullm/eullm"
+
+# The engine is a library too, so that a distribution can build its own
+# binary around it (`src/extensions.rs`). Its root is `src/main.rs`, where
+# the command line has always lived; the `eullm` binary only calls it.
+# Doctests stay off: the doc comments hold plenty of example blocks that
+# illustrate, and were never meant to compile.
+[lib]
+name = "eullm_engine"
+path = "src/main.rs"
+doctest = false
 
 [[bin]]
 name = "eullm"
-path = "src/main.rs"
+path = "src/bin/eullm.rs"
 
 [features]
 # Multimodal is on by default because every published binary carries it since
