@@ -268,7 +268,7 @@ class Runner:
         # starts at once rather than at the next poll.
         self.wake = threading.Event()
         self.model_seen = set()
-        self.busy_s = {d: 0.0 for d in self.devices}
+        self.busy_s = dict.fromkeys(self.devices, 0.0)
         self.counts = {"done": 0, "failed": 0, "blocked": 0, "released": 0, "retry": 0}
         self.started = time.time()
         walltime = args.walltime_s
@@ -830,10 +830,11 @@ def cmd_plan(args):
                   f"(groups: {', '.join(sorted(names))})", file=sys.stderr)
             return 2
     for path, spec, points in expanded:
+        selected = points
         if args.group:
-            points = [p for p in points
-                      if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
-        added = [p for p in points if q.add(p)]
+            selected = [p for p in points
+                        if any(fnmatch.fnmatchcase(p["group"], g) for g in args.group)]
+        added = [p for p in selected if q.add(p)]
         name = os.path.basename(path)
         if args.round:
             name = name.replace(".json", f".{args.round}.json")
@@ -843,7 +844,7 @@ def cmd_plan(args):
             json.dump(spec, f, indent=1)
         label = f" for jobs labelled {args.engine_label}" if args.engine_label else ""
         print(f"{path}{f' (round {args.round})' if args.round else ''}{label}: "
-              f"{len(points)} points, "
+              f"{len(selected)} points, "
               f"{len(added)} new, up to {node_hours(added):.0f} node-hours")
     print("queue:", q.counts())
     if args.engine:

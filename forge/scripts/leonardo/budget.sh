@@ -25,12 +25,16 @@
 # directory measures that side: where the calendar went and whose fault each
 # idle stretch was.
 #
-# CINECA bills a whole node: 1 node-hour = 32 core-hours on Booster, whatever
-# the job does with the GPUs.
+# CINECA bills 8 local hours per GPU-hour on Booster (32 a node-hour): a
+# 1-GPU job is a quarter of a node, not a node. Until 2026-11-20 this script
+# counted every job as a whole node and read 1,767 node-hours consumed where
+# saldo had about 650: the Fast Lane looked ahead of its pace while it was
+# far behind it.
 
 set -uo pipefail
 
 CORES_PER_NODE="${CORES_PER_NODE:-32}"
+CORES_PER_GPU="${CORES_PER_GPU:-8}"
 PARTITION="${PARTITION:-boost_usr_prod}"
 RESERVE_NODE_H=0
 if [ "${1:-}" = "--reserve" ]; then
@@ -45,11 +49,11 @@ fi
 # Playground (AIFAC_P02_1147) before the Fast Lane, and its first row made the
 # Fast Lane read -191% free on 2026-11-20. $EULLM_ACCOUNT picks among several
 # open ones; otherwise the first open one.
-read -r TOTAL ALLOC_START SETTLED MONTH_TOTAL MONTH_USED <<<"$(
+read -r TOTAL ALLOC_START SETTLED MONTH_TOTAL MONTH_USED ALLOC_END <<<"$(
     saldo -b 2>/dev/null |
     awk -v acct="${EULLM_ACCOUNT:-}" -v today="$(date +%Y%m%d)" '
         NF >= 9 && $4 ~ /^[0-9]+$/ && $2 ~ /^[0-9]{8}$/ && $3 >= today {
-            row = $4 " " $2 " " $6 " " $8 " " $9
+            row = $4 " " $2 " " $6 " " $8 " " $9 " " $3
             if ($1 == acct) { print row; found = 1; exit }
             if (first == "") first = row
         }
@@ -73,24 +77,32 @@ SINCE="${ALLOC_START:0:4}-${ALLOC_START:4:2}-${ALLOC_START:6:2}"
 # Restricted to one partition because billing is per-partition: a one-core
 # job on the serial queue reports NNodes=1 and would otherwise be charged a
 # whole 32-core Booster node.
+# Billed by GPU (gres/gpu in AllocTRES, 8 cores each); a job with no GPU
+# there is billed by its cores.
 CONSUMED_CH="$(
-    sacct -X -n -S "$SINCE" -r "$PARTITION" --format=ElapsedRaw,NNodes 2>/dev/null |
-    awk -v c="$CORES_PER_NODE" '{s += $1 * $2 * c} END {printf "%.0f", s/3600}'
+    sacct -X -n -P -S "$SINCE" -r "$PARTITION" --format=ElapsedRaw,AllocTRES,AllocCPUS 2>/dev/null |
+    awk -F'|' -v g="$CORES_PER_GPU" '
+        { gpus = 0
+          if (match($2, /gres\/gpu=[0-9]+/)) gpus = substr($2, RSTART + 9, RLENGTH - 9)
+          s += $1 * (gpus > 0 ? gpus * g : $3) }
+        END {printf "%.0f", s/3600}'
 )"
 CONSUMED_CH="${CONSUMED_CH:-0}"
 
 # %L is the remaining time limit for running jobs and the full limit for
 # pending ones — i.e. exactly what each job may still burn.
 REMAINING_CH="$(
-    squeue --me -h -o '%L %D' 2>/dev/null |
-    awk -v c="$CORES_PER_NODE" '
+    squeue --me -h -p "$PARTITION" -o '%L %D %b %C' 2>/dev/null |
+    awk -v g="$CORES_PER_GPU" '
         {
             n = split($1, p, "-")            # optional  D-HH:MM:SS
             days = (n == 2) ? p[1] : 0
             t = (n == 2) ? p[2] : $1
             m = split(t, q, ":")
             sec = (m == 3) ? q[1]*3600 + q[2]*60 + q[3] : q[1]*60 + q[2]
-            s += (days*86400 + sec) * $2 * c
+            gpus = 0                         # %b: gres per node, "gres/gpu:3" or "gpu:3"
+            if (match($3, /gpu(:[a-zA-Z0-9_]+)?:[0-9]+/)) { k = split(substr($3, RSTART, RLENGTH), x, ":"); gpus = x[k] }
+            s += (days*86400 + sec) * (gpus > 0 ? gpus * g * $2 : $4)
         }
         END {printf "%.0f", s/3600}'
 )"
@@ -114,6 +126,19 @@ printf '  COMMITTED       %8s core-h  = %8s node-h   %5s%%\n' \
     "$COMMITTED_CH" "$(nodeh "$COMMITTED_CH")" "$(pct "$COMMITTED_CH")"
 printf '  free to promise %8s core-h  = %8s node-h   %5s%%\n' \
     "$FREE_CH" "$(nodeh "$FREE_CH")" "$(pct "$FREE_CH")"
+# The straight line: where an even spend would be today, and the pace the
+# rest needs. The end date is saldo's (column 3).
+read -r PACE_LINE PACE_NEED DAYS_LEFT <<<"$(awk -v t="$TOTAL" -v c="$CONSUMED_CH" \
+    -v s="$(date -d "$SINCE" +%s)" -v e="$(date -d "${ALLOC_END:0:4}-${ALLOC_END:4:2}-${ALLOC_END:6:2}" +%s)" \
+    -v now="$(date +%s)" 'BEGIN { d = (e - s) / 86400; done = (now - s) / 86400; left = d - done
+        printf "%.0f %.0f %.0f", t * done / d, (left > 0 ? (t - c) / left : 0), left }')"
+printf '\n  straight line   %8s core-h  = %8s node-h   (an even spend, today)\n' \
+    "$PACE_LINE" "$(nodeh "$PACE_LINE")"
+# rounded by awk, printed as text: bash's printf reads "%f" in the locale's
+# decimal comma (it_IT on the login nodes) and refused "-828.469"
+printf '  ahead (+) / behind (-) %s node-h; the rest needs %s node-h a day (%s GPUs round the clock) for %s days\n' \
+    "$(awk -v a="$CONSUMED_CH" -v b="$PACE_LINE" -v c="$CORES_PER_NODE" 'BEGIN {printf "%+.0f", (a-b)/c}')" \
+    "$(nodeh "$PACE_NEED")" "$(awk -v v="$PACE_NEED" -v g="$CORES_PER_GPU" 'BEGIN {printf "%.0f", v/g/24}')" "$DAYS_LEFT"
 printf '\n  month           %8s core-h quota, %s used\n' "$MONTH_TOTAL" "$MONTH_USED"
 printf '  saldo settled   %8s core-h              (lags: cross-check only)\n' "$SETTLED"
 

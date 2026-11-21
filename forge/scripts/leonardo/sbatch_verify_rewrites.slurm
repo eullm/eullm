@@ -17,6 +17,11 @@
 #   VR_ITEMS    items (default $WORK/eullm_runs/verify/items.jsonl)
 #   VR_SHARD    "i/n": only part i of n of the items (the whole corpus, several
 #               chains a checker); the verdicts file is then verdicts-<label>-<i>of<n>
+#   VR_ENGINE   EULLM Engine binary to serve the checker instead of llama-server
+#               ($WORK/eullm-engine/<commit>/eullm, build_engine.sh)
+#   VR_PARALLEL requests in flight per server (default 8; 16 fits a 31B Q8 on an
+#               A100 at 3,072 tokens a request, a third faster, 2026-11-20)
+#   VR_CTX      context per request (default 8192)
 #   VR_REPO     checkout to run (default: the one this file was submitted from)
 #
 #SBATCH --job-name=eullm-verify
@@ -70,4 +75,5 @@ heartbeat_start
 
 python "$REPO/forge/scripts/verify_rewrites.py" check --items "$ITEMS" --out "$OUT" \
     --label "$LABEL" --serve "$CHECKER" --gpus "${VR_GPUS:-$DEVS}" --llama-server "$SERVER" \
-    --stop-after 6300 ${SHARD:+--shard "$SHARD"}
+    --stop-after 6300 ${SHARD:+--shard "$SHARD"} ${VR_ENGINE:+--engine "$VR_ENGINE"} \
+    --parallel "${VR_PARALLEL:-8}" --ctx "${VR_CTX:-8192}"

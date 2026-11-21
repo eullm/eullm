@@ -148,7 +148,7 @@ class Embeddings:
         missing = [x for x in dict.fromkeys(texts) if (self.model, x) not in self.seen]
         for start in range(0, len(missing), 32):
             batch = missing[start : start + 32]
-            for text, vector in zip(batch, self.embed(batch)):
+            for text, vector in zip(batch, self.embed(batch), strict=True):
                 self.seen[(self.model, text)] = unit(vector)
         return [self.seen[(self.model, x)] for x in texts]
 
@@ -159,8 +159,8 @@ class Embeddings:
         ms = (time.perf_counter() - started) * 1000
         scored = sorted(
             (
-                (sum(a * b for a, b in zip(query, v)), t.name)
-                for t, v in zip(item.candidates, tools)
+                (sum(a * b for a, b in zip(query, v, strict=True)), t.name)
+                for t, v in zip(item.candidates, tools, strict=True)
             ),
             key=lambda s: -s[0],
         )

@@ -44,8 +44,12 @@ def read_jsonl(path: Path) -> Iterable[dict]:
                 yield row
 
 
-def corpus_texts(paths: Iterable[Path]) -> list[str]:
+def corpus_texts(paths: Iterable[Path], keep_styles: Iterable[str] = ()) -> list[str]:
     """Texts of the memory corpus: program rows and rewrites, deduplicated.
+
+    ``keep_styles`` names elaborating styles to keep after all: Leonardo's
+    cleaned corpus (eullm_runs/clean) has its cases and explanations checked
+    by two models, which our own rewrites never were.
 
     A rewrite repeated across sibling files (two chains that crossed) counts
     once, by its id; program rows have no id and are kept by text.
@@ -55,7 +59,7 @@ def corpus_texts(paths: Iterable[Path]) -> list[str]:
     for p in paths:
         for r in read_jsonl(p):
             text = (r.get("text") or "").strip()
-            if not text or r.get("forma") in EXCLUDED_STYLES:
+            if not text or r.get("forma") in EXCLUDED_STYLES - set(keep_styles):
                 continue
             key = r.get("id") or text
             if key in seen:

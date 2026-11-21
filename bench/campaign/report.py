@@ -88,7 +88,7 @@ def table(rows, kind):
     by_config = defaultdict(list)
     for r in rows:
         by_config[tuple(r.get(p) for p in varying)].append(r)
-    header = [p for p in varying] + [h for _, h in metrics] + ["n"]
+    header = list(varying) + [h for _, h in metrics] + ["n"]
     body = []
     for key in sorted(by_config, key=lambda k: tuple(_sort_key(v) for v in k)):
         group = by_config[key]
