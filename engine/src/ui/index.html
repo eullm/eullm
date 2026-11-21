@@ -27,7 +27,12 @@
       <button id="about-btn" type="button" class="side-item" data-view="about"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><span>About</span></button>
     </nav>
     <section class="side-recents" aria-labelledby="recents-title">
-      <h2 id="recents-title">Recent chats</h2>
+      <div class="recents-head">
+        <h2 id="recents-title">Recent chats</h2>
+        <input id="import-input" type="file" accept=".json,application/json" hidden/>
+        <button id="import-btn" type="button" class="recents-import" title="Open a chat exported as JSON">Import</button>
+      </div>
+      <input id="chat-search" class="chat-search" type="search" placeholder="Search chats" aria-label="Search chats" autocomplete="off"/>
       <ul id="chat-list" class="chat-list"></ul>
     </section>
     <footer class="side-foot">
@@ -232,6 +237,7 @@
       <img id="attachment-thumb" alt="Attached image preview" hidden/>
       <audio id="attachment-audio" controls hidden></audio>
       <span id="attachment-name" class="attachment-name"></span>
+      <div id="doc-chips" class="doc-chips"></div>
       <button id="attachment-remove" type="button" class="icon-btn small" title="Remove attachment" aria-label="Remove attachment">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
       </button>
@@ -239,8 +245,8 @@
     <div class="composer-inner">
       <textarea id="input" placeholder="Type a message — Shift+Enter for newline, Enter to send" rows="1" autofocus></textarea>
       <div class="composer-actions">
-        <input id="image-input" type="file" accept="image/*,audio/*" hidden/>
-        <button id="attach-btn" type="button" class="icon-btn" aria-label="Attach media" title="Attach image or audio (multimodal models only)">
+        <input id="image-input" type="file" multiple accept="image/*,audio/*,text/*,.pdf,.docx,.odt,.odp,.ods,.pptx,.xlsx,.xlsm,.xls,.txt,.md,.csv,.tsv,.json,.html,.htm,.xml,.yaml,.yml,.log" hidden/>
+        <button id="attach-btn" type="button" class="icon-btn" aria-label="Attach a document, an image or audio" title="Attach documents (PDF, Word, Excel, PowerPoint, LibreOffice, text), or an image or audio for a multimodal model">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
         <button id="stop-btn" type="button" class="btn-stop" hidden>Stop</button>
@@ -249,6 +255,15 @@
     </div>
     <div class="composer-foot">
       <span id="composer-hint">Chats are kept in this browser only. The bin deletes this one.</span>
+      <details id="export-menu" class="export-menu">
+        <summary class="icon-btn small" aria-label="Export this chat" title="Export this chat">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </summary>
+        <div class="export-pop" role="menu">
+          <button type="button" role="menuitem" data-format="md">Markdown</button>
+          <button type="button" role="menuitem" data-format="json">JSON, to import again</button>
+        </div>
+      </details>
       <button id="clear-btn" type="button" class="icon-btn small" aria-label="Clear conversation" title="Clear conversation">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
       </button>

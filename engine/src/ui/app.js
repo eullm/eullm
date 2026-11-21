@@ -97,6 +97,12 @@
     attachmentAudio: $("attachment-audio"),
     attachmentName: $("attachment-name"),
     attachmentRemove: $("attachment-remove"),
+    docChips: $("doc-chips"),
+    composerHint: $("composer-hint"),
+    exportMenu: $("export-menu"),
+    importBtn: $("import-btn"),
+    importInput: $("import-input"),
+    chatSearch: $("chat-search"),
     sidebar: $("sidebar"),
     scrim: $("scrim"),
     menuBtn: $("menu-btn"),
@@ -115,6 +121,15 @@
   // path auto-detects image vs audio from the bytes, so both travel through
   // the same `images:[...]` field. Cleared after each send.
   let pendingMedia = null;
+
+  // Documents attached to the next message: PDF, Word, LibreOffice, Excel,
+  // PowerPoint, text. The engine reads each one's text once, when it is
+  // attached (POST /api/documents/extract); the text then travels with its
+  // turn as `documents: [{name, text}]`, and the engine decides on every
+  // turn how much of it fits the context (`tools::documents`). Entries are
+  // {id, name, state: "reading" | "ready" | "failed", text, kind, chars,
+  // tokens, parts, error}.
+  let pendingDocs = [];
 
   const settings = {
     // Free-form system prompt, opt-in, sent as a literal system-role message
@@ -759,10 +774,11 @@
     if (w) w.remove();
   }
 
-  function appendMessage(role, content = "", media = null) {
+  function appendMessage(role, content = "", media = null, docs = null, turn = null) {
     dismissWelcome();
     const msg = document.createElement("div");
     msg.className = `msg ${role}`;
+    if (turn != null) msg.dataset.turn = String(turn);
     msg.innerHTML = `
       <div class="msg-avatar">${role === "user" ? "U" : "Eu"}</div>
       <div class="msg-body">
@@ -792,13 +808,142 @@
       audio.src = media.dataUrl;
       contentEl.appendChild(audio);
     }
+    if (docs && docs.length) contentEl.appendChild(documentChips(docs));
     if (content) {
       const textEl = document.createElement("div");
+      textEl.className = "msg-text";
       textEl.innerHTML = renderContent(content);
       contentEl.appendChild(textEl);
     }
+    const metaEl = msg.querySelector(".msg-meta");
+    if (role === "user" && turn != null) {
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.className = "meta-act meta-edit";
+      edit.textContent = "Edit";
+      edit.title = "Change this message and answer it again; what came after it is replaced";
+      edit.addEventListener("click", () => editMessage(msg));
+      metaEl.appendChild(edit);
+    }
     scrollToBottom();
-    return { msg, contentEl, metaEl: msg.querySelector(".msg-meta") };
+    return { msg, contentEl, metaEl };
+  }
+
+  // The documents of a turn, as chips: name, then pages or size.
+  function documentChips(docs) {
+    const box = document.createElement("div");
+    box.className = "msg-docs";
+    for (const d of docs) {
+      const chip = document.createElement("span");
+      chip.className = "doc-chip" + (d.text ? "" : " missing");
+      chip.title = d.text ? `${d.name}\n${documentFacts(d)}` : `${d.name}: its text was not kept`;
+      chip.innerHTML = `<span aria-hidden="true">📄</span><span class="doc-name"></span><span class="doc-facts"></span>`;
+      chip.querySelector(".doc-name").textContent = d.name;
+      chip.querySelector(".doc-facts").textContent = d.text ? documentFacts(d) : "not kept";
+      box.appendChild(chip);
+    }
+    return box;
+  }
+
+  function documentFacts(d) {
+    const parts = d.parts && d.parts > 0
+      ? { pdf: "pages", pptx: "slides", odp: "slides", xlsx: "sheets", xls: "sheets", ods: "sheets" }[d.kind]
+      : null;
+    const size = d.tokens != null
+      ? `~${d.tokens >= 1000 ? `${(d.tokens / 1000).toFixed(d.tokens >= 10000 ? 0 : 1)}k` : d.tokens} tokens`
+      : "";
+    return [parts ? `${d.parts} ${d.parts === 1 ? parts.slice(0, -1) : parts}` : null, size].filter(Boolean).join(" · ");
+  }
+
+  // ── Regenerate and edit ────────────────────────────────────────────────
+  // Both take the conversation back to a user turn and answer it again:
+  // what came after it goes, from the page and from the history alike.
+
+  function truncateAfter(turn) {
+    history.length = turn + 1;
+    const anchor = els.messages.querySelector(`.msg[data-turn="${turn}"]`);
+    if (anchor) while (anchor.nextSibling) anchor.nextSibling.remove();
+  }
+
+  function lastUserTurn() {
+    for (let i = history.length - 1; i >= 0; i--) if (history[i].role === "user") return i;
+    return -1;
+  }
+
+  async function regenerate() {
+    if (abortController) return;
+    const turn = lastUserTurn();
+    if (turn < 0) return;
+    truncateAfter(turn);
+    saveChat();
+    scrollToBottom(true);
+    setSending(true);
+    await answer(history[turn]);
+  }
+
+  // Under the last answer (or the last error, or a stopped answer): Regenerate.
+  function refreshTurnActions() {
+    els.messages.querySelectorAll(".meta-regen").forEach((b) => b.remove());
+    const msgs = els.messages.querySelectorAll(".msg");
+    const last = msgs[msgs.length - 1];
+    if (!last || !last.classList.contains("assistant") || lastUserTurn() < 0) return;
+    const meta = last.querySelector(".msg-meta");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "meta-act meta-regen";
+    b.textContent = "Regenerate";
+    b.title = "Answer the last message again";
+    b.addEventListener("click", regenerate);
+    const copy = meta.querySelector(".meta-copy");
+    if (copy) copy.before(b); else { b.style.marginLeft = "auto"; meta.appendChild(b); }
+  }
+
+  function editMessage(msg) {
+    if (abortController || msg.querySelector(".msg-edit")) return;
+    const turn = Number(msg.dataset.turn);
+    const entry = history[turn];
+    if (!entry || entry.role !== "user") return;
+    const textEl = msg.querySelector(".msg-text");
+    const box = document.createElement("div");
+    box.className = "msg-edit";
+    box.innerHTML = `<textarea aria-label="Edit the message"></textarea>
+      <div class="msg-edit-actions">
+        <button type="button" class="btn-secondary" data-act="cancel">Cancel</button>
+        <button type="button" class="btn-primary" data-act="send">Send</button>
+      </div>`;
+    const area = box.querySelector("textarea");
+    area.value = entry.content;
+    if (textEl) textEl.hidden = true;
+    msg.querySelector(".msg-content").appendChild(box);
+    area.focus();
+    area.setSelectionRange(area.value.length, area.value.length);
+    const close = () => { box.remove(); if (textEl) textEl.hidden = false; };
+    box.querySelector('[data-act="cancel"]').addEventListener("click", close);
+    const submit = async () => {
+      const text = area.value.trim();
+      if (!text && !entry.media && !(entry.documents || []).length) return;
+      entry.content = text;
+      box.remove();
+      let el = msg.querySelector(".msg-text");
+      if (!el && text) {
+        el = document.createElement("div");
+        el.className = "msg-text";
+        msg.querySelector(".msg-content").appendChild(el);
+      }
+      if (el) { el.hidden = false; el.innerHTML = text ? renderContent(text) : ""; }
+      // A failed attachment is tried again with the edited message.
+      if (entry.media && entry.media.base64) delete entry.media.failed;
+      truncateAfter(turn);
+      saveChat();
+      scrollToBottom(true);
+      setSending(true);
+      await answer(entry);
+    };
+    box.querySelector('[data-act="send"]').addEventListener("click", submit);
+    area.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+    });
   }
 
   // Stick-to-bottom: while an answer streams, the page follows its newest
@@ -1006,7 +1151,8 @@
     let dropping = false;
     const out = new Array(entries.length);
     for (let i = entries.length - 1; i >= 0; i--) {
-      const { role, content, media } = entries[i];
+      const { role, media } = entries[i];
+      const content = withDocumentNotes(entries[i]);
       let resend = false;
       if (media && !media.failed && !dropping) {
         resend = newest || media.base64.length <= budget;
@@ -1021,8 +1167,22 @@
       } else {
         out[i] = { role, content };
       }
+      const docs = (entries[i].documents || []).filter((d) => d.text);
+      if (docs.length) out[i].documents = docs.map((d) => ({ name: d.name, text: d.text }));
     }
     return out;
+  }
+
+  // A document whose text this browser did not keep (a reopened chat whose
+  // documents were too large for its storage) is a note in its turn, as an
+  // attachment no longer sent is.
+  function withDocumentNotes(entry) {
+    const gone = (entry.documents || []).filter((d) => !d.text);
+    if (!gone.length) return entry.content;
+    const notes = gone.map((d) =>
+      `[A document, "${d.name}", was attached here. Its text was not kept, so it is no longer ` +
+      "part of this conversation; only what was said about it remains.]");
+    return `${notes.join("\n")}\n${entry.content}`;
   }
 
   async function send(userText) {
@@ -1042,6 +1202,9 @@
     // text turns; `dataUrl` is for the preview only, `base64` is what
     // /api/chat consumes.
     const media = pendingMedia;
+    const docs = pendingDocs
+      .filter((d) => d.state === "ready")
+      .map(({ name, text, kind, chars, tokens, parts }) => ({ name, text, kind, chars, tokens, parts }));
     clearAttachment();
 
     // The attachment stays with its turn, and every later turn re-sends it
@@ -1050,12 +1213,19 @@
     // answer came from the model's memory of its own description.
     const userEntry = { role: "user", content: userText };
     if (media) userEntry.media = { base64: media.base64, kind: media.kind };
+    if (docs.length) userEntry.documents = docs;
     history.push(userEntry);
-    appendMessage("user", userText, media);
+    appendMessage("user", userText, media, docs, history.length - 1);
     // A new question: the page follows its answer, wherever the reader was.
     scrollToBottom(true);
     saveChat();
+    await answer(userEntry);
+  }
 
+  // The answer to the conversation as it stands, whose last user turn is
+  // `userEntry`: by send(), and again by Regenerate and by editing a
+  // message, which first take the conversation back to that turn.
+  async function answer(userEntry) {
     // An attachment whose own turn failed is not re-sent. When the failure
     // was the attachment's — a file the engine cannot decode, an image past
     // its token cap — sending it again would fail every turn after this one
@@ -1065,7 +1235,8 @@
       if (userEntry.media) userEntry.media.failed = true;
     };
 
-    const { msg, contentEl, metaEl } = appendMessage("assistant", "");
+
+    const { msg, contentEl, metaEl } = appendMessage("assistant", "", null, null, history.length);
     msg.classList.add("streaming");
     updateJumpButton();
     setSending(true);
@@ -1264,8 +1435,10 @@
       updateJumpButton();
       setSending(false);
       abortController = null;
+      refreshTurnActions();
     }
   }
+
 
   // Under an answer: what the engine counted, when it said (an older engine
   // or an interrupted stream leaves only what the browser saw), and a copy
@@ -1306,7 +1479,8 @@
   }
 
   function canSend() {
-    return !!(els.input.value.trim() || pendingMedia);
+    if (pendingDocs.some((d) => d.state === "reading")) return false;
+    return !!(els.input.value.trim() || pendingMedia || pendingDocs.some((d) => d.state === "ready"));
   }
 
   function setSending(busy) {
@@ -1339,7 +1513,7 @@
   // `data:...;base64,` prefix for the backend, and a preview bar appears
   // above the textarea (thumbnail for images, a mini player for audio)
   // until the user sends or removes it.
-  function clearAttachment() {
+  function clearMedia() {
     pendingMedia = null;
     els.imageInput.value = "";
     els.attachmentThumb.removeAttribute("src");
@@ -1347,8 +1521,59 @@
     els.attachmentAudio.removeAttribute("src");
     els.attachmentAudio.hidden = true;
     els.attachmentName.textContent = "";
-    els.attachmentBar.hidden = true;
-    els.sendBtn.disabled = !canSend();
+    renderPendingDocs();
+  }
+
+  function clearAttachment() {
+    pendingDocs = [];
+    clearMedia();
+  }
+
+  // The attachment bar: the image or audio, if any, and a chip per document.
+  function renderPendingDocs() {
+    els.docChips.innerHTML = "";
+    for (const d of pendingDocs) {
+      const chip = document.createElement("span");
+      chip.className = `doc-chip ${d.state}`;
+      chip.innerHTML = `<span aria-hidden="true">📄</span><span class="doc-name"></span><span class="doc-facts"></span><button type="button" aria-label="Remove">×</button>`;
+      chip.querySelector(".doc-name").textContent = d.name;
+      chip.querySelector(".doc-facts").textContent =
+        d.state === "reading" ? "reading" : d.state === "failed" ? d.error : documentFacts(d);
+      chip.title = d.state === "failed" ? `${d.name}: ${d.error}` : d.name;
+      chip.querySelector("button").addEventListener("click", () => {
+        pendingDocs = pendingDocs.filter((x) => x !== d);
+        d.cancelled = true;
+        renderPendingDocs();
+      });
+      els.docChips.appendChild(chip);
+    }
+    els.attachmentRemove.hidden = !pendingMedia;
+    els.attachmentBar.hidden = !pendingMedia && !pendingDocs.length;
+    els.sendBtn.disabled = !!abortController || !canSend();
+  }
+
+  // A document's text, read by the engine. The chip shows it being read;
+  // Send waits until every document is read or has failed.
+  async function attachDocument(file) {
+    const doc = { id: Math.random().toString(36).slice(2), name: file.name, state: "reading" };
+    pendingDocs.push(doc);
+    renderPendingDocs();
+    try {
+      const r = await fetch(`/api/documents/extract?name=${encodeURIComponent(file.name)}`, withAuth({
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      }));
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+      Object.assign(doc, {
+        state: "ready", text: body.text, kind: body.kind, chars: body.chars,
+        tokens: body.tokens, parts: body.parts,
+      });
+    } catch (err) {
+      Object.assign(doc, { state: "failed", error: err.message });
+    }
+    if (!doc.cancelled) renderPendingDocs();
   }
 
   // llama.cpp's mtmd decodes images via stb_image, which only handles
@@ -1455,18 +1680,21 @@
 
   els.attachBtn.addEventListener("click", () => els.imageInput.click());
   els.imageInput.addEventListener("change", async () => {
-    const file = els.imageInput.files?.[0];
-    if (!file) return;
-    const kind = file.type.startsWith("image/")
-      ? "image"
-      : file.type.startsWith("audio/")
-        ? "audio"
-        : null;
-    if (!kind) {
-      alert("Only image and audio files are supported.");
-      els.imageInput.value = "";
-      return;
+    const files = [...(els.imageInput.files || [])];
+    els.imageInput.value = "";
+    // Documents, as many as chosen; of images and audio, one per message
+    // (the first chosen), as the models take them.
+    let mediaFile = null;
+    for (const f of files) {
+      const isMedia = f.type.startsWith("image/") || f.type.startsWith("audio/");
+      if (!isMedia) attachDocument(f);
+      else if (!mediaFile) mediaFile = f;
     }
+    if (mediaFile) await attachMedia(mediaFile);
+  });
+
+  async function attachMedia(file) {
+    const kind = file.type.startsWith("image/") ? "image" : "audio";
     try {
       let dataUrl = await fileToDataUrl(file);
       if (kind === "image" && !MTMD_SAFE_IMAGE.has(file.type)) {
@@ -1490,8 +1718,7 @@
       }
       els.attachmentName.textContent =
         kind === "audio" ? `🎵 ${file.name}` : file.name;
-      els.attachmentBar.hidden = false;
-      els.sendBtn.disabled = !canSend();
+      renderPendingDocs();
     } catch {
       alert(
         kind === "audio"
@@ -1501,17 +1728,35 @@
           : "Could not read this file. If it's a HEIC/HEIF photo, convert it to " +
             "JPG or PNG first — the engine accepts jpg/png/bmp/gif/webp.",
       );
-      els.imageInput.value = "";
     }
-  });
-  els.attachmentRemove.addEventListener("click", clearAttachment);
+  }
+  els.attachmentRemove.addEventListener("click", clearMedia);
+
+  // Files dropped on the chat attach as the button would.
+  for (const zone of [els.messages, els.form]) {
+    zone.addEventListener("dragover", (e) => {
+      if ([...(e.dataTransfer?.types || [])].includes("Files")) e.preventDefault();
+    });
+    zone.addEventListener("drop", async (e) => {
+      const files = [...(e.dataTransfer?.files || [])];
+      if (!files.length || abortController) return;
+      e.preventDefault();
+      let mediaFile = null;
+      for (const f of files) {
+        const isMedia = f.type.startsWith("image/") || f.type.startsWith("audio/");
+        if (!isMedia) attachDocument(f);
+        else if (!mediaFile) mediaFile = f;
+      }
+      if (mediaFile) await attachMedia(mediaFile);
+    });
+  }
 
   els.form.addEventListener("submit", (e) => {
     e.preventDefault();
     const txt = els.input.value.trim();
     // An image-only turn is allowed (the model falls back to its default
     // "describe this image" behaviour); a fully empty submit is not.
-    if (!txt && !pendingMedia) return;
+    if (!canSend()) return;
     els.input.value = "";
     autoresize();
     send(txt);
@@ -1677,9 +1922,24 @@
 
   // For a program that builds on the engine and adds a script of its own
   // (/eullm-ui/extension.js, empty in eullm itself): a page beside Chat,
-  // Model hub, Monitor and About, and the headers the page's own requests
-  // need. Nothing else of this page is promised to stay as it is.
+  // Model hub, Monitor and About, the headers the page's own requests
+  // need, and where chats are kept (see "Where chats are kept" below).
+  // Nothing else of this page is promised to stay as it is.
   window.eullm = Object.freeze({
+    setChatStore(store) {
+      const needed = ["list", "get", "put", "remove"];
+      if (!store || needed.some((k) => typeof store[k] !== "function")) return false;
+      chatStore = store;
+      searchResults = null;
+      els.chatSearch.value = "";
+      els.composerHint.textContent = store.describe || "";
+      if (history.length) newChat();
+      reloadChats();
+      return true;
+    },
+    // The chats this browser keeps, to move them into another store.
+    browserChats: () => readBrowserChats(),
+    clearBrowserChats: () => browserStore.clear(),
     addView({ name, title, icon = "", node }) {
       if (!name || VIEWS[name] || !(node instanceof HTMLElement)) return false;
       VIEWS[name] = { title, nodes: () => [node] };
@@ -1714,73 +1974,173 @@
     else if (currentView !== "chat") showView("chat");
   });
 
-  // ── Chats kept in this browser ───────────────────────────────────────
-  // The only thing besides the Parameters that the page keeps: each chat's
-  // turns in localStorage, on this browser alone, never sent anywhere. An
-  // attachment is not kept (it would fill the storage): a chat reopened
-  // tells the model the attachment is gone, as a long chat already does.
+  // ── Where chats are kept ─────────────────────────────────────────────
+  // In this browser by default: each chat's turns in localStorage, on this
+  // browser alone, never sent anywhere. A program building on the engine
+  // may keep them elsewhere instead (window.eullm.setChatStore: on its
+  // server, for the person signed in). A store has
+  //   list()       → [{id, title, model, updated}], newest first
+  //   get(id)      → {id, title, model, updated, turns} or null
+  //   put(chat)    → kept
+  //   remove(id)   → gone
+  //   search(q)    → [{id, title, model, updated, hit}] (optional)
+  //   describe     → the line under the composer
+  // all of them returning promises. An attachment is not kept (it would
+  // fill the storage): a chat reopened tells the model the attachment is
+  // gone, as a long chat already does. A document's text is kept, unless
+  // this browser's storage has no room for it.
   const CHATS_STORAGE = "eullm.chats";
   const MAX_CHATS = 50;
-  let chats = [];
-  let currentChatId = null;
-  try {
-    const saved = JSON.parse(localStorage.getItem(CHATS_STORAGE) || "[]");
-    if (Array.isArray(saved)) chats = saved.filter((c) => c && c.id && Array.isArray(c.turns));
-  } catch {}
+  // localStorage holds about 5 MB per site: past this, a chat keeps its
+  // documents' names and not their text.
+  const LOCAL_DOCUMENT_CHARS = 400_000;
 
-  function storeChats() {
-    // A full storage drops the oldest chats until the rest fit.
-    for (;;) {
-      try {
-        localStorage.setItem(CHATS_STORAGE, JSON.stringify(chats));
-        return;
-      } catch {
-        if (chats.length <= 1) return;
-        chats.pop();
+  function readBrowserChats() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CHATS_STORAGE) || "[]");
+      if (Array.isArray(saved)) return saved.filter((c) => c && c.id && Array.isArray(c.turns));
+    } catch {}
+    return [];
+  }
+
+  const browserStore = (() => {
+    let all = readBrowserChats();
+    const write = () => {
+      // A full storage drops the oldest chats until the rest fit.
+      for (;;) {
+        try {
+          localStorage.setItem(CHATS_STORAGE, JSON.stringify(all));
+          return;
+        } catch {
+          if (all.length <= 1) return;
+          all.pop();
+        }
       }
+    };
+    const summary = ({ id, title, model, updated }) => ({ id, title, model, updated });
+    const lighten = (chat) => {
+      const chars = chat.turns.reduce(
+        (n, t) => n + (t.documents || []).reduce((m, d) => m + (d.text ? d.text.length : 0), 0), 0);
+      if (chars <= LOCAL_DOCUMENT_CHARS) return chat;
+      return {
+        ...chat,
+        turns: chat.turns.map((t) => t.documents
+          ? { ...t, documents: t.documents.map(({ text, ...rest }) => rest) }
+          : t),
+      };
+    };
+    return {
+      describe: "Chats are kept in this browser only. The bin deletes this one.",
+      async list() { return all.map(summary); },
+      async get(id) { return all.find((c) => c.id === id) || null; },
+      async put(chat) {
+        all = [lighten(chat), ...all.filter((c) => c.id !== chat.id)].slice(0, MAX_CHATS);
+        write();
+      },
+      async remove(id) { all = all.filter((c) => c.id !== id); write(); },
+      async search(q) {
+        const needle = q.toLowerCase();
+        const out = [];
+        for (const c of all) {
+          if (c.title.toLowerCase().includes(needle)) { out.push({ ...summary(c), hit: "" }); continue; }
+          const turn = c.turns.find((t) => typeof t.content === "string" && t.content.toLowerCase().includes(needle));
+          if (turn) out.push({ ...summary(c), hit: snippet(turn.content, needle) });
+        }
+        return out;
+      },
+      clear() { all = []; write(); },
+    };
+  })();
+
+  // A few words around the first match, for a search result.
+  function snippet(text, needle) {
+    const at = text.toLowerCase().indexOf(needle);
+    if (at < 0) return "";
+    const start = Math.max(0, at - 30);
+    const line = text.slice(start, at + needle.length + 50).replace(/\s+/g, " ").trim();
+    return `${start > 0 ? "…" : ""}${line}…`;
+  }
+
+  let chatStore = browserStore;
+  let chats = []; // summaries, newest first
+  let currentChatId = null;
+  let searchResults = null; // null: no search; else the matches
+
+  function storeFailed(err) {
+    console.warn("chat store:", err);
+    els.composerHint.textContent = "This chat could not be saved: " + (err?.message || err);
+  }
+
+  async function reloadChats() {
+    try {
+      chats = (await chatStore.list()) || [];
+    } catch (err) {
+      chats = [];
+      storeFailed(err);
     }
+    renderChatList();
   }
 
   function chatTitle(turns) {
     const first = turns.find((t) => t.role === "user" && t.content.trim());
-    if (!first) return "New chat";
+    if (!first) {
+      const doc = turns.find((t) => t.role === "user" && t.documents?.length);
+      return doc ? doc.documents[0].name : "New chat";
+    }
     const line = first.content.trim().split("\n")[0];
     return line.length > 60 ? `${line.slice(0, 57)}…` : line;
   }
 
-  function saveChat() {
-    if (!history.length) return;
-    if (!currentChatId) currentChatId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-    const turns = history.map((t) => {
+  function chatTurns() {
+    return history.map((t) => {
       const kept = { role: t.role, content: t.content };
       if (t.model) kept.model = t.model;
       if (t.meta) kept.meta = t.meta;
       if (t.switchFrom) kept.switchFrom = t.switchFrom;
       if (t.media) kept.media = { kind: t.media.kind, failed: true };
+      if (t.documents) kept.documents = t.documents.map((d) => ({ ...d }));
       return kept;
     });
+  }
+
+  function saveChat() {
+    if (!history.length) return;
+    if (!currentChatId) currentChatId = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+    const turns = chatTurns();
     const chat = { id: currentChatId, title: chatTitle(turns), model: currentModel, updated: Date.now(), turns };
-    chats = [chat, ...chats.filter((c) => c.id !== currentChatId)].slice(0, MAX_CHATS);
-    storeChats();
+    const { id, title, model, updated } = chat;
+    chats = [{ id, title, model, updated }, ...chats.filter((c) => c.id !== currentChatId)];
+    if (chatStore === browserStore) chats = chats.slice(0, MAX_CHATS);
+    els.composerHint.textContent = chatStore.describe || "";
+    Promise.resolve()
+      .then(() => chatStore.put(chat))
+      .catch(storeFailed);
     renderChatList();
   }
 
   function renderChatList() {
     els.chatList.innerHTML = "";
-    if (!chats.length) {
+    const list = searchResults ?? chats;
+    if (!list.length) {
       const li = document.createElement("li");
       li.className = "chat-empty";
-      li.textContent = "No chats yet";
+      li.textContent = searchResults ? "No chat matches" : "No chats yet";
       els.chatList.appendChild(li);
       return;
     }
-    for (const c of chats) {
+    for (const c of list) {
       const li = document.createElement("li");
       li.className = "chat-item" + (c.id === currentChatId ? " active" : "");
       const open = document.createElement("button");
       open.type = "button";
       open.className = "chat-open";
       open.textContent = c.title;
+      if (c.hit) {
+        const hit = document.createElement("span");
+        hit.className = "chat-hit";
+        hit.textContent = c.hit;
+        open.appendChild(hit);
+      }
       open.title = `${c.title}\n${c.model || ""} · ${new Date(c.updated).toLocaleString()}`;
       if (c.id === currentChatId) open.setAttribute("aria-current", "true");
       open.addEventListener("click", () => openChat(c.id));
@@ -1792,12 +2152,46 @@
       del.textContent = "×";
       del.addEventListener("click", (e) => {
         e.stopPropagation();
-        if (confirm(`Delete "${c.title}"? It is removed from this browser.`)) deleteChat(c.id);
+        if (confirm(`Delete "${c.title}"? It cannot be recovered.`)) deleteChat(c.id);
       });
       li.append(open, del);
       els.chatList.appendChild(li);
     }
   }
+
+  // Search: titles and text, as the store finds them.
+  let searchSeqChats = 0;
+  let chatSearchTimer = null;
+  els.chatSearch.addEventListener("input", () => {
+    clearTimeout(chatSearchTimer);
+    chatSearchTimer = setTimeout(async () => {
+      const q = els.chatSearch.value.trim();
+      const seq = ++searchSeqChats;
+      if (!q) {
+        searchResults = null;
+      } else if (chatStore.search) {
+        try {
+          const found = await chatStore.search(q);
+          if (seq !== searchSeqChats) return;
+          searchResults = found || [];
+        } catch (err) {
+          storeFailed(err);
+          return;
+        }
+      } else {
+        const needle = q.toLowerCase();
+        searchResults = chats.filter((c) => c.title.toLowerCase().includes(needle));
+      }
+      renderChatList();
+    }, 200);
+  });
+  els.chatSearch.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && els.chatSearch.value) {
+      e.stopPropagation();
+      els.chatSearch.value = "";
+      els.chatSearch.dispatchEvent(new Event("input"));
+    }
+  });
 
   function resetChat() {
     abortController?.abort();
@@ -1814,18 +2208,33 @@
     showView("chat");
   }
 
-  function deleteChat(id) {
+  async function deleteChat(id) {
     chats = chats.filter((c) => c.id !== id);
-    storeChats();
+    if (searchResults) searchResults = searchResults.filter((c) => c.id !== id);
     if (id === currentChatId) resetChat();
     renderChatList();
+    try {
+      await chatStore.remove(id);
+    } catch (err) {
+      storeFailed(err);
+    }
   }
 
-  function openChat(id) {
-    const chat = chats.find((c) => c.id === id);
+  async function openChat(id) {
+    let chat;
+    try {
+      chat = await chatStore.get(id);
+    } catch (err) {
+      storeFailed(err);
+      return;
+    }
     if (!chat) return;
+    showChat(chat);
+  }
+
+  function showChat(chat) {
     resetChat();
-    currentChatId = id;
+    currentChatId = chat.id;
     dismissWelcome();
     for (const t of chat.turns) {
       const turn = { ...t };
@@ -1839,7 +2248,9 @@
         continue;
       }
       if (t.role === "system") continue;
-      const { metaEl } = appendMessage(t.role, t.content, t.media ? { kind: "missing", label: t.media.kind } : null);
+      const { metaEl } = appendMessage(
+        t.role, t.content, t.media ? { kind: "missing", label: t.media.kind } : null,
+        t.documents || null, history.length - 1);
       if (t.role === "assistant" && t.meta) renderMeta(metaEl, { ...t.meta, answer: t.content });
       else if (t.role === "assistant" && t.model) metaEl.innerHTML = `<span>${escapeHtml(t.model)}</span>`;
     }
@@ -1848,10 +2259,101 @@
       currentModel = chat.model;
       els.modelSelect.value = chat.model;
     }
+    refreshTurnActions();
     renderChatList();
     showView("chat");
     scrollToBottom(true);
   }
+
+  // ── Export and import ────────────────────────────────────────────────
+  function download(name, type, text) {
+    const url = URL.createObjectURL(new Blob([text], { type }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function fileSlug(title) {
+    return (title || "chat").normalize("NFKD").replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 60) || "chat";
+  }
+
+  function chatMarkdown(title, turns) {
+    const lines = [`# ${title}`, ""];
+    for (const t of turns) {
+      if (t.role === "system") continue;
+      const who = t.role === "user" ? "You" : `Assistant${t.model ? ` (${t.model})` : ""}`;
+      lines.push(`## ${who}`, "");
+      for (const d of t.documents || []) lines.push(`> 📄 ${d.name}`, "");
+      if (t.media) lines.push(`> ${t.media.kind === "audio" ? "🎵 audio" : "🖼 image"} attached`, "");
+      lines.push(stripThink(t.content) || t.content, "");
+    }
+    return lines.join("\n");
+  }
+
+  els.exportMenu.querySelectorAll("[data-format]").forEach((b) =>
+    b.addEventListener("click", () => {
+      els.exportMenu.open = false;
+      if (!history.length) return;
+      const turns = chatTurns();
+      const title = chatTitle(turns);
+      const stamp = new Date().toISOString().slice(0, 10);
+      if (b.dataset.format === "md") {
+        download(`${fileSlug(title)}-${stamp}.md`, "text/markdown", chatMarkdown(title, turns));
+      } else {
+        const chat = { eullm_chat: 1, title, model: currentModel, exported: new Date().toISOString(), turns };
+        download(`${fileSlug(title)}-${stamp}.json`, "application/json", JSON.stringify(chat, null, 2));
+      }
+    }));
+  document.addEventListener("click", (e) => {
+    if (els.exportMenu.open && !els.exportMenu.contains(e.target)) els.exportMenu.open = false;
+  });
+
+  els.importBtn.addEventListener("click", () => els.importInput.click());
+  els.importInput.addEventListener("change", async () => {
+    const file = els.importInput.files?.[0];
+    els.importInput.value = "";
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (!data || !Array.isArray(data.turns)) throw new Error("this is not a chat exported from EuLLM");
+      const turns = data.turns
+        .filter((t) => t && ["user", "assistant", "system"].includes(t.role) && typeof t.content === "string")
+        .map((t) => {
+          const kept = { role: t.role, content: t.content };
+          if (typeof t.model === "string") kept.model = t.model;
+          if (t.meta && typeof t.meta === "object") kept.meta = t.meta;
+          if (typeof t.switchFrom === "string") kept.switchFrom = t.switchFrom;
+          if (t.media) kept.media = { kind: t.media.kind === "audio" ? "audio" : "image", failed: true };
+          if (Array.isArray(t.documents)) {
+            kept.documents = t.documents
+              .filter((d) => d && typeof d.name === "string")
+              .map((d) => ({
+                name: d.name, kind: String(d.kind || ""), text: typeof d.text === "string" ? d.text : "",
+                chars: d.chars, tokens: d.tokens, parts: d.parts,
+              }));
+          }
+          return kept;
+        });
+      if (!turns.length) throw new Error("the chat has no messages");
+      const chat = {
+        id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        title: typeof data.title === "string" && data.title.trim() ? data.title.trim().slice(0, 80) : chatTitle(turns),
+        model: typeof data.model === "string" ? data.model : "",
+        updated: Date.now(),
+        turns,
+      };
+      await chatStore.put(chat);
+      const { id, title, model, updated } = chat;
+      chats = [{ id, title, model, updated }, ...chats];
+      showChat(chat);
+    } catch (err) {
+      alert(`Could not import this file: ${err.message}`);
+    }
+  });
 
   els.newChat.addEventListener("click", newChat);
 
@@ -2449,7 +2951,7 @@
     if (v?.api_port) window.__eullm_api_port = v.api_port;
     if (v?.version && els.sideVersion) els.sideVersion.textContent = `EuLLM Engine ${v.version}`;
     await loadModels();
-    renderChatList();
+    await reloadChats();
   }
 
   init();

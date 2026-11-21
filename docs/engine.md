@@ -1794,6 +1794,55 @@ curl -N http://localhost:11434/api/chat \
   }'
 ```
 
+#### Documents in a conversation
+
+The chat in the browser attaches documents: PDF, Word (`.docx`),
+LibreOffice (`.odt`, `.odp`, `.ods`), PowerPoint (`.pptx`), Excel (`.xlsx`,
+`.xls`) and anything that is text (`.txt`, `.md`, `.csv`, `.json`, `.html`,
+source code). Several at once, beside an image or an audio clip, by the 📎
+button or by dropping them on the chat. Any client can do the same with two
+EuLLM extensions:
+
+1. `POST /api/documents/extract?name=<file name>`, with the file as the body,
+   returns its text:
+
+   ```bash
+   curl -X POST --data-binary @contratto.pdf \
+     "http://localhost:11434/api/documents/extract?name=contratto.pdf"
+   # {"name":"contratto.pdf","kind":"pdf","text":"[Page 1]\n…","chars":32582,
+   #  "tokens":10860,"parts":16,"truncated":false}
+   ```
+
+   `parts` is the pages of a PDF, the slides of a presentation, the sheets
+   of a spreadsheet; `tokens` an estimate of what the whole text takes. A
+   spreadsheet comes back as one Markdown table per sheet, which models read
+   far better than tab-separated rows. A scanned PDF has no text and is
+   refused with that reason (attach its pages as images instead), as are the
+   old binary `.doc` and `.ppt`. Files up to 48 MB; nothing is kept on the
+   server.
+
+2. A chat message carries the text in `documents`, on `/api/chat` and
+   `/v1/chat/completions` alike:
+
+   ```json
+   {"role": "user", "content": "Quanto è il rimborso chilometrico?",
+    "documents": [{"name": "regolamento.pdf", "text": "…"}]}
+   ```
+
+   The engine writes each document into the text of its message, as
+   `<document name="…">…</document>` ahead of what the message says. Send
+   the documents again with every turn, on the message they came with, as
+   the chat does: a follow-up question still has the document it is about.
+
+When the documents of a conversation do not all fit the context left after
+the conversation itself, the room is shared: a short document goes whole,
+and of a long one the passages that best match the newest question (scored
+with BM25, about a page each), in their order, with `[…]` where text was left
+out and a line telling the model so. A 16-page regulation asked about one
+article in an 8k context keeps that article. A document with no room at all
+is replaced by a note saying it is attached but does not fit. Ollama clients
+never send `documents`, and get the chat they always had.
+
 #### `GET /api/ps`
 
 The models in memory, in Ollama's shape: every generation model, the most
@@ -2556,6 +2605,15 @@ fn main() {
   Chat, Model hub, Monitor and About with `window.eullm.addView({name, title,
   icon, node})`, switch to it with `window.eullm.showView(name)`, and send
   the page's API key on its own requests with `window.eullm.headers()`.
+- The chat keeps its conversations in the browser's own storage. A script
+  can keep them elsewhere, on its server for the person signed in, with
+  `window.eullm.setChatStore(store)`, where `store` has `list()` (each
+  chat's `{id, title, model, updated}`, newest first), `get(id)` (the chat
+  with its `turns`), `put(chat)`, `remove(id)`, optionally `search(q)`
+  (`{id, title, model, updated, hit}`, `hit` a few words around the match)
+  and `describe` (the line under the composer), the functions returning
+  promises. `window.eullm.browserChats()` and `clearBrowserChats()` read and
+  empty what the browser kept, to move it into the new store.
 - `eullm_engine::extensions::axum` is the axum the routers are made with;
   `build_info()` gives the engine's version and commit for the
   distribution's own `--version`.
