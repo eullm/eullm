@@ -13,10 +13,13 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.9.30 — 2026-11-22
 
 ### Added
 - **EuLLM Pro in the administrator's menu.** The sidebar lists the pages the Pro edition adds (People and access, AI Act compliance, Assistants for groups, Budgets and alerts), each saying what it does and what this engine does instead, with an example and a link to eullm.eu; and a line, which can be closed for good, where the engine meets a real limit: an API key everyone shares, requests that do not say who sent them. Only the administrator sees them: on a server with `EULLM_ADMIN_KEY`, only once the page holds the key. Nothing changes in the chat. `EULLM_NO_PRO_HINTS=1` turns all of it off, for whoever redistributes the engine.
+
+### Fixed
+- **The chat opens in a browser when API keys are on** (`EULLM_API_KEYS`): `http://<host>:11435/?api_key=<secret>`. Until 0.9.20 the page's scripts and styles were refused for lack of a key (a browser sends none when it fetches them), and the page stopped as soon as it read the key from the address, so the chat could not be used on a server with keys. The page's own files are now served without a key on the chat's port; everything the page reads, and the API port, still needs one.
 
 ## 0.9.20 — 2026-11-21
 

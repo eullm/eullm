@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "eullm-engine"
-version = "0.9.20"
+version = "0.9.30"
 dependencies = [
  "anstyle-query",
  "assert_cmd",
