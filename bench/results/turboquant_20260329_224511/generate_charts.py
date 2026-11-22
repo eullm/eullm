@@ -127,7 +127,7 @@ ax.grid(axis="y", alpha=0.3)
 ax.set_axisbelow(True)
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "chart_throughput.png"), dpi=150)
-print(f"  Saved: chart_throughput.png")
+print("  Saved: chart_throughput.png")
 
 # ── Chart 2: TTFT by concurrency ────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ ax.grid(axis="y", alpha=0.3)
 ax.set_axisbelow(True)
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "chart_ttft.png"), dpi=150)
-print(f"  Saved: chart_ttft.png")
+print("  Saved: chart_ttft.png")
 
 # ── Chart 3: Context capacity (bar chart) ───────────────────────────────────
 
@@ -181,7 +181,7 @@ ax.axhline(y=16*1024/1024, color="red", linestyle="--", alpha=0.0)  # invisible,
 
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "chart_context_capacity.png"), dpi=150)
-print(f"  Saved: chart_context_capacity.png")
+print("  Saved: chart_context_capacity.png")
 
 # ── Chart 4: Per-request tok/s at concurrency=4 ─────────────────────────────
 
@@ -202,7 +202,7 @@ ax.grid(axis="y", alpha=0.3)
 ax.set_axisbelow(True)
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "chart_per_request_speed.png"), dpi=150)
-print(f"  Saved: chart_per_request_speed.png")
+print("  Saved: chart_per_request_speed.png")
 
 print()
 print(f"All charts saved to: {OUTPUT_DIR}")
