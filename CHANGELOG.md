@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Fixed
+- **`--no-flash-attn` with a quantized value cache** (`--cache-type-v q4_0`, `q8_0`…): llama.cpp refuses that combination, and the engine found out only when the context failed, then fell back to f16 for the key cache too and still showed the quantized types and their memory in the startup summary. Now the value cache is f16 from the start, the key cache keeps the type asked for, and a line says so; the summary shows the types the context really uses, also after a fallback because the GPU would not allocate a quantized cache. It also says `off (--no-flash-attn)` instead of `disabled (auto-detect)`.
+
 ## 0.9.30 — 2026-11-22
 
 ### Added
