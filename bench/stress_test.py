@@ -338,7 +338,7 @@ def print_timeline(results: list[RequestResult], wall_start: float):
 
     print(f"         {''.ljust(width)}")
     print(f"         0{''.ljust(width - 6)}{duration * 1000:.0f}ms")
-    print(f"         . = prefill/waiting    # = generating tokens")
+    print("         . = prefill/waiting    # = generating tokens")
 
 
 def print_verdict(overlap: dict, interleaving: dict, label: str):
@@ -350,7 +350,7 @@ def print_verdict(overlap: dict, interleaving: dict, label: str):
         pct = overlap["overlap_ratio"] * 100
         print(f"    Overlap:      YES — {overlap['overlapping_pairs']}/{overlap['total_pairs']} pairs overlap ({pct:.0f}%)")
     else:
-        print(f"    Overlap:      NO  — requests appear sequential")
+        print("    Overlap:      NO  — requests appear sequential")
 
     # Interleaving verdict
     if interleaving.get("is_interleaved"):
@@ -359,7 +359,7 @@ def print_verdict(overlap: dict, interleaving: dict, label: str):
         print(f"                  (expected sequential: {interleaving['expected_sequential']}, "
               f"parallel: {interleaving['expected_parallel']}, actual: {interleaving['transitions']})")
     else:
-        print(f"    Interleaving: NO  — tokens arrive in sequence, not interleaved")
+        print("    Interleaving: NO  — tokens arrive in sequence, not interleaved")
         if "transitions" in interleaving:
             print(f"                  (transitions: {interleaving['transitions']}, "
                   f"expected sequential: {interleaving['expected_sequential']}, "
@@ -368,11 +368,11 @@ def print_verdict(overlap: dict, interleaving: dict, label: str):
     # Final verdict
     is_truly_parallel = overlap.get("is_parallel", False) and interleaving.get("is_interleaved", False)
     if is_truly_parallel:
-        print(f"    VERDICT:      REAL PARALLEL PROCESSING")
+        print("    VERDICT:      REAL PARALLEL PROCESSING")
     elif overlap.get("is_parallel"):
-        print(f"    VERDICT:      PARTIALLY PARALLEL (overlap but no interleaving)")
+        print("    VERDICT:      PARTIALLY PARALLEL (overlap but no interleaving)")
     else:
-        print(f"    VERDICT:      SEQUENTIAL PROCESSING (no real parallelism)")
+        print("    VERDICT:      SEQUENTIAL PROCESSING (no real parallelism)")
 
 
 # ── Main benchmark loop ──────────────────────────────────────────────────────
@@ -507,11 +507,11 @@ async def main():
                     print(f"    req{r.request_id}: {r.error}")
 
             # Timeline visualization
-            print(f"\n  Timeline:")
+            print("\n  Timeline:")
             print_timeline(result.requests, result.wall_start)
 
             # Aggregate stats
-            print(f"\n  Summary:")
+            print("\n  Summary:")
             print(f"    Wall time:      {result.wall_ms:>8.0f} ms")
             print(f"    Total tokens:   {result.total_tokens:>8d}")
             print(f"    Throughput:     {result.aggregate_throughput:>8.1f} tok/s (aggregate)")
