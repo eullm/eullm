@@ -1106,6 +1106,42 @@ pub fn correct_kv_cache_for_flash_attn(
     }
 }
 
+/// A quantized value cache needs flash attention: llama.cpp refuses to build
+/// the context without it ("quantized V cache requires flash_attn to be
+/// enabled"). The scheduler then retried at F16/F16, so the key cache lost
+/// the quantization it could have kept, an ERROR line came first in the
+/// log, and the startup summary still showed the types asked for (a Jetson
+/// run with `--cache-type-k q4_0 --cache-type-v q4_0 --no-flash-attn`,
+/// reported on github.com, 22-11-2026). With flash attention off, the value
+/// cache is set to f16 before loading, and the key cache stays as asked:
+/// llama.cpp takes a quantized key without flash attention.
+///
+/// Returns `(effective_v, corrected)`.
+pub fn correct_kv_cache_v_for_no_flash_attn(
+    cache_type_v: KvCacheType,
+    flash_attn: bool,
+) -> (KvCacheType, bool) {
+    let unquantized = matches!(
+        cache_type_v,
+        KvCacheType::F16 | KvCacheType::F32 | KvCacheType::BF16 | KvCacheType::Unknown(_)
+    );
+    if !flash_attn && !unquantized {
+        (KvCacheType::F16, true)
+    } else {
+        (cache_type_v, false)
+    }
+}
+
+/// Print the explanation for a correction made by
+/// [`correct_kv_cache_v_for_no_flash_attn`].
+pub fn report_no_flash_attn_kv_correction(requested_v: KvCacheType) {
+    eprintln!(
+        "[EULLM] --cache-type-v {} needs flash attention, which --no-flash-attn turns off: \
+         the value cache is f16, the key cache stays as asked.",
+        cache_type_name(requested_v)
+    );
+}
+
 /// Print the explanation for a correction made by
 /// [`correct_kv_cache_for_flash_attn`].
 pub fn report_flash_attn_kv_correction(requested_k: KvCacheType) {
@@ -3751,6 +3787,22 @@ mod kv_cache_naming_tests {
             KvCacheType::Q5_1,
         ] {
             assert!(!is_four_bit(t), "{t:?} is not a 4-bit type");
+        }
+    }
+}
+
+#[cfg(test)]
+mod no_flash_attn_v_correction_tests {
+    use super::*;
+
+    #[test]
+    fn a_quantized_value_cache_becomes_f16_without_flash_attention() {
+        for v in [KvCacheType::Q4_0, KvCacheType::Q4_1, KvCacheType::Q5_0, KvCacheType::Q5_1, KvCacheType::Q8_0] {
+            assert_eq!(correct_kv_cache_v_for_no_flash_attn(v, false), (KvCacheType::F16, true), "{v:?}");
+            assert_eq!(correct_kv_cache_v_for_no_flash_attn(v, true), (v, false), "{v:?} with flash attention");
+        }
+        for v in [KvCacheType::F16, KvCacheType::F32] {
+            assert_eq!(correct_kv_cache_v_for_no_flash_attn(v, false), (v, false), "{v:?}");
         }
     }
 }

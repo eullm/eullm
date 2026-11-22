@@ -213,12 +213,14 @@ impl ModelBanner {
                 self.n_ctx_train
             );
         }
+        // On: llama.cpp's AUTO, used where the backend supports it. Off:
+        // --no-flash-attn, which is not detected but asked for.
         println!(
-            "  Flash attn:    {} (auto-detect)",
+            "  Flash attn:    {}",
             if self.flash_attn {
-                "enabled"
+                "auto (used where the backend supports it)"
             } else {
-                "disabled"
+                "off (--no-flash-attn)"
             }
         );
         let k_name = inference::cache_type_display(&self.cache_type_k);

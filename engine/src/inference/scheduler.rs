@@ -858,6 +858,10 @@ pub struct ModelReadyInfo {
     /// the micro-batch to an image's (see `run_scheduler_loop`).
     pub n_batch: Option<u32>,
     pub n_ubatch: Option<u32>,
+    /// The key and value cache types the context was built with, when they
+    /// differ from the ones asked for (the F16 retry after a quantized cache
+    /// would not allocate): the summary shows these.
+    pub kv_fallback: Option<(super::KvCacheType, super::KvCacheType)>,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -2341,6 +2345,7 @@ fn run_scheduler_loop(
         }
         (result, _) => result,
     };
+    let mut kv_fallback = None;
     let mut ctx = match first {
         Ok(c) => c,
         Err(e) => {
@@ -2366,7 +2371,14 @@ fn run_scheduler_loop(
                     .with_n_outputs_max(n_outputs_max);
 
                     match model.new_context(&backend, ctx_params) {
-                        Ok(c) => c,
+                        Ok(c) => {
+                            // From here on, what the context holds: the
+                            // memory estimate and the summary read these.
+                            config.cache_type_k = super::KvCacheType::F16;
+                            config.cache_type_v = super::KvCacheType::F16;
+                            kv_fallback = Some((super::KvCacheType::F16, super::KvCacheType::F16));
+                            c
+                        }
                         Err(e2) => {
                             let msg = format!(
                                 "Context allocation failed (likely out of VRAM): {e2}\n{hint}"
@@ -2533,6 +2545,7 @@ fn run_scheduler_loop(
 
     kv_info.n_batch = Some(ctx.n_batch());
     kv_info.n_ubatch = Some(ctx.n_ubatch());
+    kv_info.kv_fallback = kv_fallback;
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));

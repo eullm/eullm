@@ -1522,6 +1522,12 @@ pub async fn main() {
                 inference::report_flash_attn_kv_correction(ctk);
                 ctk = fa_k;
             }
+            let (no_fa_v, no_fa_corrected) =
+                inference::correct_kv_cache_v_for_no_flash_attn(ctv, !no_flash_attn);
+            if no_fa_corrected {
+                inference::report_no_flash_attn_kv_correction(ctv);
+                ctv = no_fa_v;
+            }
             if cpu_moe && n_cpu_moe > 0 {
                 eprintln!("Error: --cpu-moe and --n-cpu-moe are mutually exclusive.");
                 eprintln!(
@@ -1699,6 +1705,14 @@ pub async fn main() {
                     inference::report_flash_attn_kv_correction(ctk);
                 }
                 (k, corrected)
+            };
+            let ctv = {
+                let (v, corrected) =
+                    inference::correct_kv_cache_v_for_no_flash_attn(ctv, !no_flash_attn);
+                if corrected {
+                    inference::report_no_flash_attn_kv_correction(ctv);
+                }
+                v
             };
             let ui_port_opt = if no_ui { None } else { Some(ui_port) };
             cmd_serve(
@@ -3227,6 +3241,8 @@ async fn cmd_run(
     let mut n_ctx_train: u32 = 0;
     let mut kv_k_mib: f64 = 0.0;
     let mut kv_v_mib: f64 = 0.0;
+    // The cache types the context was built with, when not those asked for.
+    let mut kv_fallback = None;
 
     let resolved_threads = threads.unwrap_or_else(inference::default_thread_count);
 
@@ -3912,6 +3928,7 @@ async fn cmd_run(
                     n_ctx_train = model_info.n_ctx_train;
                     kv_k_mib = model_info.kv_k_mib;
                     kv_v_mib = model_info.kv_v_mib;
+                    kv_fallback = model_info.kv_fallback;
                     // What the context was built with, for the banner.
                     n_batch = model_info.n_batch.unwrap_or(n_batch);
                     n_ubatch = model_info.n_ubatch.unwrap_or(n_ubatch);
@@ -3996,8 +4013,8 @@ async fn cmd_run(
             ctx_size,
             n_ctx_train,
             flash_attn,
-            cache_type_k,
-            cache_type_v,
+            cache_type_k: kv_fallback.map_or(cache_type_k, |(k, _)| k),
+            cache_type_v: kv_fallback.map_or(cache_type_v, |(_, v)| v),
             kv_k_mib,
             kv_v_mib,
             web,
