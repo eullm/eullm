@@ -37,6 +37,7 @@ import json
 import statistics
 import sys
 import time
+from pathlib import Path
 
 try:
     import aiohttp
@@ -87,7 +88,7 @@ class PowerSampler:
         if not self.sysfs_path:
             return False
         try:
-            with open(self.sysfs_path, encoding="utf-8") as f:
+            with Path(self.sysfs_path).open(encoding="utf-8") as f:
                 f.read()
             return True
         except OSError:
@@ -96,7 +97,7 @@ class PowerSampler:
     async def _run(self):
         while not self._stop:
             try:
-                with open(self.sysfs_path, encoding="utf-8") as f:
+                with Path(self.sysfs_path).open(encoding="utf-8") as f:
                     raw = float(f.read().strip())
                 self.samples.append(raw * self.scale_to_watts)
             except (OSError, ValueError):
@@ -256,7 +257,7 @@ async def main_async(args):
             "decode_tok_s_avg": avg_decode_tok_s,
             "power_watts_avg": avg_watts,
         }
-        with open(args.json, "w", encoding="utf-8") as f:
+        with Path(args.json).open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
         print(f"\nWrote {args.json}")
 
