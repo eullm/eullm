@@ -3684,7 +3684,10 @@ async fn enforce_ip_allowlist(
         .extensions()
         .get::<Identity>()
         .is_some_and(Identity::is_authenticated);
-    if authenticated || state.ip_allowlist.is_allowed(addr.ip()) {
+    // The chat page's own files, let through without a key (see
+    // `enforce_auth`): whoever has a key may be anywhere.
+    let page_file = req.extensions().get::<PageFile>().is_some();
+    if authenticated || page_file || state.ip_allowlist.is_allowed(addr.ip()) {
         next.run(req).await
     } else {
         tracing::warn!("Rejected request from disallowed IP {}", addr.ip());
@@ -3714,6 +3717,12 @@ async fn enforce_ip_allowlist(
 /// a header on every subsequent fetch). It is deliberately **not** accepted on
 /// the API listener: a token in a URL ends up in proxy logs, browser history
 /// and `Referer` headers, and no programmatic client needs it.
+/// Marks a request for one of the chat page's own files that `enforce_auth`
+/// let through without a key, for `enforce_ip_allowlist` to let through too.
+/// A request extension: only this process sets it.
+#[derive(Clone, Copy)]
+struct PageFile;
+
 async fn enforce_auth(
     State((state, allow_query_token)): State<(Arc<AppState>, bool)>,
     mut req: axum::extract::Request,
@@ -3730,6 +3739,21 @@ async fn enforce_auth(
         return next.run(req).await;
     }
     let presented = extract_token(&req, allow_query_token);
+    // With API keys on, the chat page's own files (its HTML, scripts, styles
+    // and logos: the same for everyone, no data in them) are served without
+    // one, on the chat's listener only. A browser sends no header when it
+    // fetches a script or a stylesheet, so asking for the key there left the
+    // page without them (0.9.20 and earlier). Everything the page reads,
+    // `/api` and `/v1`, still needs the key. GET and HEAD only.
+    if allow_query_token
+        && presented.is_none()
+        && state.api_keys.is_enabled()
+        && matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD)
+        && crate::ui::is_page_file(req.uri().path())
+    {
+        req.extensions_mut().insert(PageFile);
+        return next.run(req).await;
+    }
     // `/v1/systemone` refusals, and its feedback's, carry the body its
     // clients parse (see `systemone::ApiError`); every other endpoint keeps
     // the one it had.
@@ -4686,6 +4710,40 @@ mod http_tests {
         let (status, body) = get_json(&format!("{base}/api/tags")).await;
         assert_eq!(status, 401);
         assert!(body["error"].is_string(), "{body}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// With API keys on, the chat's listener serves the page's own files
+    /// without a key (a browser cannot send one for a script), and nothing
+    /// else: the API beside them, and the API listener, still need it.
+    #[tokio::test]
+    async fn with_api_keys_the_chat_page_loads_and_its_api_still_needs_the_key() {
+        let tmp = std::env::temp_dir().join(format!("eullm-page-files-{}", uuid::Uuid::new_v4()));
+        let keys = auth::ApiKeys::from_spec("ci:0123456789abcdef01").expect("keys");
+        let state = Arc::new(AppState::for_tests(ModelStore::at(tmp.clone()), keys));
+        let ui = spawn_app(ui_router(state.clone())).await;
+        let client = reqwest::Client::new();
+        for path in crate::ui::PAGE_FILES {
+            let r = client.get(format!("{ui}{path}")).send().await.unwrap();
+            assert_eq!(r.status(), 200, "{path}");
+        }
+        let (status, _) = get_json(&format!("{ui}/api/tags")).await;
+        assert_eq!(status, 401, "the API beside the page");
+        let (status, _) = get_json(&format!("{ui}/api/about")).await;
+        assert_eq!(status, 401);
+        let r = client
+            .get(format!("{ui}/api/tags"))
+            .header("X-Api-Key", "0123456789abcdef01")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(r.status(), 200, "with the key");
+        let r = client.post(format!("{ui}/")).send().await.unwrap();
+        assert_ne!(r.status(), 200, "a POST to a page file is no GET");
+        // The API listener has no page: nothing there is let through.
+        let api = spawn_app(api_router(state)).await;
+        let r = client.get(format!("{api}/eullm-ui/app.js")).send().await.unwrap();
+        assert_eq!(r.status(), 401);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

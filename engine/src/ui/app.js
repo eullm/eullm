@@ -21,7 +21,9 @@
     if (fromUrl) {
       try { sessionStorage.setItem(API_KEY_STORAGE, fromUrl); } catch {}
       const clean = location.pathname + location.hash;
-      history.replaceState(null, "", clean);
+      // window.history: `history` below is this page's conversation, and
+      // naming it here, before that declaration, throws and stops the page.
+      window.history.replaceState(null, "", clean);
       return fromUrl;
     }
     try { return sessionStorage.getItem(API_KEY_STORAGE) || ""; } catch { return ""; }
