@@ -20,6 +20,7 @@ something changed, less so for understanding what it means.
 
 ### Fixed
 - **The chat opens in a browser when API keys are on** (`EULLM_API_KEYS`): `http://<host>:11435/?api_key=<secret>`. Until 0.9.20 the page's scripts and styles were refused for lack of a key (a browser sends none when it fetches them), and the page stopped as soon as it read the key from the address, so the chat could not be used on a server with keys. The page's own files are now served without a key on the chat's port; everything the page reads, and the API port, still needs one.
+- `url` 2.5.9, for RUSTSEC-2026-0592 (a crafted `blob:` address could crash a program reading its origin).
 
 ## 0.9.20 — 2026-11-21
 
