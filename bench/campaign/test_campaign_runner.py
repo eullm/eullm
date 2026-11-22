@@ -169,7 +169,7 @@ def test_backfill_does_not_delay_a_waiting_wide_point(tmp_path, engine):
     busy = campaign.Running({"id": "x"}, [0, 1], [0, 1], 0, None, now + 1000)
     r.running["x"] = busy
     r.free -= {0, 1}
-    p, use, reserved, duration = r.plan_next(now, todo)
+    p, use, _reserved, _duration = r.plan_next(now, todo)
     assert p["group"] == "short" and use == [2]
 
 
@@ -668,7 +668,7 @@ def test_a_given_up_device_keeps_its_slot_so_pairs_stay_on_one_module(tmp_path, 
     assert r.devices == list(range(8)) and r.lost == {0} and not r.quarantined
     assert 0 not in r.free
     pair = normalize({"kind": "throughput", "model": "m", "gcds": 2, "batch": 1})
-    used, reserved = r.devices_for(pair)
+    _used, reserved = r.devices_for(pair)
     assert reserved == [2, 3]
     phys = [r.physical[d] for d in reserved]
     assert {NUMA_OF_GCD[p] for p in phys} == {"1"}
