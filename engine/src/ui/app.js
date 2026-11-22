@@ -1289,11 +1289,7 @@
       // one to /v1/chat/completions (OpenAI SSE). For the same text both
       // render the same prompt.
       const ndjson = messagesToSend.some((m) => m.images);
-      const resp = await fetch(ndjson ? "/api/chat" : "/v1/chat/completions", withAuth({
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: abortController.signal,
-        body: JSON.stringify({
+      let requestBody = {
           model: currentModel,
           messages: messagesToSend,
           stream: true,
@@ -1310,7 +1306,18 @@
           // out, so switching thinking off did nothing on a turn with a
           // picture in it.
           think: settings.think,
-        }),
+      };
+      // A program building on the engine may add to the request (see
+      // window.eullm.addRequestHook); a hook that fails is skipped.
+      for (const hook of requestHooks) {
+        try { requestBody = hook(requestBody, { chatId: currentChatId }) || requestBody; }
+        catch (err) { console.warn("request hook:", err); }
+      }
+      const resp = await fetch(ndjson ? "/api/chat" : "/v1/chat/completions", withAuth({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: abortController.signal,
+        body: JSON.stringify(requestBody),
       }));
 
       if (!resp.ok) {
@@ -1926,6 +1933,12 @@
   // need, and where chats are kept (see "Where chats are kept" below).
   // Nothing else of this page is promised to stay as it is.
   window.eullm = Object.freeze({
+    // fn(body, {chatId}) → the body to send, for every chat request.
+    addRequestHook(fn) {
+      if (typeof fn !== "function") return false;
+      requestHooks.push(fn);
+      return true;
+    },
     setChatStore(store) {
       const needed = ["list", "get", "put", "remove"];
       if (!store || needed.some((k) => typeof store[k] !== "function")) return false;
@@ -1989,6 +2002,7 @@
   // fill the storage): a chat reopened tells the model the attachment is
   // gone, as a long chat already does. A document's text is kept, unless
   // this browser's storage has no room for it.
+  const requestHooks = [];
   const CHATS_STORAGE = "eullm.chats";
   const MAX_CHATS = 50;
   // localStorage holds about 5 MB per site: past this, a chat keeps its
@@ -2200,6 +2214,7 @@
     clearAttachment();
     els.messages.innerHTML = WELCOME_HTML;
     updateStatus(loadedModelEntry());
+    document.dispatchEvent(new CustomEvent("eullm:chat", { detail: { id: null } }));
   }
 
   function newChat() {
@@ -2263,6 +2278,7 @@
     renderChatList();
     showView("chat");
     scrollToBottom(true);
+    document.dispatchEvent(new CustomEvent("eullm:chat", { detail: { id: chat.id, chat } }));
   }
 
   // ── Export and import ────────────────────────────────────────────────

@@ -2614,9 +2614,16 @@ fn main() {
   and `describe` (the line under the composer), the functions returning
   promises. `window.eullm.browserChats()` and `clearBrowserChats()` read and
   empty what the browser kept, to move it into the new store.
+- `window.eullm.addRequestHook(fn)` lets the script change each chat
+  request before it is sent: `fn(body, {chatId})` returns the body (to add
+  a field its own server reads, say). The page fires `eullm:chat` on the
+  document when a chat is opened (`detail: {id, chat}`) or a new one begun
+  (`detail: {id: null}`).
 - `eullm_engine::extensions::axum` is the axum the routers are made with;
   `build_info()` gives the engine's version and commit for the
-  distribution's own `--version`.
+  distribution's own `--version`; `monitor_latest()` gives the Monitor's
+  latest sample (as `GET /api/monitor` has it), for the distribution's own
+  alerts.
 - Depend on the engine at an exact commit (`git = "...", rev = "<sha>"`)
   and commit `Cargo.lock`: the library's interface follows the engine's
   releases, with no promise of stability between them.
