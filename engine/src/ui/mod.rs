@@ -29,6 +29,29 @@ const LOGO_DARK_PNG: &[u8] = include_bytes!("eullm-logo-dark.png");
 const LOGO_LIGHT_PNG: &[u8] = include_bytes!("eullm-logo-light.png");
 const FAVICON_ICO: &[u8] = include_bytes!("favicon.ico");
 
+/// The page's own files, every route of [`router`]: the same for everyone,
+/// they hold no data (the models, chats and settings all come from `/api`
+/// and `/v1`). With API keys on, the chat's listener serves them without
+/// one, since a browser fetching a script or a stylesheet cannot send a
+/// header, and the page could not otherwise load (`api::enforce_auth`).
+pub(crate) const PAGE_FILES: &[&str] = &[
+    "/",
+    "/eullm-ui/style.css",
+    "/eullm-ui/app.js",
+    "/eullm-ui/monitor.js",
+    "/eullm-ui/about.js",
+    "/eullm-ui/pro.js",
+    "/eullm-ui/extension.js",
+    "/eullm-ui/logo-dark.png",
+    "/eullm-ui/logo-light.png",
+    "/favicon.ico",
+];
+
+/// Whether `path` is one of [`PAGE_FILES`], exactly.
+pub(crate) fn is_page_file(path: &str) -> bool {
+    PAGE_FILES.contains(&path)
+}
+
 /// Build the UI sub-router. Mount at `/` on the top-level router.
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
@@ -239,6 +262,32 @@ mod tests {
         // A program with its own script on the page: its menu, not ours.
         assert!(!ProHints::resolve(None, true).shown);
         assert!(!ProHints::resolve(Some(("0", "environment")), true).shown);
+    }
+
+    /// Every route the router serves is in `PAGE_FILES`, and nothing else:
+    /// a path added to one and not the other is either a page file that
+    /// needs a key, or a key-free path that serves nothing.
+    #[tokio::test]
+    async fn page_files_are_exactly_the_routes() {
+        let base = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let _ = axum::serve(listener, router::<()>()).await;
+            });
+            format!("http://{addr}")
+        };
+        for path in PAGE_FILES {
+            let r = reqwest::get(format!("{base}{path}")).await.unwrap();
+            assert_eq!(r.status(), 200, "{path}");
+        }
+        let source = include_str!("mod.rs");
+        let routes = source.matches(".route(\"").count();
+        assert_eq!(routes, PAGE_FILES.len(), "a route missing from PAGE_FILES");
+        assert!(is_page_file("/eullm-ui/app.js"));
+        assert!(!is_page_file("/eullm-ui/app.js/../../api/tags"));
+        assert!(!is_page_file("/api/tags"));
+        assert!(!is_page_file("/eullm-ui/"));
     }
 
     #[test]

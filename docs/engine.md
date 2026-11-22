@@ -381,7 +381,7 @@ has each one with an example; `eullm --help` lists them too.
 | `EULLM_MODELS_DIR` | `~/.eullm/models` | Where `eullm pull` downloads. Any `.gguf` in it, at any depth, is listed and runs |
 | `EULLM_MODEL_LIBRARIES` | (none) | Other programs' model folders, separated by `;` (on Linux and macOS also by `:`), read where they are and never changed: see [Model libraries](#model-libraries-and-eullm-import) |
 | `EULLM_ALLOWED_IPS` | this machine only | IPs and subnets that may connect without a key, comma-separated. Loopback always stays allowed |
-| `EULLM_API_KEYS` | (none) | `id:secret[:rpm=N]`, comma-separated: every request must carry a key. An entry that does not parse stops the server |
+| `EULLM_API_KEYS` | (none) | `id:secret[:rpm=N]`, comma-separated: every request must carry a key. An entry that does not parse stops the server. The chat opens with `http://<host>:11435/?api_key=<secret>` (the page keeps the key for the tab and takes it out of the address); its own files are served without one, and everything it reads from `/api` and `/v1` needs it |
 | `EULLM_API_KEYS_FILE` | (none) | The same keys, one per line of a file that can be `chmod 600` |
 | `EULLM_ALLOWED_ORIGINS` | loopback pages | Web pages on other hosts allowed to call the API; `*` allows every origin |
 | `EULLM_AUDIT_DIR` | `~/.eullm/audit` | Where the audit trail is written. Set and not writable, the server does not start |
