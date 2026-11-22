@@ -30,7 +30,7 @@ import json
 import statistics
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 try:
@@ -347,7 +347,7 @@ async def cmd_collect(args: argparse.Namespace):
     output_file = args.output or f"turboquant_{args.cache_label.lower()}.json"
 
     print(f"{'=' * 76}")
-    print(f"  TurboQuant Bench — collect")
+    print("  TurboQuant Bench — collect")
     print(f"  URL:         {args.url}")
     print(f"  Model:       {args.model}")
     print(f"  Cache:       {args.cache_label}")
@@ -403,7 +403,7 @@ async def cmd_collect(args: argparse.Namespace):
             ttft_stats = compute_stats(ttfts)
             tps_stats = compute_stats(tps_list)
 
-            print(f"    ---")
+            print("    ---")
             print(f"    Wall: {result.wall_ms:.0f}ms  "
                   f"Throughput: {result.aggregate_throughput:.1f} tok/s  "
                   f"TTFT P50: {ttft_stats['p50']:.0f}ms  "
@@ -564,7 +564,7 @@ def _print_plain_table(rows: list[dict]):
 
     print()
     print(f"  {'=' * 86}")
-    print(f"  TurboQuant KV Cache Comparison")
+    print("  TurboQuant KV Cache Comparison")
     print(f"  {'=' * 86}")
     print(header)
     print(sep)
