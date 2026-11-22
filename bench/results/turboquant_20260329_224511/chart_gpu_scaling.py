@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Generate GPU scaling projection chart for TurboQuant."""
 
+import math
+
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 import numpy as np
 import os
 
@@ -60,7 +61,7 @@ ax.set_axisbelow(True)
 
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "chart_gpu_scaling.png"), dpi=150)
-print(f"Saved: chart_gpu_scaling.png")
+print("Saved: chart_gpu_scaling.png")
 
 # ── Chart: Cost savings ──────────────────────────────────────────────────────
 
@@ -69,7 +70,6 @@ fig, ax = plt.subplots(figsize=(10, 6))
 scenarios = ["1000 users\nF16", "1000 users\nTQ4_0", "3000 users\nF16", "3000 users\nTQ4_0"]
 # H100 slots: F16=54, TQ4_0=215
 # Nodes needed = ceil(users / slots_per_node)
-import math
 h100_f16_slots = slots_f16[3]  # ~54
 h100_tq4_slots = slots_tq4[3]  # ~215
 cost_per_node = 30  # EUR K/month
@@ -112,4 +112,4 @@ ax.set_axisbelow(True)
 
 plt.tight_layout()
 plt.savefig(os.path.join(OUTPUT_DIR, "chart_cost_savings.png"), dpi=150)
-print(f"Saved: chart_cost_savings.png")
+print("Saved: chart_cost_savings.png")
