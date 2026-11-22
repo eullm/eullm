@@ -45,7 +45,12 @@ source "$EULLM_REPO/forge/scripts/leonardo/env.sh"
 
 SRC="${LCPP_DIR:-$WORK/llama.cpp}"
 if [ "${LCPP_RPC:-0}" = 1 ]; then
-    BUILD="$SRC/build-cuda-rpc"; EXTRA="-DGGML_RPC=ON"; TARGETS="llama-server ggml-rpc-server"
+    # llama.cpp schedules at most GGML_SCHED_MAX_BACKENDS (16) devices: four
+    # nodes are 12 remote GPUs, 4 local and the CPU, 17, and the Large 4
+    # pilot died at load on GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS)
+    # (2026-11-21). The define is #ifndef-guarded in ggml-backend.cpp.
+    BUILD="$SRC/build-cuda-rpc"; TARGETS="llama-server ggml-rpc-server"
+    EXTRA="-DGGML_RPC=ON -DCMAKE_CXX_FLAGS=-DGGML_SCHED_MAX_BACKENDS=64 -DCMAKE_C_FLAGS=-DGGML_SCHED_MAX_BACKENDS=64"
 else
     BUILD="$SRC/build-cuda"; EXTRA=""; TARGETS="llama-server"
 fi
@@ -81,7 +86,9 @@ if [ "${LCPP_RPC:-0}" = 1 ]; then
     [ -x "$BUILD/bin/rpc-server" ] || { echo "[build] no rpc-server in $BUILD/bin" >&2; exit 1; }
     "$BUILD/bin/llama-server" --help 2>&1 | grep -q -- "--rpc" ||
         { echo "[build] llama-server has no --rpc: the RPC backend is not in it" >&2; exit 1; }
-    echo "[build] ok: rpc-server and llama-server --rpc"
+    grep -q "GGML_SCHED_MAX_BACKENDS=64" "$BUILD/CMakeCache.txt" ||
+        { echo "[build] the backend limit was not raised: four nodes will not load" >&2; exit 1; }
+    echo "[build] ok: rpc-server and llama-server --rpc, up to 64 devices"
 fi
 
 "$BUILD/bin/llama-server" --list-devices 2>&1 | tail -5
