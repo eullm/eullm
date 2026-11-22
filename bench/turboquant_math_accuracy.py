@@ -93,7 +93,7 @@ def normalize(s: str) -> str:
 
 def extract_last_line(s: str) -> str:
     s = strip_thinking(s)
-    lines = [l.strip() for l in s.strip().split('\n') if l.strip()]
+    lines = [line.strip() for line in s.strip().split('\n') if line.strip()]
     return lines[-1] if lines else s
 
 
@@ -348,7 +348,7 @@ async def collect(args):
 
     think = None if args.no_think else True
 
-    print(f"TurboQuant Math Accuracy Test")
+    print("TurboQuant Math Accuracy Test")
     print(f"  URL:   {args.url}")
     print(f"  Model: {args.model}")
     print(f"  Label: {args.label}")
@@ -423,7 +423,7 @@ async def collect(args):
     print(f"  {args.label}: {total_pass}/{total} passed ({pct:.1f}%)")
     print(f"{'='*65}")
 
-    print(f"\n  Category breakdown:")
+    print("\n  Category breakdown:")
     print(f"  {'Category':<22} {'Pass/Total':>12}   {'%':>6}")
     print(f"  {'-'*44}")
     for cat, s in sorted(cats.items()):
@@ -431,7 +431,7 @@ async def collect(args):
         print(f"  {cat:<22} {s['pass']:>4}/{s['total']:<4}        {p:>5.1f}%")
 
     # Direct vs delayed
-    print(f"\n  Direct vs Delayed (pass/total):")
+    print("\n  Direct vs Delayed (pass/total):")
     print(f"  {'Type':<12} {'mat 2x2':>10} {'mat 3x3':>10} {'scalar':>10}")
     print(f"  {'-'*44}")
     for cat in ["direct_math", "delayed_math"]:
@@ -445,7 +445,7 @@ async def collect(args):
     # By filler level
     delayed = [r for r in results if r["category"] == "delayed_math"]
     if delayed and filler_levels:
-        print(f"\n  Delayed by filler distance:")
+        print("\n  Delayed by filler distance:")
         print(f"  {'Filler':>7}   {'mat 2x2':>10} {'mat 3x3':>10} {'scalar':>10}")
         print(f"  {'-'*44}")
         for fl in filler_levels:
@@ -465,7 +465,7 @@ async def collect(args):
             if br:
                 bucket_rows.append((lo, hi, br))
         if bucket_rows:
-            print(f"\n  Accuracy by context size (prompt tokens):")
+            print("\n  Accuracy by context size (prompt tokens):")
             print(f"  {'Range':>16}   {'Pass/Total':>12}   {'%':>6}   {'Avg ctx':>9}")
             print(f"  {'-'*52}")
             for lo, hi, br in bucket_rows:
@@ -481,7 +481,7 @@ async def collect(args):
     if timed:
         latencies = [r["latency_s"] for r in timed]
         tps_vals  = [r["tokens_per_sec"] for r in timed if r["tokens_per_sec"] > 0]
-        print(f"\n  Throughput:")
+        print("\n  Throughput:")
         print(f"  {'Total wall time':<28} {total_wall:>7.1f}s")
         print(f"  {'Requests':<28} {len(timed):>7}")
         print(f"  {'Latency mean/min/max (s)':<28} {sum(latencies)/len(latencies):>5.1f} / {min(latencies):>4.1f} / {max(latencies):>4.1f}")
@@ -491,7 +491,7 @@ async def collect(args):
     if args.verbose:
         failed = [r for r in results if not r["passed"]]
         if failed:
-            print(f"\n  Failed responses:")
+            print("\n  Failed responses:")
             print(f"  {'-'*60}")
             for r in failed:
                 print(f"\n  [{r['id']}]  expected={r['expected']}")
@@ -529,7 +529,7 @@ def compare(args):
             data.append(json.load(fh))
 
     print(f"\n{'='*65}")
-    print(f"  TurboQuant Math Accuracy Comparison")
+    print("  TurboQuant Math Accuracy Comparison")
     print(f"{'='*65}\n")
 
     print(f"  {'Label':<20} {'Pass/Total':>12}   {'%':>6}")
@@ -539,7 +539,7 @@ def compare(args):
         print(f"  {d['label']:<20} {s['passed']:>4}/{s['total']:<4}        {s['percent']:>5.1f}%")
 
     if len(data) > 1:
-        print(f"\n  Divergent results:")
+        print("\n  Divergent results:")
         print(f"  {'-'*60}")
         any_diff = False
         for tid in [r["id"] for r in data[0]["results"]]:
@@ -554,11 +554,11 @@ def compare(args):
                 for label, passed, detail in rows:
                     print(f"    [{'PASS' if passed else 'FAIL'}] {label:<20} {detail[:60]}")
         if not any_diff:
-            print(f"  None — identical results across all configurations.")
+            print("  None — identical results across all configurations.")
 
     if args.markdown:
-        print(f"\n| Label | Pass | Total | % |")
-        print(f"|:---|:---:|:---:|:---:|")
+        print("\n| Label | Pass | Total | % |")
+        print("|:---|:---:|:---:|:---:|")
         for d in data:
             s = d["score"]
             print(f"| {d['label']} | {s['passed']} | {s['total']} | {s['percent']:.1f}% |")
