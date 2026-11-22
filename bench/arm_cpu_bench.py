@@ -189,7 +189,7 @@ async def run_decode_bench(session, args, power_sampler):
     for i in range(args.decode_repeats):
         if power_sampler:
             power_sampler.start()
-        ttft, _, _, gen_tokens, last_token_s = await stream_generate(
+        ttft, _, prompt_tokens, gen_tokens, last_token_s = await stream_generate(
             session, args.url, args.model, args.decode_prompt,
             max_tokens=args.decode_tokens, timeout=args.timeout,
         )
