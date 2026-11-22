@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import random
+import re
 import sys
 import time
 
@@ -260,8 +261,6 @@ def build_tests(filler_levels=None):
 
 
 # ── Answer checking ──────────────────────────────────────────────────────────
-
-import re
 
 def strip_thinking(s: str) -> str:
     return re.sub(r'<think>.*?</think>', '', s, flags=re.DOTALL).strip()
