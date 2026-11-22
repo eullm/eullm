@@ -1455,9 +1455,13 @@ body {
   color: var(--accent); border: 1px solid currentColor;
 }
 .side-pro { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--border); padding-top: 12px; }
+/* With these entries a short screen (a phone) would leave the recent chats
+   no room: the sidebar scrolls instead, and they keep some. */
+.sidebar:has(.side-pro) { overflow-y: auto; scrollbar-width: thin; }
+.sidebar:has(.side-pro) .side-recents { min-height: 180px; }
 .side-pro h2 { margin: 0 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-faint); }
-.side-pro-item span:not(.pro-badge) { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.side-pro-item .pro-badge { opacity: 0.8; }
+.side-pro-item span:not(.pro-badge) { flex: 1; min-width: 0; line-height: 1.3; }
+.side-pro-item .pro-badge { font-size: 9px; padding: 2px 4px; opacity: 0.8; }
 
 .pro-view {
   overflow-y: auto;
