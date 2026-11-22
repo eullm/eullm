@@ -17,12 +17,9 @@ Usage:
 import argparse
 import asyncio
 import json
-import os
 import re
 import sys
 import time
-from dataclasses import dataclass, asdict
-from typing import Optional
 
 try:
     import aiohttp
@@ -290,7 +287,7 @@ def normalize(s: str) -> str:
 def extract_last_line(s: str) -> str:
     """Get the last non-empty line — often the actual answer after explanation."""
     s = strip_thinking(s)
-    lines = [l.strip() for l in s.strip().split('\n') if l.strip()]
+    lines = [line.strip() for line in s.strip().split('\n') if line.strip()]
     return lines[-1] if lines else s
 
 
@@ -442,7 +439,7 @@ def compare(args):
             data.append(json.load(fh))
 
     print(f"\n{'='*70}")
-    print(f"  TurboQuant Quality Comparison")
+    print("  TurboQuant Quality Comparison")
     print(f"{'='*70}\n")
 
     # Overall scores
@@ -483,7 +480,7 @@ def compare(args):
         print()
 
     # Per-test diff (show only failures that differ)
-    print(f"\n  Divergent results (different pass/fail across cache types):")
+    print("\n  Divergent results (different pass/fail across cache types):")
     print(f"  {'-'*60}")
     any_diff = False
     test_ids = [r["id"] for r in data[0]["results"]]
@@ -502,12 +499,12 @@ def compare(args):
                 print(f"    [{status}] {label:<15} → {resp}")
 
     if not any_diff:
-        print(f"  None — all cache types produced the same pass/fail results!")
+        print("  None — all cache types produced the same pass/fail results!")
 
     if args.markdown:
-        print(f"\n\n### Markdown table\n")
-        print(f"| Cache Type | Score | Matrix | Math | Factual | Logic | Code |")
-        print(f"|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
+        print("\n\n### Markdown table\n")
+        print("| Cache Type | Score | Matrix | Math | Factual | Logic | Code |")
+        print("|:---:|:---:|:---:|:---:|:---:|:---:|:---:|")
         for d in data:
             s = d["score"]
             cats = d.get("categories", {})
