@@ -20,8 +20,8 @@ at different context distances.
 import argparse
 import asyncio
 import json
-import os
 import random
+import re
 import sys
 import time
 
@@ -262,8 +262,6 @@ def build_tests(filler_levels=None):
 
 # ── Answer checking ──────────────────────────────────────────────────────────
 
-import re
-
 def strip_thinking(s: str) -> str:
     return re.sub(r'<think>.*?</think>', '', s, flags=re.DOTALL).strip()
 
@@ -273,7 +271,7 @@ def normalize(s: str) -> str:
 
 def extract_last_line(s: str) -> str:
     s = strip_thinking(s)
-    lines = [l.strip() for l in s.strip().split('\n') if l.strip()]
+    lines = [line.strip() for line in s.strip().split('\n') if line.strip()]
     return lines[-1] if lines else s
 
 
@@ -286,7 +284,8 @@ def check_answer(test: dict, response: str) -> tuple:
     if mode == "line_match":
         # Compare line by line
         expected_lines = test["expected_lines"]
-        resp_lines = [l.strip() for l in resp.split('\n') if l.strip() and l.strip()[0].isdigit()]
+        resp_lines = [line.strip() for line in resp.split('\n')
+                      if line.strip() and line.strip()[0].isdigit()]
         correct = 0
         total = len(expected_lines)
         details = []
@@ -394,7 +393,7 @@ async def collect(args):
     print(f"{'='*60}")
 
     # Breakdown by filler level
-    print(f"\n  Filler    Passed   Line accuracy")
+    print("\n  Filler    Passed   Line accuracy")
     print(f"  {'-'*40}")
     for fl in filler_levels:
         fl_results = [r for r in results if r["filler_tokens"] == fl]
@@ -406,7 +405,7 @@ async def collect(args):
         print(f"  {fl:>5}t    {fl_pass}/{fl_total}      {fl_lines_ok}/{fl_lines_total} ({fl_line_pct:.1f}%)")
 
     # Breakdown by test type
-    print(f"\n  Test type              Passed")
+    print("\n  Test type              Passed")
     print(f"  {'-'*35}")
     test_types = ["numeric_block", "grid_lookup", "delayed_matrix", "binding", "record_search"]
     type_names = ["Numeric block recall", "Grid cell lookup", "Delayed matrix mult", "Key-value binding", "Record search"]
@@ -444,7 +443,7 @@ def compare(args):
             data.append(json.load(fh))
 
     print(f"\n{'='*70}")
-    print(f"  TurboQuant KV Cache Stress Test Comparison")
+    print("  TurboQuant KV Cache Stress Test Comparison")
     print(f"{'='*70}\n")
 
     # Overall
@@ -457,7 +456,7 @@ def compare(args):
               f"{s['percent']:>5.1f}%   {s['lines_percent']:>5.1f}%")
 
     # By filler level
-    print(f"\n  By filler distance:")
+    print("\n  By filler distance:")
     for d in data:
         print(f"\n  {d['label']}:")
         for fl in d.get("filler_levels", []):
@@ -470,7 +469,7 @@ def compare(args):
             print(f"    {fl:>5}t: {fl_pass}/{fl_total} tests, {fl_lines_ok}/{fl_lines_total} lines ({fl_line_pct:.1f}%)")
 
     # Divergent results
-    print(f"\n  Divergent results:")
+    print("\n  Divergent results:")
     print(f"  {'-'*60}")
     any_diff = False
     if len(data) > 1:
@@ -490,12 +489,12 @@ def compare(args):
                     print(f"    [{status}] {label:<15} {detail}")
 
     if not any_diff:
-        print(f"  None — identical pass/fail across all cache types.")
+        print("  None — identical pass/fail across all cache types.")
 
     if args.markdown:
-        print(f"\n\n### Markdown\n")
-        print(f"| Label | Tests | Lines | Test % | Line % |")
-        print(f"|:---:|:---:|:---:|:---:|:---:|")
+        print("\n\n### Markdown\n")
+        print("| Label | Tests | Lines | Test % | Line % |")
+        print("|:---:|:---:|:---:|:---:|:---:|")
         for d in data:
             s = d["score"]
             print(f"| {d['label']} | {s['passed']}/{s['total']} | "
