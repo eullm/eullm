@@ -47,7 +47,9 @@ pub struct ExtensionRegistry {
     /// A script the chat page loads after its own, as
     /// `/eullm-ui/extension.js`. It can add a page with
     /// `window.eullm.addView({name, title, icon, node})` and send the page's
-    /// API key with `window.eullm.headers()`.
+    /// API key with `window.eullm.headers()`. With a script installed the
+    /// page's own pointers to EuLLM Pro are not served: the menu is the
+    /// script's.
     pub chat_script: Option<String>,
 }
 

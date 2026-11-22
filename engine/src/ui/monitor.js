@@ -475,6 +475,7 @@
         return;
       }
       adminKey = key;
+      document.dispatchEvent(new CustomEvent("eullm:admin"));
       if (d.storage) storage = d.storage; else await loadStorage();
       const freed = d.deleted_files ? ` ${plural(d.deleted_files, "day")} deleted, ${size(d.freed_bytes)} freed.` : " Nothing to delete.";
       renderStorage((act === "retention" ? `Kept for ${storage.retention_days} days from now on.` : "Done.") + freed);

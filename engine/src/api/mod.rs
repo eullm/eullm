@@ -3252,6 +3252,13 @@ pub async fn serve(cfg: ServeConfig) -> Result<(), Box<dyn std::error::Error>> {
             allowed_models.describe(),
             allowed_models.source()
         );
+        // Cosmetic, so never fatal: whatever it is set to, the server starts.
+        let pro_hints = crate::ui::ProHints::load();
+        tracing::info!(
+            "EuLLM Pro pages in the chat's admin menu: {}",
+            pro_hints.reason
+        );
+        crate::ui::set_pro_hints(&pro_hints, monitor_access.admin_enabled());
     }
     match &decision_traces {
         Some(traces) => tracing::info!(

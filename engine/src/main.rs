@@ -179,6 +179,8 @@ file in the folder eullm starts from (the startup log says which was used):
   EULLM_DOWNLOAD_CONNECTIONS     connections per download, 1 to 16 [8]
   EULLM_IMAGE_MAX_TOKENS         most tokens an image is read as (finer detail)
   EULLM_IMAGE_MIN_TOKENS         fewest tokens an image is read as
+  EULLM_NO_PRO_HINTS=1           the chat's admin menu does not point to
+                                 EuLLM Pro, for whoever redistributes eullm
   HF_TOKEN                       a Hugging Face token, for gated models
   RUST_LOG                       what the log shows [eullm=info]"
     };

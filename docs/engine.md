@@ -399,6 +399,7 @@ has each one with an example; `eullm --help` lists them too.
 | `EULLM_DOWNLOAD_CONNECTIONS` | `8` | Parallel connections per download, 1 to 16; 1 downloads in a single stream |
 | `EULLM_IMAGE_MAX_TOKENS` | the projector's | Most tokens an image is read as: more reads finer detail, with more memory. Raise it in steps (512, then 1024): very high values can crash some projectors |
 | `EULLM_IMAGE_MIN_TOKENS` | the projector's | Fewest tokens an image is read as |
+| `EULLM_NO_PRO_HINTS` | off | The chat's administrator menu does not list the EuLLM Pro pages, and no line points to it: for whoever redistributes the engine. See [EuLLM and EuLLM Pro](#eullm-and-eullm-pro) |
 | `HF_TOKEN` | (none) | A Hugging Face access token, for gated and private repositories. Sent to `https://huggingface.co` only |
 | `RUST_LOG` | `eullm=info` | What the log shows, such as `eullm=debug`; naming `llama-cpp-2` (`eullm=info,llama-cpp-2=info`) adds llama.cpp's own log |
 
@@ -2559,6 +2560,45 @@ curl http://localhost:11434/v1/chat/completions \
   -d '{"model": "local", "messages": [{"role": "user", "content": "Ciao!"}]}'
 ```
 
+## EuLLM and EuLLM Pro
+
+| | EuLLM Engine (this repository) | EuLLM Pro |
+|---|---|---|
+| Inference, Ollama and OpenAI APIs, continuous batching, the models, the chat, Model hub and Monitor | ✅ | ✅ the same engine |
+| Who may use the server | API keys from one shared list (`EULLM_API_KEYS`) and the networks admitted without one | a login for each person: local accounts, LDAP or Active Directory, single sign-on with OpenID Connect |
+| Who changes the models | whoever holds the one admin key (`EULLM_ADMIN_KEY`) | administrators by account; roles for administrators, auditors and users |
+| Which models a person may use | one list for everyone (`EULLM_ALLOWED_MODELS`) | a list for each group, filled by hand or from the directory |
+| Chats | kept in each browser | on the server, for each person, the same from any computer |
+| Records | an audit trail on the machine, one line per answer, naming the key used | also a request log for each person, exported as a file chained with SHA-256 and signed with Ed25519 |
+| AI Act | – | a register of the AI systems, rules of use each person accepts, a draft notice for workers |
+| Prepared assistants | each person's own system prompt | assistants for groups: a model, instructions and reference documents |
+| Budgets and alerts | the Monitor and `/metrics` | monthly tokens for each group; alerts by webhook or email |
+| Licence | AGPL-3.0-or-later, free | commercial |
+
+The chat page shows the Pro edition in two places, and nowhere else:
+
+- **The administrator's menu**, under an "EuLLM Pro" heading in the sidebar:
+  People and access, AI Act compliance, Assistants for groups, Budgets and
+  alerts. Each page says what the Pro edition does there and what this engine
+  does instead, shows an example of the page (inert, with made-up names), and
+  links to `https://www.eullm.eu/<language>/pro`, in the browser's language
+  where the site has the page (Italian, German, French, Spanish, Dutch,
+  Portuguese, Polish), else in English. There is no button that does nothing.
+- **A line where the engine meets a real limit**: in About, when the API keys
+  are on (everyone shares one list of keys); in the Monitor's requests, when
+  the server is used by more than this machine (the requests do not say who
+  sent them). "Don't show again" closes it for good in that browser.
+
+Who sees them: on a server without `EULLM_ADMIN_KEY`, whoever opens the page,
+since they may change the models anyway; on a managed server, only a page that
+holds the admin key, from the moment the Model hub or the Monitor accepted it.
+The chat itself never shows any of it.
+
+`EULLM_NO_PRO_HINTS=1` (environment or `.env`) turns all of it off, for
+whoever redistributes the engine; the startup log says whether they are on and
+why. A program that builds on the engine and adds a script of its own to the
+page (`chat_script`, below) never gets them either: the menu is then its own.
+
 ## Building on the engine (the `eullm_engine` library)
 
 The engine is a Rust library as well as the `eullm` binary, so that a
@@ -2604,7 +2644,8 @@ fn main() {
   loads after its own scripts (empty in eullm). It can add a page beside
   Chat, Model hub, Monitor and About with `window.eullm.addView({name, title,
   icon, node})`, switch to it with `window.eullm.showView(name)`, and send
-  the page's API key on its own requests with `window.eullm.headers()`.
+  the page's API key on its own requests with `window.eullm.headers()`. With a
+  script installed the chat's pointers to EuLLM Pro are not served.
 - The chat keeps its conversations in the browser's own storage. A script
   can keep them elsewhere, on its server for the person signed in, with
   `window.eullm.setChatStore(store)`, where `store` has `list()` (each
