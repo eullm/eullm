@@ -236,6 +236,30 @@ and [the roadmap](docs/roadmap.md) says what is ready and what is next. **Want o
 The engine works today, on its own, with any GGUF model: you do not need to
 wait for Forge or the Hub.
 
+## EuLLM and EuLLM Pro
+
+The engine is complete on its own, and stays free software. **EuLLM Pro** is
+the same engine with what an organisation adds once many people use one
+server:
+
+| | EuLLM Engine (this repository) | EuLLM Pro |
+|---|---|---|
+| Inference, Ollama and OpenAI APIs, continuous batching, the models, the chat, Model hub and Monitor | ✅ | ✅ the same engine |
+| Who may use the server | API keys from one shared list (`EULLM_API_KEYS`) and the networks admitted without one | a login for each person: local accounts, LDAP or Active Directory, single sign-on with OpenID Connect |
+| Who changes the models | whoever holds the one admin key (`EULLM_ADMIN_KEY`) | administrators by account; roles for administrators, auditors and users |
+| Which models a person may use | one list for everyone (`EULLM_ALLOWED_MODELS`) | a list for each group, filled by hand or from the directory |
+| Chats | kept in each browser | on the server, for each person, the same from any computer |
+| Records | an audit trail on the machine, one line per answer, naming the key used | also a request log for each person, exported as a file chained with SHA-256 and signed with Ed25519 |
+| AI Act | – | a register of the AI systems, rules of use each person accepts, a draft notice for workers |
+| Prepared assistants | each person's own system prompt | assistants for groups: a model, instructions and reference documents |
+| Budgets and alerts | the Monitor and `/metrics` | monthly tokens for each group; alerts by webhook or email |
+| Licence | AGPL-3.0-or-later, free | commercial |
+
+The chat's administrator menu lists the Pro pages, each saying what it does,
+with a link to [eullm.eu/pro](https://www.eullm.eu/pro); none of them pretends
+to work. Whoever redistributes the engine turns them off with
+`EULLM_NO_PRO_HINTS=1` ([details](docs/engine.md#eullm-and-eullm-pro)).
+
 ## Documentation
 
 | | |

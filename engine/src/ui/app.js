@@ -68,6 +68,8 @@
     adminKey = key;
     r = await go();
     if (r.status === 403 || r.status === 429) adminKey = "";
+    // This page is the administrator's from now on (pro.js listens).
+    else document.dispatchEvent(new CustomEvent("eullm:admin"));
     return r;
   };
 

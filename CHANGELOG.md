@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **EuLLM Pro in the administrator's menu.** The sidebar lists the pages the Pro edition adds (People and access, AI Act compliance, Assistants for groups, Budgets and alerts), each saying what it does and what this engine does instead, with an example and a link to eullm.eu; and a line, which can be closed for good, where the engine meets a real limit: an API key everyone shares, requests that do not say who sent them. Only the administrator sees them: on a server with `EULLM_ADMIN_KEY`, only once the page holds the key. Nothing changes in the chat. `EULLM_NO_PRO_HINTS=1` turns all of it off, for whoever redistributes the engine.
+
 ## 0.9.20 — 2026-11-21
 
 0.9.10 was tagged but never published: its release stopped before building
