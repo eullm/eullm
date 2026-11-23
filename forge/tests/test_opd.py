@@ -76,14 +76,17 @@ def _corpus(tmp_path: Path):
                       "domande_esame": []})
         index.append(f"cds/{num}")
     chunks = tmp_path / "train.jsonl"
-    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                      encoding="utf-8")
     cards_f = tmp_path / "schede.jsonl"
-    cards_f.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cards), encoding="utf-8")
+    cards_f.write_text("".join(json.dumps(c, ensure_ascii=False) + "\n" for c in cards),
+                       encoding="utf-8")
     dev = tmp_path / "dev.txt"
     dev.write_text("cds/202000000\n", encoding="utf-8")
     statutes = tmp_path / "prompts.jsonl"
     statutes.write_text("".join(json.dumps({"id": f"s{i}", "prompt": [
-        {"role": "user", "content": f"Domanda sulle norme {i}"}]}) + "\n" for i in range(10)), encoding="utf-8")
+        {"role": "user", "content": f"Domanda sulle norme {i}"}]}) + "\n" for i in range(10)),
+                     encoding="utf-8")
     return chunks, cards_f, dev, statutes
 
 
@@ -224,7 +227,8 @@ def test_the_exam_reads_chunks_that_carry_only_source_id(tmp_path, monkeypatch):
         r.pop("sentence_id", None)
         r.pop("kind", None)
         r["source_id"] = f"cds/{r['source_id'].split('/')[1]}"
-    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                      encoding="utf-8")
     questions = tmp_path / "dev-cards.jsonl"
     questions.write_text(json.dumps({"id": "cds/202000000", "domande_esame": [
         {"domanda": "Quando si applica il principio0?", "risposta": "Sempre.",
@@ -405,7 +409,8 @@ def test_statute_rows_are_anchored_to_the_student_before_the_run(tiny_model, tmp
         model.lm_head.weight.mul_(50)
     model.save_pretrained(other)
     transformers.AutoTokenizer.from_pretrained(path).save_pretrained(other)
-    rows = [dict(json.loads(line), kind="statute") for line in prompts.read_text(encoding="utf-8").splitlines()]
+    rows = [dict(json.loads(line), kind="statute")
+            for line in prompts.read_text(encoding="utf-8").splitlines()]
     prompts.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     mod = _load("opd_train")
     base = ["--student", str(path), "--teacher", str(other), "--prompts", str(prompts),
