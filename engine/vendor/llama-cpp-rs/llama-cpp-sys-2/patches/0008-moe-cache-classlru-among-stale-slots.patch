@@ -40,10 +40,10 @@ those misses too.
 EuLLM patch on llama.cpp b12283, after 0002 (which adds the statistics).
 
 diff --git a/src/llama-moe-cache.cpp b/src/llama-moe-cache.cpp
-index 0bc46954e..632a24787 100644
+index b56db55a2..dc7b4e36f 100644
 --- a/src/llama-moe-cache.cpp
 +++ b/src/llama-moe-cache.cpp
-@@ -28,10 +28,36 @@ namespace {
+@@ -29,10 +29,36 @@ namespace {
  // CRF (combined recency and frequency) = uses of an expert, decayed with a half-life of N tokens, retained across evictions
  // class = floor(log2(CRF)), at most n_class - 1; each slot is in the LRU list of the class, as of its last use
  // victim: an empty slot, or the least recently used slot of each list not in the current plan() with the max age/2^class
@@ -80,7 +80,7 @@ index 0bc46954e..632a24787 100644
      int32_t n_expert = 0;
      int32_t n_slots  = 0;
      int32_t empty    = 0; // slot of the experts that are not cached
-@@ -59,8 +85,22 @@ struct moe_cache_lru {
+@@ -60,8 +86,22 @@ struct moe_cache_lru {
      std::vector<int32_t> misses;
      std::vector<uint64_t> token_zero; // [n_tokens] zero slots used by each token
  
@@ -104,7 +104,7 @@ index 0bc46954e..632a24787 100644
          this->n_expert = n_expert;
          this->n_slots  = n_slots;
          this->empty    = n_slots;
-@@ -155,7 +195,71 @@ struct moe_cache_lru {
+@@ -156,7 +196,71 @@ struct moe_cache_lru {
          return -1;
      }
  
@@ -177,7 +177,7 @@ index 0bc46954e..632a24787 100644
          int32_t res = -1;
          double res_score = -1.0;
          for (int c = 0; c < n_class; ++c) {
-@@ -167,6 +271,9 @@ struct moe_cache_lru {
+@@ -168,6 +272,9 @@ struct moe_cache_lru {
              if (key < 0) {
                  return s; // unused slot
              }
@@ -187,7 +187,7 @@ index 0bc46954e..632a24787 100644
              const int64_t age   = clock[key_layer(key)] - last_use[key];
              const double  score = std::ldexp((double) age, -c); // age/2^class
              if (score > res_score) {
-@@ -174,7 +281,7 @@ struct moe_cache_lru {
+@@ -175,7 +282,7 @@ struct moe_cache_lru {
                  res_score = score;
              }
          }
@@ -196,7 +196,7 @@ index 0bc46954e..632a24787 100644
              GGML_ABORT("no MoE cache victim");
          }
          return res;
-@@ -196,6 +303,15 @@ struct moe_cache_lru {
+@@ -197,6 +304,15 @@ struct moe_cache_lru {
          cpu.clear();
          n_hit = 0;
  
@@ -212,7 +212,7 @@ index 0bc46954e..632a24787 100644
          if (++seen_gen == 0) {
              std::fill(seen.begin(), seen.end(), 0);
              seen_gen = 1;
-@@ -221,6 +337,7 @@ struct moe_cache_lru {
+@@ -222,6 +338,7 @@ struct moe_cache_lru {
              use(il, key);
              if (slots[e] < n_slots) {
                  move(slots[e], class_of(key));
@@ -220,7 +220,7 @@ index 0bc46954e..632a24787 100644
                  n_hit++;
              } else {
                  misses.push_back(e);
-@@ -285,6 +402,7 @@ struct moe_cache_lru {
+@@ -286,6 +403,7 @@ struct moe_cache_lru {
              key_of[s] = key;
              slots[e]  = s;
              move(s, class_of(key));
@@ -228,7 +228,7 @@ index 0bc46954e..632a24787 100644
              fills.push_back({ e, s });
          }
          clock[il] += n_tokens;
-@@ -377,6 +495,7 @@ struct llama_moe_cache::impl {
+@@ -378,6 +496,7 @@ struct llama_moe_cache::impl {
          size_t misses = 0;
          size_t cpu    = 0; // misses computed on the CPU
          size_t bytes  = 0;
@@ -236,7 +236,7 @@ index 0bc46954e..632a24787 100644
      };
  
      // one step, from its first layer's copy to the first layer's copy of the next
-@@ -424,7 +543,7 @@ struct llama_moe_cache::impl {
+@@ -425,7 +544,7 @@ struct llama_moe_cache::impl {
      stats stats_large;
      stats stats_copy;  // experts copied from the cache for large batches
  
@@ -245,7 +245,7 @@ index 0bc46954e..632a24787 100644
      int32_t     stats_every = 0;
      uint64_t    n_begun     = 0;
      step_timing cur;
-@@ -511,6 +630,14 @@ struct llama_moe_cache::impl {
+@@ -512,6 +631,14 @@ struct llama_moe_cache::impl {
          // with misses on the CPU, the n_zero slots after the cached ones stay zero: the device computes these misses as zero
          // one extra slot at the end, CUDA MMQ can read past the last expert
          n_zero = cpu_share > 0.0f ? std::min<int32_t>(n_expert_used, 64) : 0;
@@ -260,7 +260,7 @@ index 0bc46954e..632a24787 100644
          auto alloc_size = [&](const group & g, int32_t n_slots) {
              const size_t alignment = ggml_backend_buft_get_alignment(devices[g.id].buft);
              size_t res = 0;
-@@ -574,7 +701,7 @@ struct llama_moe_cache::impl {
+@@ -575,7 +702,7 @@ struct llama_moe_cache::impl {
                  g.n_slots = 0;
                  continue;
              }
@@ -269,7 +269,7 @@ index 0bc46954e..632a24787 100644
              n_tensors[g.id] += g.ref.size()*(1 + g.layers.size());
              n_tensors_host  += g.layers.size()*(n_zero > 0 ? 3 : 1); // slot maps and CPU map
          }
-@@ -863,8 +990,9 @@ struct llama_moe_cache::impl {
+@@ -865,8 +992,9 @@ struct llama_moe_cache::impl {
  
      // count the step that began at cur.t_begin and ends at t, and report every stats_every steps
      void end_step(int64_t t) {
@@ -281,7 +281,7 @@ index 0bc46954e..632a24787 100644
              return;
          }
  
-@@ -874,6 +1002,7 @@ struct llama_moe_cache::impl {
+@@ -876,6 +1004,7 @@ struct llama_moe_cache::impl {
          win.st.hits   += cur.st.hits;
          win.st.misses += cur.st.misses;
          win.st.bytes  += cur.st.bytes;
@@ -289,7 +289,7 @@ index 0bc46954e..632a24787 100644
          if (cur.sampled) {
              win.n_sampled++;
              win.copy_us    += cur.copy_us;
-@@ -903,6 +1032,10 @@ struct llama_moe_cache::impl {
+@@ -905,6 +1034,10 @@ struct llama_moe_cache::impl {
          }
          const size_t n = win.st.hits + win.st.misses;
          line += format("; %.1f MiB/step copied, %.1f%% of the experts in VRAM", win.st.bytes/1048576.0/n_steps, n > 0 ? 100.0*win.st.hits/n : 0.0);
@@ -300,7 +300,7 @@ index 0bc46954e..632a24787 100644
          if (win.n_sampled > 0 && win.copy_us > 0) {
              line += format("; copying takes %.1f ms/step (%.1f GB/s)", win.copy_us/1e3/win.n_sampled, win.copy_bytes/1e3/win.copy_us);
          }
-@@ -1105,6 +1238,7 @@ struct llama_moe_cache::impl {
+@@ -1112,6 +1245,7 @@ struct llama_moe_cache::impl {
          st.misses += fills.size() + cpu.size();
          st.cpu    += cpu.size();
          st.bytes  += bytes;
@@ -308,7 +308,7 @@ index 0bc46954e..632a24787 100644
  
          // the next copy synchronizes the backend before it changes the slot map again
          ggml_backend_tensor_set_async(backend, dst, l.slot_map->data, 0, ggml_nbytes(l.slot_map));
-@@ -1128,6 +1262,7 @@ struct llama_moe_cache::impl {
+@@ -1135,6 +1269,7 @@ struct llama_moe_cache::impl {
              cur.st.hits   += n_hit;
              cur.st.misses += fills.size();
              cur.st.bytes  += bytes;
@@ -316,7 +316,7 @@ index 0bc46954e..632a24787 100644
              cur.t_hook = t_end;
          }
  
-@@ -1140,8 +1275,8 @@ struct llama_moe_cache::impl {
+@@ -1147,8 +1282,8 @@ struct llama_moe_cache::impl {
              if (n == 0) {
                  return;
              }

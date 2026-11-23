@@ -82,7 +82,7 @@ index 000000000..73a0b3eea
 +}
 +#endif
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 961990f85..a05f7867b 100644
+index 8e175649b..1f253c706 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
 @@ -10,6 +10,7 @@
@@ -93,7 +93,7 @@ index 961990f85..a05f7867b 100644
  #include "ggml-alloc.h"
  #include "ggml-impl.h"
  
-@@ -1183,6 +1184,57 @@ struct ggml_backend_sched_split {
+@@ -1193,6 +1194,57 @@ struct ggml_backend_sched_split {
      struct ggml_cgraph graph;
  };
  
@@ -151,7 +151,7 @@ index 961990f85..a05f7867b 100644
  struct ggml_backend_sched {
      bool is_reset; // true if the scheduler has been reset since the last graph split
      bool is_alloc;
-@@ -1232,6 +1284,7 @@ struct ggml_backend_sched {
+@@ -1242,6 +1294,7 @@ struct ggml_backend_sched {
  
      ggml_backend_sched_realloc_callback callback_realloc;
      void * callback_realloc_user_data;
@@ -159,7 +159,7 @@ index 961990f85..a05f7867b 100644
  
      char * context_buffer;
      size_t context_buffer_size;
-@@ -1277,6 +1330,217 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
+@@ -1287,6 +1340,217 @@ static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split
      split->inputs_capacity = new_cap;
  }
  
@@ -377,7 +377,7 @@ index 961990f85..a05f7867b 100644
  static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
      int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
      if (sched->graph_inputs_capacity > 0) {
-@@ -1485,6 +1749,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -1495,6 +1759,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
      sched->n_splits = 0;
      sched->n_graph_inputs = 0;
      sched->is_reset = false;
@@ -389,7 +389,7 @@ index 961990f85..a05f7867b 100644
  
      struct ggml_init_params params = {
          /* .mem_size =   */ sched->context_buffer_size,
-@@ -1803,11 +2072,23 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -1816,11 +2085,23 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                              tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
                              SET_CAUSE(tensor_copy, "4.cpy");
                          }
@@ -413,7 +413,7 @@ index 961990f85..a05f7867b 100644
                      }
                      // inputs of nodes that are not computed (e.g. the unselected branches of ggml_build_forward_select)
                      // stay in the split so that the allocation does not change, but they do not need to be copied
-@@ -2061,7 +2342,11 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
+@@ -2074,7 +2355,11 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
          if (sched->debug_realloc > 0) {
              // we are interested only in situations where the graph was reallocated even though its size remained the same [GGML_SCHED_DEBUG_REALLOC]
              // example: https://github.com/ggml-org/llama.cpp/pull/17143
@@ -426,7 +426,7 @@ index 961990f85..a05f7867b 100644
  
              if (unexpected || sched->debug_realloc > 1) {
                  GGML_ABORT("%s: unexpected graph reallocation (graph size = %d, nodes = %d, leafs = %d), debug_realloc = %d\n", __func__,
-@@ -2208,6 +2493,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2226,6 +2511,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
  
      int prev_backend_id = -1;
  
@@ -439,7 +439,7 @@ index 961990f85..a05f7867b 100644
      for (int split_id = 0; split_id < sched->n_splits; split_id++) {
          struct ggml_backend_sched_split * split = &splits[split_id];
          int split_backend_id = split->backend_id;
-@@ -2223,6 +2514,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2241,6 +2532,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
              }
          }
  
@@ -456,7 +456,7 @@ index 961990f85..a05f7867b 100644
          // copy the input tensors to the split backend
          // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
          for (int input_id = 0; input_id < split->n_inputs; input_id++) {
-@@ -2236,11 +2537,31 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2254,11 +2555,31 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
          ggml_backend_sched_prefetch_inputs(sched, split_id);
          for (int input_id = 0; input_id < split->n_inputs; input_id++) {
              struct ggml_tensor * input = split->inputs[input_id];
@@ -489,7 +489,7 @@ index 961990f85..a05f7867b 100644
          if (!sched->callback_eval) {
              enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
              if (ec != GGML_STATUS_SUCCESS) {
-@@ -2285,6 +2606,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2303,6 +2624,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
              ggml_backend_event_record(sched->events[split_backend_id][sched->cur_copy], split_backend);
          }
  
@@ -502,7 +502,7 @@ index 961990f85..a05f7867b 100644
          prev_backend_id = split_backend_id;
      }
  
-@@ -2368,6 +2695,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
+@@ -2386,6 +2713,7 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
      if (sched == NULL) {
          return;
      }
@@ -510,7 +510,7 @@ index 961990f85..a05f7867b 100644
      for (int b = 0; b < sched->n_backends; b++) {
          for (int c = 0; c < sched->n_copies; c++) {
              ggml_backend_event_free(sched->events[b][c]);
-@@ -2449,9 +2777,15 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -2467,9 +2795,15 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
  
      ggml_backend_sched_split_graph(sched, graph);
  
@@ -526,7 +526,7 @@ index 961990f85..a05f7867b 100644
  
      sched->is_alloc = true;
  
-@@ -2484,6 +2818,9 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
+@@ -2502,6 +2836,9 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
      for (int i = 0; i < sched->n_backends; i++) {
          ggml_backend_synchronize(sched->backends[i]);
      }
@@ -536,7 +536,7 @@ index 961990f85..a05f7867b 100644
      if (!sched->is_alloc) {
          // if the graph is not already allocated, always use copy 0 after a synchronization
          // this ensures that during generation the same copy is used every time,
-@@ -2510,6 +2847,14 @@ void ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_ba
+@@ -2528,6 +2865,14 @@ void ggml_backend_sched_set_realloc_callback(ggml_backend_sched_t sched, ggml_ba
      sched->callback_realloc_user_data = user_data;
  }
  
@@ -552,10 +552,10 @@ index 961990f85..a05f7867b 100644
      GGML_ASSERT(sched);
      return sched->n_splits;
 diff --git a/include/llama.h b/include/llama.h
-index 428f51f8d..9ce1f4508 100644
+index 7122143e5..bad93763c 100644
 --- a/include/llama.h
 +++ b/include/llama.h
-@@ -399,6 +399,7 @@ extern "C" {
+@@ -408,6 +408,7 @@ extern "C" {
  
          size_t moe_cache_size;      // device cache in bytes for the experts kept in host memory, split among the devices like the layers, 0 = disabled [EXPERIMENTAL]
          float  moe_cache_cpu_share; // share of the MoE cache misses computed on the CPU instead of uploaded, 0 = all uploaded [EXPERIMENTAL]
@@ -564,7 +564,7 @@ index 428f51f8d..9ce1f4508 100644
          // Abort callback
          // if it returns true, execution of llama_decode() will be aborted
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 670adcc02..e43d28b3f 100644
+index 07a0dbafc..035a480f6 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -1,6 +1,7 @@
@@ -575,7 +575,7 @@ index 670adcc02..e43d28b3f 100644
  #include "llama-arch.h"
  #include "llama-graph.h"
  #include "llama-impl.h"
-@@ -395,6 +396,7 @@ llama_context::llama_context(
+@@ -369,6 +370,7 @@ llama_context::llama_context(
      cparams.kv_unified     = params.kv_unified;
      cparams.moe_cache_size      = params.moe_cache_size;
      cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
@@ -583,7 +583,7 @@ index 670adcc02..e43d28b3f 100644
  
      // resolved after flash attention, see resolve_fused_ops()
      {
-@@ -796,6 +798,10 @@ void llama_context::sched_new(const sched_params & params) {
+@@ -775,6 +777,10 @@ void llama_context::sched_new(const sched_params & params) {
  
      ggml_backend_sched_set_copy_callback(sched.get(), sched_copy_experts, this);
      ggml_backend_sched_set_realloc_callback(sched.get(), sched_graph_realloc, this);
@@ -594,7 +594,7 @@ index 670adcc02..e43d28b3f 100644
  
      sched_params_cur = params;
  }
-@@ -4473,6 +4479,7 @@ llama_context_params llama_context_default_params() {
+@@ -4417,6 +4423,7 @@ llama_context_params llama_context_default_params() {
          /*.type_v                      =*/ GGML_TYPE_F16,
          /*.moe_cache_size              =*/ 0,
          /*.moe_cache_cpu_share         =*/ 0.0f,
@@ -603,10 +603,10 @@ index 670adcc02..e43d28b3f 100644
          /*.abort_callback_data         =*/ nullptr,
          /*.embeddings                  =*/ false,
 diff --git a/src/llama-cparams.h b/src/llama-cparams.h
-index 7ac1513ef..822a5acff 100644
+index c93494faf..de3ce1681 100644
 --- a/src/llama-cparams.h
 +++ b/src/llama-cparams.h
-@@ -61,6 +61,7 @@ struct llama_cparams {
+@@ -56,6 +56,7 @@ struct llama_cparams {
  
      size_t moe_cache_size;
      float  moe_cache_cpu_share;

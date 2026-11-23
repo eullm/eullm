@@ -15,10 +15,10 @@ the switch changes nothing.
 EuLLM patch on llama.cpp v1.0.0 (b12359), after 0001.
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 840de86a1..daa52dc56 100644
+index 18c9a7a27..b27f8e371 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -6939,6 +6939,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -7094,6 +7094,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_unpin_host_buffer") == 0) {
          return (void *)ggml_backend_cuda_unpin_host_buffer;
      }
@@ -29,10 +29,10 @@ index 840de86a1..daa52dc56 100644
          return (void *)ggml_backend_cuda_get_features;
      }
 diff --git a/ggml/src/ggml-cuda/mmq-few.cu b/ggml/src/ggml-cuda/mmq-few.cu
-index 2c2a2745e..67e93cba9 100644
+index bc7cbc6e5..688b9e9ea 100644
 --- a/ggml/src/ggml-cuda/mmq-few.cu
 +++ b/ggml/src/ggml-cuda/mmq-few.cu
-@@ -4,8 +4,29 @@
+@@ -5,8 +5,29 @@
  #include "quantize.cuh"
  #include "vecdotq.cuh"
  
@@ -62,18 +62,18 @@ index 2c2a2745e..67e93cba9 100644
  // NVIDIA only: the kernel uses the NVIDIA int8 MMA fragment layout and cp.async.
  #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
  
-@@ -845,6 +866,9 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
+@@ -907,6 +928,9 @@ static int ggml_cuda_mmq_few_min_ncols(const ggml_type type, const int cc, const
  }
  
- bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const int cc) {
+ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, const int cc) {
 +    if (!ggml_cuda_mmq_few_enabled()) {
 +        return false;
 +    }
-     const int min_ncols = ggml_cuda_mmq_few_min_ncols(src0->type, cc, src0->ne[0]);
-     if (min_ncols == 0 || src1->ne[1] < min_ncols || src1->ne[1] > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS) {
-         return false;
+     const int64_t ncols     = ids ? ids->ne[1] : src1->ne[1];
+     const int     min_ncols = ggml_cuda_mmq_few_min_ncols(src0->type, cc, src0->ne[0], ids != nullptr);
+     if (min_ncols == 0 || ncols < min_ncols || ncols > MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS) {
 diff --git a/ggml/src/ggml-cuda/mmq-few.cuh b/ggml/src/ggml-cuda/mmq-few.cuh
-index 016834998..0f07ff6d9 100644
+index 133297c00..f33806be9 100644
 --- a/ggml/src/ggml-cuda/mmq-few.cuh
 +++ b/ggml/src/ggml-cuda/mmq-few.cuh
 @@ -2,6 +2,10 @@
@@ -84,6 +84,6 @@ index 016834998..0f07ff6d9 100644
 +// "ggml_backend_cuda_set_mmq_few" sets it, for a program whose drafts must be checked with the numbers of one token.
 +void ggml_cuda_set_mmq_few(bool enabled);
 +
- bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, int cc);
+ // ids != nullptr: MUL_MAT_ID
+ bool ggml_cuda_should_use_mmq_few(const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, int cc);
  
- void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
