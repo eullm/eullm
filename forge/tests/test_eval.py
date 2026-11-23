@@ -27,7 +27,6 @@ from eullm_forge.eval import (
     to_markdown,
 )
 
-
 # --- text / QA metrics -----------------------------------------------------
 
 def test_normalize_text_strips_accents_case_punct():
@@ -41,7 +40,8 @@ def test_exact_match_is_normalized_and_needs_reference():
 
 
 def test_keyword_coverage():
-    assert keyword_coverage("chiede la risoluzione e il risarcimento", ["risoluzione", "risarcimento"]) == 1.0
+    assert keyword_coverage("chiede la risoluzione e il risarcimento",
+                            ["risoluzione", "risarcimento"]) == 1.0
     assert keyword_coverage("solo risoluzione", ["risoluzione", "risarcimento"]) == 0.5
     assert keyword_coverage("niente", []) == 1.0  # nothing required → full
 
@@ -261,7 +261,8 @@ def test_mock_judge_prefers_rubric_overlap():
 
 
 def test_the_llm_judge_reads_every_compliant_verdict_form():
-    judge = lambda raw: LLMJudge(chat_fn=lambda prompt: raw).compare("q", "A", "B")
+    def judge(raw):
+        return LLMJudge(chat_fn=lambda prompt: raw).compare("q", "A", "B")
     assert judge("Verdict: 1\nFirst is best.").winner == "A"
     assert judge("Verdict: 2\nSecond is best.").winner == "B"
     assert judge("verdict: tie\nEven.").winner == "tie"
@@ -275,7 +276,8 @@ def test_a_non_compliant_verdict_is_a_tie_not_a_win():
     and moving the win rate. A reply that names no winner is unparseable,
     and unparseable is a tie.
     """
-    judge = lambda raw: LLMJudge(chat_fn=lambda prompt: raw).compare("q", "A", "B")
+    def judge(raw):
+        return LLMJudge(chat_fn=lambda prompt: raw).compare("q", "A", "B")
     for raw in ("Verdict: both are good, tie? no, both",
                 "Verdict: abstain, cannot decide",
                 "Verdict: 10\nFirst is best",
