@@ -143,7 +143,8 @@ def test_the_summary_counts_by_kind_and_works_out_old_files(tmp_path, capsys):
          "context": ["codice penale, art. 625"], "abstained": False,
          "unsourced_articles": [], "absent": True},
         {"id": "norm-termine-codice_penale-626", "question": "art. 626?", "answer": "...",
-         "context": [], "abstained": False, "unsourced_articles": ["49"], "absent": True}]), encoding="utf-8")
+         "context": [], "abstained": False, "unsourced_articles": ["49"],
+        "absent": True}]), encoding="utf-8")
     old = tmp_path / "answers-x.jsonl"         # closed book, written before the fields
     old.write_text(json.dumps({"id": "norm-contenuto-codice_civile-2043",
                                "question": "Che cosa prevede l'art. 2043 c.c.?",
