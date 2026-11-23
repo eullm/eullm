@@ -26,8 +26,27 @@ use serde_json::Value;
 
 /// The delimiters of a reasoning block, opening and closing, as the models
 /// write them. Gemma 4's are asymmetric (`<|channel>` opens, `<channel|>`
-/// closes), as in `chat_template::strip_reasoning_blocks`.
-const BLOCKS: &[(&str, &str)] = &[("<think>", "</think>"), ("<|channel>thought", "<channel|>")];
+/// closes), as in `chat_template::strip_reasoning_blocks`. Inkling 1 and 2
+/// write their turn as blocks, each opened by `<|message_model|>` and closed
+/// by `<|end_message|>`: `<|content_thinking|>` is the reasoning,
+/// `<|content_text|>` the answer (llama.cpp's `common/parsers/inkling.cpp`).
+const BLOCKS: &[(&str, &str)] = &[
+    ("<think>", "</think>"),
+    ("<|channel>thought", "<channel|>"),
+    ("<|message_model|><|content_thinking|>", "<|end_message|>"),
+];
+
+/// Inkling's block markers, which are special tokens and not part of the
+/// answer: taken out of it wherever they come. Seen on the reference PC with
+/// Inkling 2 Mini (23-11-2026), whose answers reached the chat as
+/// `<|message_model|><|content_thinking|>…<|end_message|><|message_model|>
+/// <|content_text|>Ciao!…<|end_message|>`.
+const MARKERS: &[&str] = &[
+    "<|message_model|>",
+    "<|content_text|>",
+    "<|content_thinking|>",
+    "<|end_message|>",
+];
 
 /// Whether a request asks for the reasoning apart: `think: true`, or a level
 /// name (`"high"`…), which Ollama takes for the models that have levels.
@@ -193,9 +212,15 @@ impl ThinkingSplitter {
                     return;
                 }
                 State::Content => {
-                    if self.take_leading_whitespace() {
-                        push(parts, Part::Content(std::mem::take(&mut self.held)));
+                    if !self.take_leading_whitespace() {
+                        return;
                     }
+                    // The start of a marker the next piece may complete stays
+                    // back, so half of one never reaches the answer.
+                    let keep = if end { 0 } else { marker_holdback(&self.held) };
+                    let ready = self.held.len() - keep;
+                    let text: String = self.held.drain(..ready).collect();
+                    push(parts, Part::Content(without_markers(&text)));
                     return;
                 }
             }
@@ -217,6 +242,29 @@ impl ThinkingSplitter {
         self.trim_start = false;
         true
     }
+}
+
+/// `text` without Inkling's block markers.
+fn without_markers(text: &str) -> String {
+    if !text.contains("<|") {
+        return text.to_string();
+    }
+    MARKERS
+        .iter()
+        .fold(text.to_string(), |text, marker| text.replace(marker, ""))
+}
+
+/// How many bytes at the end of `text` may be the start of a marker.
+fn marker_holdback(text: &str) -> usize {
+    MARKERS
+        .iter()
+        .filter_map(|marker| {
+            (1..marker.len()).rev().find(|&k| {
+                text.len() >= k && marker.as_bytes().starts_with(&text.as_bytes()[text.len() - k..])
+            })
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn push(parts: &mut Vec<Part>, part: Part) {
@@ -301,6 +349,29 @@ mod tests {
             split("<|channel>thought\nThe user asks for a colour.<channel|>Blue."),
             both("The user asks for a colour.", "Blue.")
         );
+    }
+
+    /// Inkling 2 Mini's answer on the reference PC, as it reached the chat:
+    /// its blocks become the reasoning and the answer, and no marker is left.
+    #[test]
+    fn inklings_blocks_become_the_thinking_and_the_answer() {
+        let answer = "<|message_model|><|content_thinking|>The user greets me in Italian.<|end_message|>\
+                      <|message_model|><|content_text|>Ciao! Mi chiamo Inkling.<|end_message|>";
+        let expected = both("The user greets me in Italian.", "Ciao! Mi chiamo Inkling.");
+        assert_eq!(split(answer), expected);
+        for piece_len in [1, 3, 7] {
+            assert_eq!(streamed(answer, piece_len), expected, "pieces of {piece_len}");
+        }
+        // Without reasoning, the answer block alone.
+        let answer = "<|message_model|><|content_text|>Ciao!<|end_message|>";
+        assert_eq!(split(answer), (None, "Ciao!".into()));
+        assert_eq!(streamed(answer, 2), (None, "Ciao!".into()));
+    }
+
+    /// A marker-like text that is not one stays: only whole markers go.
+    #[test]
+    fn text_that_only_looks_like_a_marker_stays() {
+        assert_eq!(split("a <|message b"), (None, "a <|message b".into()));
     }
 
     #[test]

@@ -16,7 +16,7 @@ something changed, less so for understanding what it means.
 ## Unreleased
 
 ### Added
-- **Inkling 2 models** run: llama.cpp is updated to b12632 (23 November), which adds their looped architecture (`inkling2_loop`), as published by ggml-org and in the `Mainline_Support` folder of Unsloth's repository (the files at the root of Unsloth's repository are for its own fork). Until now they failed to load with "unknown model architecture".
+- **Inkling 2 models** run: llama.cpp is updated to b12632 (23 November), which adds their looped architecture (`inkling2_loop`), as published by ggml-org and in the `Mainline_Support` folder of Unsloth's repository (the files at the root of Unsloth's repository are for its own fork). Until now they failed to load with "unknown model architecture". Their reasoning and answer, which Inkling writes as blocks between special markers, reach the chat apart and without the markers.
 
 ## 0.9.40 — 2026-11-23
 
