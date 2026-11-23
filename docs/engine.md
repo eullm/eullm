@@ -1795,6 +1795,28 @@ curl -N http://localhost:11434/api/chat \
   }'
 ```
 
+##### Tools
+
+With `tools` (Ollama's definitions, which are OpenAI's) the prompt is the
+model's own template given the whole conversation and the tools, and the
+answer is parsed for calls, as on `/v1/chat/completions`, also when the
+conversation carries images or audio. The calls come back as Ollama returns
+them, with the arguments an object:
+
+```json
+{"message": {"role": "assistant", "content": "",
+  "tool_calls": [{"function": {"index": 0, "name": "get_weather",
+                               "arguments": {"city": "Rome"}}}]},
+ "done": true, "done_reason": "stop"}
+```
+
+The history goes back as Ollama clients send it: the assistant's
+`tool_calls`, and each result as `{"role": "tool", "content": "...",
+"tool_name": "get_weather"}`. A call exists only once the answer is complete,
+so with `"stream": true` the answer arrives in two lines, the message with
+its calls and then the closing one with the counts. A model whose GGUF has no
+chat template answers without tools, and the log says so.
+
 #### Documents in a conversation
 
 The chat in the browser attaches documents: PDF, Word (`.docx`),
