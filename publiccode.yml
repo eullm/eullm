@@ -1,0 +1,153 @@
+# publiccode.yml: the description of EuLLM for the Italian public
+# administration's catalogue of open source software (Developers Italia) and
+# any other catalogue that reads the standard. Specification:
+# https://yml.publiccode.tools. Version 0.7, the newest one Developers
+# Italia's parser accepts (publiccode-parser-go v5.4.3, November 2026).
+# softwareVersion and releaseDate change in each release commit.
+publiccodeYmlVersion: "0.7"
+
+name: EuLLM
+url: "https://github.com/eullm/eullm"
+landingURL: "https://www.eullm.eu"
+softwareVersion: "0.9.30"
+releaseDate: "2026-11-22"
+logo: eullm-logo-github.png
+
+platforms:
+  - web
+  - linux
+  - windows
+  - mac
+
+categories:
+  - knowledge-management
+  - document-management
+  - data-analytics
+  - it-development
+
+developmentStatus: beta
+softwareType: standalone/backend
+
+intendedAudience:
+  scope:
+    - government
+    - local-authorities
+    - justice
+    - healthcare
+    - education
+    - research
+
+description:
+  it:
+    genericName: Server di modelli linguistici
+    shortDescription: >-
+      Modelli linguistici (LLM) sui server dell'ente: domande, risposte e
+      documenti non escono mai dalla macchina, con registro di ogni risposta.
+    longDescription: |
+      EuLLM esegue modelli linguistici di grandi dimensioni (LLM) sui server
+      dell'amministrazione, sul suo data center o sul cloud qualificato che
+      sceglie. Nessun dato viene inviato a servizi esterni: le domande, le
+      risposte e i documenti allegati restano sulla macchina, e non c'è
+      telemetria.
+
+      È un unico programma, senza dipendenze da installare, per Linux,
+      Windows e macOS, con versioni per GPU NVIDIA (CUDA), AMD (ROCm),
+      Apple (Metal), per qualsiasi GPU con Vulkan e per la sola CPU. Offre le
+      stesse API di Ollama e di OpenAI: i programmi che già le usano (Open
+      WebUI, LangChain, n8n, i client OpenAI) funzionano senza modifiche.
+
+      Include una chat nel browser per i dipendenti, con i documenti allegati
+      (PDF, Word, Excel, PowerPoint, LibreOffice), una pagina per scegliere e
+      scaricare i modelli e un monitor delle richieste e dell'hardware. Ogni
+      risposta viene scritta in un registro locale (modello, token, tempi, mai
+      il testo), utile per la tenuta dei registri prevista dall'AI Act.
+
+      Più persone usano lo stesso server contemporaneamente (continuous
+      batching), con chiavi di accesso, elenco degli indirizzi ammessi, una
+      chiave da amministratore per cambiare i modelli e l'elenco dei modelli
+      permessi.
+
+      I modelli si scelgono tra quelli aperti in formato GGUF. Tra questi i
+      modelli EuLLM per il diritto italiano (legal-it-8b, legal-it-4b),
+      addestrati sul supercalcolatore europeo Leonardo solo su legislazione
+      italiana pubblica, da usare insieme a un sistema di ricerca nei testi.
+    documentation: "https://github.com/eullm/eullm/blob/main/docs/engine.md"
+    apiDocumentation: "https://github.com/eullm/eullm/blob/main/docs/engine.md#api-reference"
+    features:
+      - Modelli linguistici sui server dell'ente, nessun dato all'esterno
+      - API compatibili con Ollama e OpenAI
+      - Chat nel browser con documenti allegati
+      - Registro locale di ogni risposta, senza il testo
+      - Più utenti in parallelo sulla stessa GPU
+      - Chiavi di accesso, indirizzi ammessi, chiave da amministratore
+      - GPU NVIDIA, AMD, Apple, Vulkan, o solo CPU
+      - Modelli per il diritto italiano addestrati su Leonardo
+  en:
+    genericName: Language model server
+    shortDescription: >-
+      Large language models on the organisation's own servers: questions,
+      answers and documents never leave the machine, and every answer is logged.
+    longDescription: |
+      EuLLM runs large language models (LLMs) on the administration's own
+      servers, in its data centre or on the qualified cloud it chooses. No
+      data is sent to outside services: questions, answers and attached
+      documents stay on the machine, and there is no telemetry.
+
+      It is a single program with nothing else to install, for Linux, Windows
+      and macOS, with builds for NVIDIA (CUDA), AMD (ROCm) and Apple (Metal)
+      GPUs, for any GPU with Vulkan, and for the CPU alone. It offers the same
+      APIs as Ollama and OpenAI, so programs that already use them (Open
+      WebUI, LangChain, n8n, OpenAI clients) work unchanged.
+
+      It includes a chat in the browser for staff, with attached documents
+      (PDF, Word, Excel, PowerPoint, LibreOffice), a page to choose and
+      download models, and a monitor of requests and hardware. Every answer
+      is written to a local audit trail (model, tokens, timing, never the
+      text), for the record-keeping the AI Act asks for.
+
+      Many people use one server at once (continuous batching), with access
+      keys, an allowlist of addresses, an administrator key for changing the
+      models and a list of the models allowed.
+
+      Models are chosen among open models in the GGUF format, including the
+      EuLLM models for Italian law (legal-it-8b, legal-it-4b), trained on the
+      European supercomputer Leonardo on public Italian legislation only, to
+      be used together with a retrieval system.
+    documentation: "https://github.com/eullm/eullm/blob/main/docs/engine.md"
+    apiDocumentation: "https://github.com/eullm/eullm/blob/main/docs/engine.md#api-reference"
+    features:
+      - Language models on your own servers, no data sent out
+      - Ollama and OpenAI compatible APIs
+      - Browser chat with attached documents
+      - Local audit trail of every answer, without the text
+      - Many users at once on one GPU
+      - Access keys, address allowlist, administrator key
+      - NVIDIA, AMD, Apple, Vulkan GPUs, or CPU only
+      - Italian law models trained on Leonardo
+
+legal:
+  license: AGPL-3.0-or-later
+  mainCopyrightOwner: I3K Technologies Srl
+  repoOwner: I3K Technologies Srl
+
+maintenance:
+  type: internal
+  contacts:
+    - name: EuLLM development team
+      email: dev@eullm.eu
+      affiliation: I3K Technologies Srl
+
+localisation:
+  localisationReady: false
+  availableLanguages:
+    - en
+
+dependsOn:
+  hardware:
+    - name: GPU NVIDIA, AMD or Apple, or any GPU with Vulkan (optional)
+      optional: true
+
+IT:
+  countryExtensionVersion: "1.0"
+  riuso:
+    codiceIPA: ""

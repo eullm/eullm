@@ -59,6 +59,15 @@ A published tag is not moved to fix this. The release page and its checksums
 are already in users' hands; ship the next patch version and say in
 `CHANGELOG.md` what the mis-tagged one actually contains.
 
+## The release commit updates `publiccode.yml` too
+
+`publiccode.yml` at the root describes EuLLM for Developers Italia's catalogue
+of open source software for the Italian public administration, whose crawler
+reads it from `main`. Its `softwareVersion` and `releaseDate` change in the
+release commit, with `engine/Cargo.toml` and `CHANGELOG.md`. It stays on
+standard version 0.7 until Developers Italia's parser
+(`italia/publiccode-parser-go`) accepts a newer one.
+
 ## The release publishes what was built, not a list someone maintains
 
 `release-engine.yml` attaches `artifacts/*/*`. It used to name each file
