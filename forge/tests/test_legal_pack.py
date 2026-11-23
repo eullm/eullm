@@ -60,7 +60,8 @@ def test_one_file_per_article_named_as_it_is_cited(tmp_path, capsys):
     text = (out / "articoli" / files[0]).read_text(encoding="utf-8")
     assert text.startswith("Codice penale, art. 54 (Stato di necessità)\n\n")
     assert "particolare dovere giuridico" in text          # the continuation chunk too
-    rows = [json.loads(ln) for ln in (out / "legal-pack.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = [json.loads(ln) for ln in
+            (out / "legal-pack.jsonl").read_text(encoding="utf-8").splitlines()]
     assert {r["id"] for r in rows} == {"codice_penale-54", "codice_penale-624",
                                        "legge_procedimento_amministrativo-3"}
     assert all(r["vigente_al"] == "2026-09-15" for r in rows)
@@ -213,7 +214,8 @@ def test_the_exam_goes_through_the_api_and_resumes(server, tmp_path, monkeypatch
     assert rows[0]["sources_ok"] and rows[0]["question"] == "Cosa prevede l'art. 54?"
 
     graded = tmp_path / "answers-x.graded.jsonl"
-    graded.write_text("".join(json.dumps({**r, "grade": "correct"}) + "\n" for r in rows), encoding="utf-8")
+    graded.write_text("".join(json.dumps({**r, "grade": "correct"}) + "\n" for r in rows),
+                      encoding="utf-8")
     capsys.readouterr()
     assert mod.main(["summary", str(graded)]) == 0
     printed = capsys.readouterr().out
