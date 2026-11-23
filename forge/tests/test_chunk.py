@@ -37,7 +37,8 @@ def test_chunks_prefer_paragraph_boundary():
     chunks = chunk_text(text, max_chars=80, overlap=10)
     # The first cut should land right after a paragraph break, so the
     # first chunk ends with the trailing period of the first paragraph.
-    assert chunks[0].endswith(("primo cut.", "Primo paragrafo abbastanza lungo per superare il primo cut."))
+    assert chunks[0].endswith(
+        ("primo cut.", "Primo paragrafo abbastanza lungo per superare il primo cut."))
 
 
 def test_chunks_dont_split_mid_word():
