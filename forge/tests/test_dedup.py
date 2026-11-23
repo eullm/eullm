@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from eullm_forge.datasets.dedup import (
     DedupStats,
@@ -134,7 +133,7 @@ def test_dedup_chains_exact_then_near_no_double_counting():
                             "contributi previdenziali, riscatto contributivo"},
     ]
     stats = DedupStats()
-    out = list(dedup(recs, near_threshold=0.7, stats=stats))
+    list(dedup(recs, near_threshold=0.7, stats=stats))
     assert stats.seen == 4
     assert stats.dropped_exact + stats.dropped_near + stats.kept == 4
     assert stats.dropped_exact == 1
