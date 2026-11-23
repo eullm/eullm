@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.9.40 — 2026-11-23
 
 ### Added
 - **Tools on `/api/chat`**, as on `/v1/chat/completions`: the request's `tools` reach the model's own template, and the calls come back in Ollama's shape, `message.tool_calls[].function.{name, arguments}` with the arguments an object, streamed or not. They also work in a conversation with images or audio, which only `/api/chat` reads. Until now `/api/chat` ignored `tools` and never returned a call. With `"stream": true` the answer arrives whole, since a call exists only once it is complete.
