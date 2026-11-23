@@ -16,10 +16,10 @@ case for the arrays the fast path must leave alone.
 EuLLM patch on llama.cpp b11925.
 
 diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
-index 9004efa20..f0eb5cd88 100644
+index d8cd441a5..d7faf7cf9 100644
 --- a/src/llama-sampler.cpp
 +++ b/src/llama-sampler.cpp
-@@ -2961,26 +2961,45 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
+@@ -2927,26 +2927,45 @@ static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_tok
          return;
      }
  
