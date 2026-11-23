@@ -118,7 +118,8 @@ def corpus(tmp_path):
             "sentence_id": "cds/2025000001", "year": 2025, "kind": "cds", "chunk_index": 0}
     rows.append(late)
     chunks = tmp_path / "train.jsonl"
-    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    chunks.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                      encoding="utf-8")
     og = tmp_path / "cds-sentenze.csv"
     with og.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(index[0]), delimiter=";")
@@ -150,7 +151,8 @@ def test_the_split_keeps_appeals_together_and_the_test_years_out(corpus, tmp_pat
     first = json.loads((out / "cds-split.json").read_text(encoding="utf-8"))
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--dev", "4",
                      "--out-dir", str(out)]) == 0
-    assert json.loads((out / "cds-split.json").read_text(encoding="utf-8"))["dev_sha256"] == first["dev_sha256"]
+    assert (json.loads((out / "cds-split.json").read_text(encoding="utf-8"))["dev_sha256"]
+            == first["dev_sha256"])
     printed = capsys.readouterr()
     assert "fatto0_" not in printed.out + printed.err
     assert "after 2024" in printed.err
@@ -189,7 +191,8 @@ def test_cards_are_written_refused_and_not_asked_twice(corpus, teacher, tmp_path
     chunks, og = corpus
     url, seen = teacher
     ids = tmp_path / "ids.txt"
-    ids.write_text("cds/2019000000\ncds/2020000003\ncds/2021000004\ncds/nonexistent\n", encoding="utf-8")
+    ids.write_text("cds/2019000000\ncds/2020000003\ncds/2021000004\ncds/nonexistent\n",
+                   encoding="utf-8")
     out = tmp_path / "cds" / "schede.jsonl"
     mod = _load("cds_schede")
     args = ["--chunks", str(chunks), "--openga", str(og), "--ids", str(ids), "--out", str(out),
@@ -300,7 +303,8 @@ def test_refusals_under_older_checks_are_asked_again_once(corpus, teacher, tmp_p
     mod = _load("cds_schede")
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--ids", str(ids),
                      "--out", str(out), "--url", url]) == 0
-    assert [json.loads(line)["id"] for line in out.read_text(encoding="utf-8").splitlines()] == ["cds/2019000000"]
+    assert [json.loads(line)["id"] for line in out.read_text(encoding="utf-8").splitlines()] == [
+        "cds/2019000000"]
     assert len(seen) == 1
 
 
@@ -351,7 +355,8 @@ def test_the_retrieval_check_finds_the_rulings_its_questions_are_about(corpus, t
     dev = tmp_path / "dev.txt"
     dev.write_text("cds/2019000000\ncds/2021000004\n", encoding="utf-8")
     cards = tmp_path / "schede.jsonl"
-    cards.write_text(json.dumps({"id": "cds/2019000000", **GOOD}, ensure_ascii=False) + "\n", encoding="utf-8")
+    cards.write_text(json.dumps({"id": "cds/2019000000", **GOOD}, ensure_ascii=False) + "\n",
+                     encoding="utf-8")
     out = tmp_path / "ret.csv"
     mod = _load("cds_retrieval")
     assert mod.main(["--chunks", str(chunks), "--openga", str(og), "--cards", str(cards),
