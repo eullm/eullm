@@ -203,7 +203,8 @@ def test_off_topic_prompts_can_ask_the_judge_for_the_matter_and_what_is_needed(t
     norms.write_text("".join(json.dumps(r) + "\n" for r in RECORDS), encoding="utf-8")
     off = tmp_path / "off.jsonl"
     off.write_text(json.dumps({"question": "Chi paga le spese della domanda di rimborso IMU?",
-                               "topic": "IMU, TARI e altri tributi locali", "id": "off-1"}) + "\n", encoding="utf-8")
+                               "topic": "IMU, TARI e altri tributi locali", "id": "off-1"}) + "\n",
+                      encoding="utf-8")
     first = tmp_path / "prompts.jsonl"
     assert mod.main(["--norms", str(norms), "--offtopic", str(off), "-k", "2",
                      "--out", str(first)]) == 0
