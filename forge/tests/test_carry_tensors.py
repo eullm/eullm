@@ -59,7 +59,8 @@ def test_the_mtp_head_is_carried_into_a_single_file_merge(tmp_path):
     got = carry_missing_tensors(base, merged)
 
     assert got == ["mtp.fc.weight", "mtp.layers.0.mlp.up_proj.weight"]
-    index = json.loads((merged / "model.safetensors.index.json").read_text(encoding="utf-8"))["weight_map"]
+    index = json.loads(
+        (merged / "model.safetensors.index.json").read_text(encoding="utf-8"))["weight_map"]
     assert index == {"model.layers.0.w": "model.safetensors",
                      "mtp.fc.weight": "model-carried.safetensors",
                      "mtp.layers.0.mlp.up_proj.weight": "model-carried.safetensors"}
