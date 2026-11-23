@@ -32,7 +32,8 @@ def _bash() -> str:
 def _env(tmp_path: Path, *, tar_dir: Path | None = None) -> dict[str, str]:
     repo = tmp_path / "repo"
     (repo / "bench" / "campaign").mkdir(parents=True)
-    (repo / "bench" / "campaign" / "campaign.py").write_text("raise SystemExit(0)\n", encoding="utf-8")
+    (repo / "bench" / "campaign" / "campaign.py").write_text(
+        "raise SystemExit(0)\n", encoding="utf-8")
     campaign = tmp_path / "campaign"
     (campaign / "results").mkdir(parents=True)
     (campaign / "results" / "row.json").write_text("{}\n", encoding="utf-8")
@@ -52,7 +53,8 @@ def _env(tmp_path: Path, *, tar_dir: Path | None = None) -> dict[str, str]:
 
 
 def _run(env: dict[str, str]):
-    return subprocess.run([_bash(), str(SCRIPT)], env=env, capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run([_bash(), str(SCRIPT)], env=env, capture_output=True, text=True,
+                          encoding="utf-8")
 
 
 def test_a_failed_tar_keeps_the_previous_archive(tmp_path):
