@@ -255,10 +255,13 @@ server:
 | Budgets and alerts | the Monitor and `/metrics` | monthly tokens for each group; alerts by webhook or email |
 | Licence | AGPL-3.0-or-later, free | commercial |
 
-The chat's administrator menu lists the Pro pages, each saying what it does,
-with a link to [eullm.eu/pro](https://www.eullm.eu/pro); none of them pretends
-to work. Whoever redistributes the engine turns them off with
-`EULLM_NO_PRO_HINTS=1` ([details](docs/engine.md#eullm-and-eullm-pro)).
+In the released binaries and Docker images, the chat's administrator menu
+lists the Pro pages, each saying what it does, with a link to
+[eullm.eu/pro](https://www.eullm.eu/pro); none of them pretends to work.
+`EULLM_NO_PRO_HINTS=1` turns them off; a build from source does not show them
+unless `EULLM_NO_PRO_HINTS=0` ([details](docs/engine.md#eullm-and-eullm-pro)).
+What the open engine does never moves to Pro: see
+[CONTRIBUTING.md](CONTRIBUTING.md#the-open-engine-and-eullm-pro).
 
 ## Documentation
 

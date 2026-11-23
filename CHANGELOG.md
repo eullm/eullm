@@ -18,6 +18,8 @@ something changed, less so for understanding what it means.
 ### Added
 - **Tools on `/api/chat`**, as on `/v1/chat/completions`: the request's `tools` reach the model's own template, and the calls come back in Ollama's shape, `message.tool_calls[].function.{name, arguments}` with the arguments an object, streamed or not. They also work in a conversation with images or audio, which only `/api/chat` reads. Until now `/api/chat` ignored `tools` and never returned a call. With `"stream": true` the answer arrives whole, since a call exists only once it is complete.
 
+- **A build from source no longer shows the EuLLM Pro pages** in the chat's administrator menu, unless `EULLM_NO_PRO_HINTS=0`: whoever builds the engine is most often working on its code. The released binaries and the Docker images still show them, and `EULLM_NO_PRO_HINTS=1` still turns them off there.
+
 ### Fixed
 - **`--no-flash-attn` with a quantized value cache** (`--cache-type-v q4_0`, `q8_0`…): llama.cpp refuses that combination, and the engine found out only when the context failed, then fell back to f16 for the key cache too and still showed the quantized types and their memory in the startup summary. Now the value cache is f16 from the start, the key cache keeps the type asked for, and a line says so; the summary shows the types the context really uses, also after a fallback because the GPU would not allocate a quantized cache. It also says `off (--no-flash-attn)` instead of `disabled (auto-detect)`.
 

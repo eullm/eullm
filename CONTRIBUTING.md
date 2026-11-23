@@ -123,6 +123,23 @@ you keep (your own copyright — it is a licence, not an assignment), and why a
 `Signed-off-by` line does not cover it. One agreement covers all your future
 contributions.
 
+### The open engine and EuLLM Pro
+
+EuLLM Pro is this engine with modules for organisations compiled in (accounts
+for each person, the AI Act records, assistants for groups, budgets), sold
+under a commercial licence; the CLA above is what lets it include the
+engine's code. Three commitments come with it:
+
+- **Nothing moves from the open engine to Pro.** What the engine does today
+  it keeps doing, under AGPL-3.0, in every release. Pro only adds.
+- **The engine is not made worse to sell Pro.** No limit is put into the open
+  engine for Pro to lift.
+- **Pro is visible, not in the way.** The chat's administrator menu lists the
+  Pro pages in the released binaries and Docker images, never in the chat
+  itself; a build from source does not show them unless asked
+  (`EULLM_NO_PRO_HINTS=0`), so you do not have them in front of you while
+  working on the code.
+
 **Important:** Do not introduce *dependencies* with GPL, AGPL, or other
 copyleft licenses — our own crates being AGPL-3.0-or-later doesn't change
 this. Every dependency must stay permissive (MIT, Apache-2.0, BSD, or

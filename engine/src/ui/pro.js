@@ -4,10 +4,11 @@
 // everyone, requests nobody can tell apart). Nothing here pretends to work:
 // the only action is a link to eullm.eu.
 //
-// Served as /eullm-ui/pro.js, and empty (so none of this is shown) when the
-// server is started with EULLM_NO_PRO_HINTS=1, or when a program built on the
-// engine adds a script of its own to the page (`chat_script`): its pages are
-// then the ones in the menu.
+// Served as /eullm-ui/pro.js, and empty (so none of this is shown) in a build
+// from source unless EULLM_NO_PRO_HINTS=0, in a released binary or a Docker
+// image when the server is started with EULLM_NO_PRO_HINTS=1, and when a
+// program built on the engine adds a script of its own to the page
+// (`chat_script`): its pages are then the ones in the menu.
 //
 // Who sees it: whoever administers this server. Without EULLM_ADMIN_KEY
 // whoever opens the page may change the models, and so is shown the entries;

@@ -57,6 +57,9 @@ ENV CMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHS} \
 # stub of it. `-no-pie` on the final link only, as in the release workflow:
 # Rust's default linker makes a PIE, and nvcc's device-link object is not
 # built -fPIC ("relocation R_X86_64_32 cannot be used against local symbol").
+# The EuLLM Pro pages in the chat's administrator menu, on by default as in the
+# released binaries: see engine/Dockerfile.
+ARG EULLM_PRO_HINTS=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     LIBRARY_PATH=/usr/local/cuda/lib64/stubs \

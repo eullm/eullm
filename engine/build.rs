@@ -84,6 +84,17 @@ fn main() {
     let asset = std::env::var("EULLM_RELEASE_ASSET").unwrap_or_default();
     println!("cargo:rustc-env=EULLM_RELEASE_ASSET={}", asset.trim());
 
+    // Whether the chat's administrator menu points to EuLLM Pro unless the
+    // server says otherwise (`ui::ProHints`): yes in the binaries the release
+    // publishes (the asset above is set) and in the Docker images, whose
+    // Dockerfiles set EULLM_PRO_HINTS=1; no in a build from source, where
+    // whoever builds is most often working on the code.
+    println!("cargo:rerun-if-env-changed=EULLM_PRO_HINTS");
+    let hints = std::env::var("EULLM_PRO_HINTS").unwrap_or_default();
+    let hints = matches!(hints.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+        || !asset.trim().is_empty();
+    println!("cargo:rustc-env=EULLM_PRO_HINTS_BUILD={}", if hints { "on" } else { "off" });
+
     emit_git_rerun_triggers();
 }
 
