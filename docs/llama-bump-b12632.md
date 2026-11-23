@@ -58,3 +58,22 @@ Not checked here, to do before the tag:
 The next release is cold: sccache keys on llama.cpp's sources, so every
 kernel recompiles once (see the release skill: 67-69 minutes after the
 v0.7.30 bump).
+
+## 5. Found after the release (0.9.50)
+
+**Parsers match special tokens by id** since #29307 ("chat : implement token
+aware parsing", 22 November, in this bump). A parser built from templates
+that know the model's vocabulary matches a special-token marker
+(`p.token(...)`) only where the input carries that token's id; the engine
+hands `llama_rs_chat_parse` the text it streamed, with no ids. So in 0.9.50
+every format whose markers are special tokens failed to read, leniently: no
+reasoning, no tool calls, and the whole output as content with the
+generation prompt in front. Seen with Gemma 4 E2B on `/v1/chat/completions`
+with tools (`<|turn>model\n<|channel>thought…` as content, no call), 24-11-2026;
+Qwen3, whose `<think>` is not a special token, was unaffected.
+
+`wrapper_common.cpp` now builds the templates without the vocabulary's
+specials (`common_chat_templates_set_specials(tmpls, {})`): a token parser is
+then a literal, as before #29307. Passing the token ids instead would need
+them carried with every streamed piece; worth doing if a format turns out to
+need ids (a marker that also occurs as plain text in answers).
