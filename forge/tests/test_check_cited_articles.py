@@ -155,7 +155,8 @@ def test_more_acts_the_corpus_does_not_hold():
 def test_the_script_prints_counts_only(tmp_path, capsys):
     mod = _load()
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)), encoding="utf-8")
+    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)),
+                      encoding="utf-8")
     ans = tmp_path / "answers-m.jsonl"
     ans.write_text("".join(json.dumps(r) + "\n" for r in [
         {"question": "Che cosa prevede l'art. 2 del codice civile?",
@@ -172,10 +173,12 @@ def test_the_script_prints_counts_only(tmp_path, capsys):
 def test_show_prints_the_flagged_citation_with_its_context(tmp_path, capsys):
     mod = _load()
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)), encoding="utf-8")
+    norms.write_text("".join(json.dumps(_rec("codice_civile", n)) + "\n" for n in (1, 2, 3)),
+                      encoding="utf-8")
     ans = tmp_path / "answers-m.jsonl"
     ans.write_text(json.dumps({"question": "Che cosa prevede l'art. 2 del codice civile?",
-                               "answer": "Art. 2 e art. 9 c.c. sul punto."}) + "\n", encoding="utf-8")
+                               "answer": "Art. 2 e art. 9 c.c. sul punto."}) + "\n",
+                      encoding="utf-8")
     assert mod.main([str(ans), "--norms", str(norms), "--show", "5"]) == 0
     assert "    codice_civile art. 9 | art. 9 c.c. sul punto." in capsys.readouterr().out
 
