@@ -98,7 +98,8 @@ def test_the_scripts_build_once_and_print_counts_only(tmp_path, capsys):
     assert make.main(["--norms", str(norms), "--per-kind", "5", "--rulings", "3",
                       "--out", str(out)]) == 0
     first = out.read_text(encoding="utf-8")
-    assert make.main(["--norms", str(norms), "--out", str(out)]) == 0 and out.read_text(encoding="utf-8") == first
+    assert (make.main(["--norms", str(norms), "--out", str(out)]) == 0
+            and out.read_text(encoding="utf-8") == first)
     items = [json.loads(line) for line in first.splitlines()]
     answers = tmp_path / "answers-r2l.jsonl"
     answers.write_text("".join(json.dumps({"id": it["id"], "answer": "Non lo so."}) + "\n"
