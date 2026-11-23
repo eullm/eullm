@@ -28,7 +28,7 @@ use crate::inference::embedding::{DEFAULT_EMBEDDING_CTX, Embedded, EmbeddingMode
 
 use super::AppState;
 use super::resident::{Lease, SlotSnapshot};
-use super::thinking::{Part, ThinkingSplitter};
+use super::thinking::{AnswerReader, InlineThinking, Part};
 use crate::audit::{AuditEntry, AuditLogger};
 use crate::inference::scheduler::NotQueued;
 use crate::inference::{
@@ -1295,6 +1295,25 @@ fn build_chat_prompt(
     let mut stop_sequences = template.stop_sequences();
     stop_sequences.push("<|end|>".to_string());
     (prompt, stop_sequences, String::new())
+}
+
+/// How the model answering `messages` writes its answer, as llama.cpp knows
+/// its family (see [`crate::inference::AnswerFormat`]): `None` when the GGUF
+/// carries no template, and the answer is then read by our own splitter.
+fn answer_format(
+    snap: &SlotSnapshot,
+    messages: &[Value],
+    think: bool,
+) -> Option<crate::inference::AnswerFormat> {
+    let messages_json = serde_json::to_string(&template_messages(messages, None)).ok()?;
+    let template = match snap.engine.as_ref() {
+        Some(engine) => engine.apply_oai_chat_template(&messages_json, None, None, think),
+        None => snap
+            .scheduler
+            .as_ref()?
+            .apply_oai_chat_template(&messages_json, None, None, think),
+    };
+    template?.answer_format()
 }
 
 /// Format chat messages into a prompt string using the model-appropriate template.
@@ -2893,6 +2912,7 @@ async fn generate_with(
                 snap.lease,
                 snap.load_duration,
                 split_thinking,
+                AnswerReader::plain(),
             ))
         } else {
             let Collected {
@@ -2952,6 +2972,7 @@ async fn generate_with(
                 snap.lease,
                 snap.load_duration,
                 split_thinking,
+                AnswerReader::plain(),
             ))
         } else {
             let tracker = crate::monitor::begin(&snap.model_name, "generate");
@@ -3162,6 +3183,12 @@ async fn chat_with(
                 multimodal_chat_prompt(rendered, &pairs, mm_think)
             }
         };
+        let mm_answer_format = if oai_template.is_none() {
+            answer_format(&snap, &messages, mm_think)
+        } else {
+            None
+        };
+        let mm_answer_prefix = mm_prefix.clone();
         let mm_request = GenerateRequest {
             prompt: mm_prompt,
             max_tokens: sp.max_tokens,
@@ -3222,6 +3249,7 @@ async fn chat_with(
                 snap.lease,
                 snap.load_duration,
                 split_thinking,
+                AnswerReader::new(mm_answer_format, &mm_answer_prefix),
             ));
         }
         let Collected {
@@ -3249,7 +3277,7 @@ async fn chat_with(
             json!({
                 "model": model,
                 "created_at": chrono::Utc::now().to_rfc3339(),
-                "message": chat_message(text, split_thinking),
+                "message": chat_message(text, split_thinking, mm_answer_format, &mm_answer_prefix),
                 "done": true,
                 "done_reason": stop_reason.as_api_str(),
                 "total_duration": duration_ms * 1_000_000 + nanos(snap.load_duration),
@@ -3285,6 +3313,13 @@ async fn chat_with(
         Some(tmpl) => (tmpl.prompt.clone(), Vec::new(), String::new()),
         None => build_chat_prompt(&snap, &messages, think, model_name_ref),
     };
+    // How the answer is read, when it is not the tool path's.
+    let answer_format = if oai_template.is_none() {
+        answer_format(&snap, &messages, think)
+    } else {
+        None
+    };
+    let answer_prefix = response_prefix.clone();
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
 
@@ -3346,6 +3381,7 @@ async fn chat_with(
                 snap.lease,
                 snap.load_duration,
                 split_thinking,
+                AnswerReader::new(answer_format.clone(), &answer_prefix),
             ))
         } else {
             let Collected {
@@ -3375,7 +3411,7 @@ async fn chat_with(
                 json!({
                     "model": model,
                     "created_at": chrono::Utc::now().to_rfc3339(),
-                    "message": chat_message(text, split_thinking),
+                    "message": chat_message(text, split_thinking, answer_format, &answer_prefix),
                     "done": true,
                     "done_reason": stop_reason.as_api_str(),
                     "total_duration": duration_ms * 1_000_000 + nanos(snap.load_duration),
@@ -3403,6 +3439,7 @@ async fn chat_with(
                 snap.lease,
                 snap.load_duration,
                 split_thinking,
+                AnswerReader::new(answer_format.clone(), &answer_prefix),
             ))
         } else {
             let tracker = crate::monitor::begin(&snap.model_name, "chat");
@@ -3438,7 +3475,7 @@ async fn chat_with(
                 json!({
                     "model": model,
                     "created_at": chrono::Utc::now().to_rfc3339(),
-                    "message": chat_message(result.text, split_thinking),
+                    "message": chat_message(result.text, split_thinking, answer_format, &answer_prefix),
                     "done": true,
                     "done_reason": result.stop_reason.as_api_str(),
                     "total_duration": result.duration_ms * 1_000_000 + nanos(snap.load_duration),
@@ -3870,6 +3907,13 @@ async fn chat_completions_with(
         Some(tmpl) => (tmpl.prompt.clone(), Vec::new(), String::new()),
         None => build_chat_prompt(&snap, &messages, think, model_name_ref),
     };
+    // How the answer is read, when it is not the tool path's.
+    let answer_format = if oai_template.is_none() {
+        answer_format(&snap, &messages, think)
+    } else {
+        None
+    };
+    let answer_prefix = response_prefix.clone();
     let sp = parse_chat_completions_params(&body);
     let grammar = parse_format_grammar(&body);
 
@@ -3976,7 +4020,7 @@ async fn chat_completions_with(
                 }
                 (message, called)
             }
-            None => (openai_message(text), false),
+            None => (openai_message(text, None, ""), false),
         };
         let finish_reason = if called_tools {
             "tool_calls"
@@ -4030,6 +4074,7 @@ async fn chat_completions_with(
                 audit,
                 snap.lease,
                 snap.load_duration,
+                AnswerReader::new(answer_format.clone(), &answer_prefix),
             );
             Ok(Sse::new(stream).into_response())
         } else {
@@ -4063,7 +4108,7 @@ async fn chat_completions_with(
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "message": openai_message(text),
+                    "message": openai_message(text, answer_format, &answer_prefix),
                     "finish_reason": stop_reason.as_api_str()
                 }],
                 "usage": {
@@ -4088,6 +4133,7 @@ async fn chat_completions_with(
                 audit,
                 snap.lease,
                 snap.load_duration,
+                AnswerReader::new(answer_format.clone(), &answer_prefix),
             );
             Ok(Sse::new(stream).into_response())
         } else {
@@ -4127,7 +4173,7 @@ async fn chat_completions_with(
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "message": openai_message(result.text),
+                    "message": openai_message(result.text, answer_format, &answer_prefix),
                     "finish_reason": result.stop_reason.as_api_str()
                 }],
                 "usage": {
@@ -4299,13 +4345,14 @@ fn stream_from_channel_sse(
     audit: AuditCtx,
     lease: Lease,
     load_duration: std::time::Duration,
+    reader: AnswerReader,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
     async_stream::stream! {
         let _lease = lease;
         let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
         // The OpenAI stream carries the reasoning apart, in
         // `delta.reasoning_content` (see `super::thinking`).
-        let mut splitter = matches!(format, StreamFormat::OpenAI).then(ThinkingSplitter::new);
+        let mut splitter = Some(reader);
 
         while let Some(event) = rx.recv().await {
             match event {
@@ -4322,7 +4369,7 @@ fn stream_from_channel_sse(
                 StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason, stats } => {
                     // What the splitter still held: the end of the answer, or
                     // of reasoning the token budget cut short.
-                    for part in splitter.take().map(ThinkingSplitter::finish).unwrap_or_default() {
+                    for part in splitter.take().map(AnswerReader::finish).unwrap_or_default() {
                         let data = format_part_event(&part, &model, &completion_id, format);
                         yield Ok(Event::default().data(data.to_string()));
                     }
@@ -4362,6 +4409,7 @@ fn stream_from_channel_sse(
 /// The stream holds `lease` until it ends, as `stream_from_channel_sse` does.
 /// `split_thinking`: the request asked for the reasoning apart (`think`, see
 /// [`super::thinking`]), so it streams as `thinking` beside the answer.
+#[allow(clippy::too_many_arguments)]
 fn ndjson_stream_response(
     mut rx: mpsc::Receiver<StreamEvent>,
     model: String,
@@ -4370,11 +4418,15 @@ fn ndjson_stream_response(
     lease: Lease,
     load_duration: std::time::Duration,
     split_thinking: bool,
+    reader: AnswerReader,
 ) -> axum::response::Response {
     let stream = async_stream::stream! {
         let _lease = lease;
         let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-        let mut splitter = split_thinking.then(ThinkingSplitter::new);
+        let mut splitter = Some(reader);
+        // Not asked apart: the reasoning stays in the answer, in `<think>`
+        // tags whatever the model's own markers were.
+        let mut inline = (!split_thinking).then(InlineThinking::default);
 
         while let Some(event) = rx.recv().await {
             match event {
@@ -4382,6 +4434,10 @@ fn ndjson_stream_response(
                     let parts = match splitter.as_mut() {
                         Some(splitter) => splitter.push(&piece),
                         None => vec![Part::Content(piece)],
+                    };
+                    let parts = match inline.as_mut() {
+                        Some(inline) => inline.map(parts),
+                        None => parts,
                     };
                     for part in parts {
                         let data = format_part_event(&part, &model, &completion_id, format);
@@ -4393,7 +4449,12 @@ fn ndjson_stream_response(
                 StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason, stats } => {
                     // What the splitter still held: the end of the answer, or
                     // of reasoning the token budget cut short.
-                    for part in splitter.take().map(ThinkingSplitter::finish).unwrap_or_default() {
+                    let mut rest = splitter.take().map(AnswerReader::finish).unwrap_or_default();
+                    if let Some(inline) = inline.as_mut() {
+                        rest = inline.map(rest);
+                        rest.extend(inline.close());
+                    }
+                    for part in rest {
                         let data = format_part_event(&part, &model, &completion_id, format);
                         let mut line = data.to_string();
                         line.push('\n');
@@ -4467,8 +4528,12 @@ fn format_part_event(part: &Part, model: &str, completion_id: &str, format: Stre
 
 /// `/v1/chat/completions`' `message`: the answer, and its reasoning apart in
 /// `reasoning_content` when it had any (see [`super::thinking`]).
-fn openai_message(text: String) -> Value {
-    let (reasoning, content) = super::thinking::split(&text);
+fn openai_message(
+    text: String,
+    format: Option<crate::inference::AnswerFormat>,
+    prefix: &str,
+) -> Value {
+    let (reasoning, content) = super::thinking::read(format, prefix, &text);
     let mut message = json!({ "role": "assistant", "content": content });
     if let Some(reasoning) = reasoning {
         message["reasoning_content"] = Value::String(reasoning);
@@ -4478,11 +4543,17 @@ fn openai_message(text: String) -> Value {
 
 /// `/api/chat`'s `message`: the answer, and its reasoning in `thinking` when
 /// the request asked for that apart (`think`, see [`super::thinking`]).
-fn chat_message(text: String, split_thinking: bool) -> Value {
+fn chat_message(
+    text: String,
+    split_thinking: bool,
+    format: Option<crate::inference::AnswerFormat>,
+    prefix: &str,
+) -> Value {
+    let (thinking, content) = super::thinking::read(format, prefix, &text);
     if !split_thinking {
+        let text = super::thinking::inline(thinking, content);
         return json!({ "role": "assistant", "content": text });
     }
-    let (thinking, content) = super::thinking::split(&text);
     let mut message = json!({ "role": "assistant", "content": content });
     if let Some(thinking) = thinking {
         message["thinking"] = Value::String(thinking);
@@ -4518,7 +4589,21 @@ fn template_messages(messages: &[Value], markers: Option<(&[usize], &str)>) -> V
             let mut out = serde_json::Map::new();
             let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
             out.insert("role".into(), json!(role));
-            let text = message.get("content").and_then(Value::as_str).unwrap_or("");
+            // A string, or OpenAI's array of parts, of which the text ones.
+            let joined;
+            let text = match message.get("content") {
+                Some(Value::String(text)) => text.as_str(),
+                Some(Value::Array(parts)) => {
+                    joined = parts
+                        .iter()
+                        .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                        .filter_map(|part| part.get("text").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    joined.as_str()
+                }
+                _ => "",
+            };
             let content = match markers {
                 Some((per_message, marker)) => {
                     let count = per_message.get(i).copied().unwrap_or(0);
@@ -4587,7 +4672,7 @@ fn chat_message_with_tools(
     split_thinking: bool,
 ) -> Value {
     let Some(mut parsed) = parsed else {
-        return chat_message(text, split_thinking);
+        return chat_message(text, split_thinking, None, "");
     };
     // A template parser that left the reasoning in the answer (Gemma 4's
     // `<|channel>thought`), taken apart as on `/v1/chat/completions`.
@@ -4716,11 +4801,11 @@ async fn chat_with_tools(
 /// `/api/generate`'s `response`, and its reasoning apart when the request
 /// asked for that (`think`, see [`super::thinking`]).
 fn generate_answer(text: String, split_thinking: bool) -> (String, Option<String>) {
+    let (thinking, response) = super::thinking::read(None, "", &text);
     if split_thinking {
-        let (thinking, response) = super::thinking::split(&text);
         (response, thinking)
     } else {
-        (text, None)
+        (super::thinking::inline(thinking, response), None)
     }
 }
 
@@ -4936,7 +5021,7 @@ mod api_chat_tools_tests {
         assert_eq!(message, json!({ "role": "assistant", "content": "It is 18 °C." }));
         assert!(message.get("tool_calls").is_none());
         let plain = chat_message_with_tools(None, "<think>x</think>Hi".into(), true);
-        assert_eq!(plain, chat_message("<think>x</think>Hi".into(), true));
+        assert_eq!(plain, chat_message("<think>x</think>Hi".into(), true, None, ""));
     }
 
     #[test]

@@ -101,8 +101,20 @@ curl -s http://localhost:11434/api/chat -H 'Content-Type: application/json' -d '
 }'
 ```
 
-Leave `think` out and the reasoning comes back in the answer, tags included,
-so a UI can render it as a collapsible section.
+Leave `think` out and the reasoning comes back in the answer, between
+`<think>` and `</think>`, so a UI can render it as a collapsible section. The
+tags are `<think>` whatever markers the model writes (Gemma 4's thought
+channel, Inkling's blocks).
+
+**Each answer is read in its model's own format.** Where the reasoning ends
+and the answer begins, and which markers are neither, differs from family to
+family. llama.cpp knows each family's format, and reads every answer with it
+(llama-server's parser), from the template in the model's GGUF; what it
+leaves in the answer, and the answers of a model whose GGUF has no template,
+EuLLM's own reading takes apart (`<think>`, Gemma 4's channel, Inkling's
+blocks). A new model family is then read correctly once llama.cpp knows it,
+which an engine update brings. The terminal chat (`eullm run`) reads its
+answers the same way, and prints the reasoning dimmed before the answer.
 
 **`"think": true` returns the reasoning apart, as Ollama does (new in v0.7.30).** On `/api/chat`
 the reasoning goes to `message.thinking` and `message.content` holds only the

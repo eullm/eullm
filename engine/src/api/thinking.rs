@@ -14,6 +14,14 @@
 //! stays in the answer with its tags, as it always has, for the clients that
 //! render it from there.
 //!
+//! How an answer is read, since 24-11-2026: with the model's own format, as
+//! llama.cpp knows its family ([`AnswerReader`], the parser llama-server
+//! reads every answer with), and with [`ThinkingSplitter`] for what the
+//! format leaves in the answer and for the models whose GGUF has no
+//! template. A new family's answers are then readable with a llama.cpp
+//! bump, and nothing to write here: until then each needed its own case
+//! (`<think>`, Gemma 4's channel, Inkling's blocks).
+//!
 //! `/v1/chat/completions` always takes it apart, into `reasoning_content`
 //! (`delta.reasoning_content` as it streams), as llama-server does. It kept
 //! it in `content` until 19-11-2026, when Gemma 4 on Leonardo answered 13
@@ -83,6 +91,211 @@ pub(crate) fn openai_think(body: &Value) -> bool {
         return effort != "none";
     }
     true
+}
+
+/// Reads an answer as it streams: with the model's own format, as llama.cpp
+/// knows it ([`AnswerFormat`]), when the model's template has one, and with
+/// [`ThinkingSplitter`] on what the format calls the answer, for what the
+/// format leaves in it (Gemma 4's thought channel, in the parsers of some
+/// llama.cpp versions). Without a format, or when the format does not read
+/// the answer, [`ThinkingSplitter`] alone, as before 24-11-2026.
+///
+/// The format reads the answer so far again at each piece, as llama-server
+/// does, and what it reads beyond the last reading goes out. A reading that
+/// takes back text already sent (a parser that changed its mind) sends
+/// nothing until it catches up.
+pub(crate) struct AnswerReader {
+    format: Option<FormatReading>,
+    splitter: ThinkingSplitter,
+}
+
+struct FormatReading {
+    format: crate::inference::AnswerFormat,
+    /// What the engine puts before the answer (a reasoning block the prompt
+    /// opened, `GenerateRequest::response_prefix`), which the format, built
+    /// from that same prompt, does not expect.
+    prefix: String,
+    raw: String,
+    /// What has gone out so far, by kind.
+    thinking: String,
+    content: String,
+    /// The format has read the answer at least once.
+    read_once: bool,
+}
+
+/// Bytes after which a format that has not read the answer once is given up
+/// for the splitter: the model is not writing what its template says.
+const FORMAT_GIVES_UP_AFTER: usize = 512;
+
+impl AnswerReader {
+    /// `prefix`: the response prefix the engine sends before the answer.
+    pub(crate) fn new(format: Option<crate::inference::AnswerFormat>, prefix: &str) -> Self {
+        Self {
+            format: format.map(|format| FormatReading {
+                format,
+                prefix: prefix.to_string(),
+                raw: String::new(),
+                thinking: String::new(),
+                content: String::new(),
+                read_once: false,
+            }),
+            splitter: ThinkingSplitter::new(),
+        }
+    }
+
+    /// Without a format: the splitter alone.
+    pub(crate) fn plain() -> Self {
+        Self::new(None, "")
+    }
+
+    pub(crate) fn push(&mut self, piece: &str) -> Vec<Part> {
+        let Some(reading) = self.format.as_mut() else {
+            return self.splitter.push(piece);
+        };
+        reading.raw.push_str(piece);
+        match reading.read(true) {
+            Some(parts) => self.through_splitter(parts),
+            None if !reading.read_once && reading.raw.len() > FORMAT_GIVES_UP_AFTER => {
+                tracing::debug!("the answer does not read in its template's format; plain reading");
+                let raw = std::mem::take(&mut reading.raw);
+                self.format = None;
+                self.splitter.push(&raw)
+            }
+            None => Vec::new(),
+        }
+    }
+
+    pub(crate) fn finish(mut self) -> Vec<Part> {
+        let mut parts = match self.format.as_mut() {
+            Some(reading) => match reading.read(false).or_else(|| reading.read(true)) {
+                Some(parts) => self.through_splitter(parts),
+                None if !reading.read_once => {
+                    let raw = std::mem::take(&mut reading.raw);
+                    self.splitter.push(&raw)
+                }
+                None => Vec::new(),
+            },
+            None => Vec::new(),
+        };
+        parts.extend(self.splitter.finish());
+        parts
+    }
+
+    /// The format's reasoning goes out as it is; its answer through the
+    /// splitter.
+    fn through_splitter(&mut self, parts: Vec<Part>) -> Vec<Part> {
+        let mut out = Vec::new();
+        for part in parts {
+            match part {
+                Part::Thinking(text) => out.push(Part::Thinking(text)),
+                Part::Content(text) => out.extend(self.splitter.push(&text)),
+            }
+        }
+        out
+    }
+}
+
+impl FormatReading {
+    /// What reading the answer so far adds to what went out; `None` when the
+    /// format cannot read it.
+    fn read(&mut self, partial: bool) -> Option<Vec<Part>> {
+        let text = match self.raw.strip_prefix(self.prefix.as_str()) {
+            Some(rest) => rest,
+            // The prefix is still arriving.
+            None if self.prefix.starts_with(self.raw.as_str()) => return Some(Vec::new()),
+            None => self.raw.as_str(),
+        };
+        let (thinking, content) = self.format.read(text, partial)?;
+        self.read_once = true;
+        let mut parts = Vec::new();
+        if let Some(new) = thinking.strip_prefix(self.thinking.as_str()) {
+            if !new.is_empty() {
+                parts.push(Part::Thinking(new.to_string()));
+            }
+            self.thinking = thinking.clone();
+        }
+        if let Some(new) = content.strip_prefix(self.content.as_str()) {
+            if !new.is_empty() {
+                parts.push(Part::Content(new.to_string()));
+            }
+            self.content = content.clone();
+        }
+        Some(parts)
+    }
+}
+
+/// A whole answer read by [`AnswerReader`]: its reasoning, when it had any,
+/// and the answer.
+pub(crate) fn read(
+    format: Option<crate::inference::AnswerFormat>,
+    prefix: &str,
+    text: &str,
+) -> (Option<String>, String) {
+    let mut reader = AnswerReader::new(format, prefix);
+    let mut parts = reader.push(text);
+    parts.extend(reader.finish());
+    joined(parts)
+}
+
+/// The answer with its reasoning in it, between `<think>` tags, as the
+/// Ollama endpoints return it when the reasoning is not asked apart: the
+/// tags the `<think>` families write, and every client that renders a
+/// reasoning section reads, whatever markers the model used (Gemma 4's
+/// channel, Inkling's blocks).
+pub(crate) fn inline(thinking: Option<String>, content: String) -> String {
+    match thinking {
+        Some(thinking) => format!("<think>{thinking}</think>{content}"),
+        None => content,
+    }
+}
+
+/// [`inline`] as the answer streams: reasoning opens a `<think>` tag, the
+/// answer after it closes it, and every part comes out as answer text.
+#[derive(Debug, Default)]
+pub(crate) struct InlineThinking {
+    open: bool,
+}
+
+impl InlineThinking {
+    pub(crate) fn map(&mut self, parts: Vec<Part>) -> Vec<Part> {
+        parts
+            .into_iter()
+            .map(|part| match part {
+                Part::Thinking(text) if !self.open => {
+                    self.open = true;
+                    Part::Content(format!("<think>{text}"))
+                }
+                Part::Thinking(text) => Part::Content(text),
+                Part::Content(text) if self.open => {
+                    self.open = false;
+                    Part::Content(format!("</think>{text}"))
+                }
+                content => content,
+            })
+            .collect()
+    }
+
+    /// The end of the answer: a reasoning block it never left is closed.
+    pub(crate) fn close(&mut self) -> Vec<Part> {
+        if std::mem::take(&mut self.open) {
+            vec![Part::Content("</think>".into())]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Parts joined by kind.
+pub(crate) fn joined(parts: Vec<Part>) -> (Option<String>, String) {
+    let mut thinking = String::new();
+    let mut content = String::new();
+    for part in parts {
+        match part {
+            Part::Thinking(text) => thinking.push_str(&text),
+            Part::Content(text) => content.push_str(&text),
+        }
+    }
+    ((!thinking.is_empty()).then_some(thinking), content)
 }
 
 /// A whole answer taken apart: its reasoning, when it had any, and the rest.
@@ -372,6 +585,43 @@ mod tests {
     #[test]
     fn text_that_only_looks_like_a_marker_stays() {
         assert_eq!(split("a <|message b"), (None, "a <|message b".into()));
+    }
+
+    /// Not asked apart, the reasoning stays in the answer, in `<think>` tags
+    /// whatever the model wrote, whole or streamed.
+    #[test]
+    fn reasoning_left_in_the_answer_is_in_think_tags() {
+        assert_eq!(inline(Some("r".into()), "a".into()), "<think>r</think>a");
+        assert_eq!(inline(None, "a".into()), "a");
+        let mut inline = InlineThinking::default();
+        let mut out = inline.map(vec![
+            Part::Thinking("we".into()),
+            Part::Thinking("igh".into()),
+            Part::Content("Blue".into()),
+            Part::Content(".".into()),
+        ]);
+        out.extend(inline.close());
+        assert_eq!(joined(out), (None, "<think>weigh</think>Blue.".into()));
+        // Reasoning the budget cut short is closed at the end.
+        let mut inline = InlineThinking::default();
+        let mut out = inline.map(vec![Part::Thinking("cut".into())]);
+        out.extend(inline.close());
+        assert_eq!(joined(out), (None, "<think>cut</think>".into()));
+    }
+
+    /// Without the model's format, the reader is the splitter, streamed or
+    /// whole.
+    #[test]
+    fn the_reader_without_a_format_reads_as_the_splitter() {
+        let answer = "<think>\nr\n</think>\n\nIt is 4.";
+        assert_eq!(read(None, "", answer), split(answer));
+        let mut reader = AnswerReader::plain();
+        let mut parts = Vec::new();
+        for piece in ["<th", "ink>r</th", "ink>It", " is 4."] {
+            parts.extend(reader.push(piece));
+        }
+        parts.extend(reader.finish());
+        assert_eq!(joined(parts), split(answer));
     }
 
     #[test]

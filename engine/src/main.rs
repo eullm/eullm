@@ -4673,6 +4673,29 @@ fn build_cli_prompt(
     )
 }
 
+/// How the model writes its answer, as llama.cpp knows its family, for the
+/// terminal to read it as the API does (`api::thinking::AnswerReader`).
+fn cli_answer_format(
+    backend: &ChatBackend,
+    pairs: &[(&str, &str)],
+    think_arg: bool,
+) -> Option<inference::AnswerFormat> {
+    let messages: Vec<serde_json::Value> = pairs
+        .iter()
+        .map(|(role, content)| serde_json::json!({ "role": role, "content": content }))
+        .collect();
+    let messages_json = serde_json::to_string(&messages).ok()?;
+    let template = match backend {
+        ChatBackend::Sequential(engine) => {
+            engine.apply_oai_chat_template(&messages_json, None, None, think_arg)
+        }
+        ChatBackend::Batched(scheduler) => {
+            scheduler.apply_oai_chat_template(&messages_json, None, None, think_arg)
+        }
+    };
+    template?.answer_format()
+}
+
 async fn interactive_chat(
     backend: ChatBackend,
     model_name: &str,
@@ -4974,6 +4997,20 @@ async fn interactive_chat(
             continue;
         }
 
+        // The answer read as the API reads it: the reasoning apart from the
+        // answer, whatever markers the model writes them with. Inkling 2 Mini
+        // printed its block markers here (23-11-2026).
+        let answer_format = {
+            let pairs: Vec<(&str, &str)> = history
+                .iter()
+                .map(|m| (m.role, m.content.as_str()))
+                .collect();
+            cli_answer_format(&backend, &pairs, think_arg)
+        };
+        let mut reader = crate::api::thinking::AnswerReader::new(answer_format, &response_prefix);
+        let mut answer_text = String::new();
+        let mut printer = ReasoningPrinter::new();
+
         let request = inference::GenerateRequest {
             prompt,
             max_tokens: max_tokens.min(max_reply_tokens),
@@ -4993,7 +5030,9 @@ async fn interactive_chat(
         while let Some(event) = rx.recv().await {
             match event {
                 inference::StreamEvent::Token(piece) => {
-                    print!("{piece}");
+                    for part in reader.push(&piece) {
+                        printer.print(&part, &mut answer_text);
+                    }
                     let _ = std::io::stdout().flush();
                     response_text.push_str(&piece);
                 }
@@ -5004,6 +5043,15 @@ async fn interactive_chat(
                     stop_reason,
                     ..
                 } => {
+                    for part in std::mem::replace(
+                        &mut reader,
+                        crate::api::thinking::AnswerReader::plain(),
+                    )
+                    .finish()
+                    {
+                        printer.print(&part, &mut answer_text);
+                    }
+                    printer.end();
                     // Strip any trailing stop sequence that was printed as part of the stream.
                     // Use trim_end() before matching: some models append \n after the
                     // stop token (e.g. Gemma's <end_of_turn>\n), which would break
@@ -5077,7 +5125,19 @@ async fn interactive_chat(
         // (see `ChatTemplate::build_prompt`'s doc comment).
         if !response_text.is_empty() {
             let content = if think_arg {
-                crate::chat_template::strip_reasoning_blocks(&response_text)
+                // The answer as read, without its reasoning; a stop sequence
+                // the fallback templates print is not part of it.
+                let mut answer = answer_text.trim().to_string();
+                for stop in template.stop_sequences() {
+                    if let Some(rest) = answer.strip_suffix(stop.as_str()) {
+                        answer = rest.trim_end().to_string();
+                    }
+                }
+                if answer.is_empty() {
+                    crate::chat_template::strip_reasoning_blocks(&response_text)
+                } else {
+                    answer
+                }
             } else {
                 format!("{}{response_text}", template.think_suppression_prefix())
             };
@@ -5085,6 +5145,54 @@ async fn interactive_chat(
                 role: "assistant",
                 content,
             });
+        }
+    }
+}
+
+/// Prints an answer read by `AnswerReader` in the terminal: the reasoning
+/// dimmed when the output is a terminal, a blank line, then the answer,
+/// which it also keeps.
+struct ReasoningPrinter {
+    in_reasoning: bool,
+    styled: bool,
+}
+
+impl ReasoningPrinter {
+    fn new() -> Self {
+        use std::io::IsTerminal;
+        Self {
+            in_reasoning: false,
+            styled: std::io::stdout().is_terminal(),
+        }
+    }
+
+    fn print(&mut self, part: &crate::api::thinking::Part, answer: &mut String) {
+        use crate::api::thinking::Part;
+        match part {
+            Part::Thinking(text) => {
+                if !self.in_reasoning {
+                    self.in_reasoning = true;
+                    if self.styled {
+                        print!("\x1b[2m");
+                    }
+                }
+                print!("{text}");
+            }
+            Part::Content(text) => {
+                if self.in_reasoning {
+                    self.end();
+                    println!("\n");
+                }
+                print!("{text}");
+                answer.push_str(text);
+            }
+        }
+    }
+
+    /// Leave the reasoning's style, if the answer is still in it.
+    fn end(&mut self) {
+        if std::mem::take(&mut self.in_reasoning) && self.styled {
+            print!("\x1b[0m");
         }
     }
 }

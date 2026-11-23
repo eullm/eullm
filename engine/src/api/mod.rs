@@ -33,7 +33,7 @@ mod route;
 // path as an HTTP request instead of a second, divergent one.
 pub(crate) mod routes;
 mod systemone;
-mod thinking;
+pub(crate) mod thinking;
 
 pub use auth::Identity;
 pub use route::{CandidateFacts, CatalogFacts, DEFAULT_AUTO_TIMEOUT_MS};
