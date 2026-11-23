@@ -35,6 +35,10 @@ COPY hub/ hub/
 # --locked: the versions CI tested, not whatever resolves today. The cache
 # mounts keep the crates and llama.cpp's objects from one build to the next,
 # so the binary is copied out of them in the same step.
+# EULLM_PRO_HINTS: the chat's administrator menu lists the EuLLM Pro pages by
+# default, as in the released binaries (EULLM_NO_PRO_HINTS=1 at run time, or
+# --build-arg EULLM_PRO_HINTS=0, turns them off).
+ARG EULLM_PRO_HINTS=1
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     cargo build --release --locked -p eullm-engine \

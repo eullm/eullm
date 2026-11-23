@@ -88,9 +88,12 @@ async fn serve_about_js() -> Response {
 }
 
 /// Whether the administrator's menu points to EuLLM Pro, as decided at
-/// startup (`set_pro_hints`). On by default; off with `EULLM_NO_PRO_HINTS`,
-/// for whoever redistributes the engine, and off when a program built on the
-/// engine adds a script of its own to the page: the menu is then its own.
+/// startup (`set_pro_hints`). By default on in the binaries the release
+/// publishes and in the Docker images, off in a build from source (see
+/// `build.rs`), so that developers working on the code do not have it in
+/// front of them; `EULLM_NO_PRO_HINTS` decides either way (`1` off, `0` on).
+/// Always off when a program built on the engine adds a script of its own
+/// to the page: the menu is then its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProHints {
     pub shown: bool,
@@ -106,30 +109,56 @@ impl ProHints {
         Self::resolve(
             setting.as_ref().map(|(v, s)| (v.as_str(), s.label())),
             crate::extensions::chat_script().is_some(),
+            env!("EULLM_PRO_HINTS_BUILD") == "on",
         )
     }
 
     /// Pure, so the precedence is tested without the process environment.
-    pub fn resolve(no_hints: Option<(&str, &str)>, extension_script: bool) -> Self {
+    /// `released`: this build shows them by default (`build.rs`).
+    pub fn resolve(no_hints: Option<(&str, &str)>, extension_script: bool, released: bool) -> Self {
         if extension_script {
             return Self {
                 shown: false,
                 reason: "off: the program serving the page adds its own script".into(),
             };
         }
-        match no_hints {
-            Some((value, source)) if crate::settings::is_truthy(value) => Self {
+        let default = || {
+            if released {
+                Self {
+                    shown: true,
+                    reason: "on  [source: default for a released build; EULLM_NO_PRO_HINTS=1 \
+                             turns them off]"
+                        .into(),
+                }
+            } else {
+                Self {
+                    shown: false,
+                    reason: "off  [source: default for a build from source; EULLM_NO_PRO_HINTS=0 \
+                             shows them]"
+                        .into(),
+                }
+            }
+        };
+        let Some((value, source)) = no_hints else {
+            return default();
+        };
+        match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Self {
                 shown: false,
                 reason: format!("off  [source: EULLM_NO_PRO_HINTS ({source})]"),
             },
-            Some((_, source)) => Self {
+            "0" | "false" | "no" | "off" => Self {
                 shown: true,
-                reason: format!("on  [source: EULLM_NO_PRO_HINTS ({source}), not 1/true/yes/on]"),
+                reason: format!("on  [source: EULLM_NO_PRO_HINTS ({source})]"),
             },
-            None => Self {
-                shown: true,
-                reason: "on  [source: default; EULLM_NO_PRO_HINTS=1 turns them off]".into(),
-            },
+            _ => {
+                let mut fallback = default();
+                fallback.reason = format!(
+                    "{}  (EULLM_NO_PRO_HINTS ({source}) is neither 1 nor 0, ignored)",
+                    fallback.reason
+                );
+                fallback
+            }
         }
     }
 }
@@ -252,16 +281,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pro_hints_are_on_unless_turned_off_or_replaced() {
-        assert!(ProHints::resolve(None, false).shown);
-        assert!(!ProHints::resolve(Some(("1", "environment")), false).shown);
-        assert!(!ProHints::resolve(Some(("yes", ".env")), false).shown);
-        // A value that is not a yes leaves them on, and the log says why.
-        let kept = ProHints::resolve(Some(("0", "environment")), false);
-        assert!(kept.shown && kept.reason.contains("not 1/true/yes/on"), "{kept:?}");
+    fn pro_hints_follow_the_build_unless_the_server_says_otherwise() {
+        // By default: on in a released build, off in one from source.
+        assert!(ProHints::resolve(None, false, true).shown);
+        assert!(!ProHints::resolve(None, false, false).shown);
+        // The setting decides either way.
+        assert!(!ProHints::resolve(Some(("1", "environment")), false, true).shown);
+        assert!(!ProHints::resolve(Some(("yes", ".env")), false, true).shown);
+        assert!(ProHints::resolve(Some(("0", "environment")), false, false).shown);
+        assert!(ProHints::resolve(Some(("off", ".env")), false, false).shown);
+        // Anything else is ignored, and the log says so.
+        let ignored = ProHints::resolve(Some(("maybe", "environment")), false, true);
+        assert!(ignored.shown && ignored.reason.contains("ignored"), "{ignored:?}");
         // A program with its own script on the page: its menu, not ours.
-        assert!(!ProHints::resolve(None, true).shown);
-        assert!(!ProHints::resolve(Some(("0", "environment")), true).shown);
+        assert!(!ProHints::resolve(None, true, true).shown);
+        assert!(!ProHints::resolve(Some(("0", "environment")), true, true).shown);
     }
 
     /// Every route the router serves is in `PAGE_FILES`, and nothing else:

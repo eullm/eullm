@@ -3110,26 +3110,58 @@ async fn chat_with(
         media_as_notes(messages, &media)
     };
 
+    // The request's tools, in the OpenAI shape Ollama also uses: with them,
+    // the prompt is the model's own template given the whole conversation
+    // and the tools, and the answer is parsed for calls, as on
+    // `/v1/chat/completions` (see `chat_with_tools`).
+    let tools_json = request_tools(&body);
+
     #[cfg(feature = "multimodal")]
     if let Some(reader) = projector {
         let sp = parse_generate_params(&body);
         // Parsed here rather than reused from the text path below: the
         // multimodal branch returns before that code runs.
         let mm_think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
-        let marked = with_media_markers(
-            &messages,
-            &media.per_message,
-            llama_cpp_2::mtmd::mtmd_default_marker(),
-        );
-        let pairs: Vec<(&str, &str)> = marked
-            .iter()
-            .map(|(role, content)| (role.as_str(), content.as_str()))
-            .collect();
-        let rendered = match &reader {
-            MediaReader::Engine(engine) => engine.apply_jinja_chat_template(&pairs, mm_think),
-            MediaReader::Scheduler(sched) => sched.apply_jinja_chat_template(&pairs, mm_think),
+        let marker = llama_cpp_2::mtmd::mtmd_default_marker();
+        let oai_template = tools_json.as_deref().and_then(|tools| {
+            let messages_json = serde_json::to_string(&template_messages(
+                &messages,
+                Some((&media.per_message, marker)),
+            ))
+            .ok()?;
+            match &reader {
+                MediaReader::Engine(engine) => {
+                    engine.apply_oai_chat_template(&messages_json, Some(tools), None, mm_think)
+                }
+                MediaReader::Scheduler(sched) => {
+                    sched.apply_oai_chat_template(&messages_json, Some(tools), None, mm_think)
+                }
+            }
+        });
+        if tools_json.is_some() && oai_template.is_none() {
+            tracing::warn!(
+                "tools requested but the model has no embedded chat template; proceeding without tools"
+            );
+        }
+        let (mm_prompt, mm_stops, mm_prefix) = match &oai_template {
+            Some(tmpl) => (tmpl.prompt.clone(), Vec::new(), String::new()),
+            None => {
+                let marked = with_media_markers(&messages, &media.per_message, marker);
+                let pairs: Vec<(&str, &str)> = marked
+                    .iter()
+                    .map(|(role, content)| (role.as_str(), content.as_str()))
+                    .collect();
+                let rendered = match &reader {
+                    MediaReader::Engine(engine) => {
+                        engine.apply_jinja_chat_template(&pairs, mm_think)
+                    }
+                    MediaReader::Scheduler(sched) => {
+                        sched.apply_jinja_chat_template(&pairs, mm_think)
+                    }
+                };
+                multimodal_chat_prompt(rendered, &pairs, mm_think)
+            }
         };
-        let (mm_prompt, mm_stops, mm_prefix) = multimodal_chat_prompt(rendered, &pairs, mm_think);
         let mm_request = GenerateRequest {
             prompt: mm_prompt,
             max_tokens: sp.max_tokens,
@@ -3148,8 +3180,13 @@ async fn chat_with(
             // generation. See `multimodal_chat_prompt`.
             stop_sequences: mm_stops,
             // think-aware, like the text path: a model that can be asked not to
-            // think can also emit a think tag that has to be stripped.
-            filter_sequences: crate::inference::default_filters(mm_think),
+            // think can also emit a think tag that has to be stripped. With
+            // tools nothing is: the format-aware parser reads the raw output.
+            filter_sequences: if oai_template.is_some() {
+                Vec::new()
+            } else {
+                crate::inference::default_filters(mm_think)
+            },
             grammar: None,
             cache_prompt: sp.cache_prompt,
             response_prefix: mm_prefix,
@@ -3163,6 +3200,19 @@ async fn chat_with(
             }
         };
         let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
+        if let Some(tmpl) = oai_template {
+            return chat_with_tools(
+                rx,
+                tmpl,
+                model,
+                audit,
+                snap.lease,
+                snap.load_duration,
+                split_thinking,
+                is_streaming(&body),
+            )
+            .await;
+        }
         if is_streaming(&body) {
             return Ok(ndjson_stream_response(
                 rx,
@@ -3216,8 +3266,25 @@ async fn chat_with(
 
     let think = body.get("think").and_then(|v| v.as_bool()).unwrap_or(true);
     let model_name_ref: &str = &model;
-    let (prompt, stop_sequences, response_prefix) =
-        build_chat_prompt(&snap, &messages, think, model_name_ref);
+    let oai_template = tools_json.as_deref().and_then(|tools| {
+        let messages_json = serde_json::to_string(&template_messages(&messages, None)).ok()?;
+        if let Some(engine) = snap.engine.as_ref() {
+            engine.apply_oai_chat_template(&messages_json, Some(tools), None, think)
+        } else {
+            snap.scheduler
+                .as_ref()?
+                .apply_oai_chat_template(&messages_json, Some(tools), None, think)
+        }
+    });
+    if tools_json.is_some() && oai_template.is_none() {
+        tracing::warn!(
+            "tools requested but the model has no embedded chat template; proceeding without tools"
+        );
+    }
+    let (prompt, stop_sequences, response_prefix) = match &oai_template {
+        Some(tmpl) => (tmpl.prompt.clone(), Vec::new(), String::new()),
+        None => build_chat_prompt(&snap, &messages, think, model_name_ref),
+    };
     let sp = parse_generate_params(&body);
     let grammar = parse_format_grammar(&body);
 
@@ -3235,12 +3302,36 @@ async fn chat_with(
         stop_sequences,
         // think-aware: with think:false a think tag in the OUTPUT is
         // spurious, since the prompt already carries a closed empty block.
-        filter_sequences: crate::inference::default_filters(think),
+        // With tools nothing is filtered: the parser needs the raw output.
+        filter_sequences: if oai_template.is_some() {
+            Vec::new()
+        } else {
+            crate::inference::default_filters(think)
+        },
         grammar,
         raw: false,
         cache_prompt: sp.cache_prompt,
         response_prefix,
     };
+
+    if let Some(tmpl) = oai_template {
+        let rx = match snap.scheduler.as_ref() {
+            Some(sched) => sched.try_submit(request)?,
+            None => sequential_to_channel(Arc::clone(snap.engine.as_ref().unwrap()), request),
+        };
+        let rx = crate::monitor::watch(rx, &snap.model_name, "chat");
+        return chat_with_tools(
+            rx,
+            tmpl,
+            model,
+            audit,
+            snap.lease,
+            snap.load_duration,
+            split_thinking,
+            is_streaming(&body),
+        )
+        .await;
+    }
 
     if let Some(ref sched) = snap.scheduler {
         let rx = sched.try_submit(request)?;
@@ -4399,6 +4490,229 @@ fn chat_message(text: String, split_thinking: bool) -> Value {
     message
 }
 
+/// A request's `tools`, as the JSON the model's template reads, when it has
+/// any. Ollama's tool definitions are OpenAI's (`{"type": "function",
+/// "function": {name, description, parameters}}`), so they pass as they are.
+fn request_tools(body: &Value) -> Option<String> {
+    body.get("tools")
+        .filter(|t| t.as_array().is_some_and(|a| !a.is_empty()))
+        .map(Value::to_string)
+}
+
+/// `/api/chat`'s conversation as llama.cpp's OpenAI-format template reader
+/// (`common_chat_msgs_parse_oaicompat`) takes it, for the tool path. Ollama's
+/// history differs from OpenAI's in three ways that reader refuses or loses:
+/// an assistant's `tool_calls` have no `"type": "function"` (refused:
+/// "Missing tool call type"), a tool's answer names the tool in `tool_name`
+/// (OpenAI's `name`), and the reasoning is in `thinking` (its
+/// `reasoning_content`). `arguments` may stay an object: the reader takes
+/// either. Images and audio are left out: with `markers` (the attachments of
+/// each message, and the projector's marker) each message's text starts
+/// with one marker per attachment, as [`with_media_markers`] does for the
+/// plain path.
+fn template_messages(messages: &[Value], markers: Option<(&[usize], &str)>) -> Vec<Value> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(i, message)| {
+            let mut out = serde_json::Map::new();
+            let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+            out.insert("role".into(), json!(role));
+            let text = message.get("content").and_then(Value::as_str).unwrap_or("");
+            let content = match markers {
+                Some((per_message, marker)) => {
+                    let count = per_message.get(i).copied().unwrap_or(0);
+                    format!("{}{}", format!("{marker}\n").repeat(count), text.replace(marker, ""))
+                }
+                None => text.to_string(),
+            };
+            out.insert("content".into(), json!(content));
+            if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
+                let calls: Vec<Value> = calls
+                    .iter()
+                    .map(|call| {
+                        let function = call.get("function").cloned().unwrap_or_else(|| json!({}));
+                        let mut out = json!({ "type": "function", "function": {
+                            "name": function.get("name").cloned().unwrap_or_else(|| json!("")),
+                            "arguments": function.get("arguments").cloned().unwrap_or_else(|| json!({})),
+                        }});
+                        if let Some(id) = call.get("id") {
+                            out["id"] = id.clone();
+                        }
+                        out
+                    })
+                    .collect();
+                if !calls.is_empty() {
+                    out.insert("tool_calls".into(), Value::Array(calls));
+                }
+            }
+            if let Some(thinking) = message
+                .get("thinking")
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+            {
+                out.insert("reasoning_content".into(), json!(thinking));
+            }
+            if let Some(name) = message.get("tool_name").or_else(|| message.get("name")) {
+                out.insert("name".into(), name.clone());
+            }
+            if let Some(id) = message.get("tool_call_id") {
+                out.insert("tool_call_id".into(), id.clone());
+            }
+            Value::Object(out)
+        })
+        .collect()
+}
+
+/// A tool call's `arguments` as Ollama returns them: a JSON object, where
+/// the parser (OpenAI's convention) hands over a string. Empty is no
+/// arguments; text that is not JSON stays a string, rather than lose it.
+fn tool_arguments(arguments: &str) -> Value {
+    if arguments.trim().is_empty() {
+        return json!({});
+    }
+    serde_json::from_str(arguments).unwrap_or_else(|e| {
+        tracing::warn!("tool call arguments are not JSON ({e}); returned as a string");
+        Value::String(arguments.to_string())
+    })
+}
+
+/// `/api/chat`'s `message` on the tool path: the answer and its reasoning as
+/// [`chat_message`] gives them, and the calls as Ollama returns them,
+/// `tool_calls[].function.{index, name, arguments}` with the arguments an
+/// object. Unparsed output is the plain answer.
+fn chat_message_with_tools(
+    parsed: Option<crate::inference::ParsedChatMessage>,
+    text: String,
+    split_thinking: bool,
+) -> Value {
+    let Some(mut parsed) = parsed else {
+        return chat_message(text, split_thinking);
+    };
+    // A template parser that left the reasoning in the answer (Gemma 4's
+    // `<|channel>thought`), taken apart as on `/v1/chat/completions`.
+    if parsed.reasoning_content.is_none() {
+        let (reasoning, content) = super::thinking::split(&parsed.content);
+        parsed.reasoning_content = reasoning;
+        parsed.content = content;
+    }
+    let mut message = json!({ "role": "assistant", "content": parsed.content });
+    if let Some(reasoning) = parsed.reasoning_content {
+        if split_thinking {
+            message["thinking"] = Value::String(reasoning);
+        } else {
+            // Not asked apart: where the plain path leaves it, in the answer.
+            message["content"] = Value::String(format!("<think>{reasoning}</think>{}", parsed.content));
+        }
+    }
+    if !parsed.tool_calls.is_empty() {
+        message["tool_calls"] = parsed
+            .tool_calls
+            .into_iter()
+            .enumerate()
+            .map(|(index, call)| {
+                json!({ "function": {
+                    "index": index,
+                    "name": call.name,
+                    "arguments": tool_arguments(&call.arguments),
+                }})
+            })
+            .collect();
+    }
+    message
+}
+
+/// `/api/chat` with tools, on text or images alike: the whole answer is read
+/// first, since a call exists only once the output is complete and parsed
+/// (as on `/v1/chat/completions`). Streaming gets two NDJSON lines: the
+/// message, calls included, then the closing one with the counts.
+#[allow(clippy::too_many_arguments)]
+async fn chat_with_tools(
+    rx: mpsc::Receiver<StreamEvent>,
+    tmpl: crate::inference::DynamicOaiTemplate,
+    model: String,
+    audit: AuditCtx,
+    lease: Lease,
+    load_duration: std::time::Duration,
+    split_thinking: bool,
+    streaming: bool,
+) -> Result<axum::response::Response, Refusal> {
+    let Collected {
+        text,
+        tokens_generated,
+        tokens_prompt,
+        duration_ms,
+        stop_reason,
+        stats,
+    } = collect_stream(rx).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e })),
+        )
+    })?;
+    audit.log(
+        &model,
+        StreamFormat::OllamaChat,
+        tokens_prompt,
+        tokens_generated,
+        duration_ms,
+        &stats,
+    );
+    let message = chat_message_with_tools(tmpl.parse_output(&text), text, split_thinking);
+    let created_at = chrono::Utc::now().to_rfc3339();
+
+    if streaming {
+        let first = json!({
+            "model": model,
+            "created_at": created_at,
+            "message": message,
+            "done": false,
+        });
+        let last = audit.extended(format_done_event(
+            &model,
+            "",
+            StreamFormat::OllamaChat,
+            tokens_generated,
+            tokens_prompt,
+            duration_ms,
+            stop_reason,
+            load_duration,
+            &stats,
+        ));
+        let stream = async_stream::stream! {
+            let _lease = lease;
+            for line in [first, last] {
+                let mut line = line.to_string();
+                line.push('\n');
+                yield Ok::<_, std::convert::Infallible>(line);
+            }
+        };
+        return Ok(axum::response::Response::builder()
+            .header(header::CONTENT_TYPE, "application/x-ndjson")
+            .header(header::TRANSFER_ENCODING, "chunked")
+            .body(Body::from_stream(stream))
+            .unwrap());
+    }
+    drop(lease);
+    Ok(Json(audit.extended(with_drafts(
+        json!({
+            "model": model,
+            "created_at": created_at,
+            "message": message,
+            "done": true,
+            "done_reason": stop_reason.as_api_str(),
+            "total_duration": duration_ms * 1_000_000 + nanos(load_duration),
+            "load_duration": nanos(load_duration),
+            "prompt_eval_count": tokens_prompt,
+            "prompt_eval_duration": nanos(stats.prompt_time),
+            "eval_count": tokens_generated,
+            "eval_duration": nanos(stats.eval_time)
+        }),
+        &stats,
+    )))
+    .into_response())
+}
+
 /// `/api/generate`'s `response`, and its reasoning apart when the request
 /// asked for that (`think`, see [`super::thinking`]).
 fn generate_answer(text: String, split_thinking: bool) -> (String, Option<String>) {
@@ -4544,6 +4858,99 @@ fn format_done_event(
             },
             "timings": openai_timings(tokens_prompt, tokens_generated, stats),
         }),
+    }
+}
+
+#[cfg(test)]
+mod api_chat_tools_tests {
+    use super::*;
+    use crate::inference::{ParsedChatMessage, ParsedToolCall};
+
+    /// An Ollama client's history after one round of tools, as llama.cpp's
+    /// template reader needs it: the call typed, the tool named, the
+    /// reasoning where it reads it, the pictures gone.
+    #[test]
+    fn ollama_history_becomes_what_the_template_reads() {
+        let messages = vec![
+            json!({ "role": "user", "content": "Weather in Rome?", "images": ["aGVsbG8="] }),
+            json!({ "role": "assistant", "content": "", "thinking": "Need the tool.",
+                    "tool_calls": [{ "function": { "name": "get_weather", "arguments": { "city": "Rome" } } }] }),
+            json!({ "role": "tool", "content": "18 °C", "tool_name": "get_weather" }),
+        ];
+        let out = template_messages(&messages, None);
+        assert_eq!(out[0], json!({ "role": "user", "content": "Weather in Rome?" }));
+        assert_eq!(out[1]["tool_calls"][0]["type"], "function");
+        assert_eq!(out[1]["tool_calls"][0]["function"]["arguments"], json!({ "city": "Rome" }));
+        assert_eq!(out[1]["reasoning_content"], "Need the tool.");
+        assert!(out[1].get("thinking").is_none());
+        assert_eq!(out[2]["name"], "get_weather");
+        assert!(out[2].get("tool_name").is_none());
+    }
+
+    /// With pictures, each message's text starts with one marker per
+    /// attachment, and a marker typed in the text is removed.
+    #[test]
+    fn markers_go_where_the_attachments_were() {
+        let messages = vec![
+            json!({ "role": "user", "content": "what is <M> this?", "images": ["a", "b"] }),
+            json!({ "role": "assistant", "content": "A cat." }),
+        ];
+        let out = template_messages(&messages, Some((&[2, 0], "<M>")));
+        assert_eq!(out[0]["content"], "<M>\n<M>\nwhat is  this?");
+        assert_eq!(out[1]["content"], "A cat.");
+    }
+
+    /// Calls as Ollama returns them: under `function`, arguments an object.
+    #[test]
+    fn tool_calls_come_back_in_ollama_s_shape() {
+        let parsed = ParsedChatMessage {
+            content: String::new(),
+            reasoning_content: Some("Need the tool.".into()),
+            tool_calls: vec![
+                ParsedToolCall { id: None, name: "get_weather".into(), arguments: r#"{"city":"Rome"}"#.into() },
+                ParsedToolCall { id: None, name: "now".into(), arguments: String::new() },
+            ],
+        };
+        let message = chat_message_with_tools(Some(parsed), String::new(), true);
+        assert_eq!(message["role"], "assistant");
+        assert_eq!(message["content"], "");
+        assert_eq!(message["thinking"], "Need the tool.");
+        assert_eq!(
+            message["tool_calls"],
+            json!([
+                { "function": { "index": 0, "name": "get_weather", "arguments": { "city": "Rome" } } },
+                { "function": { "index": 1, "name": "now", "arguments": {} } },
+            ])
+        );
+    }
+
+    /// No call: the same message as without tools; unparsed: the plain one.
+    #[test]
+    fn an_answer_without_calls_is_the_plain_message() {
+        let parsed = ParsedChatMessage {
+            content: "It is 18 °C.".into(),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+        };
+        let message = chat_message_with_tools(Some(parsed), String::new(), false);
+        assert_eq!(message, json!({ "role": "assistant", "content": "It is 18 °C." }));
+        assert!(message.get("tool_calls").is_none());
+        let plain = chat_message_with_tools(None, "<think>x</think>Hi".into(), true);
+        assert_eq!(plain, chat_message("<think>x</think>Hi".into(), true));
+    }
+
+    #[test]
+    fn arguments_that_are_not_json_stay_a_string() {
+        assert_eq!(tool_arguments("{\"a\": 1}"), json!({ "a": 1 }));
+        assert_eq!(tool_arguments("  "), json!({}));
+        assert_eq!(tool_arguments("city=Rome"), json!("city=Rome"));
+    }
+
+    #[test]
+    fn only_a_non_empty_tools_list_turns_the_tool_path_on() {
+        assert!(request_tools(&json!({})).is_none());
+        assert!(request_tools(&json!({ "tools": [] })).is_none());
+        assert!(request_tools(&json!({ "tools": [{ "type": "function" }] })).is_some());
     }
 }
 

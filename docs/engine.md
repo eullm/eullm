@@ -399,7 +399,7 @@ has each one with an example; `eullm --help` lists them too.
 | `EULLM_DOWNLOAD_CONNECTIONS` | `8` | Parallel connections per download, 1 to 16; 1 downloads in a single stream |
 | `EULLM_IMAGE_MAX_TOKENS` | the projector's | Most tokens an image is read as: more reads finer detail, with more memory. Raise it in steps (512, then 1024): very high values can crash some projectors |
 | `EULLM_IMAGE_MIN_TOKENS` | the projector's | Fewest tokens an image is read as |
-| `EULLM_NO_PRO_HINTS` | off | The chat's administrator menu does not list the EuLLM Pro pages, and no line points to it: for whoever redistributes the engine. See [EuLLM and EuLLM Pro](#eullm-and-eullm-pro) |
+| `EULLM_NO_PRO_HINTS` | off in released binaries and Docker images, on in a build from source | `1`: the chat's administrator menu does not list the EuLLM Pro pages, and no line points to it, for whoever redistributes the engine. `0`: they are shown in a build from source too. See [EuLLM and EuLLM Pro](#eullm-and-eullm-pro) |
 | `HF_TOKEN` | (none) | A Hugging Face access token, for gated and private repositories. Sent to `https://huggingface.co` only |
 | `RUST_LOG` | `eullm=info` | What the log shows, such as `eullm=debug`; naming `llama-cpp-2` (`eullm=info,llama-cpp-2=info`) adds llama.cpp's own log |
 
@@ -1795,6 +1795,28 @@ curl -N http://localhost:11434/api/chat \
   }'
 ```
 
+##### Tools
+
+With `tools` (Ollama's definitions, which are OpenAI's) the prompt is the
+model's own template given the whole conversation and the tools, and the
+answer is parsed for calls, as on `/v1/chat/completions`, also when the
+conversation carries images or audio. The calls come back as Ollama returns
+them, with the arguments an object:
+
+```json
+{"message": {"role": "assistant", "content": "",
+  "tool_calls": [{"function": {"index": 0, "name": "get_weather",
+                               "arguments": {"city": "Rome"}}}]},
+ "done": true, "done_reason": "stop"}
+```
+
+The history goes back as Ollama clients send it: the assistant's
+`tool_calls`, and each result as `{"role": "tool", "content": "...",
+"tool_name": "get_weather"}`. A call exists only once the answer is complete,
+so with `"stream": true` the answer arrives in two lines, the message with
+its calls and then the closing one with the counts. A model whose GGUF has no
+chat template answers without tools, and the log says so.
+
 #### Documents in a conversation
 
 The chat in the browser attaches documents: PDF, Word (`.docx`),
@@ -2594,9 +2616,12 @@ since they may change the models anyway; on a managed server, only a page that
 holds the admin key, from the moment the Model hub or the Monitor accepted it.
 The chat itself never shows any of it.
 
-`EULLM_NO_PRO_HINTS=1` (environment or `.env`) turns all of it off, for
-whoever redistributes the engine; the startup log says whether they are on and
-why. A program that builds on the engine and adds a script of its own to the
+They are on by default in the binaries the release publishes and in the
+Docker images (their Dockerfiles build with `EULLM_PRO_HINTS=1`), and off in a
+build from source, where whoever builds is most often working on the code.
+`EULLM_NO_PRO_HINTS` (environment or `.env`) decides either way: `1` turns
+them off, for whoever redistributes the engine, `0` shows them in a build from
+source. The startup log says whether they are on and why. A program that builds on the engine and adds a script of its own to the
 page (`chat_script`, below) never gets them either: the menu is then its own.
 
 ## Building on the engine (the `eullm_engine` library)
