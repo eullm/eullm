@@ -51,7 +51,8 @@ def test_wrong_articles_are_counted_by_kind(tmp_path, capsys):
     graded_dir.mkdir()
     (graded_dir / "answers-practical-dev-m.graded.jsonl").write_text("".join(
         json.dumps({"id": i, "grade": g}) + "\n"
-        for i, g in [("q1", "wrong"), ("q2", "wrong"), ("q3", "correct"), ("q4", "partial")]), encoding="utf-8")
+        for i, g in [("q1", "wrong"), ("q2", "wrong"), ("q3", "correct"), ("q4", "partial")]),
+        encoding="utf-8")
     assert _mod().main([str(items), str(answers), "--graded-dir", str(graded_dir)]) == 0
     out = capsys.readouterr().out
     row = next(ln for ln in out.splitlines() if ln.startswith("practical-dev-m")).split()
