@@ -59,8 +59,8 @@ def _setup(tmp_path):
 
 
 def _run(env):
-    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True, encoding="utf-8",
-                          timeout=60)
+    return subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
 
 
 def test_open_book_by_default(tmp_path):
