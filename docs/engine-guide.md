@@ -1530,6 +1530,19 @@ fit there, compute buffer included, and the other the rest: llama.cpp's own
 split, by free memory, gives the slower card as large a share as its memory,
 and every token waits on it. The log names each card's speed and the layers
 it got. `--tensor-split` sets the split by hand, and is then left as given.
+Measured on an RTX 5070 Ti (839-844 GB/s) and a Radeon RX 6700 XT (337-353
+GB/s, on PCIe 3.0 x2) on 24-11-2026:
+
+| Model | 5070 Ti alone | Both cards |
+|---|---|---|
+| QwQ-32B Q4_K_M (dense, 18.5 GiB), `-c 4096` | 4.6 tokens/s, 45 of 64 layers on the GPU, the rest on the CPU | 20.5 tokens/s, 48 layers on the 5070 Ti, 17 and the output layer on the Radeon |
+| Inkling 2 Mini UD-Q4_K_M (MoE), `-c 16000` | 36-44 tokens/s in the terminal chat, the experts of 6 layers in RAM | 34-35.6 tokens/s in the browser chat, 20 layers on the 5070 Ti, 4 on the Radeon; prompts read at up to 915 tokens/s |
+
+A dense model that does not fit on the fast card is where the second card
+pays: what would run on the CPU runs on a GPU. A MoE model loses little
+with its experts in RAM, where the CPU reads only the experts a token
+uses, and gains little from the second card.
+
 Inkling 2's loop needed a change to llama.cpp for this (patch `0016`): the
 layers its later passes repeat were split by index, so their weights all
 stayed on the first card. The expert cache and the

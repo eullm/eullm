@@ -3716,7 +3716,8 @@ fn prefill_setup(
     let max_output = effective_ctx - n_tokens;
     let effective_max_tokens = request.max_tokens.min(max_output);
 
-    if effective_max_tokens < request.max_tokens {
+    // `u32::MAX` is "no limit": the context is the limit, nothing was cut.
+    if effective_max_tokens < request.max_tokens && request.max_tokens != u32::MAX {
         tracing::warn!(
             "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
             request.max_tokens,

@@ -567,6 +567,66 @@ modelli virtuali base+adapter funzionanti.
 
 ---
 
+## Più GPU, anche di marche diverse (dopo 0.9.60)
+
+Con la 0.9.60 una build `cuda,vulkan` usa due schede di marche diverse e
+riempie per prima la più veloce, misurata al caricamento
+(`inference::measured_fit::run_across_gpus`); la patch `0016` tiene le
+ripetizioni del loop di Inkling 2 accanto ai loro pesi. Misurato il
+24-11-2026 su RTX 5070 Ti (839-844 GB/s) + Radeon RX 6700 XT (337-353 GB/s,
+PCIe 3.0 x2):
+
+| Modello | Solo 5070 Ti | Due schede |
+|---|---|---|
+| QwQ-32B Q4_K_M, `-c 4096` | 4,6 tok/s (45/64 strati in GPU) | 20,5 tok/s (48 + 17) |
+| Qwen3.8-27B UD-Q4_K_M, `-c 32768` | 7,4 tok/s (CPU al 1458%) | 25,4 tok/s |
+| Inkling 2 Mini UD-Q4_K_M (MoE), `-c 16000` | 36-44 tok/s, esperti di 6 strati in RAM | 34-35,6 tok/s (20 + 4 strati) |
+
+Le voci sotto sono da misurare prima di farle, una per volta.
+
+- [ ] **MG-A · Lo strato di uscita sulla scheda più veloce.** llama.cpp lo dà
+  all'ultima scheda della lista, che con CUDA prima di Vulkan è la più lenta:
+  Inkling legge 469 MiB di uscita a ogni token a 337 GB/s invece che a 839.
+  Ordinare i dispositivi del modello (`LlamaModelParams::with_devices`) con
+  la più veloce per ultima; i conti di `fastest_first` vanno rifatti
+  sull'ordine nuovo, e `keep_bytes` va sulla scheda dove finisce il proiettore.
+- [ ] **MG-B · Niente pipeline parallelism con un solo slot.** Con più schede
+  llama.cpp tiene quattro copie del grafo (Inkling: compute buffer di 1,9 GiB
+  sulla 5070 Ti); servono a più richieste insieme. Con `--batch-size 1`
+  spegnerlo libererebbe circa 1,4 GiB sulla scheda veloce, 1-2 strati in più
+  lì. Serve un parametro di contesto (oggi la scelta è dentro
+  `llama_context`), quindi una patch o un'opzione upstream.
+- [ ] **MG-C · `--device`** (in `RuntimeOpts`, come il `--device` di
+  llama.cpp): quali schede usare, al posto di `GGML_VK_VISIBLE_DEVICES`.
+  Collegato a `fit::gpu_devices` (il calcolo della VRAM deve ignorare le
+  schede escluse), a `ServeConfig` e al banner.
+- [ ] **MG-D · MoE: seconda scheda o esperti in RAM, decisione al
+  caricamento.** Su Inkling 2 Mini la Radeon non batte la CPU, che legge solo
+  gli esperti attivi di ogni token; sui densi la seconda scheda vince di 3-4
+  volte. Stimare il costo per token di ogni strato su ciascuna scheda (dalla
+  velocità misurata) e sulla CPU (esperti attivi ÷ banda della RAM) e
+  scegliere la disposizione più rapida.
+- [ ] **MG-E · Una build CUDA + ROCm.** Nello stesso binario statico non si
+  può: HIP è il codice del backend CUDA compilato per AMD, e i simboli si
+  sovrappongono. Servono i backend caricati a runtime (`GGML_BACKEND_DL`,
+  `libggml-cuda.so` e `libggml-hip.so` accanto al binario) e una verifica
+  delle patch `0001`-`0004`, che danno per scontato un solo backend GPU. Da
+  fare solo con una macchina NVIDIA + AMD su ROCm per provarla.
+- [ ] **MG-F · Schede NVIDIA vecchie accanto a una nuova** (P100 16 GB,
+  V100 32 GB). CUDA 13 non compila più per Pascal e Volta e la serie di
+  driver 580 è indicata come l'ultima che le supporta: serve una build CUDA
+  12.9 con le architetture 60/70 e 120, o la scheda vecchia su Vulkan.
+  Stimato su Qwen3.8-27B: una P100 al posto della Radeon porterebbe da 25 a
+  circa 30-33 tok/s; una 32 GB conta di più sui modelli che oggi non stanno
+  nelle GPU (un 70B Q4). La P100 (sm_60) non ha `dp4a`: lettura dei prompt
+  più lenta.
+- [ ] **MG-G · Un binario `cuda-vulkan` tra quelli rilasciati**, per chi ha
+  due schede di marche diverse e non compila: una riga in più nella matrice
+  di `release-engine.yml` (Linux x64), con i pacchetti Vulkan nell'immagine
+  di build.
+
+---
+
 ## 1.0+ — Solo su domanda dimostrata dai dati
 
 - [ ] **1.0-A · Multimodale concorrente e multi-turno** *(P2)*
