@@ -327,7 +327,8 @@ def test_the_raft_script_keeps_every_original_and_adds_the_share(tmp_path, index
                                    "ob-g-codice_civile-41"} for i in range(4)]
     pairs.append(_topic_pair(index, named=True))
     src = tmp_path / "v04.jsonl"
-    src.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n", encoding="utf-8")
+    src.write_text("\n".join(json.dumps(p, ensure_ascii=False) for p in pairs) + "\n",
+                   encoding="utf-8")
     out = tmp_path / "v05.jsonl"
     spec = importlib.util.spec_from_file_location(
         "make_raft_absent", Path(__file__).resolve().parents[1] / "scripts" / "make_raft_absent.py")
@@ -385,7 +386,8 @@ def test_abstain_prompts_teach_the_difference_and_hide_the_note_from_the_student
                  "Il debitore deve dare preavviso al creditore nel codice civile."},
     ]
     norms = tmp_path / "legislazione_x.chunks.jsonl"
-    norms.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
+    norms.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records),
+                     encoding="utf-8")
     question = "Nel codice civile, entro quanto deve agire il creditore?"
     pair = {"task": "openbook_grounded", "named": False, "key": "ob-g-codice_civile-41",
             "instruction": open_book_prompt(question, records[:2]), "output": "x"}
@@ -444,7 +446,8 @@ def test_the_engine_backend_writes_grounded_pairs(tmp_path):
         norms = tmp_path / "legislazione_x.chunks.jsonl"
         norms.write_text("\n".join(json.dumps(r) for r in RECORDS) + "\n", encoding="utf-8")
         exam = tmp_path / "exam.jsonl"
-        exam.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n", encoding="utf-8")
+        exam.write_text(json.dumps(exam_item("codice_civile", "3").to_dict()) + "\n",
+                        encoding="utf-8")
         out = tmp_path / "o.jsonl"
         assert load_script().main([
             "--norms", str(norms), "--exclude-exam", str(exam), "--out", str(out),
