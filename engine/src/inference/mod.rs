@@ -10,6 +10,7 @@
 
 pub mod decision;
 pub mod embedding;
+pub mod measured_fit;
 pub(crate) mod output;
 pub(crate) mod sampling;
 pub mod scheduler;
@@ -576,6 +577,52 @@ pub(crate) fn grow_moe_cache(
     }
 }
 
+/// The parameters the scheduler loads the text model of `config` with, given
+/// to `f`: `gpu_layers` (`check_gpu_support`'s) on the GPU, the MTP layers
+/// where `--mtp` drafts, the file mapping, the split across GPUs and the
+/// experts kept in RAM. `measured_fit` measures with the same ones, so the
+/// measure and the load cannot place the model differently. Err: a
+/// `--tensor-split` llama.cpp refuses.
+pub(crate) fn with_text_model_params<R>(
+    config: &InferenceConfig,
+    gpu_layers: i32,
+    f: impl FnOnce(&LlamaModelParams) -> R,
+) -> Result<R, String> {
+    let model_params = if gpu_layers >= 0 {
+        LlamaModelParams::default().with_n_gpu_layers(gpu_layers as u32)
+    } else {
+        LlamaModelParams::default().with_n_gpu_layers(1000)
+    };
+    // MTP layers are skipped at load unless asked for (`--mtp`).
+    let model_params = model_params.with_load_mtp(config.mtp > 0);
+    // `--no-mmap`: experts kept in RAM go to the backend's pinned host buffer.
+    // Only when asked: llama.cpp's default load mode (auto) maps the file
+    // unless a device cannot use mapped memory, and is left to decide.
+    let model_params = if config.no_mmap {
+        model_params.with_use_mmap(false)
+    } else {
+        model_params
+    };
+    let mut model_params = pin!(config.gpu_split.apply(model_params)?);
+    // Patterns passed to `add_cpu_buft_override` are stored as raw pointers
+    // (not copied) inside `model_params`, so they must outlive `f`: kept
+    // bound in this local.
+    let n_cpu_moe_patterns: Vec<std::ffi::CString> = (0..config.n_cpu_moe)
+        .map(|i| {
+            std::ffi::CString::new(format!(r"blk\.{i}\.ffn_(up|down|gate|gate_up)_(ch|)exps"))
+                .expect("pattern has no interior NUL")
+        })
+        .collect();
+    if config.cpu_moe {
+        model_params.as_mut().add_cpu_moe_override();
+    } else {
+        for pattern in &n_cpu_moe_patterns {
+            model_params.as_mut().add_cpu_buft_override(pattern);
+        }
+    }
+    Ok(f(&model_params))
+}
+
 /// Build context params with flash attention, n_batch, and KV cache types applied.
 pub(crate) fn build_ctx_params(
     config: &InferenceConfig,
@@ -816,6 +863,10 @@ pub struct InferenceConfig {
     /// `--split-mode`, `--tensor-split`: how the model goes
     /// across several GPUs (see `crate::gpu_split`).
     pub gpu_split: crate::gpu_split::GpuSplit,
+    /// Set where `--fit` kept the experts of some layers in RAM: the
+    /// scheduler measures the load with llama.cpp before it loads and
+    /// settles the split on what it measures (see `measured_fit`).
+    pub measured_fit: Option<measured_fit::MeasuredFit>,
 }
 
 impl Default for InferenceConfig {
@@ -850,6 +901,7 @@ impl Default for InferenceConfig {
             load_threads: crate::readahead::LoadThreads::default(),
             kv_unified: false,
             gpu_split: crate::gpu_split::GpuSplit::default(),
+            measured_fit: None,
         }
     }
 }

@@ -576,6 +576,22 @@ prompt was read at 822 tokens/s instead of 256, and the answer written at
 19.4 tokens/s instead of 21.5, with the experts of 8 layers on the card
 instead of 11. An `--n-cpu-moe` set by hand is not adjusted.
 
+That reserve is an estimate from one model, and a wider one asks more: Inkling
+2 Mini at 16,000 tokens wanted 7 GiB of compute buffer at 2048 tokens a pass
+and 1.8 GiB at 512, where 1.4 GiB and 320 MiB had been kept, and the load
+failed. Since 0.9.60, on one GPU, the load checks the split before it is made:
+llama.cpp builds the model and its context without allocating anything or
+reading the weights (`common_fit_measure`, a fraction of a second) and says
+what the GPU would hold, and the experts of whole layers move to RAM until
+that fits beside `--vram-reserve` and what else was kept free, or back to the
+GPU where a whole layer's worth is left over. Where the engine chose 2048
+tokens a pass by itself (no `--n-ubatch`), it goes back to 512 when 2048
+would send more than an eighth of the layers' experts to RAM: reading long
+prompts faster is not worth writing every token slower. The log says what was
+measured and what changed, and the banner shows the split that was loaded.
+Several GPUs, an expert cache (`--moe-cache`, which measures itself) and a
+split given by hand are left as planned.
+
 The batch a decode call takes, `--n-batch`, is raised to match when it is
 smaller. A dense model, or an MoE that fits whole on the GPU, copies nothing
 per pass and gains little.

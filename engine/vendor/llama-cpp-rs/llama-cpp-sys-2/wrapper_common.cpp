@@ -357,6 +357,43 @@ extern "C" int llama_rs_fit_params(
         log_level));
 }
 
+// EuLLM addition: see wrapper_common.h. Measures with no_alloc and
+// load_mode NONE, so nothing is allocated and the weights are not read.
+extern "C" int llama_rs_fit_measure(
+    const char * path_model,
+    const struct llama_model_params * mparams,
+    const struct llama_context_params * cparams,
+    size_t * out_model,
+    size_t * out_context,
+    size_t * out_compute,
+    int64_t * out_free,
+    size_t max_devices,
+    size_t * out_n_devices) {
+    if (!path_model || !mparams || !cparams || !out_n_devices) {
+        return 1;
+    }
+    *out_n_devices = 0;
+    try {
+        const auto rows = common_fit_measure(
+            std::vector<std::string>{ path_model }, mparams, cparams, nullptr, nullptr, GGML_LOG_LEVEL_ERROR);
+        size_t n = 0;
+        for (const auto & row : rows) {
+            if (row.kind != common_memory_breakdown_row::DEVICE || n >= max_devices) {
+                continue;
+            }
+            out_model[n]   = row.model;
+            out_context[n] = row.context;
+            out_compute[n] = row.compute;
+            out_free[n]    = row.free;
+            n++;
+        }
+        *out_n_devices = n;
+        return 0;
+    } catch (const std::exception &) {
+        return 1;
+    }
+}
+
 // EuLLM fix: common_memory_breakdown_print's table is emitted via LOG_TRC
 // (common/log.h), gated by a *separate* verbosity threshold
 // (common_log_verbosity_thold, default LOG_LEVEL_INFO) that the upstream

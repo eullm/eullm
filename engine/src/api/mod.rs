@@ -739,6 +739,23 @@ impl AppState {
                 }
                 _ => (n_cpu_moe, self.gpu_split.clone()),
             };
+            // The experts of some layers in RAM on one GPU: the load weighs
+            // the split against what llama.cpp measures, the compute buffer
+            // included, which the plan could only estimate
+            // (`inference::measured_fit`). What stays free beside the model
+            // is what the plan kept, less the micro-batch's estimate.
+            let measured_fit = plan
+                .as_ref()
+                .filter(|plan| {
+                    gpu_split.is_default()
+                        && matches!(plan.basis, crate::fit::OffloadBasis::MoeExperts { .. })
+                })
+                .map(|plan| crate::inference::measured_fit::MeasuredFit {
+                    keep_bytes: plan.kept_bytes.saturating_sub(crate::fit::ubatch_reserve_bytes(
+                        self.n_ubatch.unwrap_or(crate::inference::DEFAULT_N_UBATCH),
+                    )),
+                    ubatch_raised: self.n_ubatch.is_none() && cache_n_ubatch.is_some(),
+                });
             if cache_n_ubatch.is_some() {
                 tracing::info!(
                     "experts in RAM: reading prompts {load_n_ubatch} tokens at a time (--n-ubatch), \
@@ -821,6 +838,7 @@ impl AppState {
                 load_threads: self.load_threads,
                 kv_unified: self.kv_unified,
                 gpu_split,
+                measured_fit,
             };
             if mmproj_path.is_some() {
                 tracing::info!("{}", mmproj_placement.describe());
@@ -993,9 +1011,11 @@ impl AppState {
                     .strip_prefix("eullm/")
                     .unwrap_or(&normalized)
                     .to_string(),
-                gpu_layers: self.gpu_layers,
-                cpu_moe: self.cpu_moe,
-                n_cpu_moe: self.n_cpu_moe,
+                // What this load was given, not the server's flags: the plan's
+                // split, and the measure's where it settled on another.
+                gpu_layers,
+                cpu_moe,
+                n_cpu_moe: info.n_cpu_moe.unwrap_or(n_cpu_moe),
                 rs_seq: self.rs_seq,
                 // Drafts on the scheduler's one slot only.
                 mtp: if batch_size == 1 { self.mtp } else { 0 },
