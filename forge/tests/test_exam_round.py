@@ -135,7 +135,8 @@ def test_a_development_round_draws_more_per_code_and_chains_its_links(leonardo):
                    ROUND_PER_CODE="30", ROUND_CODES="codice_civile",
                    ROUND_EXAM_LINKS="3", ROUND_JUDGE_LINKS="2", ROUND_OPEN_ONLY="1")
     assert r.returncode == 0, r.stdout + r.stderr
-    kinds = [json.loads(x)["metadata"]["tipo"] for x in dev.read_text(encoding="utf-8").splitlines()]
+    kinds = [json.loads(x)["metadata"]["tipo"]
+             for x in dev.read_text(encoding="utf-8").splitlines()]
     assert kinds.count("contenuto") == 30          # 40 untrained articles, 30 asked
     lines = calls.splitlines()
     assert len(lines) == 5
