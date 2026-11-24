@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.9.60 — 2026-11-24
 
 ### Added
 - **Every answer is read in its model's own format**, as llama.cpp knows each family's (the parser llama-server reads answers with): the reasoning apart from the answer, and the model's markers out of both, for Qwen3, DeepSeek-R1, Gemma 4, GPT-OSS, Inkling 2 and the families a llama.cpp update brings, on the API, the chat and the terminal alike. Until now EuLLM knew three formats by hand, and a new family showed its markers until it was taught a fourth. A model whose GGUF has no template is read as before.
