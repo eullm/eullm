@@ -1301,20 +1301,28 @@ pub async fn main() {
         logs
     };
 
-    logs.with_env_filter(
-        // Module paths are rooted at the [[bin]] name ("eullm" in
-        // Cargo.toml), not the package name ("eullm-engine") - there's
-        // no separate lib.rs, so every tracing::info!/warn! call site
-        // resolves its target under "eullm::...". "eullm_engine=info"
-        // never matched anything, silently disabling all engine
-        // logging (KV-reuse diagnostics, context/scheduler startup
-        // info, etc.) unless RUST_LOG was set explicitly.
-        tracing_subscriber::EnvFilter::try_new(inference::log_filter(
-            crate::settings::var("RUST_LOG").as_deref(),
-        ))
-        .unwrap_or_else(|_| inference::log_filter(None).into()),
-    )
-    .init();
+    let logs = logs
+        .with_env_filter(
+            // Module paths are rooted at the [[bin]] name ("eullm" in
+            // Cargo.toml), not the package name ("eullm-engine") - there's
+            // no separate lib.rs, so every tracing::info!/warn! call site
+            // resolves its target under "eullm::...". "eullm_engine=info"
+            // never matched anything, silently disabling all engine
+            // logging (KV-reuse diagnostics, context/scheduler startup
+            // info, etc.) unless RUST_LOG was set explicitly.
+            tracing_subscriber::EnvFilter::try_new(inference::log_filter(
+                crate::settings::var("RUST_LOG").as_deref(),
+            ))
+            .unwrap_or_else(|_| inference::log_filter(None).into()),
+        )
+        .with_filter_reloading();
+    let reload = logs.reload_handle();
+    let _ = LOG_FILTER.set(Box::new(move |filter: &str| {
+        if let Ok(filter) = tracing_subscriber::EnvFilter::try_new(filter) {
+            let _ = reload.reload(filter);
+        }
+    }));
+    logs.init();
 
     // Install signal handler for SIGABRT — llama.cpp calls abort() on
     // GGML_ASSERT failures, which kills the process with no diagnostic info.
@@ -4712,6 +4720,34 @@ fn cli_answer_format(
     template?.answer_format()
 }
 
+/// Replaces the log filter while the process runs (see `quiet_logs_for_chat`).
+type SetLogFilter = Box<dyn Fn(&str) + Send + Sync>;
+static LOG_FILTER: std::sync::OnceLock<SetLogFilter> = std::sync::OnceLock::new();
+
+/// The terminal chat writes its answers where the log writes its lines, and
+/// every request logged how its prompt was read between the question and the
+/// answer. Once the chat is in use, only warnings and errors are shown, unless
+/// `RUST_LOG` asks for more. The lines of the startup stay: they are written
+/// before the first question.
+fn quiet_logs_for_chat() {
+    if crate::settings::var("RUST_LOG").is_some_and(|v| !v.trim().is_empty()) {
+        return;
+    }
+    if let Some(set) = LOG_FILTER.get() {
+        set("eullm=warn,llama-cpp-2=error");
+    }
+}
+
+/// Whether a line typed in the terminal chat ends it: the commands, and
+/// `exit` or `quit` typed on their own, which nobody means as a question and
+/// which went to the model until 0.9.60.
+fn ends_chat(input: &str) -> bool {
+    matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "/bye" | "/exit" | "/quit" | "/q" | "exit" | "quit"
+    )
+}
+
 async fn interactive_chat(
     backend: ChatBackend,
     model_name: &str,
@@ -4804,9 +4840,10 @@ async fn interactive_chat(
         // Commands are recalled too: /temp 0.2 is exactly the kind of line
         // someone types, adjusts, and types again.
         reader.remember(&input);
+        quiet_logs_for_chat();
 
         // Commands
-        if input == "/bye" || input == "/exit" || input == "/quit" || input == "/q" {
+        if ends_chat(&input) {
             println!("Bye!");
             return;
         } else if input == "/clear" {
@@ -4815,7 +4852,7 @@ async fn interactive_chat(
             continue;
         } else if input == "/help" {
             println!("Commands:");
-            println!("  /bye, /q          Exit the chat (Ctrl+D does the same)");
+            println!("  /bye, /q, exit    Exit the chat (Ctrl+D does the same)");
             println!("  /clear            Clear conversation history");
             println!(
                 "  /think            Enable reasoning (current: {})",
@@ -5645,6 +5682,21 @@ async fn run_multimodal_oneshot(engine: Arc<InferenceEngine>, image_path: PathBu
         }
     }
     let _ = join.await;
+}
+
+#[cfg(test)]
+mod chat_exit_tests {
+    use super::ends_chat;
+
+    #[test]
+    fn exit_typed_without_a_slash_ends_the_chat() {
+        for line in ["/bye", "/q", "/exit", "/quit", "exit", "Exit", " quit ", "QUIT"] {
+            assert!(ends_chat(line), "{line:?}");
+        }
+        for line in ["exit the loop", "how do I quit vim?", "bye", "/clear", "exit."] {
+            assert!(!ends_chat(line), "{line:?}");
+        }
+    }
 }
 
 #[cfg(test)]

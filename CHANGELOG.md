@@ -23,6 +23,8 @@ something changed, less so for understanding what it means.
 - **Tool calls with Gemma 4, Inkling 2 and the other models whose markers are special tokens** (0.9.50): no call came back, and the answer held the raw markers, `<|turn>model` and `<|channel>thought` among them. The llama.cpp of 0.9.50 matches those markers by token id, and the engine reads text; it matches them as text again.
 - **The terminal chat (`eullm run`) showed Inkling 2's block markers** and every model's reasoning as raw text: it prints the reasoning dimmed, then the answer, and keeps only the answer in the conversation.
 - On the Ollama endpoints without `think`, the reasoning left in the answer is between `<think>` tags for every model; Gemma 4's came in its own channel markers.
+- **Inkling 2 read the whole conversation again at every turn**: the check that a slot's sliding window still holds what the next token sees read, on a model that is also recurrent, the position of the recurrent state (the last token), failed every time, and the engine fell back to reading the prompt from the start, with a warning in the log. On those models the recurrent state decides how far a slot can go back, and a saved state keeps the window with it, so the check is skipped there.
+- **The terminal chat** (`eullm run`): `exit` or `quit` typed on their own end it, as `/bye` does, instead of going to the model; and once the chat is in use the log shows only warnings and errors, so how each prompt was read no longer appears between the question and the answer (`RUST_LOG` still shows it).
 
 ## 0.9.50 — 2026-11-23
 
