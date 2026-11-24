@@ -1515,3 +1515,44 @@ trained before (k3s-k6, the k3s50 and k450 chains, the current candidate)
 saw the uncleaned corpora: their development results are read with
 `split_by_article.py`, and the held-out exams are given only to models
 trained on clean files.
+
+## 29. 2026-11-24: the recipe on four corpora, and the clean candidate queued
+
+The candidate's recipe (knowledge adapter at 0.5, one GRPO round of 750
+steps, 200 steps of OPD with r2l as teacher) on each knowledge corpus,
+against r2l (paired, won:lost; closed book of 674, r2l 196):
+
+| candidate | corpus | devbig | devbig, no note | practical | closed book |
+|---|---|---|---|---|---:|
+| k50-g1-opd200, seeds 0 and 1 | old memory, unverified | 4:14, 7:7 | 4:13, 7:15 | 7:11, 5:13 | 299, 274 |
+| k3s50-g1-opd200 | Qwen, verified | 7:12 | 6:19 | 6:18 | 238 |
+| k450-g1-opd200, seeds 0 and 1 | + Gemma cases and explanations | 7:9, 11:11 | 7:20, 10:18 | 8:14, 7:11 | 255, 226 |
+| k650-g1-opd200 | + Gemma, all four forms | 7:9 | 7:15 | 8:7 | 240 |
+| k750-g1-opd200 | Gemma only, clean, 70M tokens | 4:10 | 5:18 | 7:12 | 231 |
+
+- Every GRPO round reached step 750 (checkpoint-750), so the five compare.
+- **k650 is the most even so far**: level with r2l on devbig, the only one
+  level on the practical exam (8:7), the least behind without the note,
+  and a fifth more on the closed book. One seed: the second is running.
+- The old unverified corpus taught more closed-book recall (299) and
+  answered devbig worse; the verified corpora trade some recall for
+  answers. Gemma alone at 70M tokens (k7) is not enough: Qwen plus Gemma,
+  or Gemma at full volume (k8, queued after the checks of samples 5-8).
+- The knowledge pass alone, before OPD, is level or ahead of r2l without
+  the note (k750-g1 12:12, k650-g1 11:13): OPD buys closed-book recall and
+  costs a little there.
+
+**Queued:** k650-g1-opd200 with seed 1; `k9`, the k6 corpus rebuilt from
+clean files (Qwen and every Gemma form), on r2l and on the 4B, and behind
+k9-r2l the whole recipe (`r2l-k950`, scale, package, g1, OPD, exams), the
+first candidate that may sit the held-out exams.
+
+**Also on 2026-11-22/24:** the Booster maintenance of 23-24 November ended
+on the 23rd in the evening; the checks of samples 5-8 were cancelled in it
+and requeued (they resume from their verdicts). gpt-oss as a checker
+through llama-server agreed with itself on 556 of 587 items when run again,
+with the engine on 536 and 547: the engine is fit to check, from a new pass
+(a pass keeps one server). The Large 4 pilot, with the 64-device build, now
+stops at `loading model` and the job's hour of waiting runs out: the load
+itself (605 GB, read and sent to 12 remote GPUs) is the next thing to
+understand.
