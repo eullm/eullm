@@ -3590,6 +3590,7 @@ async fn cmd_run(
                     kv_bpe_v,
                     companion_reserve_bytes.saturating_add(fit::ubatch_reserve_bytes(n_ubatch)),
                     vram_reserve,
+                    kv_layout,
                 );
             }
             // The MTP head's context, built once the model has loaded (see

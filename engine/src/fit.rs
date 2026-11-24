@@ -3269,7 +3269,7 @@ pub fn place_mmproj(
 /// model is. `reserve_bytes` is every other reservation already in force (a
 /// launch-time embedding companion), taken out of free VRAM before the
 /// projector is weighed against it; `mmproj_bytes` comes from
-/// [`mmproj_footprint_bytes`].
+/// [`mmproj_footprint_bytes`]; `kv` is how the load lays its KV cache out.
 pub fn decide_mmproj_placement(
     model_path: &Path,
     mmproj_bytes: u64,
@@ -3278,11 +3278,17 @@ pub fn decide_mmproj_placement(
     kv_bytes_per_elem_v: f64,
     reserve_bytes: u64,
     vram_reserve: u64,
+    kv: KvLayout,
 ) -> MmprojPlacement {
     if mmproj_bytes == 0 {
         return MmprojPlacement::FollowText;
     }
-    let info = read_gguf_info(model_path);
+    // Laid out as the load lays its KV cache out, as every other sizer here
+    // reads the model: without it a sliding-window layer was charged the
+    // whole context, and Gemma 4 E4B at 256k tokens weighed more than 15 GiB of
+    // KV cache instead of 4, so its projector went to RAM beside 5.4 GiB of
+    // free VRAM and images were encoded on the CPU (24-11-2026).
+    let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
     let file_size = model_file_bytes(model_path);
     let layout = match (&info, file_size) {
         (Some(i), size) if size > 0 => read_model_moe_layout(model_path, i.n_layers),
