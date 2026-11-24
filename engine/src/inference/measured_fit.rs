@@ -58,10 +58,15 @@ pub struct Settled {
     pub n_cpu_moe: u32,
     /// What llama.cpp measured on the GPU for that split, in bytes.
     pub used: u64,
-    /// `used` is within the budget. When no split fits, the one with every
-    /// expert in RAM that was measured last.
+    /// `used` is within the budget. When no split fits, the one measured to
+    /// take the least, with the fewest layers in RAM among those that take
+    /// about as little.
     pub fits: bool,
 }
+
+/// Splits measured within this much of each other take the same memory: the
+/// one with fewer layers in RAM is the better.
+const SAME_BYTES: u64 = 64 << 20;
 
 /// Settle `n_cpu_moe` from `start`: while the measure is over `budget`, the
 /// experts of the next layers go to RAM, as many as cover what is over; while
@@ -70,6 +75,15 @@ pub struct Settled {
 /// what the GPU would hold with the first `n` layers' experts in RAM. The
 /// result is the fewest layers in RAM measured to fit; `None` when a measure
 /// failed, and the plan stands.
+///
+/// Experts sent to RAM do not always leave the GPU: their copies for a
+/// micro-batch live in the compute buffer, and where a model reads the same
+/// weights more than once in a pass (Inkling 2's loop) the copies of every
+/// layer in RAM are kept until the last read. There the compute buffer grows
+/// by what the model loses (0.53 GiB a layer on Inkling 2 Mini at 512 tokens,
+/// 24-11-2026), and moving more layers only writes slower. When a step to
+/// RAM frees less than half of what it moved, the walk stops there; when no
+/// split fits, the one taking least is kept, with the fewest layers in RAM.
 pub fn settle(
     start: u32,
     expert_bytes: &[u64],
@@ -77,19 +91,31 @@ pub fn settle(
     mut measure: impl FnMut(u32) -> Option<u64>,
 ) -> Option<Settled> {
     let n_layers = expert_bytes.len() as u32;
+    let moved =
+        |from: u32, to: u32| -> u64 { expert_bytes[from as usize..to as usize].iter().sum() };
     let mut n = start.min(n_layers);
-    // The fewest layers in RAM measured to fit, and the most measured not to.
+    // The fewest layers in RAM measured to fit, and every split measured not
+    // to; the last of these is where the walk to RAM stands.
     let mut best: Option<Settled> = None;
-    let mut over: Option<Settled> = None;
+    let mut over: Vec<Settled> = Vec::new();
     for _ in 0..MAX_MEASURES {
         let used = measure(n)?;
         let next = if used > budget {
-            if over.is_none_or(|o| n > o.n_cpu_moe) {
-                over = Some(Settled {
-                    n_cpu_moe: n,
-                    used,
-                    fits: false,
-                });
+            // A step to RAM that freed less than half of what it moved: the
+            // experts' copies took their place, and further steps would too.
+            // Not the first layer sent to RAM, whose step also brings the
+            // copies of one layer, which every model pays once.
+            let pays = over
+                .last()
+                .filter(|o| o.n_cpu_moe > 0 && o.n_cpu_moe < n)
+                .is_none_or(|o| o.used.saturating_sub(used) >= moved(o.n_cpu_moe, n) / 2);
+            over.push(Settled {
+                n_cpu_moe: n,
+                used,
+                fits: false,
+            });
+            if !pays {
+                break;
             }
             let need = used - budget;
             let (mut freed, mut m) = (0u64, n);
@@ -115,15 +141,20 @@ pub fn settle(
             m
         };
         // Never back to a split measured not to fit, nor past one that does.
-        let next = over
-            .map_or(next, |o| next.max(o.n_cpu_moe + 1))
-            .min(n_layers);
+        let most_over = over.iter().map(|o| o.n_cpu_moe).max();
+        let next = most_over.map_or(next, |o| next.max(o + 1)).min(n_layers);
         if next == n || best.is_some_and(|b| next >= b.n_cpu_moe) {
             break;
         }
         n = next;
     }
-    best.or(over)
+    if best.is_some() {
+        return best;
+    }
+    let least = over.iter().map(|o| o.used).min()?;
+    over.into_iter()
+        .filter(|o| o.used <= least + SAME_BYTES)
+        .min_by_key(|o| o.n_cpu_moe)
 }
 
 /// Whether the default micro-batch is the better of the two: the raised one
@@ -361,6 +392,26 @@ mod tests {
         assert!(s.fits);
         assert!(used(s.n_cpu_moe) <= 9 * GIB);
         assert!(used(s.n_cpu_moe - 1) > 9 * GIB);
+    }
+
+    #[test]
+    fn experts_whose_copies_stay_on_the_gpu_are_not_sent_to_ram() {
+        // Inkling 2 Mini at 512 tokens: every layer sent to RAM comes back as
+        // the copy of its experts in the compute buffer, and the total stays
+        // 0.16 GiB over the budget whatever the split.
+        let layers = [GIB / 2; 40];
+        let mut measured = Vec::new();
+        let s = settle(6, &layers, 14 * GIB, |n| {
+            measured.push(n);
+            Some(14 * GIB + GIB / 6 - u64::from(n.saturating_sub(6)) * (1 << 20))
+        })
+        .unwrap();
+        assert_eq!(
+            s.n_cpu_moe, 6,
+            "the plan's split, not the most layers in RAM"
+        );
+        assert!(!s.fits);
+        assert_eq!(measured, [6, 7], "one step shows that moving frees nothing");
     }
 
     #[test]

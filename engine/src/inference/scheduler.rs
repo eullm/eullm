@@ -2513,6 +2513,22 @@ fn run_scheduler_loop(
     // checkpoint is what makes the cut possible (`prefill_setup`).
     let n_swa = model.n_swa();
     let keeps_states = model.is_hybrid() || model.is_recurrent() || n_swa > 0;
+    // The window a reused slot is checked against (`window_reaches_back`),
+    // on a model whose window alone can lose what the next token sees. On a
+    // hybrid model the memory's first position is not the window's: llama.cpp
+    // answers the later of the window's and the recurrent state's, which is
+    // the last token read (`llama_memory_hybrid_iswa::seq_pos_min`), so every
+    // reuse failed the check and Inkling 2 read the whole conversation again
+    // at every turn (24-11-2026). There the recurrent state decides how far a
+    // slot can be cut back: not at all (`clear_kv_cache_seq` refuses) or a
+    // few tokens with `--mtp`, which the window's spare micro-batch holds,
+    // or to a checkpoint, which keeps the window with it (`PARTIAL_ONLY`
+    // writes the sliding-window cache).
+    let window_check = if model.is_hybrid() || model.is_recurrent() {
+        0
+    } else {
+        n_swa
+    };
     let mut states: StateCheckpoints = (0..sched_config.max_batch_size)
         .map(|_| Vec::new())
         .collect();
@@ -2798,7 +2814,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
-                            n_swa,
+                            window_check,
                             None,
                         );
                         if setup.is_err()
@@ -2820,7 +2836,7 @@ fn run_scheduler_loop(
                                 per_seq_ctx,
                                 &tokens,
                                 effective_reuse_len,
-                                n_swa,
+                                window_check,
                                 None,
                             );
                         }
@@ -2842,7 +2858,7 @@ fn run_scheduler_loop(
                                 per_seq_ctx,
                                 &tokens,
                                 effective_reuse_len,
-                                n_swa,
+                                window_check,
                                 None,
                             );
                         }
@@ -2877,7 +2893,7 @@ fn run_scheduler_loop(
                         per_seq_ctx,
                         &tokens,
                         effective_reuse_len,
-                        n_swa,
+                        window_check,
                         mtp_state.as_mut(),
                         keep_states.then_some(&mut *slot_states),
                     );
@@ -2901,7 +2917,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
-                            n_swa,
+                            window_check,
                             mtp_state.as_mut(),
                             Some(&mut *slot_states),
                         );
@@ -2919,7 +2935,7 @@ fn run_scheduler_loop(
                             per_seq_ctx,
                             &tokens,
                             effective_reuse_len,
-                            n_swa,
+                            window_check,
                             mtp_state.as_mut(),
                             keep_states.then_some(&mut *slot_states),
                         );

@@ -498,7 +498,11 @@ pub struct Report {
 }
 
 fn backend_name() -> &'static str {
-    if cfg!(feature = "cuda") {
+    if cfg!(all(feature = "cuda", feature = "vulkan")) {
+        "cuda+vulkan"
+    } else if cfg!(all(feature = "rocm", feature = "vulkan")) {
+        "rocm+vulkan"
+    } else if cfg!(feature = "cuda") {
         "cuda"
     } else if cfg!(feature = "rocm") {
         "rocm"
