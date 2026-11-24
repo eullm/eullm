@@ -31,7 +31,8 @@ def test_rows_ask_past_the_end_of_each_code_as_the_exam_does(tmp_path):
                        _rec("codice_penale", 734, "Distruzione di bellezze naturali.")])
     exam = tmp_path / "exam.jsonl"
     exam.write_text(json.dumps({"id": "norm-inesistente-codice_civile-3434", "metadata": {
-        "tipo": "inesistente", "code": "codice_civile", "articolo": "3434"}}) + "\n", encoding="utf-8")
+        "tipo": "inesistente", "code": "codice_civile", "articolo": "3434"}}) + "\n",
+        encoding="utf-8")
     rows = mod.rows_for(index, 30, mod.asked([exam]), random.Random(0))
 
     by_code = {}
