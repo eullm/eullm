@@ -1541,6 +1541,29 @@ pub struct DynamicOaiTemplate {
     parser: Option<llama_cpp_2::model::ChatParser>,
 }
 
+/// How a model writes its answers, as llama.cpp knows it for the model's
+/// family: where the reasoning is, where the answer, which markers are
+/// neither. The parser llama-server reads every answer with, from the same
+/// render of the model's own template ([`DynamicOaiTemplate::answer_format`]).
+/// It makes a new family's answers readable with nothing to change here but
+/// the llama.cpp pin: Inkling 2 (23-11-2026) needed a hand-written case
+/// before it, as Gemma 4 and the `<think>` families did.
+#[derive(Clone)]
+pub struct AnswerFormat {
+    parser: llama_cpp_2::model::ChatParser,
+}
+
+impl AnswerFormat {
+    /// `text` (the answer so far, or whole when `partial` is false) as its
+    /// reasoning and its answer. `None` when the format does not read it.
+    pub fn read(&self, text: &str, partial: bool) -> Option<(String, String)> {
+        let raw = llama_cpp_2::model::chat_parse(text, partial, Some(&self.parser)).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        let field = |k: &str| v.get(k).and_then(|c| c.as_str()).unwrap_or("").to_string();
+        Some((field("reasoning_content"), field("content")))
+    }
+}
+
 /// One tool call extracted from a model's output.
 pub struct ParsedToolCall {
     /// Call id, when the output format carries one (most don't).
@@ -1563,6 +1586,12 @@ pub struct ParsedChatMessage {
 }
 
 impl DynamicOaiTemplate {
+    /// The format the answer to this prompt is written in, when the
+    /// template has one.
+    pub fn answer_format(&self) -> Option<AnswerFormat> {
+        self.parser.clone().map(|parser| AnswerFormat { parser })
+    }
+
     /// Parse `text` (the model's complete raw output for one turn) with
     /// llama.cpp's format-aware parser — the same `common_chat_parse`
     /// llama-server uses, so a model that tool-calls correctly there

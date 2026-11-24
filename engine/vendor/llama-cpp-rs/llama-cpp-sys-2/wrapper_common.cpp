@@ -87,6 +87,14 @@ extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
     try {
         auto tmpls = common_chat_templates_init(model, /* chat_template_override */ "");
         *out_was_explicit = common_chat_templates_was_explicit(tmpls.get());
+        // EuLLM: the parser matches the model's special tokens as text. Since
+        // llama.cpp #29307 (b12632) a parser built with the vocabulary's
+        // specials matches them by token id only, and llama_rs_chat_parse
+        // reads text, the pieces the engine streamed: Gemma 4's
+        // <|channel>thought and Inkling's blocks never matched, and the
+        // answer came back whole, generation prompt included (24-11-2026).
+        // Without the specials a token parser is a literal, as before #29307.
+        common_chat_templates_set_specials(tmpls.get(), common_peg_tokens());
 
         common_chat_templates_inputs inputs;
         inputs.add_generation_prompt = add_generation_prompt;

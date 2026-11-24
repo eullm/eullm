@@ -13,6 +13,16 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **Every answer is read in its model's own format**, as llama.cpp knows each family's (the parser llama-server reads answers with): the reasoning apart from the answer, and the model's markers out of both, for Qwen3, DeepSeek-R1, Gemma 4, GPT-OSS, Inkling 2 and the families a llama.cpp update brings, on the API, the chat and the terminal alike. Until now EuLLM knew three formats by hand, and a new family showed its markers until it was taught a fourth. A model whose GGUF has no template is read as before.
+
+### Fixed
+- **Tool calls with Gemma 4, Inkling 2 and the other models whose markers are special tokens** (0.9.50): no call came back, and the answer held the raw markers, `<|turn>model` and `<|channel>thought` among them. The llama.cpp of 0.9.50 matches those markers by token id, and the engine reads text; it matches them as text again.
+- **The terminal chat (`eullm run`) showed Inkling 2's block markers** and every model's reasoning as raw text: it prints the reasoning dimmed, then the answer, and keeps only the answer in the conversation.
+- On the Ollama endpoints without `think`, the reasoning left in the answer is between `<think>` tags for every model; Gemma 4's came in its own channel markers.
+
 ## 0.9.50 — 2026-11-23
 
 ### Added
