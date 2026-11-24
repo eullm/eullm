@@ -34,8 +34,9 @@ def _model(root: Path, name: str) -> Path:
 
 
 def _run(*args: str, margin: str = "0") -> str:
-    out = subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True, encoding="utf-8",
-                         timeout=60, env={"PATH": "/usr/bin:/bin", "MOVE_MARGIN_GB": margin})
+    out = subprocess.run(["bash", str(SCRIPT), *args], capture_output=True, text=True,
+                         encoding="utf-8", timeout=60,
+                         env={"PATH": "/usr/bin:/bin", "MOVE_MARGIN_GB": margin})
     assert out.returncode == 0, out.stderr
     return out.stdout
 
