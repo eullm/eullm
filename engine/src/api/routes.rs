@@ -2656,6 +2656,9 @@ async fn about(State(state): State<S>) -> Json<Value> {
         "model_libraries": libraries,
         "audit_log": crate::audit::AuditLogger::new().log_path(),
         "api_port": state.api_port,
+        // What the start found that costs speed, for the chat to show
+        // (`inference::vulkan_check`): empty when there is nothing to say.
+        "warnings": crate::inference::vulkan_check::notices(),
         "protections": {
             "api_keys": state.api_keys.is_enabled(),
             "allowed_ips": state.ip_allowlist.describe(),

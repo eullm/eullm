@@ -13,6 +13,12 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **A build with Vulkan starts where Vulkan is not installed.** The Vulkan library (`libvulkan.so.1`, `vulkan-1.dll`) is opened when the engine starts instead of being required to start it, so the same binary can carry Vulkan beside CUDA for a card of another vendor and still run in a CUDA container or on a server that has no Vulkan.
+- **Where a missing Vulkan costs speed, the engine says so in plain sight**, not in a log line: with an AMD or Intel Arc card in the machine that only Vulkan can use, a box on the terminal and a banner at the top of the chat name the idle card and the command that installs Vulkan (`sudo apt install libvulkan1 mesa-vulkan-drivers`, or the Fedora and Arch equivalents). A build whose only GPU backend is Vulkan stops instead, with the same command, unless the CPU is asked for with `--gpu-layers 0`: before, it did not start at all, with the system's own "cannot open shared object file". On a machine with NVIDIA cards only, nothing is shown.
+
 ## 0.9.60 — 2026-11-24
 
 ### Added

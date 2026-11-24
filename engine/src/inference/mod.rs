@@ -14,6 +14,7 @@ pub mod measured_fit;
 pub(crate) mod output;
 pub(crate) mod sampling;
 pub mod scheduler;
+pub mod vulkan_check;
 
 use std::num::NonZeroU32;
 use std::path::PathBuf;
