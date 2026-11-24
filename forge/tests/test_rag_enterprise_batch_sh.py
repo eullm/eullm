@@ -61,7 +61,8 @@ def test_each_model_is_asked_in_turn_and_the_env_is_put_back(tmp_path):
     engine.mkdir()
     (engine / "i3k-rag-engine").write_text(FAKE, encoding="utf-8")
     (engine / "i3k-rag-engine").chmod(0o755)
-    (engine / ".env").write_text("AUTH__JWT_SECRET=x\nEULLM__MODEL_OVERRIDE=/old.gguf\n", encoding="utf-8")
+    (engine / ".env").write_text("AUTH__JWT_SECRET=x\nEULLM__MODEL_OVERRIDE=/old.gguf\n",
+                                 encoding="utf-8")
     models = tmp_path / "models"
     models.mkdir()
     for name in ("a.gguf", "b.gguf", "broken.gguf"):
@@ -84,10 +85,12 @@ def test_each_model_is_asked_in_turn_and_the_env_is_put_back(tmp_path):
         env=env, capture_output=True, text=True, encoding="utf-8", timeout=300)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    started = [json.loads(ln) for ln in (tmp_path / "started.jsonl").read_text(encoding="utf-8").splitlines()]
+    started = [json.loads(ln) for ln in
+               (tmp_path / "started.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [(Path(s["model"]).name, s["extra"]) for s in started] == \
         [("a.gguf", None), ("broken.gguf", None), ("b.gguf", "--moe-cache auto")]
-    rows = [json.loads(ln) for ln in (out / "answers-b-v022.jsonl").read_text(encoding="utf-8").splitlines()]
+    rows = [json.loads(ln) for ln in
+            (out / "answers-b-v022.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(rows) == 2 and rows[0]["answer"] == "Risposta di b.gguf"
     assert len((out / "answers-a-v022.jsonl").read_text(encoding="utf-8").splitlines()) == 2
     assert "broken: RAG Enterprise did not come up" in proc.stdout
