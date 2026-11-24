@@ -1523,8 +1523,16 @@ layers it holds. Vulkan sees the NVIDIA card too; llama.cpp loads on it once,
 through the backend listed first (CUDA), and EuLLM sizes against each card
 once (since 0.9.60; before, a build with both backends counted the NVIDIA
 card's memory twice and did not compile). `--fit` sums the two cards' free
-memory, and llama.cpp splits the layers in proportion to it;
-`--tensor-split` sets the proportions by hand. The expert cache and the
+memory. Where the model fits whole on the two, the load measures how fast
+each card reads its memory (a product over a 512 MiB matrix, a few
+milliseconds) and gives the fastest as many layers as llama.cpp measures to
+fit there, compute buffer included, and the other the rest: llama.cpp's own
+split, by free memory, gives the slower card as large a share as its memory,
+and every token waits on it. The log names each card's speed and the layers
+it got. `--tensor-split` sets the split by hand, and is then left as given.
+Inkling 2's loop needed a change to llama.cpp for this (patch `0016`): the
+layers its later passes repeat were split by index, so their weights all
+stayed on the first card. The expert cache and the
 prefetch run on one GPU only and stay off. Only between the layers of the
 two cards does anything cross between them, a few MB for each micro-batch,
 so a slot on the chipset's slower lanes is enough.

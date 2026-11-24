@@ -2074,6 +2074,12 @@ fn run_scheduler_loop(
         {
             config.n_cpu_moe = m.n_cpu_moe;
             config.n_ubatch = m.n_ubatch;
+            if let Some(tensor_split) = &m.tensor_split {
+                config.gpu_split = crate::gpu_split::GpuSplit {
+                    mode: crate::gpu_split::SplitMode::default(),
+                    tensor_split: tensor_split.clone(),
+                };
+            }
             measured = Some(m);
         }
     }

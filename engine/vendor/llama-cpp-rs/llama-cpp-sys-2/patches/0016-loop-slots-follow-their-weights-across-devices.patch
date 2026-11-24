@@ -1,0 +1,103 @@
+model: a cache slot that shares an earlier layer's weights goes to that layer's device
+
+inkling2_loop runs its core layers several times. Its later passes are cache slots of their own
+(n_layer_all = the physical layers + the core once more for each later pass), with their own KV
+and recurrent state and the weights of the core layer they repeat (post_arch_tensors). The layers
+were split across devices by slot index, so on two GPUs the slots of the later passes took the
+second device's share, and with them no weights: Inkling 2 Mini on an RTX 5070 Ti and a Radeon
+RX 6700 XT put 14,891 MiB of weights on the first and 469 MiB (the output layer) on the second,
+whose layers then computed with weights on the other card, and the first card's compute buffer
+did not fit (24-11-2026).
+
+A model now names the layer whose weights each slot computes with (llama_model::layer_weights,
+the slot itself by default, layer_phys for inkling2_loop); the split is made over the layers that
+hold weights, and every other slot goes to its layer's device with its KV cache. For every model
+without shared slots the assignment is the same as before.
+
+EuLLM patch on llama.cpp b12632+23 (969d733).
+
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 06eb7c929..56b4d5f4b 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1813,15 +1813,25 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+         splits[i] = split_sum != 0.0f ? splits[i] / split_sum : float(i + 1) / n_devices();
+     }
+ 
+-    const int i_gpu_start = std::max(n_layer_all + 1 - n_gpu_layers, 0);
+-    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_layer_all + 1);
+-    auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
++    // [EuLLM] the split is made over the layers that hold weights: a cache slot that computes with
++    // the weights of an earlier layer (inkling2_loop's later passes) goes where those weights are,
++    // with its KV cache. By slot index, the slots of the later passes took the share of the last
++    // devices and the weights all stayed on the first.
++    std::vector<int> split_pos(n_layer_all);
++    int n_split_layers = 0;
++    for (int il = 0; il < n_layer_all; ++il) {
++        split_pos[il] = layer_weights(il) == il ? n_split_layers++ : -1;
++    }
++
++    const int i_gpu_start = std::max(n_split_layers + 1 - n_gpu_layers, 0);
++    const int act_gpu_layers = devices.empty() ? 0 : std::min(n_gpu_layers, n_split_layers + 1);
++    auto get_layer_buft_list = [&](int il, int pos) -> llama_model::impl::layer_dev {
+         const bool is_swa = il < n_layer_all && hparams.is_swa(il);
+-        if (il < i_gpu_start || (il - i_gpu_start) >= act_gpu_layers) {
++        if (pos < i_gpu_start || (pos - i_gpu_start) >= act_gpu_layers) {
+             LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
+             return {cpu_dev, &pimpl->cpu_buft_list};
+         }
+-        const int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + n_devices(), float(il - i_gpu_start)/act_gpu_layers) - splits.begin();
++        const int layer_gpu = std::upper_bound(splits.begin(), splits.begin() + n_devices(), float(pos - i_gpu_start)/act_gpu_layers) - splits.begin();
+         auto * dev = devices.at(layer_gpu).dev;
+         LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
+         return {dev, &pimpl->gpu_buft_list.at(dev)};
+@@ -1834,11 +1844,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+     // assign the repeating layers to the devices according to the splits
+     pimpl->dev_layer.resize(n_layer_all);
+     for (int il = 0; il < n_layer_all; ++il) {
+-        pimpl->dev_layer[il] = get_layer_buft_list(il);
++        if (split_pos[il] >= 0) {
++            pimpl->dev_layer[il] = get_layer_buft_list(il, split_pos[il]);
++        }
++    }
++    for (int il = 0; il < n_layer_all; ++il) {
++        if (split_pos[il] < 0) {
++            pimpl->dev_layer[il] = pimpl->dev_layer[layer_weights(il)];
++            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s with the weights of layer %d\n", il,
++                    ggml_backend_dev_name(pimpl->dev_layer[il].dev), layer_weights(il));
++        }
+     }
+ 
+     // assign the output layer
+-    pimpl->dev_output = get_layer_buft_list(n_layer_all);
++    pimpl->dev_output = get_layer_buft_list(n_layer_all, n_split_layers);
+ 
+     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
+ 
+diff --git a/src/llama-model.h b/src/llama-model.h
+index eae5c6848..943c96cf6 100644
+--- a/src/llama-model.h
++++ b/src/llama-model.h
+@@ -1083,6 +1083,10 @@ struct llama_model {
+     // optional, runs after the scale pass
+     virtual void post_arch_tensors(llama_model_loader &) {}
+ 
++    // the layer whose weights the cache slot il computes with: il itself, except in a model whose
++    // later slots share the weights of earlier layers (inkling2_loop's later passes) [EuLLM]
++    virtual int layer_weights(int il) const { return il; }
++
+ protected:
+     llama_model_params params;
+ 
+diff --git a/src/models/models.h b/src/models/models.h
+index b12642fb9..9e85ba729 100644
+--- a/src/models/models.h
++++ b/src/models/models.h
+@@ -2563,6 +2563,7 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
+ 
+     int n_layer_phys() const override { return n_phys; }
+     int layer_phys(int il) const;
++    int layer_weights(int il) const override { return layer_phys(il); }
+ 
+     int      n_phys     = 0;
+     uint32_t core_start = 0;
