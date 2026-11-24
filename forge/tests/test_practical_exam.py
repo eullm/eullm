@@ -241,7 +241,8 @@ def test_training_prompts_are_judged_rows_beside_the_mixed_ones(tmp_path, known,
     save_eval_set([to_item(g, {"domanda": "q", "risposta": "r", "rubrica": "x",
                                "articoli": [g[0]]}, "dev")], exam)
     mix = tmp_path / "prompts-judge.jsonl"
-    mix.write_text(json.dumps({"id": "m1", "tipo": "termine", "prompt": []}) + "\n", encoding="utf-8")
+    mix.write_text(json.dumps({"id": "m1", "tipo": "termine", "prompt": []}) + "\n",
+                   encoding="utf-8")
     monkeypatch.setattr(mod, "ask", lambda url, msgs, mt, t: _reply(articoli=[1]))
     out = tmp_path / "prompts-practical.jsonl"
     assert mod.main(["--norms", str(norms), "--exclude-exam", str(exam), "--url", "http://x",
