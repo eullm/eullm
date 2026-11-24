@@ -42,7 +42,8 @@ def test_the_share_is_taken_out_by_id_and_other_rows_pass(tmp_path, capsys):
     rows.append({"id": "plain", "tipo": "termine",
                  "prompt": [{"role": "user", "content": open_book_prompt(q, [REC])}]})
     src = tmp_path / "p.jsonl"
-    src.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+    src.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                   encoding="utf-8")
     out = tmp_path / "o.jsonl"
     assert mod.main([str(src), "--share", "0.7", "--out", str(out)]) == 0
     got = [json.loads(ln) for ln in out.read_text(encoding="utf-8").splitlines()]
