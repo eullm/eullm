@@ -42,7 +42,8 @@ def test_agreement_counts_only_the_items_both_graded():
 def _graded(d: Path, label: str, grades: dict[str, str]):
     d.mkdir(parents=True, exist_ok=True)
     (d / f"answers-{label}.graded.jsonl").write_text("".join(
-        json.dumps({"id": i, "grade": g, "answer": "x"}) + "\n" for i, g in grades.items()), encoding="utf-8")
+        json.dumps({"id": i, "grade": g, "answer": "x"}) + "\n" for i, g in grades.items()),
+        encoding="utf-8")
 
 
 def test_the_script_reports_per_model_and_per_kind(tmp_path, capsys):
