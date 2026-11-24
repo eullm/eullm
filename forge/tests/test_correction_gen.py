@@ -108,7 +108,8 @@ def test_the_exercise_keeps_the_id_and_kind():
 def test_the_script_prints_counts_only(tmp_path, capsys):
     samples = tmp_path / "samples.jsonl"
     samples.write_text(json.dumps(_row(answers=["Il termine è di 60 giorni [2].",
-                                                 "Il termine è di 30 giorni."])) + "\n", encoding="utf-8")
+                                                 "Il termine è di 30 giorni."])) + "\n",
+                      encoding="utf-8")
     spec = importlib.util.spec_from_file_location("make_correction_pairs", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
