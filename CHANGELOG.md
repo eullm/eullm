@@ -13,6 +13,13 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.10.0 — 2026-11-24
+
+### Added
+- **The Linux CUDA binary uses a card of another vendor too.** `eullm-linux-x64-cuda-13.1` now carries Vulkan beside CUDA: an AMD or Intel Arc card next to the NVIDIA one computes its own layers, the faster card filled first, without building the engine yourself (Qwen3.8-27B on an RTX 5070 Ti and a Radeon RX 6700 XT: 25.6 tokens/s, against 7.4 on the 5070 Ti alone). The datacenter and Windows CUDA binaries stay CUDA only.
+- **A build with Vulkan starts where Vulkan is not installed.** The Vulkan library (`libvulkan.so.1`, `vulkan-1.dll`) is opened when the engine starts instead of being required to start it, so the same binary can carry Vulkan beside CUDA for a card of another vendor and still run in a CUDA container or on a server that has no Vulkan.
+- **Where a missing Vulkan costs speed, the engine says so in plain sight**, not in a log line: with an AMD or Intel Arc card in the machine that only Vulkan can use, a box on the terminal and a banner at the top of the chat name the idle card and the command that installs Vulkan (`sudo apt install libvulkan1 mesa-vulkan-drivers`, or the Fedora and Arch equivalents). A build whose only GPU backend is Vulkan stops instead, with the same command, unless the CPU is asked for with `--gpu-layers 0`: before, it did not start at all, with the system's own "cannot open shared object file". On a machine with NVIDIA cards only, nothing is shown.
+
 ## 0.9.60 — 2026-11-24
 
 ### Added

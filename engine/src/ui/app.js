@@ -2972,6 +2972,36 @@
     if (v?.version && els.sideVersion) els.sideVersion.textContent = `EuLLM Engine ${v.version}`;
     await loadModels();
     await reloadChats();
+    showServerWarnings();
+  }
+
+  // What the server found at start that costs speed (a graphics card left
+  // idle because Vulkan is missing), above the chat: whoever opens the chat
+  // in the browser may never see the terminal that printed it. Closing it
+  // hides it until the tab is closed.
+  async function showServerWarnings() {
+    try {
+      const r = await fetch("/api/about", withAuth());
+      if (!r.ok) return;
+      const warnings = (await r.json()).warnings || [];
+      let closed = [];
+      try { closed = JSON.parse(sessionStorage.getItem("eullm.closedWarnings") || "[]"); } catch {}
+      for (const w of warnings) {
+        if (closed.includes(w.title) || document.querySelector(".server-warning")) continue;
+        const box = document.createElement("div");
+        box.className = "server-warning";
+        box.setAttribute("role", "alert");
+        box.innerHTML = `<div class="server-warning-text"><strong>${escapeHtml(w.title)}</strong>
+          <span>${escapeHtml(w.text)}</span>
+          ${w.command ? `<code>${escapeHtml(w.command)}</code>` : ""}</div>
+          <button type="button" class="server-warning-close" aria-label="Close">×</button>`;
+        box.querySelector("button").addEventListener("click", () => {
+          box.remove();
+          try { sessionStorage.setItem("eullm.closedWarnings", JSON.stringify([...closed, w.title])); } catch {}
+        });
+        els.messages.parentNode.insertBefore(box, els.messages);
+      }
+    } catch {}
   }
 
   init();

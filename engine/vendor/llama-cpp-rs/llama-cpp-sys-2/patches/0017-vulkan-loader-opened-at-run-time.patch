@@ -1,0 +1,181 @@
+ggml-vulkan: the Vulkan loader is opened at run time, not linked
+
+EuLLM's CUDA build carries the Vulkan backend too, so that a card of another vendor beside an NVIDIA
+one is used (an RTX 5070 Ti on CUDA and a Radeon RX 6700 XT on Vulkan: QwQ-32B Q4_K_M from 4.6 to
+20.5 tokens/s, 24-11-2026). Linked, the loader (libvulkan.so.1, vulkan-1.dll) is needed for the
+program to start at all, and CUDA containers, servers and HPC nodes often have none.
+
+The backend already reaches Vulkan through vulkan-hpp's dynamic dispatcher. Its one entry point,
+vkGetInstanceProcAddr, now comes from vulkan-hpp's DynamicLoader, which opens the loader at run
+time; the backend's other direct calls (vkGetInstanceProcAddr, vkGetDeviceProcAddr,
+vkGetPhysicalDeviceFeatures2, vkCmdCopyBuffer) go through the dispatcher, and VK_NO_PROTOTYPES
+keeps any new one from compiling. Without a loader the instance
+init throws, ggml_backend_vk_reg() returns no backend, and the program runs on its other backends.
+CMake links Vulkan's headers only, and dl for dlopen.
+
+EuLLM patch on llama.cpp b12632+23 (969d733).
+
+diff --git a/ggml/src/ggml-vulkan/CMakeLists.txt b/ggml/src/ggml-vulkan/CMakeLists.txt
+index d8fa6ef40..912f017d1 100644
+--- a/ggml/src/ggml-vulkan/CMakeLists.txt
++++ b/ggml/src/ggml-vulkan/CMakeLists.txt
+@@ -131,7 +131,9 @@ if (Vulkan_FOUND)
+         "GGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT"
+     )
+ 
+-    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan SPIRV-Headers::SPIRV-Headers)
++    # [EuLLM] the headers only: the loader is opened at run time (see ggml-vulkan.cpp), so a
++    # program built with Vulkan starts where no loader is installed.
++    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Headers SPIRV-Headers::SPIRV-Headers ${CMAKE_DL_LIBS})
+     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+ 
+     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp b/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp
+index 778d012bc..7e3fc88fb 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp
+@@ -504,7 +504,7 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
+     VkBufferCopy buf_copy{ 0, offset, copy_size };
+ 
+     ggml_vk_sync_buffers(ctx, subctx);
+-    vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
++    ggml_vk_default_dispatcher().vkCmdCopyBuffer(subctx->s->buffer->buf, (VkBuffer)staging->buffer, (VkBuffer)dst->buffer, 1, &buf_copy);
+ 
+     for (uint64_t i3 = 0; i3 < ne3; i3++) {
+         for (uint64_t i2 = 0; i2 < ne2; i2++) {
+@@ -764,7 +764,7 @@ void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t dst_offse
+ 
+     VkBufferCopy bc{ src_offset, dst_offset, size };
+ 
+-    vkCmdCopyBuffer(ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
++    ggml_vk_default_dispatcher().vkCmdCopyBuffer(ctx->s->buffer->buf, (VkBuffer)src->buffer, (VkBuffer)dst->buffer, 1, &bc);
+ }
+ 
+ void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-types.h b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+index 211948ee7..98bbc1235 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -2,6 +2,11 @@
+ 
+ #include "ggml-vulkan.h"
+ 
++// [EuLLM] no prototypes: the loader is opened at run time (ggml_vk_loader_get_instance_proc_addr),
++// so nothing may call it through a symbol the program would then need at start.
++#ifndef VK_NO_PROTOTYPES
++#define VK_NO_PROTOTYPES
++#endif
+ #include <vulkan/vulkan_core.h>
+ 
+ #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index 60cebe494..585dde57a 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -5092,7 +5092,7 @@ vk_device ggml_vk_get_device(size_t idx) {
+             device_extensions.push_back("VK_EXT_device_fault");
+         }
+ 
+-        vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
++        ggml_vk_default_dispatcher().vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+ 
+         device->device_fault = device->device_fault && fault_features.deviceFault;
+ 
+@@ -5315,7 +5315,7 @@ vk_device ggml_vk_get_device(size_t idx) {
+             std::vector<VkCooperativeMatrixPropertiesKHR> cm_props;
+ 
+             PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR pfn_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR =
+-                (PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)vkGetInstanceProcAddr(vk_instance.instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR");
++                (PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR)ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR");
+ 
+             uint32_t cm_props_num;
+ 
+@@ -5437,7 +5437,7 @@ vk_device ggml_vk_get_device(size_t idx) {
+ 
+         if (device->device_fault) {
+             device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
+-                vkGetDeviceProcAddr(device->device, "vkGetDeviceFaultInfoEXT");
++                ggml_vk_default_dispatcher().vkGetDeviceProcAddr(device->device, "vkGetDeviceFaultInfoEXT");
+         }
+ 
+         // Queues
+@@ -5799,7 +5799,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
+     }
+ #endif
+ 
+-    vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
++    ggml_vk_default_dispatcher().vkGetPhysicalDeviceFeatures2(physical_device, &device_features2);
+ 
+     fp16 = fp16 && vk12_features.shaderFloat16;
+ 
+@@ -5875,6 +5875,33 @@ static void ggml_vk_print_gpu_info(size_t idx) {
+ 
+ static DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
+ 
++// [EuLLM] The Vulkan loader is opened at run time instead of being linked: a build that carries
++// Vulkan beside CUDA has to start where no loader is installed (CUDA containers, servers, HPC
++// nodes) and only go without the Vulkan devices there. A missing loader throws, which
++// ggml_backend_vk_reg() turns into no Vulkan backend.
++#if VK_HEADER_VERSION >= 301
++using ggml_vk_dynamic_loader = vk::detail::DynamicLoader;
++#else
++using ggml_vk_dynamic_loader = vk::DynamicLoader;
++#endif
++
++static PFN_vkGetInstanceProcAddr ggml_vk_loader_get_instance_proc_addr() {
++    static std::unique_ptr<ggml_vk_dynamic_loader> loader;
++    if (!loader) {
++        try {
++            loader = std::make_unique<ggml_vk_dynamic_loader>();
++        } catch (const std::exception & e) {
++            GGML_LOG_INFO("ggml_vulkan: no Vulkan loader (%s): Vulkan devices are not used\n", e.what());
++            throw;
++        }
++    }
++    auto proc = loader->getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
++    if (!proc) {
++        throw std::runtime_error("the Vulkan loader has no vkGetInstanceProcAddr");
++    }
++    return proc;
++}
++
+ DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
+     return ggml_vk_default_dispatcher_instance;
+ }
+@@ -5886,7 +5913,7 @@ void ggml_vk_instance_init() {
+     VK_LOG_DEBUG("ggml_vk_instance_init()");
+ 
+     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
+-    ggml_vk_default_dispatcher_instance.init(vkGetInstanceProcAddr);
++    ggml_vk_default_dispatcher_instance.init(ggml_vk_loader_get_instance_proc_addr());
+ 
+     // vkEnumerateInstanceVersion is Vulkan 1.1. A null value indicated Vulkan 1.0.
+     if (ggml_vk_default_dispatcher_instance.vkEnumerateInstanceVersion == nullptr) {
+@@ -5949,12 +5976,12 @@ void ggml_vk_instance_init() {
+ 
+     if (debug_utils_ext) {
+         vk_instance.debug_utils_support              = true;
+-        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
+-        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT = (PFN_vkQueueBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueBeginDebugUtilsLabelEXT");
+-        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT = (PFN_vkQueueEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueEndDebugUtilsLabelEXT");
+-        vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
+-        vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
+-        vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
++        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
++        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT = (PFN_vkQueueBeginDebugUtilsLabelEXT) ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkQueueBeginDebugUtilsLabelEXT");
++        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT = (PFN_vkQueueEndDebugUtilsLabelEXT) ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkQueueEndDebugUtilsLabelEXT");
++        vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
++        vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
++        vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) ggml_vk_default_dispatcher().vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
+     }
+ 
+     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+@@ -17596,7 +17623,7 @@ bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
+     vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
+     device_features2.pNext = &vk11_features;
+ 
+-    vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
++    ggml_vk_default_dispatcher().vkGetPhysicalDeviceFeatures2(vkdev, &device_features2);
+ 
+     return vk11_features.storageBuffer16BitAccess;
+ }

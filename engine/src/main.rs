@@ -3272,6 +3272,12 @@ async fn cmd_run(
         eprintln!("Error initializing llama.cpp backend: {e}");
         std::process::exit(1);
     });
+    // A build with Vulkan starts without it (patch 0017): say so where it
+    // costs a card or the GPU itself (see `inference::vulkan_check`).
+    if let Err(lines) = inference::vulkan_check::check(gpu_layers) {
+        inference::vulkan_check::print_box("ERROR: this EuLLM cannot reach the GPU", &lines);
+        std::process::exit(1);
+    }
 
     // --embedding-model: load the companion embedding model now, before the
     // generation model's own --fit sizing runs below, and reserve its VRAM
@@ -4313,6 +4319,12 @@ async fn cmd_serve(
         eprintln!("Error initializing llama.cpp backend: {e}");
         std::process::exit(1);
     });
+    // A build with Vulkan starts without it (patch 0017): say so where it
+    // costs a card or the GPU itself (see `inference::vulkan_check`).
+    if let Err(lines) = inference::vulkan_check::check(gpu_layers) {
+        inference::vulkan_check::print_box("ERROR: this EuLLM cannot reach the GPU", &lines);
+        std::process::exit(1);
+    }
 
     // --embedding-model: load the companion embedding model now. There is no
     // generation model loaded yet to size against, so the reservation only

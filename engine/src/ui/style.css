@@ -1507,3 +1507,24 @@ body {
   .pro-view-grid { grid-template-columns: minmax(0, 1fr); }
   .pro-view { padding: 18px 12px 32px; }
 }
+
+/* A warning of the server's start, above the chat (app.js, showServerWarnings). */
+/* The shell is a grid of three rows: the warning takes a fourth, under the top bar. */
+.shell:has(> .server-warning) { grid-template-rows: auto auto minmax(0, 1fr) auto; }
+.server-warning {
+  display: flex; align-items: flex-start; gap: 10px;
+  margin: 10px 16px 0; padding: 10px 14px;
+  border: 1px solid var(--warn); border-left-width: 4px; border-radius: var(--radius-sm);
+  background: var(--bg-input); color: var(--text); font-size: 14px;
+}
+.server-warning-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.server-warning-text strong { color: var(--warn); }
+.server-warning-text code {
+  align-self: flex-start; max-width: 100%; overflow-x: auto; white-space: nowrap;
+  padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-elev); font-size: 13px;
+}
+.server-warning-close {
+  border: 0; background: none; color: var(--text-faint); font-size: 18px; line-height: 1;
+  cursor: pointer; padding: 2px 6px; border-radius: 4px;
+}
+.server-warning-close:hover, .server-warning-close:focus-visible { color: var(--text); background: var(--bg-elev); }
