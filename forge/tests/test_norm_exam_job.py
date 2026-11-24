@@ -103,7 +103,8 @@ def test_open_only_skips_the_closed_book_pass(job):
 
 def test_a_hybrid_round_is_labelled_apart_and_passes_the_models(job):
     run, out = job
-    (out / "answers-a-open.jsonl").write_text("{}\n{}\n{}\n", encoding="utf-8")   # the BM25 run, done
+    # the BM25 run, done
+    (out / "answers-a-open.jsonl").write_text("{}\n{}\n{}\n", encoding="utf-8")
     r, asked = run(EXAM_OPEN_ONLY="1", EXAM_EMBEDDER="Qwen/Qwen3-Embedding-0.6B",
                    EXAM_RERANKER="Qwen/Qwen3-Reranker-4B", EXAM_OPEN_TAG="hyb")
     assert r.returncode == 0, r.stdout + r.stderr
