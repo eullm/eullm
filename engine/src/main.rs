@@ -3939,7 +3939,7 @@ async fn cmd_run(
                 }
                 Err(e) => {
                     eprintln!("Error starting scheduler: {e}");
-                    std::process::exit(1);
+                    exit_now(1);
                 }
             }
         } else {
@@ -3963,7 +3963,7 @@ async fn cmd_run(
                 }
                 Err(e) => {
                     eprintln!("Error loading model: {e}");
-                    std::process::exit(1);
+                    exit_now(1);
                 }
             }
         }
@@ -5195,6 +5195,25 @@ impl ReasoningPrinter {
             print!("\x1b[0m");
         }
     }
+}
+
+/// Exit at once after a model failed to load, without the C and C++
+/// destructors: llama.cpp's CUDA backend frees the pinned host memory of
+/// the experts in RAM from one of them, after the CUDA driver has shut down,
+/// and aborts there ("CUDA error: driver shutting down", then an attempt to
+/// attach gdb), hiding the error that was the reason to exit (24-11-2026).
+/// What is open goes back to the system as the process ends.
+fn exit_now(code: i32) -> ! {
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    #[cfg(unix)]
+    // SAFETY: `_exit` ends the process; nothing runs after it.
+    unsafe {
+        libc::_exit(code)
+    }
+    #[cfg(not(unix))]
+    std::process::exit(code)
 }
 
 /// Spawn a new copy of this process without --daemon, then exit.
