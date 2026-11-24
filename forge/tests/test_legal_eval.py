@@ -66,7 +66,8 @@ def test_quiet_grading_prints_no_item(tmp_path, capsys):
     src = tmp_path / "answers-m.jsonl"
     src.write_text("\n".join(json.dumps({"id": f"norm-termine-codice_civile-{n}",
                                          "question": "Q?", "answer": "A.",
-                                         "reference": "R."}) for n in (1, 2, 3)) + "\n", encoding="utf-8")
+                                         "reference": "R."}) for n in (1, 2, 3)) + "\n",
+                      encoding="utf-8")
 
     class Batched:
         calls = 0
