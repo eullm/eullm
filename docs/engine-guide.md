@@ -1511,8 +1511,35 @@ No patching C++ projects. No hunting for CUDA versions. Feature flags at build t
 | `vulkan` | Cross-platform | `cargo build --release --features vulkan` |
 | `metal` | Apple Silicon | `cargo build --release --features metal` |
 | *(none)* | CPU only | `cargo build --release` |
+| `cuda,vulkan` | An NVIDIA card and another vendor's | `cargo build --release --features cuda,vulkan` |
 
 All GPU backends are compiled natively via llama.cpp — no wrappers, no Docker, no Python.
+
+#### Two cards of different vendors (`cuda,vulkan`)
+
+A machine with an NVIDIA card and an AMD or Intel one can use both for the
+same model: the NVIDIA card on CUDA, the other on Vulkan, each computing the
+layers it holds. Vulkan sees the NVIDIA card too; llama.cpp loads on it once,
+through the backend listed first (CUDA), and EuLLM sizes against each card
+once (since 0.9.60; before, a build with both backends counted the NVIDIA
+card's memory twice and did not compile). `--fit` sums the two cards' free
+memory, and llama.cpp splits the layers in proportion to it;
+`--tensor-split` sets the proportions by hand. The expert cache and the
+prefetch run on one GPU only and stay off. Only between the layers of the
+two cards does anything cross between them, a few MB for each micro-batch,
+so a slot on the chipset's slower lanes is enough.
+
+On Debian or Ubuntu, Vulkan's build needs its headers, the shader compiler
+and the SPIR-V headers besides CUDA's toolkit:
+
+```bash
+sudo apt install libvulkan-dev glslc spirv-headers
+cargo build --release --features cuda,vulkan
+```
+
+`eullm -V` then says `(CUDA+Vulkan)`, and the load log names both cards
+(`CUDA0`, `Vulkan1`). ROCm and Vulkan go together the same way
+(`rocm,vulkan`).
 
 ### Development setup
 

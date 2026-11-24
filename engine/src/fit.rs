@@ -986,6 +986,59 @@ pub fn read_gguf_moe_layout(path: &Path, file_size: u64, n_layers: u32) -> Optio
     None
 }
 
+/// The GPUs llama.cpp places a model on, in its order: ggml's devices of
+/// type GPU, less any whose `device_id` (its PCI address) a device before it
+/// already has. A build with two backends lists one card under both: CUDA and
+/// Vulkan each see an NVIDIA card, and llama.cpp loads on the first only
+/// ("skipping device … with the same id", `llama_model_load`), where a sum
+/// over every device would size against its VRAM twice.
+pub(crate) fn gpu_devices() -> Vec<llama_cpp_sys_2::ggml_backend_dev_t> {
+    use llama_cpp_sys_2::{
+        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
+        ggml_backend_dev_get_props, ggml_backend_dev_props, ggml_backend_dev_type,
+    };
+
+    let mut devices = Vec::new();
+    let mut ids = Vec::new();
+    // SAFETY: the registry is a process-global initialised by the ggml
+    // backends when they load; every index below the count is valid, the
+    // properties are written into a struct we own, and `device_id` is a C
+    // string the device owns for the life of the process.
+    unsafe {
+        for i in 0..ggml_backend_dev_count() {
+            let dev = ggml_backend_dev_get(i);
+            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
+                continue;
+            }
+            let mut props: ggml_backend_dev_props = std::mem::zeroed();
+            ggml_backend_dev_get_props(dev, &raw mut props);
+            ids.push((!props.device_id.is_null()).then(|| {
+                std::ffi::CStr::from_ptr(props.device_id)
+                    .to_string_lossy()
+                    .into_owned()
+            }));
+            devices.push(dev);
+        }
+    }
+    first_of_each_device(&ids)
+        .into_iter()
+        .map(|i| devices[i])
+        .collect()
+}
+
+/// The indices of `ids` llama.cpp keeps: each device unless one before it
+/// has the same id. A device without an id is always kept, as llama.cpp
+/// keeps it.
+pub(crate) fn first_of_each_device(ids: &[Option<String>]) -> Vec<usize> {
+    (0..ids.len())
+        .filter(|&i| {
+            ids[i]
+                .as_ref()
+                .is_none_or(|id| !ids[..i].iter().any(|other| other.as_ref() == Some(id)))
+        })
+        .collect()
+}
+
 /// Free VRAM in bytes, as reported by the active GPU backend.
 ///
 /// `(free, total)` in bytes, or `None` when there is no GPU or nothing can be
@@ -1004,35 +1057,18 @@ pub fn read_gguf_moe_layout(path: &Path, file_size: u64, n_layers: u32) -> Optio
 /// card was told "no GPU detected" and judged every model against system RAM
 /// alone. Reported from the field.
 ///
-/// Multiple GPUs are summed, because that is what a layer split can use.
+/// Multiple GPUs are summed, because that is what a layer split can use;
+/// each card once, as llama.cpp uses it (see [`gpu_devices`]).
 ///
 /// Returns `None` before `llama_backend_init` has run: the device registry is
 /// empty until then, and reporting zero VRAM would read as "a GPU with no
 /// memory" rather than "not asked yet".
 pub fn vram_bytes() -> Option<(u64, u64)> {
-    use llama_cpp_sys_2::{
-        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
-        ggml_backend_dev_memory, ggml_backend_dev_type,
-    };
-
     let mut free_total: u64 = 0;
     let mut total_total: u64 = 0;
-    // SAFETY: the registry is a process-global initialised by the ggml
-    // backends when they load. `ggml_backend_dev_get` is valid for any index
-    // below the count, and `ggml_backend_dev_memory` writes two usize
-    // out-params through pointers we own. Nothing here mutates backend state.
-    unsafe {
-        for i in 0..ggml_backend_dev_count() {
-            let dev = ggml_backend_dev_get(i);
-            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
-                continue;
-            }
-            let mut free: usize = 0;
-            let mut total: usize = 0;
-            ggml_backend_dev_memory(dev, &mut free as *mut usize, &mut total as *mut usize);
-            free_total += free as u64;
-            total_total += total as u64;
-        }
+    for (free, total) in device_vram() {
+        free_total += free;
+        total_total += total;
     }
 
     // A device that reports nothing is a device we cannot size against, and
@@ -1047,26 +1083,19 @@ pub fn vram_bytes() -> Option<(u64, u64)> {
 /// the devices a model is split across: what [`vram_bytes`] sums. Empty
 /// before `llama_backend_init`, or without a GPU.
 pub fn device_vram() -> Vec<(u64, u64)> {
-    use llama_cpp_sys_2::{
-        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
-        ggml_backend_dev_memory, ggml_backend_dev_type,
-    };
-
-    let mut devices = Vec::new();
-    // SAFETY: as in `vram_bytes`.
-    unsafe {
-        for i in 0..ggml_backend_dev_count() {
-            let dev = ggml_backend_dev_get(i);
-            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
-                continue;
-            }
+    gpu_devices()
+        .into_iter()
+        .map(|dev| {
             let mut free: usize = 0;
             let mut total: usize = 0;
-            ggml_backend_dev_memory(dev, &mut free as *mut usize, &mut total as *mut usize);
-            devices.push((free as u64, total as u64));
-        }
-    }
-    devices
+            // SAFETY: a device of the registry (`gpu_devices`); the call
+            // writes two out-params we own and mutates no backend state.
+            unsafe {
+                llama_cpp_sys_2::ggml_backend_dev_memory(dev, &raw mut free, &raw mut total);
+            }
+            (free as u64, total as u64)
+        })
+        .collect()
 }
 
 /// Where the layers of a MoE model go across several GPUs when the experts of
@@ -2594,31 +2623,22 @@ pub fn moe_cache_support() -> Result<(), String> {
 
 /// The names ggml gives its GPUs (`CUDA0`, `ROCm0`, ...), in its order.
 fn gpu_names() -> Vec<String> {
-    use llama_cpp_sys_2::{
-        GGML_BACKEND_DEVICE_TYPE_GPU, ggml_backend_dev_count, ggml_backend_dev_get,
-        ggml_backend_dev_name, ggml_backend_dev_type,
-    };
-
-    let mut gpus = Vec::new();
-    // SAFETY: the same registry walk as `vram_bytes`; `ggml_backend_dev_name`
-    // returns a NUL-terminated string owned by the backend.
-    unsafe {
-        for i in 0..ggml_backend_dev_count() {
-            let dev = ggml_backend_dev_get(i);
-            if dev.is_null() || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU {
-                continue;
-            }
-            let name = ggml_backend_dev_name(dev);
-            gpus.push(if name.is_null() {
+    gpu_devices()
+        .into_iter()
+        .map(|dev| {
+            // SAFETY: a device of the registry (`gpu_devices`);
+            // `ggml_backend_dev_name` returns a NUL-terminated string owned by
+            // the backend.
+            let name = unsafe { llama_cpp_sys_2::ggml_backend_dev_name(dev) };
+            if name.is_null() {
                 String::new()
             } else {
-                std::ffi::CStr::from_ptr(name)
+                unsafe { std::ffi::CStr::from_ptr(name) }
                     .to_string_lossy()
                     .into_owned()
-            });
-        }
-    }
-    gpus
+            }
+        })
+        .collect()
 }
 
 /// [`moe_cache_support`] for the GPUs ggml lists, by name. The cache
@@ -3659,6 +3679,21 @@ pub(crate) fn context_reserve_bytes(
     kv_cache_bytes(info, ctx_size, kv_bytes_per_elem_k, kv_bytes_per_elem_v)
         .saturating_add(COMPUTE_BUFFER_RESERVE_BYTES as u64)
         .saturating_add(ubatch_reserve_bytes(n_ubatch))
+}
+
+#[cfg(test)]
+mod gpu_device_tests {
+    use super::first_of_each_device;
+
+    #[test]
+    fn a_card_two_backends_list_is_counted_once() {
+        let id = |s: &str| Some(s.to_string());
+        // CUDA0 and Vulkan0 are the same RTX 5070 Ti, Vulkan1 the Radeon.
+        let ids = [id("0000:01:00.0"), id("0000:01:00.0"), id("0000:05:00.0")];
+        assert_eq!(first_of_each_device(&ids), [0, 2]);
+        // A device without an id is kept, as llama.cpp keeps it.
+        assert_eq!(first_of_each_device(&[None, None, id("a")]), [0, 1, 2]);
+    }
 }
 
 #[cfg(test)]

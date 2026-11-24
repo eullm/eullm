@@ -78,16 +78,9 @@ pub struct ModelBanner {
 /// A compile-time fact, so it is the same for every model and does not belong
 /// in `ModelBanner`.
 pub fn gpu_backend_name() -> &'static str {
-    if cfg!(feature = "cuda") {
-        "CUDA"
-    } else if cfg!(feature = "rocm") {
-        "ROCm"
-    } else if cfg!(feature = "vulkan") {
-        "Vulkan"
-    } else if cfg!(feature = "metal") {
-        "Metal"
-    } else {
-        "none (CPU only!)"
+    match crate::inference::backend_label() {
+        "CPU" => "none (CPU only!)",
+        gpu => gpu,
     }
 }
 

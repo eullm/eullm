@@ -168,16 +168,7 @@ pub fn check_gpu_support(gpu_layers: i32) -> i32 {
     }
 
     if has_gpu {
-        let backend_name = if cfg!(feature = "cuda") {
-            "CUDA"
-        } else if cfg!(feature = "rocm") {
-            "ROCm"
-        } else if cfg!(feature = "vulkan") {
-            "Vulkan"
-        } else {
-            "Metal"
-        };
-        tracing::info!("GPU backend: {backend_name}");
+        tracing::info!("GPU backend: {}", backend_label());
     }
 
     gpu_layers
@@ -199,7 +190,11 @@ pub fn check_gpu_support(gpu_layers: i32) -> i32 {
 /// wall.
 /// The GPU backend this binary was built with, as `eullm -V` names it.
 pub const fn backend_label() -> &'static str {
-    if cfg!(feature = "cuda") {
+    if cfg!(all(feature = "cuda", feature = "vulkan")) {
+        "CUDA+Vulkan"
+    } else if cfg!(all(feature = "rocm", feature = "vulkan")) {
+        "ROCm+Vulkan"
+    } else if cfg!(feature = "cuda") {
         "CUDA"
     } else if cfg!(feature = "rocm") {
         "ROCm"
@@ -388,6 +383,15 @@ fn media_token_costs(
 /// Returns `None` when there is no GPU device at all (a CPU-only run has no
 /// VRAM margin to check) rather than bogus figures.
 fn gpu_memory() -> Option<(u64, u64)> {
+    // Each discrete card once, as llama.cpp loads on it (`fit::gpu_devices`).
+    let gpus = crate::fit::device_vram();
+    if !gpus.is_empty() {
+        let (free, total) = gpus
+            .iter()
+            .fold((0u64, 0u64), |(f, t), (free, total)| (f + free, t + total));
+        return (total > 0).then_some((free, total));
+    }
+    // Only integrated GPUs: llama.cpp uses those when there is nothing else.
     let (mut free_sum, mut total_sum) = (0u64, 0u64);
     let device_count = unsafe { llama_cpp_sys_2::ggml_backend_dev_count() };
     for i in 0..device_count {
@@ -396,9 +400,7 @@ fn gpu_memory() -> Option<(u64, u64)> {
             continue;
         }
         let device_type = unsafe { llama_cpp_sys_2::ggml_backend_dev_type(device) };
-        if device_type != llama_cpp_sys_2::GGML_BACKEND_DEVICE_TYPE_GPU
-            && device_type != llama_cpp_sys_2::GGML_BACKEND_DEVICE_TYPE_IGPU
-        {
+        if device_type != llama_cpp_sys_2::GGML_BACKEND_DEVICE_TYPE_IGPU {
             continue;
         }
         let (mut free, mut total) = (0usize, 0usize);

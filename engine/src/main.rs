@@ -64,13 +64,14 @@ const DEFAULT_PIDFILE: &str = "eullm.pid";
 //   eullm 0.5.8 (CUDA)
 //   eullm 0.5.8 (Metal)
 //   eullm 0.5.8 (CPU)
-// Only one branch matches per build because feature flags are mutually
-// exclusive (set by the release matrix).
+// Only one branch matches per build: the release matrix builds one backend
+// each, and a local build may add Vulkan to CUDA or ROCm for a second card
+// of another vendor.
 // The git commit this binary was built from (see build.rs) — the crate
 // version alone doesn't say which commit on an unreleased branch a build
 // came from, and "did you actually rebuild with the fix" was costing real
 // back-and-forth during hands-on debugging on real hardware.
-#[cfg(feature = "cuda")]
+#[cfg(all(feature = "cuda", not(feature = "vulkan")))]
 const VERSION_STRING: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (CUDA) [",
@@ -84,17 +85,33 @@ const VERSION_STRING: &str = concat!(
     env!("EULLM_GIT_HASH"),
     "]"
 );
-#[cfg(feature = "rocm")]
+#[cfg(all(feature = "rocm", not(feature = "vulkan")))]
 const VERSION_STRING: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (ROCm) [",
     env!("EULLM_GIT_HASH"),
     "]"
 );
-#[cfg(feature = "vulkan")]
+#[cfg(all(feature = "vulkan", not(feature = "cuda"), not(feature = "rocm")))]
 const VERSION_STRING: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     " (Vulkan) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
+// Two backends in one build: an NVIDIA or AMD card on its own backend and
+// another vendor's on Vulkan, each card used once (`fit::gpu_devices`).
+#[cfg(all(feature = "cuda", feature = "vulkan"))]
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (CUDA+Vulkan) [",
+    env!("EULLM_GIT_HASH"),
+    "]"
+);
+#[cfg(all(feature = "rocm", feature = "vulkan"))]
+const VERSION_STRING: &str = concat!(
+    env!("CARGO_PKG_VERSION"),
+    " (ROCm+Vulkan) [",
     env!("EULLM_GIT_HASH"),
     "]"
 );
