@@ -193,8 +193,10 @@ def test_a_review_subset_holds_exactly_the_answers_on_the_sheet(tmp_path):
     out = tmp_path / "devreview"
     subset = _script("review_subset")
     assert subset.main([str(sheet), "--answers", str(src), "--out", str(out)]) == 0
-    a = [json.loads(x)["id"] for x in (out / "answers-a.jsonl").read_text(encoding="utf-8").splitlines()]
-    b = [json.loads(x)["id"] for x in (out / "answers-b.jsonl").read_text(encoding="utf-8").splitlines()]
+    a = [json.loads(x)["id"] for x in
+         (out / "answers-a.jsonl").read_text(encoding="utf-8").splitlines()]
+    b = [json.loads(x)["id"] for x in
+         (out / "answers-b.jsonl").read_text(encoding="utf-8").splitlines()]
     assert a == ["norm-contenuto-codice_civile-3", "norm-contenuto-codice_civile-7"]
     assert b == ["norm-contenuto-codice_civile-0"]
     # not a development name: refused
