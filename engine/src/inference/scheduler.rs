@@ -1012,8 +1012,10 @@ fn ctx_oom_hint(requested_tokens: u32) -> String {
     };
 
     format!(
-        "  Requested context: {requested_tokens} tokens — KV cache likely exceeds available VRAM.\
-        \n  Try a smaller context: {smaller}{kv_tip}"
+        "  Requested context: {requested_tokens} tokens — the KV cache, or the compute buffer \
+         llama.cpp reports above, does not fit in the VRAM left.\
+        \n  Try a smaller context: {smaller}{kv_tip}\
+        \n  On a MoE model, more experts on the CPU leave more VRAM: --n-cpu-moe N with a larger N."
     )
 }
 
@@ -2344,6 +2346,36 @@ fn run_scheduler_loop(
             model.new_context(&backend, params)
         }
         (result, _) => result,
+    };
+    // A micro-batch above the default whose compute buffer did not fit: the
+    // default's, which takes a fraction of it, before giving up. The larger
+    // one is a speed-up EuLLM asks for itself (experts in RAM read 2048
+    // prompt tokens at a time), sized by a reserve measured on other
+    // models; Inkling 2 Mini at 16,000 tokens wanted 7,042 MiB for it on a
+    // 16 GB RTX 5070 Ti and the load failed (24-11-2026).
+    let first = match first {
+        Err(e) if config.n_ubatch > super::DEFAULT_N_UBATCH => {
+            tracing::warn!(
+                "A micro-batch of {} tokens did not fit ({e}; the out-of-memory error above is \
+                 that attempt, not a failed load). Reading prompts {} tokens at a time instead",
+                config.n_ubatch,
+                super::DEFAULT_N_UBATCH
+            );
+            crate::monitor::history::event(
+                "warning",
+                format!(
+                    "Micro-batch {} → {}: its compute buffer did not fit ({e})",
+                    config.n_ubatch,
+                    super::DEFAULT_N_UBATCH
+                ),
+            );
+            config.n_ubatch = super::DEFAULT_N_UBATCH;
+            let params = super::build_ctx_params(&config, ctx_size)
+                .with_n_seq_max(sched_config.max_batch_size as u32)
+                .with_n_outputs_max(n_outputs_max);
+            model.new_context(&backend, params)
+        }
+        other => other,
     };
     let mut kv_fallback = None;
     let mut ctx = match first {
