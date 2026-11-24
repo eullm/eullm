@@ -128,6 +128,7 @@ def test_grpo_train_refuses_judged_prompts_without_a_judge(tmp_path):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     prompts = tmp_path / "p.jsonl"
-    prompts.write_text(json.dumps({"prompt": [], "tipo": "contenuto", "keywords": []}) + "\n", encoding="utf-8")
+    prompts.write_text(json.dumps({"prompt": [], "tipo": "contenuto", "keywords": []}) + "\n",
+                       encoding="utf-8")
     with pytest.raises(SystemExit, match="need a judge"):
         mod.main(["--model", "m", "--prompts", str(prompts), "--out", str(tmp_path / "o")])
