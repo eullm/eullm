@@ -79,7 +79,8 @@ def test_numbers_asked_about_by_an_evaluation_are_never_stated_absent(tmp_path):
                                               "articolo": "624-ter"}}) + "\n"
                      + json.dumps({"id": "x", "metadata": {"tipo": "pena",
                                                            "code": "codice_penale",
-                                                           "articolo": "624"}}) + "\n", encoding="utf-8")
+                                                           "articolo": "624"}}) + "\n",
+                      encoding="utf-8")
     fakes, asked = excluded([suite])
     assert fakes == {("codice_penale", "624-ter")} and asked == {("codice_penale", "624")}
     rows = program_rows(articles(), fakes=fakes, absent_share=1.0)
