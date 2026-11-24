@@ -89,9 +89,11 @@ def test_an_sft_round_s_adapter_is_found_in_its_directory_or_given(tmp_path):
     (base / "config.json").write_text("{}", encoding="utf-8")
     sft = grpo / "root" / "sft" / "final"
     sft.mkdir(parents=True)
-    (sft / "adapter_config.json").write_text(json.dumps({"base_model_name_or_path": str(base)}), encoding="utf-8")
+    (sft / "adapter_config.json").write_text(
+        json.dumps({"base_model_name_or_path": str(base)}), encoding="utf-8")
     (grpo / "root" / "sft" / "checkpoint-100").mkdir()
-    (grpo / "root" / "sft" / "checkpoint-100" / "adapter_config.json").write_text("{}", encoding="utf-8")
+    (grpo / "root" / "sft" / "checkpoint-100" / "adapter_config.json").write_text(
+        "{}", encoding="utf-8")
     (grpo / "root" / "merged").symlink_to(scratch / "root")
     _round(grpo, scratch, "top", grpo / "root" / "merged", present=False)
     mod = load()
@@ -100,6 +102,7 @@ def test_an_sft_round_s_adapter_is_found_in_its_directory_or_given(tmp_path):
     # elsewhere: given by name
     other = tmp_path / "elsewhere" / "lora"
     other.mkdir(parents=True)
-    (other / "adapter_config.json").write_text(json.dumps({"base_model_name_or_path": str(base)}), encoding="utf-8")
+    (other / "adapter_config.json").write_text(
+        json.dumps({"base_model_name_or_path": str(base)}), encoding="utf-8")
     start, rounds = mod.chain_of(grpo / "top", {"root": other})
     assert rounds[0] == ("root", other)
