@@ -79,7 +79,8 @@ def test_a_second_gate_gets_its_own_labels(tmp_path):
     env, log = _setup(tmp_path)
     r = _run({**env, "GATE_TAG": "gate2", "GATE_DIR": str(tmp_path / "gate2")}, "r2h")
     assert r.returncode == 0, r.stderr + r.stdout
-    tags = {ln.split("|")[5] for ln in log.read_text(encoding="utf-8").splitlines() if "norm_exam" in ln}
+    tags = {ln.split("|")[5] for ln in log.read_text(encoding="utf-8").splitlines()
+            if "norm_exam" in ln}
     assert tags == {"TAG=hybnn-gate2", "TAG=hyb-gate2"}
 
 
