@@ -186,7 +186,8 @@ def test_legal_eval_answers_the_exam_with_the_gguf(server_bin, tmp_path):
     items = tmp_path / "exam-dev.jsonl"
     items.write_text("".join(json.dumps({"id": f"q{i}", "domain": "legal", "lang": "it",
                                          "question": q}) + "\n"
-                             for i, q in enumerate(["Che cosa prevede", "Che cosa"])), encoding="utf-8")
+                             for i, q in enumerate(["Che cosa prevede", "Che cosa"])),
+                      encoding="utf-8")
     binary, gguf, record = server_bin
     answers = tmp_path / "answers-x-q4.jsonl"
     script = Path(__file__).resolve().parents[1] / "scripts" / "legal_eval.py"
