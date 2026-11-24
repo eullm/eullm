@@ -25,6 +25,7 @@ on:
         default: all
         options:
           - all
+          - cuda
           - rocm
           - vulkan
           - windows-vulkan
@@ -783,7 +784,7 @@ jobs:
           path: ${{ matrix.artifact }}
 
   build-cuda:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' || inputs.job == 'cuda' }}
     strategy:
       # One architecture set failing must not cancel the other — they are
       # separate downloads. `release` below already tolerates any of these
@@ -816,10 +817,19 @@ jobs:
           # reverse) — so the same binary now also covers RHEL/CentOS/Rocky/
           # Alma/Oracle Linux 8+, not just current Ubuntu/Fedora/Arch/Windows.
           # This is the same principle Python's manylinux images use.
+          #
+          # Vulkan too (0.10.0): an AMD or Intel Arc card beside the NVIDIA
+          # one computes its own layers, the faster card filled first
+          # (`inference::measured_fit`); QwQ-32B on an RTX 5070 Ti and a
+          # Radeon RX 6700 XT went from 4.6 to 20.5 tokens/s (24-11-2026).
+          # The loader is opened at run time (patch 0017), so the binary
+          # still starts where no Vulkan is installed.
           - cuda: "13.1.2"
             artifact: eullm-linux-x64-cuda-13.1
             cuda_tag: "13.1.2-devel-rockylinux8"
             cuda_archs: "86;89;120"
+            features: "cuda,vulkan,multimodal"
+            vulkan: true
           # Data-center NVIDIA: A100 (sm_80) and H100 (sm_90). Separate
           # artifact rather than folding into the consumer one above, same
           # reasoning as CPU/Vulkan/CUDA already being separate downloads:
@@ -855,10 +865,14 @@ jobs:
           # margin for sites more conservative than this one. sm_80/sm_90
           # have both been supported since CUDA 12.0, so nothing is lost on
           # the architecture side.
+          #
+          # CUDA only: A100/H100 nodes do not mix vendors.
           - cuda: "12.4.1"
             artifact: eullm-linux-x64-cuda-12.4-datacenter
             cuda_tag: "12.4.1-devel-rockylinux8"
             cuda_archs: "80;90"
+            features: "cuda,multimodal"
+            vulkan: false
 
     runs-on: ubuntu-22.04
     container:
@@ -894,6 +908,53 @@ jobs:
         run: |
           dnf install -y gcc-toolset-13 cmake make pkgconf-pkg-config openssl-devel clang-devel curl
           echo "/opt/rh/gcc-toolset-13/root/usr/bin" >> $GITHUB_PATH
+
+      # Vulkan's build tools, for the build that carries Vulkan beside CUDA.
+      # Rocky 8 packages the Vulkan headers and loader (AppStream), but not
+      # glslc, and EPEL 8's SPIR-V headers are from 2021, older than
+      # ggml-vulkan's shaders need (checked 24-11-2026). Both come from
+      # shaderc's own release, which pins the glslang, SPIRV-Tools and
+      # SPIRV-Headers it is built with: glslc built here (about 3 minutes on
+      # 8 cores), the headers installed, and the two kept in a cache keyed by
+      # the release. The loader is only for CMake's FindVulkan: the binary
+      # opens it at run time (patch 0017). A newer glslc changes which shaders
+      # ggml-vulkan generates: bump the target cache's `p1` marker with it, or
+      # a restored target/ keeps the old shader list and fails to compile.
+      - name: Vulkan headers and loader (Vulkan beside CUDA)
+        if: ${{ matrix.vulkan }}
+        run: dnf install -y vulkan-headers vulkan-loader-devel python39
+
+      - name: Cache glslc and the SPIR-V headers (shaderc v2026.4)
+        if: ${{ matrix.vulkan }}
+        id: shaderc-cache
+        uses: actions/cache@v5
+        with:
+          path: /opt/shaderc
+          key: shaderc-v2026.4-rockylinux8-gcc13
+
+      - name: Build glslc and the SPIR-V headers (shaderc v2026.4)
+        if: ${{ matrix.vulkan && steps.shaderc-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -eu
+          git clone --depth 1 --branch v2026.4 https://github.com/google/shaderc.git /tmp/shaderc
+          cd /tmp/shaderc
+          python3.9 utils/git-sync-deps
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON -DSHADERC_SKIP_COPYRIGHT_CHECK=ON \
+            -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON -DENABLE_GLSLANG_BINARIES=OFF
+          cmake --build build --target glslc_exe -j"$(nproc)"
+          mkdir -p /opt/shaderc/bin
+          cp build/glslc/glslc /opt/shaderc/bin/
+          cmake -S third_party/spirv-headers -B spirv-headers-build \
+            -DCMAKE_INSTALL_PREFIX=/opt/shaderc -DSPIRV_HEADERS_ENABLE_TESTS=OFF
+          cmake --install spirv-headers-build
+
+      - name: Put glslc and the SPIR-V headers on the build's paths
+        if: ${{ matrix.vulkan }}
+        run: |
+          echo "/opt/shaderc/bin" >> $GITHUB_PATH
+          echo "CMAKE_PREFIX_PATH=/opt/shaderc" >> $GITHUB_ENV
+          /opt/shaderc/bin/glslc --version
 
       - name: Install Rust toolchain
         run: |
@@ -1027,7 +1088,7 @@ jobs:
             fi
           done
 
-      - name: Build engine with CUDA + multimodal (mtmd)
+      - name: Build engine with CUDA + multimodal (mtmd), and Vulkan where the matrix says
         run: |
           . "$HOME/.cargo/env"
           export PATH="/usr/local/cuda/bin:$PATH"
@@ -1069,7 +1130,7 @@ jobs:
           # `cargo rustc -p <pkg> --bin <name> -- <flags>` applies extra
           # rustc flags only to that final crate's own compile+link, which
           # is what scopes it correctly.
-          cargo rustc --release --features "cuda,multimodal" -p eullm-engine --bin eullm -- -C link-arg=-no-pie
+          cargo rustc --release --features "${{ matrix.features }}" -p eullm-engine --bin eullm -- -C link-arg=-no-pie
         env:
           CUDA_PATH: /usr/local/cuda
           CUDACXX: /usr/local/cuda/bin/nvcc
@@ -1110,6 +1171,23 @@ jobs:
           # Printed so the effect of the nvprune step is visible in the log
           # without downloading the release asset to measure it.
           ls -l ${{ matrix.artifact }}
+
+      # The build with Vulkan must carry the backend and must not need the
+      # loader to start (patch 0017): a CUDA container has none.
+      - name: Check the Vulkan backend is in, and libvulkan is not needed to start
+        if: ${{ matrix.vulkan }}
+        run: |
+          if ! strings ${{ matrix.artifact }} | grep -q ggml_vk_; then
+            echo "::error::no ggml_vk_* symbols: the Vulkan backend was not compiled in"
+            exit 1
+          fi
+          if readelf -d ${{ matrix.artifact }} | grep NEEDED | grep -qi vulkan; then
+            echo "::error::the binary links libvulkan: it would not start where no Vulkan is installed"
+            readelf -d ${{ matrix.artifact }} | grep NEEDED
+            exit 1
+          fi
+          echo "Vulkan backend present, libvulkan opened at run time:"
+          readelf -d ${{ matrix.artifact }} | grep NEEDED
 
       - name: Upload artifact
         uses: actions/upload-artifact@v6
