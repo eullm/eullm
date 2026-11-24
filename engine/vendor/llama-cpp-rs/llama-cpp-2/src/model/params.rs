@@ -330,8 +330,76 @@ impl LlamaModelParams {
     }
 }
 
+/// What a model and its context would take on one GPU, from
+/// [`LlamaModelParams::measure_device_memory`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeviceMemory {
+    /// The weights placed on the device.
+    pub model: u64,
+    /// The context: the KV cache and the other state of the sequences.
+    pub context: u64,
+    /// The compute buffers: the activations of a micro-batch, and the
+    /// copies of weights kept in host memory that the device computes from.
+    pub compute: u64,
+    /// The device's free memory when it was measured.
+    pub free: i64,
+}
+
+impl DeviceMemory {
+    /// Everything the load would allocate on the device.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.model + self.context + self.compute
+    }
+}
+
 #[cfg(feature = "common")]
 impl LlamaModelParams {
+    /// What loading `model_path` with these parameters, and a context with
+    /// `cparams`, would allocate on each GPU, measured by llama.cpp without
+    /// allocating anything or reading the weights (`common_fit_measure`).
+    /// The parameters are used as they are, buffer overrides included.
+    /// `None` when the model or the context cannot be built.
+    ///
+    /// Not thread safe, as [`Self::fit_params`]: llama.cpp changes its global
+    /// logger while it measures.
+    #[must_use]
+    pub fn measure_device_memory(
+        &self,
+        model_path: &CStr,
+        cparams: &LlamaContextParams,
+    ) -> Option<Vec<DeviceMemory>> {
+        const MAX_DEVICES: usize = 16;
+        let mut model = [0usize; MAX_DEVICES];
+        let mut context = [0usize; MAX_DEVICES];
+        let mut compute = [0usize; MAX_DEVICES];
+        let mut free = [0i64; MAX_DEVICES];
+        let mut n = 0usize;
+        let status = unsafe {
+            llama_cpp_sys_2::llama_rs_fit_measure(
+                model_path.as_ptr(),
+                &raw const self.params,
+                &raw const cparams.context_params,
+                model.as_mut_ptr(),
+                context.as_mut_ptr(),
+                compute.as_mut_ptr(),
+                free.as_mut_ptr(),
+                MAX_DEVICES,
+                &raw mut n,
+            )
+        };
+        (status == 0).then(|| {
+            (0..n.min(MAX_DEVICES))
+                .map(|i| DeviceMemory {
+                    model: model[i] as u64,
+                    context: context[i] as u64,
+                    compute: compute[i] as u64,
+                    free: free[i],
+                })
+                .collect()
+        })
+    }
+
     /// Automatically fit model parameters to available device memory.
     ///
     /// Wraps llama.cpp's `common_fit_params` (libcommon), which determines optimal `n_gpu_layers`,

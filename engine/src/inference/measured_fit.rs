@@ -1,0 +1,380 @@
+//! The split of a MoE model between RAM and VRAM, checked against what
+//! llama.cpp measures before the load.
+//!
+//! `--fit` places the experts of a MoE model from the GGUF alone: weights and
+//! KV cache are known from the file, the compute buffer is not, and was
+//! charged a flat reserve (`fit::COMPUTE_BUFFER_RESERVE_BYTES`, plus
+//! `fit::ubatch_reserve_bytes` for a larger micro-batch). With experts in RAM
+//! the compute buffer also holds the copies of the experts a micro-batch
+//! computes from, and that grows with the model and the micro-batch: Inkling
+//! 2 Mini at 16,000 tokens asked 1,778 MiB of it at 512 tokens and 7,041 MiB
+//! at 2,048, where the plan had kept 320 MiB and 1.4 GiB, and the load failed
+//! on a 16 GB RTX 5070 Ti (24-11-2026).
+//!
+//! Here the scheduler, before it loads, asks llama.cpp what the load would
+//! allocate on the GPU (`common_fit_measure`: the model and the context built
+//! without allocating anything or reading the weights, a fraction of a
+//! second), and moves the experts of whole layers between RAM and VRAM until
+//! what it measures fits beside what has to stay free. Where the plan raised
+//! the micro-batch itself (experts in RAM read prompts 2,048 tokens at a
+//! time), the raised one is kept only if it does not cost more than a few
+//! layers of experts in VRAM; otherwise the default's is taken.
+//!
+//! Only for a single GPU, without an expert cache and without a split of the
+//! user's: the cache already measures itself (`grow_moe_cache`), and several
+//! GPUs are balanced by `fit::balance_moe_split`.
+
+use std::ffi::CString;
+use std::num::NonZeroU32;
+
+use super::InferenceConfig;
+
+/// What a load sized by `--fit` with the experts of some layers in RAM gives
+/// the scheduler, so that it can check the split against llama.cpp's own
+/// numbers (see the module documentation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MeasuredFit {
+    /// VRAM that stays free beside the text model besides `--vram-reserve`:
+    /// companions, a projector going to the GPU, the MTP head's context.
+    /// The compute buffer is not in it: that is what is measured.
+    pub keep_bytes: u64,
+    /// The micro-batch was raised by the plan, not asked for with
+    /// `--n-ubatch`: it may come back down to the default.
+    pub ubatch_raised: bool,
+}
+
+/// Left free beyond `--vram-reserve` for what the measure does not see: the
+/// CUDA graphs and the library workspaces a first decode allocates.
+const MARGIN_BYTES: u64 = 128 << 20;
+
+/// Measures before giving up on a better split: each one builds the model and
+/// the context without their memory, a fraction of a second on a large MoE.
+const MAX_MEASURES: u32 = 8;
+
+/// The split a measure settled on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Settled {
+    /// The first `n_cpu_moe` layers keep their experts in RAM.
+    pub n_cpu_moe: u32,
+    /// What llama.cpp measured on the GPU for that split, in bytes.
+    pub used: u64,
+    /// `used` is within the budget. When no split fits, the one with every
+    /// expert in RAM that was measured last.
+    pub fits: bool,
+}
+
+/// Settle `n_cpu_moe` from `start`: while the measure is over `budget`, the
+/// experts of the next layers go to RAM, as many as cover what is over; while
+/// it is under by whole layers, the experts of the last layers in RAM come
+/// back. `expert_bytes[i]` is what layer `i`'s experts weigh, `measure(n)` is
+/// what the GPU would hold with the first `n` layers' experts in RAM. The
+/// result is the fewest layers in RAM measured to fit; `None` when a measure
+/// failed, and the plan stands.
+pub fn settle(
+    start: u32,
+    expert_bytes: &[u64],
+    budget: u64,
+    mut measure: impl FnMut(u32) -> Option<u64>,
+) -> Option<Settled> {
+    let n_layers = expert_bytes.len() as u32;
+    let mut n = start.min(n_layers);
+    // The fewest layers in RAM measured to fit, and the most measured not to.
+    let mut best: Option<Settled> = None;
+    let mut over: Option<Settled> = None;
+    for _ in 0..MAX_MEASURES {
+        let used = measure(n)?;
+        let next = if used > budget {
+            if over.is_none_or(|o| n > o.n_cpu_moe) {
+                over = Some(Settled {
+                    n_cpu_moe: n,
+                    used,
+                    fits: false,
+                });
+            }
+            let need = used - budget;
+            let (mut freed, mut m) = (0u64, n);
+            while m < n_layers && freed < need {
+                freed += expert_bytes[m as usize];
+                m += 1;
+            }
+            m
+        } else {
+            if best.is_none_or(|b| n < b.n_cpu_moe) {
+                best = Some(Settled {
+                    n_cpu_moe: n,
+                    used,
+                    fits: true,
+                });
+            }
+            let slack = budget - used;
+            let (mut back, mut m) = (0u64, n);
+            while m > 0 && back + expert_bytes[m as usize - 1] <= slack {
+                back += expert_bytes[m as usize - 1];
+                m -= 1;
+            }
+            m
+        };
+        // Never back to a split measured not to fit, nor past one that does.
+        let next = over
+            .map_or(next, |o| next.max(o.n_cpu_moe + 1))
+            .min(n_layers);
+        if next == n || best.is_some_and(|b| next >= b.n_cpu_moe) {
+            break;
+        }
+        n = next;
+    }
+    best.or(over)
+}
+
+/// Whether the default micro-batch is the better of the two: the raised one
+/// reads long prompts faster with experts in RAM, every layer of experts it
+/// sends to RAM slows every token written. Kept while it costs at most an
+/// eighth of the layers (two at least), and wherever it fits and the default
+/// does not; dropped where it does not fit and the default does.
+pub fn prefer_default_ubatch(raised: Settled, default: Settled, n_layers: u32) -> bool {
+    match (raised.fits, default.fits) {
+        (true, true) => raised.n_cpu_moe.saturating_sub(default.n_cpu_moe) > (n_layers / 8).max(2),
+        (false, true) => true,
+        (true, false) => false,
+        // Neither fits: the smaller compute buffer is the better chance.
+        (false, false) => true,
+    }
+}
+
+/// What the measure changed: the split and micro-batch the scheduler loads
+/// with, when they differ from the plan's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Measured {
+    pub n_cpu_moe: u32,
+    pub n_ubatch: u32,
+}
+
+/// Measure the load `config` describes and settle its split (see the module
+/// documentation). `gpu_layers` is what the load asks the GPU for
+/// (`check_gpu_support`'s), and the context is the scheduler's: `ctx_size`
+/// tokens over `n_seq_max` sequences with `n_outputs_max` logit rows. `None`
+/// where nothing is measured or nothing changes.
+pub(crate) fn run(
+    config: &InferenceConfig,
+    gpu_layers: i32,
+    ctx_size: NonZeroU32,
+    n_seq_max: u32,
+    n_outputs_max: u32,
+) -> Option<Measured> {
+    let fit = config.measured_fit?;
+    if config.cpu_moe
+        || config.n_cpu_moe == 0
+        || config.moe_cache_bytes > 0
+        || !config.gpu_split.is_default()
+        || gpu_layers >= 0
+    {
+        return None;
+    }
+    let info = crate::fit::read_gguf_info(&config.model_path)?;
+    let layout = crate::fit::read_model_moe_layout(&config.model_path, info.n_layers)?;
+    let path = CString::new(config.model_path.to_str()?).ok()?;
+    let n_layers = layout.expert_bytes_per_layer.len() as u32;
+    let started = std::time::Instant::now();
+
+    // What the GPU would hold, and its free memory, for a split and a
+    // micro-batch. One GPU only: several are balanced elsewhere.
+    let measures = std::cell::Cell::new(0u32);
+    let measure = |n_cpu_moe: u32, n_ubatch: u32| -> Option<(u64, u64)> {
+        let mut probe = config.clone();
+        probe.n_cpu_moe = n_cpu_moe;
+        probe.n_ubatch = n_ubatch;
+        let cparams = super::build_ctx_params(&probe, ctx_size)
+            .with_n_seq_max(n_seq_max)
+            .with_n_outputs_max(n_outputs_max);
+        let rows = super::with_text_model_params(&probe, gpu_layers, |params| {
+            params.measure_device_memory(&path, &cparams)
+        })
+        .ok()??;
+        measures.set(measures.get() + 1);
+        let [row] = rows.as_slice() else {
+            return None;
+        };
+        tracing::debug!(
+            "Measured with the experts of {n_cpu_moe} layers in RAM, micro-batch {n_ubatch}: \
+             model {}, context {}, compute {}",
+            crate::fit::gib(row.model),
+            crate::fit::gib(row.context),
+            crate::fit::gib(row.compute)
+        );
+        Some((row.total(), u64::try_from(row.free).unwrap_or(0)))
+    };
+
+    let (planned_used, free) = measure(config.n_cpu_moe, config.n_ubatch)?;
+    let budget = free
+        .saturating_sub(config.vram_reserve)
+        .saturating_sub(fit.keep_bytes)
+        .saturating_sub(MARGIN_BYTES);
+    // The plan's own split is the first thing `settle` measures: measured once.
+    let planned = std::cell::Cell::new(Some(planned_used));
+    let settle_at = |n_ubatch: u32| {
+        settle(
+            config.n_cpu_moe,
+            &layout.expert_bytes_per_layer,
+            budget,
+            |n| {
+                if n == config.n_cpu_moe
+                    && n_ubatch == config.n_ubatch
+                    && let Some(used) = planned.take()
+                {
+                    return Some(used);
+                }
+                measure(n, n_ubatch).map(|(used, _)| used)
+            },
+        )
+    };
+    let at_plan = settle_at(config.n_ubatch)?;
+    let (settled, n_ubatch) = if fit.ubatch_raised && config.n_ubatch > super::DEFAULT_N_UBATCH {
+        match settle_at(super::DEFAULT_N_UBATCH) {
+            Some(default) if prefer_default_ubatch(at_plan, default, n_layers) => {
+                (default, super::DEFAULT_N_UBATCH)
+            }
+            _ => (at_plan, config.n_ubatch),
+        }
+    } else {
+        (at_plan, config.n_ubatch)
+    };
+
+    let elapsed = started.elapsed();
+    tracing::info!(
+        "Measured on the GPU: {} for the model, its context and compute buffer with the experts \
+         of {} layers in RAM and a micro-batch of {n_ubatch}, against {} available ({} \
+         measures, {:.1}s)",
+        crate::fit::gib(settled.used),
+        settled.n_cpu_moe,
+        crate::fit::gib(budget),
+        measures.get(),
+        elapsed.as_secs_f64(),
+    );
+    if !settled.fits {
+        tracing::warn!(
+            "Measured on the GPU: no split of the experts fits beside the {} kept free; loading \
+             with the experts of {} layers in RAM anyway",
+            crate::fit::gib(config.vram_reserve + fit.keep_bytes),
+            settled.n_cpu_moe
+        );
+    }
+    if settled.n_cpu_moe == config.n_cpu_moe && n_ubatch == config.n_ubatch {
+        return None;
+    }
+    let mut changes = Vec::new();
+    if settled.n_cpu_moe != config.n_cpu_moe {
+        changes.push(format!(
+            "the experts of {} layers in RAM instead of {}",
+            settled.n_cpu_moe, config.n_cpu_moe
+        ));
+    }
+    if n_ubatch != config.n_ubatch {
+        changes.push(format!(
+            "prompts read {n_ubatch} tokens at a time instead of {} (--n-ubatch), whose compute \
+             buffer would have kept more experts in RAM",
+            config.n_ubatch
+        ));
+    }
+    let line = format!("Measured placement: {}", changes.join("; "));
+    tracing::info!("{line}");
+    crate::monitor::history::event("info", line);
+    Some(Measured {
+        n_cpu_moe: settled.n_cpu_moe,
+        n_ubatch,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GIB: u64 = 1 << 30;
+
+    /// A GPU that holds `fixed` plus the experts of the layers not in RAM,
+    /// plus `copy` for the experts in RAM a micro-batch computes from.
+    fn gpu(expert_bytes: &[u64], fixed: u64, copy: u64) -> impl Fn(u32) -> u64 + '_ {
+        move |n| {
+            let on_gpu: u64 = expert_bytes.iter().skip(n as usize).sum();
+            fixed + on_gpu + if n > 0 { copy } else { 0 }
+        }
+    }
+
+    #[test]
+    fn an_underestimated_compute_buffer_sends_more_experts_to_ram() {
+        let layers = [GIB; 20];
+        let used = gpu(&layers, 4 * GIB, 2 * GIB);
+        // The plan's 8 layers in RAM measure 4 + 12 + 2 = 18 GiB against 14.
+        let s = settle(8, &layers, 14 * GIB, |n| Some(used(n))).unwrap();
+        assert_eq!(s.n_cpu_moe, 12);
+        assert!(s.fits);
+        assert_eq!(s.used, 14 * GIB);
+    }
+
+    #[test]
+    fn an_overestimated_one_brings_experts_back() {
+        let layers = [GIB; 20];
+        let used = gpu(&layers, 4 * GIB, GIB / 2);
+        let s = settle(12, &layers, 14 * GIB, |n| Some(used(n))).unwrap();
+        // 4 + 9 + 0.5 = 13.5 fits; one more layer would be 14.5.
+        assert_eq!(s.n_cpu_moe, 11);
+        assert!(s.fits);
+    }
+
+    #[test]
+    fn a_split_that_fits_is_left_as_it_is() {
+        let layers = [GIB; 20];
+        let mut calls = 0;
+        let s = settle(10, &layers, 15 * GIB, |n| {
+            calls += 1;
+            Some(gpu(&layers, 4 * GIB, GIB / 2)(n))
+        })
+        .unwrap();
+        // 14.5 measured, half a GiB short of a whole layer back.
+        assert_eq!(s.n_cpu_moe, 10);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn no_split_that_fits_gives_every_layer_to_ram() {
+        let layers = [GIB; 4];
+        let s = settle(1, &layers, GIB, |n| Some(gpu(&layers, 3 * GIB, GIB)(n))).unwrap();
+        assert_eq!(s.n_cpu_moe, 4);
+        assert!(!s.fits);
+    }
+
+    #[test]
+    fn a_failed_measure_leaves_the_plan() {
+        let layers = [GIB; 4];
+        assert_eq!(settle(2, &layers, GIB, |_| None), None);
+    }
+
+    #[test]
+    fn it_never_goes_back_to_a_split_measured_not_to_fit() {
+        // A compute buffer that grows by more than a layer once experts leave
+        // the GPU: moving one back looks free and is not.
+        let layers = [GIB; 10];
+        let used = |n: u32| -> u64 {
+            let on_gpu: u64 = layers.iter().skip(n as usize).sum();
+            2 * GIB + on_gpu + if n > 0 { 3 * GIB } else { 0 }
+        };
+        let s = settle(0, &layers, 9 * GIB, |n| Some(used(n))).unwrap();
+        assert!(s.fits);
+        assert!(used(s.n_cpu_moe) <= 9 * GIB);
+        assert!(used(s.n_cpu_moe - 1) > 9 * GIB);
+    }
+
+    #[test]
+    fn the_raised_micro_batch_goes_when_it_costs_many_layers() {
+        let at = |n_cpu_moe, fits| Settled {
+            n_cpu_moe,
+            used: 0,
+            fits,
+        };
+        // Inkling at 16,000 tokens: 5 GiB more compute buffer, many layers.
+        assert!(prefer_default_ubatch(at(30, true), at(20, true), 40));
+        // Two layers on a 40-layer model: worth it for long prompts.
+        assert!(!prefer_default_ubatch(at(22, true), at(20, true), 40));
+        assert!(prefer_default_ubatch(at(40, false), at(30, true), 40));
+        assert!(!prefer_default_ubatch(at(30, true), at(40, false), 40));
+    }
+}

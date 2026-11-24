@@ -3205,6 +3205,10 @@ async fn cmd_run(
     // The slots of `--moe-prefetch` the launch model gets, once it is known
     // whether its experts are in RAM and pinned.
     let mut moe_prefetch_slots: u32 = 0;
+    // Set where `--fit` keeps the experts of some layers in RAM: the load
+    // checks that split against what llama.cpp measures (see
+    // `inference::measured_fit`).
+    let mut measured_fit: Option<inference::measured_fit::MeasuredFit> = None;
     // `--n-batch`, `--n-ubatch` and `--no-mmap` as given, for the API server,
     // which sizes every model it loads from them; the launch model's own may
     // change below with an expert cache (`fit::MOE_CACHE_N_UBATCH`,
@@ -3692,6 +3696,16 @@ async fn cmd_run(
                         );
                         n_cpu_moe = computed;
                         gpu_layers = -1;
+                        // Weighed by the load against what llama.cpp measures,
+                        // the compute buffer included, which the plan could
+                        // only estimate. What stays free beside the model is
+                        // what the plan kept for the rest.
+                        measured_fit = Some(inference::measured_fit::MeasuredFit {
+                            keep_bytes: companion_reserve_bytes
+                                .saturating_add(mmproj_placement.reserve(mmproj_bytes))
+                                .saturating_add(mtp_reserve),
+                            ubatch_raised: moe_plan.n_ubatch.is_some(),
+                        });
                         if let Some(larger) = moe_plan.n_ubatch {
                             n_ubatch = larger;
                             n_batch = inference::batch_for_ubatch(n_batch, larger);
@@ -3908,6 +3922,7 @@ async fn cmd_run(
             load_threads,
             kv_unified,
             gpu_split: gpu_split.clone(),
+            measured_fit,
         };
 
         // A model with a projector runs on the scheduler too, which reads a
@@ -3934,6 +3949,7 @@ async fn cmd_run(
                     // What the context was built with, for the banner.
                     n_batch = model_info.n_batch.unwrap_or(n_batch);
                     n_ubatch = model_info.n_ubatch.unwrap_or(n_ubatch);
+                    n_cpu_moe = model_info.n_cpu_moe.unwrap_or(n_cpu_moe);
                     scheduler = Some(handle);
                     println!("Model loaded (continuous batching, max_batch_size={batch_size}).");
                 }

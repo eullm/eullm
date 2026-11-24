@@ -61,6 +61,24 @@ int llama_rs_fit_params(
 
 void llama_rs_memory_breakdown_print(const struct llama_context * ctx);
 
+// EuLLM addition: the device memory a model and its context would take, as
+// llama.cpp would allocate it, measured without allocating or reading the
+// weights (common_fit_measure: no_alloc, load_mode NONE). mparams and
+// cparams are used as they are, overrides included. For each GPU device, at
+// most max_devices of them, writes the bytes of its model, context (KV cache)
+// and compute buffers, and its free memory; *out_n_devices is how many.
+// Returns 0, or 1 when the model or the context could not be built.
+int llama_rs_fit_measure(
+    const char * path_model,
+    const struct llama_model_params * mparams,
+    const struct llama_context_params * cparams,
+    size_t * out_model,
+    size_t * out_context,
+    size_t * out_compute,
+    int64_t * out_free,
+    size_t max_devices,
+    size_t * out_n_devices);
+
 struct llama_rs_mtp_speculative * llama_rs_mtp_speculative_init(
     struct llama_context * ctx_tgt,
     struct llama_context * ctx_dft,

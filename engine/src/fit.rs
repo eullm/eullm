@@ -3367,6 +3367,9 @@ pub struct OffloadPlan {
     /// Whether the load may grow the cache into the VRAM left over (see
     /// [`MoeCacheGrow`]).
     pub moe_cache_grow: Option<MoeCacheGrow>,
+    /// The VRAM the plan kept free beside the text model: the reserve it was
+    /// given and a projector going to the GPU.
+    pub kept_bytes: u64,
 }
 
 /// Size one load: where the projector goes, then MoE expert offload, then
@@ -3447,6 +3450,7 @@ pub fn plan_offload(
             n_ubatch: cache.n_ubatch,
             moe_prefetch_bytes: cache.prefetch_bytes,
             moe_cache_grow: cache.grow,
+            kept_bytes: reserve_bytes.saturating_add(mmproj.reserve(mmproj_bytes)),
         };
     }
 
@@ -3533,6 +3537,7 @@ pub fn plan_offload(
         n_ubatch: moe_n_ubatch,
         moe_prefetch_bytes: 0,
         moe_cache_grow: None,
+        kept_bytes: reserve_bytes.saturating_add(mmproj.reserve(mmproj_bytes)),
     }
 }
 

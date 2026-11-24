@@ -862,6 +862,10 @@ pub struct ModelReadyInfo {
     /// differ from the ones asked for (the F16 retry after a quantized cache
     /// would not allocate): the summary shows these.
     pub kv_fallback: Option<(super::KvCacheType, super::KvCacheType)>,
+    /// The layers whose experts the load kept in RAM, when the measure
+    /// before it settled on a different number than the plan's
+    /// (`measured_fit`): the banner shows this one.
+    pub n_cpu_moe: Option<u32>,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -2054,62 +2058,55 @@ fn run_scheduler_loop(
     // for more did on Intel Macs.
     let gpu_layers = super::check_gpu_support(config.gpu_layers);
 
-    let model_params = if gpu_layers >= 0 {
-        LlamaModelParams::default().with_n_gpu_layers(gpu_layers as u32)
-    } else {
-        LlamaModelParams::default().with_n_gpu_layers(1000)
-    };
-    // MTP layers are skipped at load unless asked for (`--mtp`).
-    let model_params = model_params.with_load_mtp(config.mtp > 0);
-    // `--no-mmap`: experts kept in RAM go to the backend's pinned host buffer.
-    // Only when asked: llama.cpp's default load mode (auto) maps the file
-    // unless a device cannot use mapped memory, and is left to decide.
-    let model_params = if config.no_mmap {
-        model_params.with_use_mmap(false)
-    } else {
-        model_params
-    };
+    // `--fit` with the experts of some layers in RAM: the split checked
+    // against what llama.cpp measures for this load, before it is made.
+    let mut config = config;
+    let mut measured = None;
+    if config.measured_fit.is_some() {
+        let ctx_size =
+            NonZeroU32::new(config.context_size).unwrap_or(NonZeroU32::new(4096).unwrap());
+        let n_seq_max = sched_config.max_batch_size as u32;
+        // As below, before the MTP head is known: one row per slot, and the
+        // drafts `--mtp` asks for.
+        let n_outputs_max = n_seq_max.max(config.mtp + 1);
+        if let Some(m) =
+            super::measured_fit::run(&config, gpu_layers, ctx_size, n_seq_max, n_outputs_max)
+        {
+            config.n_cpu_moe = m.n_cpu_moe;
+            config.n_ubatch = m.n_ubatch;
+            measured = Some(m);
+        }
+    }
+
     // `--split-mode`, `--tensor-split`: llama.cpp's defaults unless given.
     if !config.gpu_split.is_default() {
         tracing::info!("Split across the GPUs: {}", config.gpu_split.describe());
     }
-    let model_params = match config.gpu_split.apply(model_params) {
-        Ok(params) => params,
-        Err(msg) => {
-            let _ = ready_tx.send(Err(msg.clone()));
-            return Err(msg.into());
-        }
-    };
-    let mut model_params = pin!(model_params);
-    // Patterns passed to `add_cpu_buft_override` are stored as raw pointers
-    // (not copied) inside `model_params`, so they must outlive the
-    // `load_from_file` call below — keep them bound in this local.
-    let n_cpu_moe_patterns: Vec<std::ffi::CString> = (0..config.n_cpu_moe)
-        .map(|i| {
-            std::ffi::CString::new(format!(r"blk\.{i}\.ffn_(up|down|gate|gate_up)_(ch|)exps"))
-                .expect("pattern has no interior NUL")
-        })
-        .collect();
     if config.cpu_moe {
         tracing::info!("--cpu-moe: keeping MoE expert tensors on CPU RAM");
-        model_params.as_mut().add_cpu_moe_override();
     } else if config.n_cpu_moe > 0 {
         tracing::info!(
             "--n-cpu-moe {}: keeping MoE expert tensors on CPU RAM for the first {} layers",
             config.n_cpu_moe,
             config.n_cpu_moe
         );
-        for pattern in &n_cpu_moe_patterns {
-            model_params.as_mut().add_cpu_buft_override(pattern);
-        }
     }
 
     tracing::info!("Loading model: {}", config.model_path.display());
     let ahead = crate::readahead::start(&config.model_path, config.load_threads);
-    let model = LlamaModel::load_from_file(&backend, &config.model_path, &model_params);
+    let model = super::with_text_model_params(&config, gpu_layers, |params| {
+        LlamaModel::load_from_file(&backend, &config.model_path, params)
+    });
     if let Some(ahead) = ahead {
         ahead.finish();
     }
+    let model = match model {
+        Ok(model) => model,
+        Err(msg) => {
+            let _ = ready_tx.send(Err(msg.clone()));
+            return Err(msg.into());
+        }
+    };
     let model = match model {
         Ok(m) => m,
         Err(e) => {
@@ -2238,7 +2235,6 @@ fn run_scheduler_loop(
         tracing::warn!("--mtp: a model loaded with its projector does not draft");
         mtp_draft = 0;
     }
-    let mut config = config;
     // An image is decoded whole, in one micro-batch: with a projector, the
     // context's is at least what the sequential engine sizes one by
     // (`multimodal_batch_size`: 512, or EULLM_IMAGE_MAX_TOKENS).
@@ -2578,6 +2574,7 @@ fn run_scheduler_loop(
     kv_info.n_batch = Some(ctx.n_batch());
     kv_info.n_ubatch = Some(ctx.n_ubatch());
     kv_info.kv_fallback = kv_fallback;
+    kv_info.n_cpu_moe = measured.map(|m| m.n_cpu_moe);
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));
