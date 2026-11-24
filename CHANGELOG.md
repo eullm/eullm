@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
+## 0.10.0 — 2026-11-24
 
 ### Added
 - **The Linux CUDA binary uses a card of another vendor too.** `eullm-linux-x64-cuda-13.1` now carries Vulkan beside CUDA: an AMD or Intel Arc card next to the NVIDIA one computes its own layers, the faster card filled first, without building the engine yourself (Qwen3.8-27B on an RTX 5070 Ti and a Radeon RX 6700 XT: 25.6 tokens/s, against 7.4 on the 5070 Ti alone). The datacenter and Windows CUDA binaries stay CUDA only.
