@@ -29,7 +29,18 @@
 #   RR_ARGS     more law_rewrites.py options (--styles, --limit, --teacher, ...)
 #   RR_PARALLEL requests in flight (default 8)
 #   RR_CTX      context per request (default 8192)
+#   RR_LOAD_MIN minutes to wait for the model to load (default 60); a longer
+#               wait needs a longer job (sbatch -t)
+#   RR_JOB_S    seconds of the job the rewrites may use, load included
+#               (default 6600, for the 2-hour job; 10200 with sbatch -t 03:00:00)
+#   RR_VERBOSE  1: llama-server at full verbosity (-lv 4)
 #   RR_REPO     checkout to run (default: the one this file was submitted from)
+#
+# While the model loads, $LOGDIR/load-<job>.log gets a line a minute: what
+# llama-server has read from disk, what it has sent to the rpc-servers, and
+# its log's last line. On 2026-11-24 the Large 4 pilot stopped at "loading
+# model" and said nothing more for the hour it was given: those numbers say
+# whether a load is slow (they grow) or stuck (they do not), and where.
 #
 #SBATCH --job-name=eullm-rpc-rewrites
 #SBATCH --partition=boost_usr_prod
@@ -91,7 +102,7 @@ for node in "${NODES[@]:1}"; do
     srun --nodes=1 --ntasks=1 --nodelist="$node" --gres=gpu:4 --overlap bash -c "
         for g in 0 1 2 3; do
             CUDA_VISIBLE_DEVICES=\$g '$BIN/rpc-server' -H 0.0.0.0 -p \$(($RPC_PORT + g)) \
-                > '$LOGDIR/rpc-$node-\$g-${SLURM_JOB_ID:-0}.log' 2>&1 &
+                > $LOGDIR/rpc-$node-gpu\$g-${SLURM_JOB_ID:-0}.log 2>&1 &
         done
         wait" &
     for g in 0 1 2 3; do RPC+=("$node:$((RPC_PORT + g))"); done
@@ -104,17 +115,36 @@ done
 echo "[rr] ${#RPC[@]} rpc-servers up"
 
 RPC_LIST=$(IFS=,; echo "${RPC[*]}")
+SLOG="$LOGDIR/server-${SLURM_JOB_ID:-0}.log"
+# shellcheck disable=SC2046
 "$BIN/llama-server" -m "$TEACHER" ${RPC_LIST:+--rpc "$RPC_LIST"} -ngl 999 -np "$PARALLEL" \
     -c $((PARALLEL * CTX)) --host 127.0.0.1 --port "$PORT" --no-webui \
-    > "$LOGDIR/server-${SLURM_JOB_ID:-0}.log" 2>&1 &
+    $([ "${RR_VERBOSE:-0}" = 1 ] && echo "-lv 4") > "$SLOG" 2>&1 &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null; kill $(jobs -p) 2>/dev/null' EXIT
-for _ in $(seq 720); do
+# a line a minute while it loads: read from disk, sent to the rpc-servers
+LLOG="$LOGDIR/load-${SLURM_JOB_ID:-0}.log"
+(
+    t0=$SECONDS
+    while kill -0 $SERVER_PID 2>/dev/null && ! curl -sf "http://127.0.0.1:$PORT/health" >/dev/null; do
+        rd=$(awk '/^read_bytes/ {printf "%.1f", $2 / 1e9}' /proc/$SERVER_PID/io 2>/dev/null)
+        rc=$(awk '/^rchar/ {printf "%.1f", $2 / 1e9}' /proc/$SERVER_PID/io 2>/dev/null)
+        sent=$(ss -tni 2>/dev/null | awk -v lo="$RPC_PORT" -v hi="$((RPC_PORT + 3))" '
+            $1 == "ESTAB" { n = split($5, a, ":"); f = (a[n] >= lo && a[n] <= hi); next }
+            f && match($0, /bytes_sent:[0-9]+/) { s += substr($0, RSTART + 11, RLENGTH - 11); f = 0 }
+            END { printf "%.1f", s / 1e9 }')
+        echo "[load] +$((SECONDS - t0)) s: read ${rd:-?} GB from disk (${rc:-?} GB rchar), sent ${sent:-?} GB to rpc-servers; last: $(tail -c 300 "$SLOG" | tr -d '\r' | tail -1 | cut -c1-160)"
+        sleep 60
+    done
+) > "$LLOG" 2>&1 &
+for _ in $(seq $(( ${RR_LOAD_MIN:-60} * 12 ))); do
     curl -sf "http://127.0.0.1:$PORT/health" >/dev/null && break
     kill -0 $SERVER_PID 2>/dev/null || { echo "[rr] llama-server died:" >&2; tail -20 "$LOGDIR/server-${SLURM_JOB_ID:-0}.log" >&2; exit 1; }
     sleep 5
 done
-curl -sf "http://127.0.0.1:$PORT/health" >/dev/null || { echo "[rr] the model did not load in an hour" >&2; exit 1; }
+curl -sf "http://127.0.0.1:$PORT/health" >/dev/null || {
+    echo "[rr] the model did not load in ${RR_LOAD_MIN:-60} minutes; the last minutes of $LLOG:" >&2
+    tail -5 "$LLOG" >&2; exit 1; }
 echo "[rr] teacher loaded after ${SECONDS} s"
 
 # shellcheck disable=SC1091
@@ -124,4 +154,4 @@ heartbeat_start
 # shellcheck disable=SC2086
 python "$REPO/forge/scripts/law_rewrites.py" --norms "${NORMS[@]}" --exclude "${EXCLUDE[@]}" \
     --out "$OUT" --url "http://127.0.0.1:$PORT" --parallel "$PARALLEL" \
-    --stop-after $((6600 - SECONDS)) ${RR_ARGS:-}
+    --stop-after $((${RR_JOB_S:-6600} - SECONDS)) ${RR_ARGS:-}
