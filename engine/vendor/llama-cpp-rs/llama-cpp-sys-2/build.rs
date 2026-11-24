@@ -1062,12 +1062,12 @@ fn main() {
         config.define("GGML_VULKAN", "ON");
         match target_os {
             TargetOs::Windows(_) => {
-                let vulkan_path = env::var("VULKAN_SDK").expect(
+                // The SDK gives the headers and glslc; the loader (vulkan-1.dll) is not
+                // linked, ggml-vulkan opens it at run time (EuLLM patch 0017), so the program
+                // starts on a machine without it.
+                env::var("VULKAN_SDK").expect(
                     "Please install Vulkan SDK and ensure that VULKAN_SDK env variable is set",
                 );
-                let vulkan_lib_path = Path::new(&vulkan_path).join("Lib");
-                println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
-                println!("cargo:rustc-link-lib=vulkan-1");
 
                 // workaround for this error: "FileTracker : error FTK1011: could not create the new file tracking log file"
                 // it has to do with MSBuild FileTracker not respecting the path
@@ -1085,12 +1085,10 @@ fn main() {
                 }
             }
             TargetOs::Linux => {
-                // If we are not using system provided vulkan SDK, add vulkan libs for linking
-                if let Ok(vulkan_path) = env::var("VULKAN_SDK") {
-                    let vulkan_lib_path = Path::new(&vulkan_path).join("lib");
-                    println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
-                }
-                println!("cargo:rustc-link-lib=vulkan");
+                // libvulkan.so.1 is not linked: ggml-vulkan opens it at run time (EuLLM patch
+                // 0017), so a build with Vulkan beside CUDA starts where no loader is installed.
+                // dlopen is in glibc since 2.34 and in libdl before it.
+                println!("cargo:rustc-link-lib=dl");
             }
             TargetOs::Android => {
                 // Cross-compiling the Vulkan backend for Android needs a few things the NDK
