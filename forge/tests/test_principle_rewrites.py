@@ -73,8 +73,10 @@ def test_the_script_asks_the_cards_that_may_leave_and_resumes(tmp_path, monkeypa
     # the first Consiglio di Stato cards carry no court
     cds = tmp_path / "schede.jsonl"
     cds.write_text(json.dumps({k: v for k, v in CARD.items() if k != "court"}
-                              | {"id": "cds/2020000001", "oggetto": "appalti pubblici"}) + "\n", encoding="utf-8")
-    (tmp_path / "schede-civ.rejects.jsonl").write_text(json.dumps({"id": "x", "reason": "r"}), encoding="utf-8")
+                              | {"id": "cds/2020000001", "oggetto": "appalti pubblici"}) + "\n",
+                      encoding="utf-8")
+    (tmp_path / "schede-civ.rejects.jsonl").write_text(
+        json.dumps({"id": "x", "reason": "r"}), encoding="utf-8")
     mod = load("principle_rewrites")
     asked = []
 
