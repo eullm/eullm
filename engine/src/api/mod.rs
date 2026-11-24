@@ -504,25 +504,7 @@ impl AppState {
             gguf_path.display()
         );
 
-        // Gemma 4 requires f16 KV cache regardless of the server's configured
-        // baseline (mixed SWA architecture) — see
-        // `inference::correct_kv_cache_for_model` for the rationale. This
-        // must run here, not just in the CLI `run` startup path, so a swap
-        // triggered by a request (on `run` after startup, or on any `serve`)
-        // hits the same correction instead of silently loading incompatible
-        // KV cache types.
-        let (cache_type_k, cache_type_v, kv_corrected) =
-            crate::inference::correct_kv_cache_for_model(
-                &normalized,
-                self.cache_type_k,
-                self.cache_type_v,
-            );
-        if kv_corrected {
-            tracing::warn!(
-                "Gemma 4 detected ({}) with non-f16 KV cache — auto-correcting to f16/f16 (mixed SWA architecture requires it)",
-                crate::audit::sanitize_for_log(&normalized)
-            );
-        }
+        let (cache_type_k, cache_type_v) = (self.cache_type_k, self.cache_type_v);
 
         // What sizing reads about the model, read once for every attempt.
         // The launch flags describe the launch model; whatever is being

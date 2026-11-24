@@ -1146,8 +1146,6 @@ pub fn is_four_bit(t: KvCacheType) -> bool {
 /// who genuinely wants four-bit keys can have them by also passing
 /// `--no-flash-attn`, which is the configuration that actually works.
 ///
-/// Mirrors `correct_kv_cache_for_model`, which does the same for Gemma 4.
-///
 /// Returns `(effective_k, corrected)`.
 pub fn correct_kv_cache_for_flash_attn(
     cache_type_k: KvCacheType,
@@ -1232,33 +1230,6 @@ pub fn cache_type_name(t: KvCacheType) -> &'static str {
             debug_assert!(false, "unhandled KV cache type {other:?}");
             "f16"
         }
-    }
-}
-
-/// Gemma 4's mixed SWA architecture (25 SWA layers at head_dim=256 + 5
-/// global layers at head_dim=512) is incompatible with quantized KV cache in
-/// stock llama.cpp: the SWA bypass to f16 has not yet been merged upstream.
-/// Auto-correct all non-f16 KV to f16/f16 for Gemma 4.
-///
-/// Applied to every model load path (CLI `run`, and `load_generation_model` for both
-/// `run`'s later swaps and any `serve` swap) so the correction can't be
-/// bypassed by the entry point — a request-driven swap on `serve` hits the
-/// same architecture constraint as a CLI launch.
-///
-/// Returns the (possibly corrected) cache types and whether a correction
-/// was applied, so callers can report it through their own log/print path.
-pub fn correct_kv_cache_for_model(
-    model_name: &str,
-    cache_type_k: KvCacheType,
-    cache_type_v: KvCacheType,
-) -> (KvCacheType, KvCacheType, bool) {
-    let model_lower = model_name.to_lowercase();
-    let is_gemma4 = model_lower.contains("gemma-4") || model_lower.contains("gemma4");
-    let needs_correction = cache_type_k != KvCacheType::F16 || cache_type_v != KvCacheType::F16;
-    if is_gemma4 && needs_correction {
-        (KvCacheType::F16, KvCacheType::F16, true)
-    } else {
-        (cache_type_k, cache_type_v, false)
     }
 }
 

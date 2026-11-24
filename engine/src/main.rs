@@ -1526,23 +1526,8 @@ pub async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             });
-            // Gemma 4 requires f16 KV cache (mixed SWA architecture) — see
-            // `inference::correct_kv_cache_for_model` for the rationale. The
-            // same correction also applies inside `load_generation_model` so it can't
-            // be bypassed by swapping models after startup.
-            let (corrected_k, corrected_v, corrected) =
-                inference::correct_kv_cache_for_model(&model, ctk, ctv);
-            if corrected {
-                eprintln!(
-                    "[EULLM] Gemma 4 detected with non-f16 KV cache ({cache_type_k}/{cache_type_v})."
-                );
-                eprintln!("[EULLM] Mixed SWA architecture (D=512/256) requires f16 KV cache.");
-                eprintln!("[EULLM] Auto-correcting to f16/f16.");
-                ctk = corrected_k;
-                ctv = corrected_v;
-            }
-            // After the Gemma correction, so this sees what will actually be
-            // used rather than what was typed.
+            // So that this sees what will actually be used rather than what
+            // was typed.
             let (fa_k, fa_corrected) =
                 inference::correct_kv_cache_for_flash_attn(ctk, !no_flash_attn);
             if fa_corrected {
