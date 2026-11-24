@@ -584,7 +584,12 @@ llama.cpp builds the model and its context without allocating anything or
 reading the weights (`common_fit_measure`, a fraction of a second) and says
 what the GPU would hold, and the experts of whole layers move to RAM until
 that fits beside `--vram-reserve` and what else was kept free, or back to the
-GPU where a whole layer's worth is left over. Where the engine chose 2048
+GPU where a whole layer's worth is left over. A model that reads its weights
+more than once a pass (Inkling 2's loop) keeps on the GPU the copies of the
+experts in RAM until their last read, so a layer sent to RAM comes back as
+compute buffer (0.53 GiB each on Inkling 2 Mini at 512 tokens): where a step
+frees less than half of what it moved, the walk stops, and where nothing fits
+the split that takes least, with the fewest layers in RAM, is loaded. Where the engine chose 2048
 tokens a pass by itself (no `--n-ubatch`), it goes back to 512 when 2048
 would send more than an eighth of the layers' experts to RAM: reading long
 prompts faster is not worth writing every token slower. The log says what was
