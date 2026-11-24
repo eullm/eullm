@@ -2618,7 +2618,8 @@ impl InferenceEngine {
         let max_tokens = request.max_tokens.min(max_output);
         let n_len = (tokens_prompt + max_tokens) as i32;
 
-        if max_tokens < request.max_tokens {
+        // `u32::MAX` is "no limit": the context is the limit, nothing was cut.
+        if max_tokens < request.max_tokens && request.max_tokens != u32::MAX {
             tracing::warn!(
                 "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
                 request.max_tokens,
@@ -2847,7 +2848,8 @@ impl InferenceEngine {
         let max_tokens = request.max_tokens.min(max_output);
         let n_len = (tokens_prompt + max_tokens) as i32;
 
-        if max_tokens < request.max_tokens {
+        // `u32::MAX` is "no limit": the context is the limit, nothing was cut.
+        if max_tokens < request.max_tokens && request.max_tokens != u32::MAX {
             tracing::warn!(
                 "num_predict capped: requested={}, effective={} (context={}, prompt_tokens={})",
                 request.max_tokens,
