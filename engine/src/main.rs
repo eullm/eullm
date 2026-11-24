@@ -3817,7 +3817,20 @@ async fn cmd_run(
                             kv_layout,
                         )
                     } {
-                        fit::FitOutcome::Proceed(n) => gpu_layers = n,
+                        fit::FitOutcome::Proceed(n) => {
+                            gpu_layers = n;
+                            // Whole on several GPUs, split by nobody: the load
+                            // measures each card's speed and fills the fastest
+                            // first (`inference::measured_fit`).
+                            if n < 0 && gpu_split.is_default() && fit::device_vram().len() > 1 {
+                                measured_fit = Some(inference::measured_fit::MeasuredFit {
+                                    keep_bytes: companion_reserve_bytes
+                                        .saturating_add(mmproj_placement.reserve(mmproj_bytes))
+                                        .saturating_add(mtp_reserve),
+                                    ubatch_raised: false,
+                                });
+                            }
+                        }
                         fit::FitOutcome::Abort => {
                             // Clean return: don't load, don't bind a port. If we
                             // were invoked from the picker flow, the user lands

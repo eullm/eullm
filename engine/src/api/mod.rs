@@ -748,7 +748,14 @@ impl AppState {
                 .as_ref()
                 .filter(|plan| {
                     gpu_split.is_default()
-                        && matches!(plan.basis, crate::fit::OffloadBasis::MoeExperts { .. })
+                        && match plan.basis {
+                            crate::fit::OffloadBasis::MoeExperts { .. } => true,
+                            // Whole on several GPUs: the fastest filled first.
+                            crate::fit::OffloadBasis::Dense(crate::fit::FitDecision::FitsFully) => {
+                                plan.gpu_layers < 0 && crate::fit::device_vram().len() > 1
+                            }
+                            _ => false,
+                        }
                 })
                 .map(|plan| crate::inference::measured_fit::MeasuredFit {
                     keep_bytes: plan.kept_bytes.saturating_sub(crate::fit::ubatch_reserve_bytes(
