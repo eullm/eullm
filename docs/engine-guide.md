@@ -1550,8 +1550,17 @@ prefetch run on one GPU only and stay off. Only between the layers of the
 two cards does anything cross between them, a few MB for each micro-batch,
 so a slot on the chipset's slower lanes is enough.
 
-On Debian or Ubuntu, Vulkan's build needs its headers, the shader compiler
-and the SPIR-V headers besides CUDA's toolkit:
+Since 0.10.0 the Linux CUDA binary of the releases (`eullm-linux-x64-cuda-13.1`)
+carries Vulkan too, so nothing has to be built: on an RTX 5070 Ti beside a
+Radeon RX 6700 XT it wrote Qwen3.8-27B at 25.6 tokens/s, as the build below
+does. It opens the Vulkan library when it starts instead of needing it to
+start, so it still runs in a CUDA container or on a server without Vulkan;
+where that leaves an AMD or Intel Arc card idle, a box on the terminal and a
+banner at the top of the chat say so, with the command that installs Vulkan.
+The datacenter build (A100/H100) and the Windows CUDA build stay CUDA only.
+
+To build it yourself on Debian or Ubuntu, Vulkan's build needs its headers,
+the shader compiler and the SPIR-V headers besides CUDA's toolkit:
 
 ```bash
 sudo apt install libvulkan-dev glslc spirv-headers
