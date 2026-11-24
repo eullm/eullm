@@ -42,14 +42,17 @@ def test_a_mistral_style_checkpoint_comes_out_in_bf16(tmp_path):
     st.save_file(shard2, str(src / "model-00002-of-00002.safetensors"))
     wm = {**{k: "model-00001-of-00002.safetensors" for k in shard1},
           **{k: "model-00002-of-00002.safetensors" for k in shard2}}
-    (src / "model.safetensors.index.json").write_text(json.dumps({"weight_map": wm}), encoding="utf-8")
+    (src / "model.safetensors.index.json").write_text(json.dumps({"weight_map": wm}),
+                                                     encoding="utf-8")
     (src / "config.json").write_text(json.dumps(
-        {"model_type": "mistral3", "quantization_config": {"quant_method": "fp8"}}), encoding="utf-8")
+        {"model_type": "mistral3", "quantization_config": {"quant_method": "fp8"}}),
+        encoding="utf-8")
     (src / "tokenizer.json").write_text("{}", encoding="utf-8")
 
     assert _load().main([str(src), str(dst)]) == 0
 
-    index = json.loads((dst / "model.safetensors.index.json").read_text(encoding="utf-8"))["weight_map"]
+    index = json.loads((dst / "model.safetensors.index.json").read_text(encoding="utf-8"))[
+        "weight_map"]
     assert set(index) == {"model.layers.0.self_attn.o_proj.weight", "model.norm.weight",
                           "model.layers.0.mlp.experts.gate_up_proj", "lm_head.weight"}
     out = {}
@@ -88,5 +91,6 @@ def test_the_output_is_written_in_parts(tmp_path):
         json.dumps({"weight_map": {k: "m.safetensors" for k in tensors}}), encoding="utf-8")
     (src / "config.json").write_text("{}", encoding="utf-8")
     mod.convert(src, tmp_path / "out", part_bytes=30)
-    index = json.loads((tmp_path / "out" / "model.safetensors.index.json").read_text(encoding="utf-8"))
+    index = json.loads(
+        (tmp_path / "out" / "model.safetensors.index.json").read_text(encoding="utf-8"))
     assert len(set(index["weight_map"].values())) == 3
