@@ -76,15 +76,18 @@ def test_a_rebuilt_f16_re_quantizes_the_q4_beside_it(stage):
     hf, out = stage
     _write_export(hf, "v1-old-checkpoint")
     _run(hf, out)
-    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v1")
+    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith(
+        "F16DATA-built-from-v1")
     # F16 deleted to save space, HF re-exported, script re-run.
     (out / "mymodel-f16.gguf").unlink()
     _write_export(hf, "v2-new-checkpoint")
 
     printed = _run(hf, out)
     assert "skipping quantization" not in printed
-    assert (out / "mymodel-f16.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v2")
-    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v2")
+    assert (out / "mymodel-f16.gguf").read_text(encoding="utf-8").startswith(
+        "F16DATA-built-from-v2")
+    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith(
+        "F16DATA-built-from-v2")
 
 
 def test_a_reused_f16_reuses_its_q4(stage):
@@ -94,4 +97,5 @@ def test_a_reused_f16_reuses_its_q4(stage):
     printed = _run(hf, out)
     assert "skipping conversion" in printed
     assert "skipping quantization" in printed
-    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith("F16DATA-built-from-v1")
+    assert (out / "mymodel-q4_k_m.gguf").read_text(encoding="utf-8").startswith(
+        "F16DATA-built-from-v1")
