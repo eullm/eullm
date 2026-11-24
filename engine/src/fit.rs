@@ -3270,6 +3270,7 @@ pub fn place_mmproj(
 /// launch-time embedding companion), taken out of free VRAM before the
 /// projector is weighed against it; `mmproj_bytes` comes from
 /// [`mmproj_footprint_bytes`]; `kv` is how the load lays its KV cache out.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_mmproj_placement(
     model_path: &Path,
     mmproj_bytes: u64,
