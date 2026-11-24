@@ -100,7 +100,8 @@ def test_batches_resume_where_they_stopped():
 def test_two_links_end_where_one_run_does(tiny_dir, data, tmp_path):
     run(tiny_dir, data, tmp_path / "one", "--max-steps", "4")
     run(tiny_dir, data, tmp_path / "two", "--max-steps", "2")
-    assert json.loads((tmp_path / "two" / "ckpt" / "state.json").read_text(encoding="utf-8")) == {"step": 2}
+    assert (json.loads((tmp_path / "two" / "ckpt" / "state.json").read_text(encoding="utf-8"))
+            == {"step": 2})
     run(tiny_dir, data, tmp_path / "two", "--max-steps", "4")
     from eullm_forge.memory import NGramMemory
 
