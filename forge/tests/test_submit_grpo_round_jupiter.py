@@ -56,7 +56,8 @@ def _setup(tmp_path):
         f.write_text(json.dumps(_item(9, "codice_penale", "1")) + "\n", encoding="utf-8")
     # START already answered the trap test: it is asked only the other sets.
     (runs / "teacher-eval").mkdir()
-    (runs / "teacher-eval" / "answers-trap-test-dqp-d-q9b.jsonl").write_text("{}\n", encoding="utf-8")
+    (runs / "teacher-eval" / "answers-trap-test-dqp-d-q9b.jsonl").write_text(
+        "{}\n", encoding="utf-8")
 
     bin_ = tmp_path / "bin"
     bin_.mkdir()
