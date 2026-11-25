@@ -501,17 +501,16 @@ struct RuntimeOpts {
     /// Keys' KV cache: f16, q8_0, q4_0, q4_1, q5_0, q5_1, f32
     ///
     /// q8_0 takes half the memory of f16 for a very small quality cost: room
-    /// for a longer --ctx-size. A four-bit key cache (q4_0, q4_1) with flash
-    /// attention on produces nonsense, so it is raised to q8_0 and the log
-    /// says so; Gemma 4 models always use f16.
+    /// for a longer --ctx-size. Key caches that produce nonsense are raised to
+    /// q8_0 and the log says so: q4_0 always, q4_1 with flash attention on.
     #[arg(long, value_name = "TYPE", default_value = "f16", help_heading = HELP_GPU)]
     cache_type_k: String,
 
     /// Values' KV cache, the same types as for keys
     ///
     /// Values tolerate quantization better than keys: q4_0 values with q8_0
-    /// keys is a reasonable trade at long context. Gemma 4 models always use
-    /// f16.
+    /// keys is a reasonable trade at long context. A quantized value cache
+    /// needs flash attention: with --no-flash-attn it is f16.
     #[arg(long, value_name = "TYPE", default_value = "f16", help_heading = HELP_GPU)]
     cache_type_v: String,
 
@@ -1528,10 +1527,9 @@ pub async fn main() {
             });
             // So that this sees what will actually be used rather than what
             // was typed.
-            let (fa_k, fa_corrected) =
-                inference::correct_kv_cache_for_flash_attn(ctk, !no_flash_attn);
+            let (fa_k, fa_corrected) = inference::correct_kv_cache_k(ctk, !no_flash_attn);
             if fa_corrected {
-                inference::report_flash_attn_kv_correction(ctk);
+                inference::report_kv_cache_k_correction(ctk, !no_flash_attn);
                 ctk = fa_k;
             }
             let (no_fa_v, no_fa_corrected) =
@@ -1711,10 +1709,9 @@ pub async fn main() {
                 std::process::exit(1);
             });
             let (ctk, _) = {
-                let (k, corrected) =
-                    inference::correct_kv_cache_for_flash_attn(ctk, !no_flash_attn);
+                let (k, corrected) = inference::correct_kv_cache_k(ctk, !no_flash_attn);
                 if corrected {
-                    inference::report_flash_attn_kv_correction(ctk);
+                    inference::report_kv_cache_k_correction(ctk, !no_flash_attn);
                 }
                 (k, corrected)
             };

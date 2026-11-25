@@ -18,6 +18,9 @@ something changed, less so for understanding what it means.
 ### Added
 - **The Windows CUDA download uses a card of another vendor too.** `eullm-windows-x64-cuda-13.1.zip` now carries Vulkan beside CUDA, as the Linux CUDA binary has since 0.10.0: an AMD or Intel Arc card next to the NVIDIA one computes its own layers, the faster card filled first, without building the engine yourself. On Windows the Vulkan library comes with every vendor's graphics driver, so there is nothing to install; on a PC with an NVIDIA card alone the ZIP runs as before. The Microsoft Store package, which carries the same CUDA build, gets it too. Built and checked by CI, not yet run on a Windows PC with two cards: reports welcome.
 
+### Fixed
+- **`--cache-type-k q4_0` with `--no-flash-attn` wrote gibberish**, from 0.9.50: the answer ran on to the token limit, several times slower, on every machine tested (CPU, Metal, Jetson, Raspberry Pi). Before 0.9.50 that combination silently used f16 keys; since 0.9.50 the keys were really q4_0, which llama.cpp does not handle without flash attention either. A q4_0 key cache is now raised to q8_0 with or without flash attention, as it already was with it, and a line says so. Without flash attention, q4_1 and q5_0 keys work, if you need keys smaller than q8_0. Found by [@PeterHickman](https://github.com/PeterHickman), whose tests on seven machines at every release caught it (#140): thank you, Peter.
+
 ## 0.10.0 — 2026-11-24
 
 ### Added
