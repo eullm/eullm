@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## 0.10.10 — 2026-11-25
+
+### Added
+- **The Windows CUDA download uses a card of another vendor too.** `eullm-windows-x64-cuda-13.1.zip` now carries Vulkan beside CUDA, as the Linux CUDA binary has since 0.10.0: an AMD or Intel Arc card next to the NVIDIA one computes its own layers, the faster card filled first, without building the engine yourself. On Windows the Vulkan library comes with every vendor's graphics driver, so there is nothing to install; on a PC with an NVIDIA card alone the ZIP runs as before. The Microsoft Store package, which carries the same CUDA build, gets it too. Built and checked by CI, not yet run on a Windows PC with two cards: reports welcome.
+
 ## 0.10.0 — 2026-11-24
 
 ### Added
