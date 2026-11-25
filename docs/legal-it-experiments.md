@@ -1556,3 +1556,21 @@ with the engine on 536 and 547: the engine is fit to check, from a new pass
 stops at `loading model` and the job's hour of waiting runs out: the load
 itself (605 GB, read and sent to 12 remote GPUs) is the next thing to
 understand.
+
+**The second seeds, 2026-11-25.** k650-g1-opd200 with seed 1: devbig 7:14,
+without the note 8:15, practical 9:19 (p=0.09), closed book 198; seed 0 had
+7:9, 7:15, 8:7 and 240. k450 over its two seeds: 7:9 and 11:11, 7:20 and
+10:18, 8:14 and 7:11, 255 and 226. Two seeds of one recipe differ as much
+as two recipes do: k650's 8:7 on the practical exam was its seed's, and
+neither corpus is ahead of the other on what was measured. Both stay level
+with r2l on the product with the note and a fifth to a quarter ahead on the
+closed book. What decides between corpora from here is not one more seed of
+each but the clean candidate (k950) and, for every candidate, more than one
+seed before a ranking.
+
+**Large 4 over RPC: the load is slow, not stuck.** The probe with Gemma 31B
+on two nodes loaded in 187 s and wrote 24 cases; its load log shows the
+layers crossing to the remote GPUs at 80-90 MB/s, the speed of the service
+Ethernet the node names resolve to. Large 4's 420 GB for the remote GPUs at
+that rate is an hour and a half, past the pilot's hour. The job now reaches
+the rpc-servers on the workers' InfiniBand addresses.

@@ -34,6 +34,8 @@
 #   RR_JOB_S    seconds of the job the rewrites may use, load included
 #               (default 6600, for the 2-hour job; 10200 with sbatch -t 03:00:00)
 #   RR_VERBOSE  1: llama-server at full verbosity (-lv 4)
+#   RR_NET      ib (default): reach the rpc-servers on the workers' InfiniBand
+#               addresses; name: on the node names (the service Ethernet)
 #   RR_REPO     checkout to run (default: the one this file was submitted from)
 #
 # While the model loads, $LOGDIR/load-<job>.log gets a line a minute: what
@@ -100,12 +102,24 @@ echo "[rr] nodes ${NODES[*]}, teacher $TEACHER"
 RPC=()
 for node in "${NODES[@]:1}"; do
     srun --nodes=1 --ntasks=1 --nodelist="$node" --gres=gpu:4 --overlap bash -c "
+        ip -4 -o addr show 2>/dev/null | awk '\$2 ~ /^ib/ {split(\$4, a, \"/\"); print a[1]; exit}' \
+            > $LOGDIR/addr-$node-${SLURM_JOB_ID:-0}.txt
         for g in 0 1 2 3; do
             CUDA_VISIBLE_DEVICES=\$g '$BIN/rpc-server' -H 0.0.0.0 -p \$(($RPC_PORT + g)) \
                 > $LOGDIR/rpc-$node-gpu\$g-${SLURM_JOB_ID:-0}.log 2>&1 &
         done
         wait" &
-    for g in 0 1 2 3; do RPC+=("$node:$((RPC_PORT + g))"); done
+done
+# The node names resolve to the service Ethernet: Gemma 31B crossed it at
+# 80-90 MB/s on 2026-11-24, and Large 4's 420 GB for the remote GPUs would
+# take an hour and a half. Each worker's InfiniBand address instead, when it
+# has one (RR_NET=name keeps the names).
+for node in "${NODES[@]:1}"; do
+    f="$LOGDIR/addr-$node-${SLURM_JOB_ID:-0}.txt"; host=$node
+    for _ in $(seq 60); do [ -s "$f" ] && break; sleep 2; done
+    if [ "${RR_NET:-ib}" = ib ] && [ -s "$f" ]; then host=$(head -1 "$f"); fi
+    echo "[rr] $node -> $host"
+    for g in 0 1 2 3; do RPC+=("$host:$((RPC_PORT + g))"); done
 done
 for addr in "${RPC[@]}"; do
     host=${addr%:*}; port=${addr#*:}
