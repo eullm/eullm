@@ -288,6 +288,10 @@ jobs:
         run: python3 tools/check_utf8.py
       - name: The check's own tests
         run: pytest -q tools/test_check_utf8.py
+      # Not UTF-8, but the same job already has Python and pytest: the parts
+      # of release-engine.yml's answer check that need no binary.
+      - name: The release answer check's own tests
+        run: pytest -q tools/test_answer_check.py
 
   # ── Engine ───────────────────────────────────────────────────────────
   engine:

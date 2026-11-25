@@ -68,6 +68,37 @@ release commit, with `engine/Cargo.toml` and `CHANGELOG.md`. It stays on
 standard version 0.7 until Developers Italia's parser
 (`italia/publiccode-parser-go`) accepts a newer one.
 
+## Nothing is published before a binary has answered (from 0.10.20)
+
+0.9.50, 0.9.60 and 0.10.0 went out writing gibberish with
+`--cache-type-k q4_0 --no-flash-attn`, on every machine a tester ran
+(issue #140, reported on github.com). The workflow built the binaries and
+published them without running one, and the unit tests cannot see a fault
+that needs a model loaded. 0.10.10 was deleted and re-tagged with the fix.
+
+- **`answer-check` gates `release`.** The Linux CPU binary of the run loads
+  qwen3-0.6b and answers questions with known answers at temperature 0 under
+  each KV cache setting in `tools/answer_check.py`; an answer passes when it
+  holds the expected word and `done_reason` is `stop`. A failure, or a failed
+  Linux CPU build, means nothing is published. Never weaken it to let a
+  release out: fix the binary. Run on 0.10.0 it fails the q4_0 setting; on
+  0.10.10 all ten pass.
+- **Check before tagging.** Dispatch the workflow on `main` with
+  `job: gate` (build-linux-cpu plus the check, about 15 minutes), and tag
+  only once it is green. Locally: `python3 tools/answer_check.py --binary
+  ./eullm --pull`.
+- **A release that touches inference goes out as a candidate first.**
+  `EuLLM-vX.Y.Z-rc1` builds everything and publishes a pre-release: never
+  `latest` (so `eullm update` and the installers ignore it), no Store
+  package. The binaries already report X.Y.Z (the version is
+  `engine/Cargo.toml`'s; `require_version_match` drops the `-rc1`). The
+  maintainer and the testers on issue #140 run it on GPUs the gate cannot
+  reach; a problem means a fix and `-rc2`, and the final `EuLLM-vX.Y.Z` is
+  tagged on the commit the candidate proved. Documentation, packaging and CI
+  releases can be tagged final directly.
+- **Never call a release ready before its own binaries ran.** A green CI on
+  the tagged commit says the code compiles and its unit tests pass, no more.
+
 ## The release publishes what was built, not a list someone maintains
 
 `release-engine.yml` attaches `artifacts/*/*`. It used to name each file
