@@ -84,7 +84,8 @@ that needs a model loaded. 0.10.10 was deleted and re-tagged with the fix.
   release out: fix the binary. Run on 0.10.0 it fails the q4_0 setting; on
   0.10.10 all ten pass.
 - **Check before tagging.** Dispatch the workflow on `main` with
-  `job: gate` (build-linux-cpu plus the check, about 15 minutes), and tag
+  `job: gate` (build-linux-cpu plus the check: 6 minutes on 25-11-2026, 34 s of them
+  the check itself), and tag
   only once it is green. Locally: `python3 tools/answer_check.py --binary
   ./eullm --pull`.
 - **A release that touches inference goes out as a candidate first.**
