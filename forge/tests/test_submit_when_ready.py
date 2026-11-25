@@ -45,7 +45,8 @@ def cluster(tmp_path):
     home.mkdir()
     shutil.copy(LEONARDO / "submit_when_ready.sh", home)
     _exe(home / "submit_chain.sh", '#!/usr/bin/env bash\necho "$*" >> "$CALLS.chain"\n')
-    (home / "sbatch_stage3.slurm").write_text("#!/bin/bash\n#SBATCH --job-name=eullm-stage3\n", encoding="utf-8")
+    (home / "sbatch_stage3.slurm").write_text(
+        "#!/bin/bash\n#SBATCH --job-name=eullm-stage3\n", encoding="utf-8")
     bin_ = tmp_path / "bin"
     bin_.mkdir()
     # The queue holds whatever $QUEUED names, as `squeue -n X -o %i` would.
@@ -62,7 +63,8 @@ def cluster(tmp_path):
         now = {**env, **({"QUEUED": os.environ["QUEUED"]} if "QUEUED" in os.environ else {})}
         run = subprocess.run(["bash", str(home / "submit_when_ready.sh"), *args, "--",
                               "sbatch_stage3.slurm", "2"],
-                             cwd=tmp_path, env=now, capture_output=True, text=True, encoding="utf-8", timeout=60)
+                             cwd=tmp_path, env=now, capture_output=True, text=True,
+                             encoding="utf-8", timeout=60)
         chain = Path(f"{calls}.chain")
         queued = Path(f"{calls}.sbatch")
         return (run, chain.read_text(encoding="utf-8") if chain.exists() else "",
