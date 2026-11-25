@@ -332,7 +332,9 @@ SAMPLES = [
 
 # Qwen3-Embedding is trained with an instruction before the query and none
 # before the documents.
-QUERY_INSTRUCTION = "Instruct: Given a customer email, retrieve the shop policies that answer it\nQuery:"
+QUERY_INSTRUCTION = (
+    "Instruct: Given a customer email, retrieve the shop policies that answer it\nQuery:"
+)
 
 
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -574,7 +576,8 @@ def draft_messages(mail, verdict, passages):
         f'{team}".'
     )
     if verdict["priority"] == "high":
-        system += " The email has high priority: acknowledge it first, and apologise if the customer is upset."
+        system += (" The email has high priority: acknowledge it first, and apologise if the "
+                   "customer is upset.")
     numbered = "\n".join(
         f"[{n}] {p['title']}: {p['text']}" for n, (p, _) in enumerate(passages, 1)
     )

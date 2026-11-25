@@ -133,9 +133,11 @@ TESTS = [
     {"id": "math18", "category": "math", "check": "contains_number",
      "prompt": "What is |-7| + |3|? Return ONLY the number.", "expected": "10"},
     {"id": "math19", "category": "math", "check": "contains_number",
-     "prompt": "Convert 0.75 to a percentage. Return ONLY the number (no % sign).", "expected": "75"},
+     "prompt": "Convert 0.75 to a percentage. Return ONLY the number (no % sign).",
+     "expected": "75"},
     {"id": "math20", "category": "math", "check": "contains_number",
-     "prompt": "What is the 10th Fibonacci number (starting F1=1, F2=1)? Return ONLY the number.", "expected": "55"},
+     "prompt": "What is the 10th Fibonacci number (starting F1=1, F2=1)? Return ONLY the number.",
+     "expected": "55"},
     # ══════════════════════════════════════════════════════════════════════
     # FACTUAL (20 tests)
     # ══════════════════════════════════════════════════════════════════════
@@ -144,127 +146,169 @@ TESTS = [
     {"id": "fact02", "category": "factual", "check": "contains_word",
      "prompt": "Chemical symbol for tungsten? Return ONLY the symbol.", "expected": "W"},
     {"id": "fact03", "category": "factual", "check": "contains_number",
-     "prompt": "Year the Euro was introduced for electronic transactions? Return ONLY the year.", "expected": "1999"},
+     "prompt": "Year the Euro was introduced for electronic transactions? Return ONLY the year.",
+     "expected": "1999"},
     {"id": "fact04", "category": "factual", "check": "contains_word",
-     "prompt": "Planet with most moons in our solar system? Return ONLY the name.", "expected": "Saturn"},
+     "prompt": "Planet with most moons in our solar system? Return ONLY the name.",
+     "expected": "Saturn"},
     {"id": "fact05", "category": "factual", "check": "contains_word",
-     "prompt": "Max GDPR fine as % of global turnover? Return ONLY the percentage.", "expected": "4%"},
+     "prompt": "Max GDPR fine as % of global turnover? Return ONLY the percentage.",
+     "expected": "4%"},
     {"id": "fact06", "category": "factual", "check": "contains_word",
      "prompt": "Capital of Portugal? Return ONLY the city name.", "expected": "Lisbon"},
     {"id": "fact07", "category": "factual", "check": "contains_word",
      "prompt": "Chemical symbol for gold? Return ONLY the symbol.", "expected": "Au"},
     {"id": "fact08", "category": "factual", "check": "contains_number",
-     "prompt": "How many countries in the European Union (as of 2024)? Return ONLY the number.", "expected": "27"},
+     "prompt": "How many countries in the European Union (as of 2024)? Return ONLY the number.",
+     "expected": "27"},
     {"id": "fact09", "category": "factual", "check": "contains_word",
      "prompt": "What is the largest ocean on Earth? Return ONLY the name.", "expected": "Pacific"},
     {"id": "fact10", "category": "factual", "check": "contains_word",
-     "prompt": "Who wrote 'The Divine Comedy'? Return ONLY the author's last name.", "expected": "Alighieri"},
+     "prompt": "Who wrote 'The Divine Comedy'? Return ONLY the author's last name.",
+     "expected": "Alighieri"},
     {"id": "fact11", "category": "factual", "check": "contains_word",
      "prompt": "What is the currency of Japan? Return ONLY the name.", "expected": "Yen"},
     {"id": "fact12", "category": "factual", "check": "contains_word",
-     "prompt": "What is the chemical formula for water? Return ONLY the formula.", "expected": "H2O"},
+     "prompt": "What is the chemical formula for water? Return ONLY the formula.",
+     "expected": "H2O"},
     {"id": "fact13", "category": "factual", "check": "contains_number",
      "prompt": "How many bones in an adult human body? Return ONLY the number.", "expected": "206"},
     {"id": "fact14", "category": "factual", "check": "contains_word",
-     "prompt": "What is the smallest country in the world by area? Return ONLY the name.", "expected": "Vatican"},
+     "prompt": "What is the smallest country in the world by area? Return ONLY the name.",
+     "expected": "Vatican"},
     {"id": "fact15", "category": "factual", "check": "contains_number",
-     "prompt": "Speed of light in km/s (rounded to nearest thousand)? Return ONLY the number.", "expected": "300000"},
+     "prompt": "Speed of light in km/s (rounded to nearest thousand)? Return ONLY the number.",
+     "expected": "300000"},
     {"id": "fact16", "category": "factual", "check": "contains_word",
      "prompt": "Capital of Australia? Return ONLY the city name.", "expected": "Canberra"},
     {"id": "fact17", "category": "factual", "check": "contains_word",
-     "prompt": "What element has atomic number 1? Return ONLY the element name.", "expected": "Hydrogen"},
+     "prompt": "What element has atomic number 1? Return ONLY the element name.",
+     "expected": "Hydrogen"},
     {"id": "fact18", "category": "factual", "check": "contains_number",
      "prompt": "How many sides does a hexagon have? Return ONLY the number.", "expected": "6"},
     {"id": "fact19", "category": "factual", "check": "contains_word",
      "prompt": "What is the longest river in Europe? Return ONLY the name.", "expected": "Volga"},
     {"id": "fact20", "category": "factual", "check": "contains_word",
-     "prompt": "What programming language was created by Guido van Rossum? Return ONLY the name.", "expected": "Python"},
+     "prompt": "What programming language was created by Guido van Rossum? Return ONLY the name.",
+     "expected": "Python"},
     # ══════════════════════════════════════════════════════════════════════
     # LOGIC & REASONING (20 tests)
     # ══════════════════════════════════════════════════════════════════════
     {"id": "logic01", "category": "logic", "check": "contains_word",
-     "prompt": "All roses are flowers. Some flowers fade quickly. Can we conclude some roses fade quickly? Answer ONLY 'yes' or 'no'.", "expected": "no"},
+     "prompt": "All roses are flowers. Some flowers fade quickly. Can we conclude some roses fade "
+               "quickly? Answer ONLY 'yes' or 'no'.", "expected": "no"},
     {"id": "logic02", "category": "logic", "check": "contains_number",
-     "prompt": "If A=1, B=2, C=3... sum of letters in 'EULLM'? Return ONLY the number.", "expected": "63"},
+     "prompt": "If A=1, B=2, C=3... sum of letters in 'EULLM'? Return ONLY the number.",
+     "expected": "63"},
     {"id": "logic03", "category": "logic", "check": "contains_number",
      "prompt": "Next in: 1, 1, 2, 3, 5, 8, 13, __? Return ONLY the number.", "expected": "21"},
     {"id": "logic04", "category": "logic", "check": "contains_number",
-     "prompt": "If a shirt costs $20 after a 20% discount, what was the original price? Return ONLY the number.", "expected": "25"},
+     "prompt": "If a shirt costs $20 after a 20% discount, what was the original price? Return "
+               "ONLY the number.", "expected": "25"},
     {"id": "logic05", "category": "logic", "check": "contains_word",
-     "prompt": "All dogs are animals. All animals are living things. Are all dogs living things? Answer ONLY 'yes' or 'no'.", "expected": "yes"},
+     "prompt": "All dogs are animals. All animals are living things. Are all dogs living things? "
+               "Answer ONLY 'yes' or 'no'.", "expected": "yes"},
     {"id": "logic06", "category": "logic", "check": "contains_number",
-     "prompt": "A train travels 60 km/h for 2.5 hours. Distance in km? Return ONLY the number.", "expected": "150"},
+     "prompt": "A train travels 60 km/h for 2.5 hours. Distance in km? Return ONLY the number.",
+     "expected": "150"},
     {"id": "logic07", "category": "logic", "check": "contains_number",
      "prompt": "Next in: 3, 6, 12, 24, __? Return ONLY the number.", "expected": "48"},
     {"id": "logic08", "category": "logic", "check": "contains_word",
-     "prompt": "Monday is after Sunday. Sunday is after Saturday. Is Monday after Saturday? Answer ONLY 'yes' or 'no'.", "expected": "yes"},
+     "prompt": "Monday is after Sunday. Sunday is after Saturday. Is Monday after Saturday? Answer "
+               "ONLY 'yes' or 'no'.", "expected": "yes"},
     {"id": "logic09", "category": "logic", "check": "contains_number",
-     "prompt": "If 3 workers build a wall in 12 hours, how many hours for 6 workers? Return ONLY the number.", "expected": "6"},
+     "prompt": "If 3 workers build a wall in 12 hours, how many hours for 6 workers? Return ONLY "
+               "the number.", "expected": "6"},
     {"id": "logic10", "category": "logic", "check": "contains_number",
-     "prompt": "How many letters in the word 'TURBOQUANT'? Return ONLY the number.", "expected": "10"},
+     "prompt": "How many letters in the word 'TURBOQUANT'? Return ONLY the number.",
+     "expected": "10"},
     {"id": "logic11", "category": "logic", "check": "contains_word",
-     "prompt": "Some cats are black. Some black things are shoes. Can we conclude some cats are shoes? Answer ONLY 'yes' or 'no'.", "expected": "no"},
+     "prompt": "Some cats are black. Some black things are shoes. Can we conclude some cats are "
+               "shoes? Answer ONLY 'yes' or 'no'.", "expected": "no"},
     {"id": "logic12", "category": "logic", "check": "contains_number",
      "prompt": "Next in: 1, 4, 9, 16, 25, __? Return ONLY the number.", "expected": "36"},
     {"id": "logic13", "category": "logic", "check": "contains_number",
-     "prompt": "You have 3 red balls, 2 blue balls, 4 green balls. Total? Return ONLY the number.", "expected": "9"},
+     "prompt": "You have 3 red balls, 2 blue balls, 4 green balls. Total? Return ONLY the number.",
+     "expected": "9"},
     {"id": "logic14", "category": "logic", "check": "contains_number",
-     "prompt": "If today is Wednesday, what day is it in 100 days? Count Wed as day 0. Return ONLY the day name. Actually, return ONLY the number of the weekday (Mon=1..Sun=7).", "expected": "5"},
+     "prompt": "If today is Wednesday, what day is it in 100 days? Count Wed as day 0. Return ONLY "
+               "the day name. Actually, return ONLY the number of the weekday (Mon=1..Sun=7).",
+     "expected": "5"},
     {"id": "logic15", "category": "logic", "check": "contains_number",
-     "prompt": "A rectangle is 8cm wide and 5cm tall. What is its area in cm²? Return ONLY the number.", "expected": "40"},
+     "prompt": "A rectangle is 8cm wide and 5cm tall. What is its area in cm²? Return ONLY the "
+               "number.", "expected": "40"},
     {"id": "logic16", "category": "logic", "check": "contains_number",
      "prompt": "Next in: 2, 3, 5, 7, 11, 13, __? Return ONLY the number.", "expected": "17"},
     {"id": "logic17", "category": "logic", "check": "contains_word",
-     "prompt": "If no fish can fly, and a salmon is a fish, can a salmon fly? Answer ONLY 'yes' or 'no'.", "expected": "no"},
+     "prompt": "If no fish can fly, and a salmon is a fish, can a salmon fly? Answer ONLY 'yes' or "
+               "'no'.", "expected": "no"},
     {"id": "logic18", "category": "logic", "check": "contains_number",
-     "prompt": "How many vowels in 'ARTIFICIAL INTELLIGENCE'? Return ONLY the number.", "expected": "10"},
+     "prompt": "How many vowels in 'ARTIFICIAL INTELLIGENCE'? Return ONLY the number.",
+     "expected": "10"},
     {"id": "logic19", "category": "logic", "check": "contains_number",
-     "prompt": "If you fold a paper in half 7 times, how many layers? Return ONLY the number.", "expected": "128"},
+     "prompt": "If you fold a paper in half 7 times, how many layers? Return ONLY the number.",
+     "expected": "128"},
     {"id": "logic20", "category": "logic", "check": "contains_number",
-     "prompt": "A clock shows 3:15. What is the angle between hour and minute hands in degrees? Return ONLY the number.", "expected": "7.5"},
+     "prompt": "A clock shows 3:15. What is the angle between hour and minute hands in degrees? "
+               "Return ONLY the number.", "expected": "7.5"},
     # ══════════════════════════════════════════════════════════════════════
     # CODE & TECHNICAL (20 tests)
     # ══════════════════════════════════════════════════════════════════════
     {"id": "code01", "category": "code", "check": "contains_word",
      "prompt": "What does FizzBuzz output for 15? Return ONLY the word.", "expected": "FizzBuzz"},
     {"id": "code02", "category": "code", "check": "contains_word",
-     "prompt": "In Python, what built-in function returns the length of a list? Return ONLY the function name.", "expected": "len"},
+     "prompt": "In Python, what built-in function returns the length of a list? Return ONLY the "
+               "function name.", "expected": "len"},
     {"id": "code03", "category": "code", "check": "contains_word",
-     "prompt": "What HTTP status code means 'Not Found'? Return ONLY the number and name.", "expected": "404"},
+     "prompt": "What HTTP status code means 'Not Found'? Return ONLY the number and name.",
+     "expected": "404"},
     {"id": "code04", "category": "code", "check": "contains_word",
-     "prompt": "What does SQL stand for? Return ONLY the full name.", "expected": "Structured Query Language"},
+     "prompt": "What does SQL stand for? Return ONLY the full name.",
+     "expected": "Structured Query Language"},
     {"id": "code05", "category": "code", "check": "contains_word",
-     "prompt": "In git, what command shows the commit history? Return ONLY the command.", "expected": "git log"},
+     "prompt": "In git, what command shows the commit history? Return ONLY the command.",
+     "expected": "git log"},
     {"id": "code06", "category": "code", "check": "contains_number",
      "prompt": "What is the default port for HTTPS? Return ONLY the number.", "expected": "443"},
     {"id": "code07", "category": "code", "check": "contains_word",
-     "prompt": "What does JSON stand for? Return ONLY the full name.", "expected": "JavaScript Object Notation"},
+     "prompt": "What does JSON stand for? Return ONLY the full name.",
+     "expected": "JavaScript Object Notation"},
     {"id": "code08", "category": "code", "check": "contains_word",
-     "prompt": "In Python, what keyword defines a function? Return ONLY the keyword.", "expected": "def"},
+     "prompt": "In Python, what keyword defines a function? Return ONLY the keyword.",
+     "expected": "def"},
     {"id": "code09", "category": "code", "check": "contains_number",
      "prompt": "What is the default port for HTTP? Return ONLY the number.", "expected": "80"},
     {"id": "code10", "category": "code", "check": "contains_word",
-     "prompt": "What does API stand for? Return ONLY the full name.", "expected": "Application Programming Interface"},
+     "prompt": "What does API stand for? Return ONLY the full name.",
+     "expected": "Application Programming Interface"},
     {"id": "code11", "category": "code", "check": "contains_word",
-     "prompt": "What does CSS stand for? Return ONLY the full name.", "expected": "Cascading Style Sheets"},
+     "prompt": "What does CSS stand for? Return ONLY the full name.",
+     "expected": "Cascading Style Sheets"},
     {"id": "code12", "category": "code", "check": "contains_word",
-     "prompt": "In Rust, what keyword is used to declare a mutable variable? Return ONLY the keyword.", "expected": "mut"},
+     "prompt": "In Rust, what keyword is used to declare a mutable variable? Return ONLY the "
+               "keyword.", "expected": "mut"},
     {"id": "code13", "category": "code", "check": "contains_number",
      "prompt": "Default SSH port? Return ONLY the number.", "expected": "22"},
     {"id": "code14", "category": "code", "check": "contains_word",
-     "prompt": "What does CRUD stand for in databases? Return ONLY the full name.", "expected": "Create Read Update Delete"},
+     "prompt": "What does CRUD stand for in databases? Return ONLY the full name.",
+     "expected": "Create Read Update Delete"},
     {"id": "code15", "category": "code", "check": "contains_word",
-     "prompt": "In HTML, what tag creates a hyperlink? Return ONLY the tag name (no brackets).", "expected": "a"},
+     "prompt": "In HTML, what tag creates a hyperlink? Return ONLY the tag name (no brackets).",
+     "expected": "a"},
     {"id": "code16", "category": "code", "check": "contains_word",
-     "prompt": "What does REST stand for? Return ONLY the full name.", "expected": "Representational State Transfer"},
+     "prompt": "What does REST stand for? Return ONLY the full name.",
+     "expected": "Representational State Transfer"},
     {"id": "code17", "category": "code", "check": "contains_word",
-     "prompt": "In Python, what exception is raised when dividing by zero? Return ONLY the exception name.", "expected": "ZeroDivisionError"},
+     "prompt": "In Python, what exception is raised when dividing by zero? Return ONLY the "
+               "exception name.", "expected": "ZeroDivisionError"},
     {"id": "code18", "category": "code", "check": "contains_number",
      "prompt": "Default port for PostgreSQL? Return ONLY the number.", "expected": "5432"},
     {"id": "code19", "category": "code", "check": "contains_word",
-     "prompt": "What does YAML stand for? Return ONLY the full name.", "expected": "YAML Ain't Markup Language"},
+     "prompt": "What does YAML stand for? Return ONLY the full name.",
+     "expected": "YAML Ain't Markup Language"},
     {"id": "code20", "category": "code", "check": "contains_word",
-     "prompt": "In git, what command creates a new branch? Return ONLY the command.", "expected": "git branch"},
+     "prompt": "In git, what command creates a new branch? Return ONLY the command.",
+     "expected": "git branch"},
 ]
 
 
@@ -351,7 +395,8 @@ async def send_prompt(session: aiohttp.ClientSession, url: str, model: str,
         "options": {"temperature": temperature, "num_predict": 256},
     }
     try:
-        async with session.post(f"{url}/api/chat", json=payload, timeout=aiohttp.ClientTimeout(total=60)) as resp:
+        async with session.post(f"{url}/api/chat", json=payload,
+                                timeout=aiohttp.ClientTimeout(total=60)) as resp:
             if resp.status != 200:
                 return f"[ERROR: HTTP {resp.status}]"
             data = await resp.json()
@@ -367,13 +412,15 @@ async def collect(args):
     passed = 0
     total = len(TESTS)
 
-    print(f"Running {total} quality tests against {args.url} (label={args.label}, model={args.model})")
+    print(f"Running {total} quality tests against {args.url} (label={args.label}, "
+          f"model={args.model})")
     print(f"Temperature: {args.temperature}")
     print()
 
     async with aiohttp.ClientSession() as session:
         for test in TESTS:
-            response = await send_prompt(session, args.url, args.model, test["prompt"], args.temperature)
+            response = await send_prompt(session, args.url, args.model, test["prompt"],
+                                         args.temperature)
             ok, detail = check_answer(test, response)
             status = "PASS" if ok else "FAIL"
             if ok:
@@ -474,7 +521,8 @@ def compare(args):
             cats = d.get("categories", {})
             if cat in cats:
                 v = cats[cat]
-                print(f"  {v['passed']}/{v['total']:>2} ({v['passed']/v['total']*100:3.0f}%)", end="")
+                print(f"  {v['passed']}/{v['total']:>2} ({v['passed']/v['total']*100:3.0f}%)",
+                      end="")
             else:
                 print(f"  {'n/a':>12}", end="")
         print()
@@ -529,7 +577,8 @@ def main():
     c.add_argument("--url", default="http://localhost:11434")
     c.add_argument("--model", default="qwen3-14b")
     c.add_argument("--label", required=True, help="Cache type label (e.g. F16, TQ4_0, TQ3_0)")
-    c.add_argument("--temperature", type=float, default=0.0, help="Use 0.0 for deterministic output")
+    c.add_argument("--temperature", type=float, default=0.0,
+                   help="Use 0.0 for deterministic output")
     c.add_argument("--output", "-o", help="Save results to JSON file")
 
     # compare

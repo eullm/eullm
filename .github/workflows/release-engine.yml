@@ -6,7 +6,8 @@ on:
       - "engine-v*"
       - "EuLLM-v*"
   # Manual dispatch runs only build-arm-cix-p1, build-vulkan, build-rocm and
-  # build-windows-vulkan, so any of them can be iterated on from the Actions
+  # build-windows-vulkan (and, asked for by name, build-cuda and
+  # build-windows-cuda), so any of them can be iterated on from the Actions
   # tab without a real tag, without paying for the rest of the release matrix
   # (Windows CUDA alone is a ~50 min cold build), and without ever creating a
   # GitHub Release (the `release` job only runs on an actual tag push).
@@ -28,6 +29,7 @@ on:
           - cuda
           - rocm
           - vulkan
+          - windows-cuda
           - windows-vulkan
           - windows-rocm
           - arm-cix-p1
@@ -1563,13 +1565,25 @@ jobs:
           name: eullm-windows-x64-zip
           path: eullm-windows-x64.zip
 
+  # Vulkan beside CUDA since 0.10.10, as eullm-linux-x64-cuda-13.1 since
+  # 0.10.0: an AMD or Intel Arc card next to the NVIDIA one computes its own
+  # layers, the faster card filled first. vulkan-1.dll is opened at run time
+  # (patch 0017), so the exe starts on a machine without it. `job:
+  # windows-cuda` dispatches it on its own; `all` leaves it out, as it leaves
+  # out the Linux CUDA builds, for its ~50 minutes cold.
   build-windows-cuda:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ github.event_name == 'push' || inputs.job == 'windows-cuda' }}
     runs-on: windows-2022
     env:
       # The asset this build is published as, baked into the binary (engine/
       # build.rs): `eullm update` downloads the same one again.
       EULLM_RELEASE_ASSET: eullm-windows-x64-cuda-13.1.zip
+      # The Vulkan SDK build-windows-vulkan installs: its glslc compiles
+      # ggml-vulkan's shaders.
+      VULKAN_VERSION: "1.4.363.1"
+      # A short target directory and no --target, for the path length of
+      # ggml-vulkan's shader generator (see build-windows-vulkan).
+      CARGO_TARGET_DIR: D:\t
     steps:
       - uses: actions/checkout@v5
         with:
@@ -1710,6 +1724,21 @@ jobs:
           }
           Write-Host "CUDA headers present under $inc"
 
+      # Installed as build-windows-vulkan installs it, which explains why.
+      - name: Install Vulkan SDK
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
+          curl.exe -fsSL --retry 3 -o $installer "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Vulkan SDK download failed with exit code $LASTEXITCODE" }
+          $p = Start-Process -FilePath $installer -ArgumentList '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer failed with exit code $($p.ExitCode)" }
+          $sdk = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "no glslc.exe in $sdk\Bin after the install" }
+          "VULKAN_SDK=$sdk" | Add-Content -Path $env:GITHUB_ENV
+          "$sdk\Bin" | Add-Content -Path $env:GITHUB_PATH
+          & "$sdk\Bin\glslc.exe" --version
+
       # MSVC env (vcvarsall) must be ACTIVE for Ninja to find cl.exe / nvcc.
       # Plain `runs-on: windows-2022` does NOT activate it — that's only set up
       # for MSBuild. We invoke vcvars64.bat directly (via vswhere to find the
@@ -1747,7 +1776,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         continue-on-error: true
         with:
-          key: x86_64-pc-windows-msvc-cuda-13.1
+          # -vulkan: the target directory moved to CARGO_TARGET_DIR with
+          # Vulkan, and a cache of the old layout would only be dead weight.
+          key: x86_64-pc-windows-msvc-cuda-13.1-vulkan
+          # CARGO_TARGET_DIR, as a path from the workspace (D:\a\eullm\eullm).
+          workspaces: ". -> ../../../t"
 
       # sccache now uses S3 backend (see workflow-level env block)
 
@@ -1781,9 +1814,18 @@ jobs:
               Write-Host "::warning::sccache S3 backend (${env:SCCACHE_ENDPOINT}) unreachable — building WITHOUT cache (slower, but the build will not fail)."
           }
 
-      - name: Build engine with CUDA + multimodal (mtmd)
+      - name: Build engine with CUDA + Vulkan + multimodal (mtmd)
         shell: pwsh
-        run: cargo build --release --target x86_64-pc-windows-msvc --features "cuda,multimodal" -p eullm-engine
+        run: |
+          # cl.exe for the shader generator's CMake project, which otherwise
+          # finds LLVM's clang first on PATH (see build-windows-vulkan).
+          $cl = Join-Path $env:VCToolsInstallDir 'bin\HostX64\x64\cl.exe'
+          if (-not (Test-Path $cl)) { throw "cl.exe not found at $cl" }
+          $env:CC = $cl
+          $env:CXX = $cl
+          # No --target: the host is x86_64-pc-windows-msvc already, and the
+          # triple would add its own folder to every path (CARGO_TARGET_DIR).
+          cargo build --release --features "cuda,vulkan,multimodal" -p eullm-engine
         env:
           CUDA_PATH: ${{ steps.cuda-toolkit.outputs.CUDA_PATH }}
           # Ampere (RTX 3000) + Ada (RTX 4000) + Blackwell (RTX 5000).
@@ -1819,7 +1861,27 @@ jobs:
           # eullm.exe from the same folder — no CUDA Toolkit install needed.
           $bundle = "eullm-windows-x64-cuda-13.1"
           New-Item -ItemType Directory -Path $bundle -Force | Out-Null
-          Copy-Item "target\x86_64-pc-windows-msvc\release\eullm.exe" -Destination "$bundle\eullm.exe"
+          Copy-Item "$env:CARGO_TARGET_DIR\release\eullm.exe" -Destination "$bundle\eullm.exe"
+
+          # Vulkan is inside, and nothing of it is needed to start: not the
+          # loader (opened at run time, patch 0017), not the SDK's DLLs, which
+          # exist on this runner only. A machine with an NVIDIA card alone,
+          # or without Vulkan, must start this exe as it started 0.10.0's.
+          $text = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("$bundle\eullm.exe"))
+          if (-not $text.Contains('ggml_vulkan: ')) {
+            Write-Host "::error::eullm.exe has no ggml_vulkan strings: the Vulkan backend was not compiled in"
+            exit 1
+          }
+          $deps = & dumpbin /dependents "$bundle\eullm.exe" | Out-String
+          $head = ($deps -split 'Image has the following delay load dependencies')[0]
+          $vk = [regex]::Matches($head, '(?im)^\s+((?:vulkan|shaderc|spirv|glslang)[\w-]*\.dll)\s*$') |
+                ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+          if ($vk) {
+            Write-Host $deps
+            Write-Host "::error::eullm.exe imports Vulkan DLLs it must not need to start: $($vk -join ', ')"
+            exit 1
+          }
+          Write-Host "Vulkan backend present, no Vulkan DLL imported"
 
           # Search the whole toolkit tree for the three DLLs, rather than
           # assuming they sit directly under \bin. That assumption held for
@@ -1916,7 +1978,12 @@ jobs:
             'Microsoft Corporation, distributed unmodified as Visual Studio'
             'Distributable Code:'
             ''
-          ) + ($msvcDlls | ForEach-Object { "  $_" }) |
+          ) + ($msvcDlls | ForEach-Object { "  $_" }) + @(
+            ''
+            'vulkan-1.dll, through which eullm.exe reaches a GPU of another'
+            'vendor, is not in this archive: it is installed with the graphics'
+            'driver.'
+          ) |
             Set-Content -Path "$bundle\THIRD-PARTY-NOTICES.txt" -Encoding utf8
 
           Compress-Archive -Path "$bundle\*" -DestinationPath "$bundle.zip" -Force
@@ -1953,10 +2020,11 @@ jobs:
       # The asset this build is published as, baked into the binary (engine/
       # build.rs): `eullm update` downloads the same one again.
       EULLM_RELEASE_ASSET: eullm-windows-x64-vulkan.zip
-      # The newest SDK on 7 October 2026 (vulkan.lunarg.com/sdk/latest.json).
-      # Its installer carries glslc, which ggml-vulkan compiles its shaders
-      # with, and the SPIRV-Headers CMake package ggml-vulkan asks for.
-      VULKAN_VERSION: "1.4.363.0"
+      # The newest SDK on 25 November 2026 (vulkan.lunarg.com/sdk/latest.json),
+      # the same as build-windows-cuda's. Its installer carries glslc, which
+      # ggml-vulkan compiles its shaders with, and the SPIRV-Headers CMake
+      # package ggml-vulkan asks for.
+      VULKAN_VERSION: "1.4.363.1"
       # A short target directory, and no --target below, for path length.
       # ggml-vulkan configures its shader generator as a CMake project of its
       # own, deep inside llama.cpp's build tree, and CMake's compiler checks

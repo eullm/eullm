@@ -177,13 +177,15 @@ async def test_multiturn(session, args):
             return False
         history += r.text + "\n"
         ttfts.append(r.ttft or 0.0)
-        print(f"  turn {turn:2d}: TTFT={r.ttft*1000:6.1f}ms  total={r.total_time*1000:7.1f}ms  prompt_chars={len(history)}")
+        print(f"  turn {turn:2d}: TTFT={r.ttft*1000:6.1f}ms  total={r.total_time*1000:7.1f}ms  "
+              f"prompt_chars={len(history)}")
 
     if args.server_log:
         reused = grep_reused_lines(args.server_log, offset)
         print(f"  server log 'reused N from cache': {reused}")
         if len(reused) >= 2 and reused[-1] <= reused[0]:
-            print("  WARNING: reused-token count did not grow across turns — reuse may not be active")
+            print("  WARNING: reused-token count did not grow across turns — reuse may not be "
+                  "active")
     else:
         print("  (pass --server-log <path> to cross-check 'reused N from cache' log lines)")
 
@@ -193,20 +195,24 @@ async def test_multiturn(session, args):
         first_half = sum(ttfts[1: len(ttfts) // 2 + 1]) / max(1, len(ttfts) // 2)
         second_half = sum(ttfts[len(ttfts) // 2 + 1:]) / max(1, len(ttfts) - len(ttfts) // 2 - 1)
         growth = (second_half - first_half) / first_half if first_half else 0
-        print(f"  TTFT trend: first-half avg={first_half*1000:.1f}ms  second-half avg={second_half*1000:.1f}ms  growth={growth:+.0%}")
+        print(f"  TTFT trend: first-half avg={first_half*1000:.1f}ms  second-half "
+              f"avg={second_half*1000:.1f}ms  growth={growth:+.0%}")
         if growth > 0.5:
-            print("  WARNING: TTFT grew substantially as the conversation lengthened — check for a full re-prefill every turn")
+            print("  WARNING: TTFT grew substantially as the conversation lengthened — check for a "
+                  "full re-prefill every turn")
     return True
 
 
 async def test_concurrent(session, args):
     """0.7-A: N independent growing-history conversations running at once."""
-    print(f"\n[concurrent] {args.concurrency} independent conversations, {args.concurrent_turns} turns each")
+    print(f"\n[concurrent] {args.concurrency} independent conversations, {args.concurrent_turns} "
+          "turns each")
 
     async def one_conversation(conv_id):
         history = ""
         for turn in range(1, args.concurrent_turns + 1):
-            history += f"User (conv {conv_id}): give me a fun fact about the city ranked #{turn} by population in your training data.\nAssistant: "
+            history += (f"User (conv {conv_id}): give me a fun fact about the city ranked "
+                        f"#{turn} by population in your training data.\nAssistant: ")
             r = await stream_generate(
                 session, args.url, args.model, history,
                 seed=args.seed + conv_id, max_tokens=args.max_tokens, timeout=args.timeout,
@@ -231,7 +237,8 @@ async def test_concurrent(session, args):
 
 async def test_cancel(session, args):
     """0.7-A: abrupt mid-stream disconnect must not wedge the server or the slot."""
-    print(f"\n[cancel] {args.cancel_iterations} abrupt mid-stream disconnects, each followed by a fresh request")
+    print(f"\n[cancel] {args.cancel_iterations} abrupt mid-stream disconnects, each followed by a "
+          "fresh request")
     ok = True
     for i in range(args.cancel_iterations):
         cancelled = await stream_generate(
@@ -250,7 +257,8 @@ async def test_cancel(session, args):
             max_tokens=16, timeout=args.timeout,
         )
         recovered = follow_up.done and not follow_up.error
-        print(f"  iter {i}: disconnected after 8 tokens, next request {'ok' if recovered else 'FAILED: ' + str(follow_up.error)}")
+        print(f"  iter {i}: disconnected after 8 tokens, next request "
+              f"{'ok' if recovered else 'FAILED: ' + str(follow_up.error)}")
         ok = ok and recovered
     return ok
 
@@ -262,7 +270,8 @@ async def test_slow_consumer(session, args):
     try_send hits TrySendError::Full. Before the fix this was misread as a
     disconnect and the response was truncated early with no `done` event.
     """
-    print(f"\n[slow-consumer] deliberately slow reads over {args.slow_consumer_tokens} tokens (targets the Full-vs-Closed fix)")
+    print(f"\n[slow-consumer] deliberately slow reads over {args.slow_consumer_tokens} tokens "
+          "(targets the Full-vs-Closed fix)")
     r = await stream_generate(
         session, args.url, args.model,
         "Count from 1 to 300, one number per line, nothing else.",
@@ -274,9 +283,11 @@ async def test_slow_consumer(session, args):
         print(f"  FAILED: {r.error}")
         return False
     if not r.done:
-        print("  FAILED: stream never reached 'done' — looks like the Full-channel-as-disconnect bug")
+        print("  FAILED: stream never reached 'done' — looks like the Full-channel-as-disconnect "
+              "bug")
         return False
-    print(f"  ok: reached 'done', {r.tokens_generated} tokens generated, {r.total_time:.1f}s wall time")
+    print(f"  ok: reached 'done', {r.tokens_generated} tokens generated, {r.total_time:.1f}s wall "
+          "time")
     return True
 
 
@@ -298,7 +309,8 @@ async def test_determinism(session, args):
 
     all_same = all(o == outputs[0] for o in outputs)
     print(f"  outputs: {[repr(o) for o in outputs]}")
-    print(f"  {'ok: byte-identical across all repeats' if all_same else 'FAILED: outputs diverged'}")
+    verdict = "ok: byte-identical across all repeats" if all_same else "FAILED: outputs diverged"
+    print(f"  {verdict}")
 
     if all_same and args.baseline_url:
         async with aiohttp.ClientSession() as baseline_session:
@@ -310,7 +322,8 @@ async def test_determinism(session, args):
             print(f"  baseline ({args.baseline_url}): FAILED — {baseline.error or 'incomplete'}")
             return False
         matches_baseline = baseline.text == outputs[0]
-        print(f"  baseline ({args.baseline_url}): {repr(baseline.text)} — {'matches' if matches_baseline else 'DIFFERS from'} current server")
+        print(f"  baseline ({args.baseline_url}): {repr(baseline.text)} — "
+              f"{'matches' if matches_baseline else 'DIFFERS from'} current server")
         return all_same and matches_baseline
 
     return all_same
@@ -354,20 +367,31 @@ async def main_async(args):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default="http://localhost:11434", help="eullm server base URL")
     p.add_argument("--model", required=True, help="model name as loaded by the server")
-    p.add_argument("--tests", default="all", help=f"comma-separated subset of {ALL_TESTS}, or 'all'")
-    p.add_argument("--server-log", default=None, help="path to the server's log file, for cross-checking 'reused N from cache' lines")
-    p.add_argument("--baseline-url", default=None, help="optional second server (e.g. an old binary) to diff the determinism test against")
+    p.add_argument("--tests", default="all",
+                   help=f"comma-separated subset of {ALL_TESTS}, or 'all'")
+    p.add_argument("--server-log", default=None,
+                   help="path to the server's log file, for cross-checking 'reused N from cache' "
+                        "lines")
+    p.add_argument("--baseline-url", default=None,
+                   help="optional second server (e.g. an old binary) to diff the determinism test "
+                        "against")
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--max-tokens", type=int, default=64, help="max_tokens for the multiturn/concurrent tests")
+    p.add_argument("--max-tokens", type=int, default=64,
+                   help="max_tokens for the multiturn/concurrent tests")
     p.add_argument("--turns", type=int, default=20, help="turns for the multiturn test")
-    p.add_argument("--concurrency", type=int, default=8, help="conversations for the concurrent test")
-    p.add_argument("--concurrent-turns", type=int, default=5, help="turns per conversation in the concurrent test")
+    p.add_argument("--concurrency", type=int, default=8,
+                   help="conversations for the concurrent test")
+    p.add_argument("--concurrent-turns", type=int, default=5,
+                   help="turns per conversation in the concurrent test")
     p.add_argument("--cancel-iterations", type=int, default=5)
-    p.add_argument("--slow-consumer-tokens", type=int, default=300, help="must exceed the 256-slot event channel to force TrySendError::Full")
-    p.add_argument("--slow-consumer-delay", type=float, default=0.15, help="seconds slept before consuming each streamed line")
+    p.add_argument("--slow-consumer-tokens", type=int, default=300,
+                   help="must exceed the 256-slot event channel to force TrySendError::Full")
+    p.add_argument("--slow-consumer-delay", type=float, default=0.15,
+                   help="seconds slept before consuming each streamed line")
     p.add_argument("--determinism-repeats", type=int, default=3)
     p.add_argument("--timeout", type=float, default=120, help="per-request timeout in seconds")
     return p.parse_args()

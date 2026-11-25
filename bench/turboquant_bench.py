@@ -138,7 +138,8 @@ class RequestResult:
         if self.eval_count and self.eval_duration_ns and self.eval_duration_ns > 0:
             return self.eval_count / (self.eval_duration_ns / 1e9)
         # Fallback: wall-clock based
-        gen_ms = (self.last_token_time - self.first_token_time) * 1000 if self.first_token_time > 0 else 0
+        gen_ms = ((self.last_token_time - self.first_token_time) * 1000
+                  if self.first_token_time > 0 else 0)
         if gen_ms > 0 and self.token_count > 1:
             return (self.token_count - 1) / (gen_ms / 1000)
         return 0.0
@@ -560,7 +561,8 @@ def _print_plain_table(rows: list[dict]):
         f"  {'Cache Type':>12} | {'Conc':>4} | {'TTFT P50':>10} | "
         f"{'tok/s P50':>10} | {'Agg tok/s':>10} | {'Wall Time':>10} | {'vs F16':>18}"
     )
-    sep = f"  {'─' * 12}-+-{'─' * 4}-+-{'─' * 10}-+-{'─' * 10}-+-{'─' * 10}-+-{'─' * 10}-+-{'─' * 18}"
+    sep = (f"  {'─' * 12}-+-{'─' * 4}-+-{'─' * 10}-+-{'─' * 10}-+-"
+           f"{'─' * 10}-+-{'─' * 10}-+-{'─' * 18}")
 
     print()
     print(f"  {'=' * 86}")
@@ -576,7 +578,8 @@ def _print_plain_table(rows: list[dict]):
             parts.append(f"tps {row['vs_tps']}")
         if row["vs_wall"]:
             parts.append(f"wall {row['vs_wall']}")
-        vs = ", ".join(parts) if parts else ("baseline" if not row["vs_ttft"] and not row["vs_tps"] else "")
+        vs = ", ".join(parts) if parts else (
+            "baseline" if not row["vs_ttft"] and not row["vs_tps"] else "")
 
         # For F16 rows where vs columns are empty, show "baseline"
         if not row["vs_ttft"] and not row["vs_tps"] and not row["vs_wall"]:

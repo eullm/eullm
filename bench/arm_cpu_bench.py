@@ -159,7 +159,8 @@ async def stream_generate(session, base_url, model, prompt, max_tokens, timeout)
                 last_token_time = now
 
     total = time.monotonic() - start
-    return ttft, total, prompt_tokens, gen_tokens, last_token_time - start if last_token_time else total
+    return (ttft, total, prompt_tokens, gen_tokens,
+            last_token_time - start if last_token_time else total)
 
 
 async def run_prefill_sweep(session, args):
@@ -179,7 +180,8 @@ async def run_prefill_sweep(session, args):
             print(f"  ~{word_target} words: FAILED to get a timed response")
             continue
         tok_s = prompt_tokens / ttft
-        print(f"  {prompt_tokens:5d} prompt tokens: TTFT={ttft*1000:8.1f}ms  prefill={tok_s:7.1f} tok/s")
+        print(f"  {prompt_tokens:5d} prompt tokens: TTFT={ttft*1000:8.1f}ms  prefill={tok_s:7.1f} "
+              "tok/s")
         results.append({"prompt_tokens": prompt_tokens, "ttft_s": ttft, "prefill_tok_s": tok_s})
     return results
 
@@ -202,7 +204,8 @@ async def run_decode_bench(session, args, power_sampler):
             continue
         decode_s = last_token_s - ttft
         decode_tok_s = (gen_tokens - 1) / decode_s if decode_s > 0 else 0.0
-        print(f"  repeat {i}: TTFT={ttft*1000:7.1f}ms  decode={decode_tok_s:7.1f} tok/s over {gen_tokens} tokens")
+        print(f"  repeat {i}: TTFT={ttft*1000:7.1f}ms  decode={decode_tok_s:7.1f} tok/s over "
+              f"{gen_tokens} tokens")
         runs.append({
             "prompt_tokens": prompt_tokens,
             "gen_tokens": gen_tokens,
@@ -222,7 +225,8 @@ async def main_async(args):
     if args.power_sysfs_path:
         power_sampler = PowerSampler(args.power_sysfs_path, args.power_scale_to_watts)
         if not power_sampler.available():
-            print(f"\n[power] WARNING: cannot read {args.power_sysfs_path} - power will not be reported")
+            print(f"\n[power] WARNING: cannot read {args.power_sysfs_path} - power will not be "
+                  "reported")
             power_sampler = None
     else:
         print("\n[power] no --power-sysfs-path given - power/perf-per-watt will not be reported "
@@ -232,7 +236,8 @@ async def main_async(args):
         prefill_results = await run_prefill_sweep(session, args)
         decode_results = await run_decode_bench(session, args, power_sampler)
 
-    avg_decode_tok_s = statistics.mean(r["decode_tok_s"] for r in decode_results) if decode_results else None
+    avg_decode_tok_s = (statistics.mean(r["decode_tok_s"] for r in decode_results)
+                        if decode_results else None)
     avg_watts = power_sampler.average_watts() if power_sampler else None
 
     print("\n" + "=" * 60)
@@ -265,19 +270,29 @@ async def main_async(args):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--url", default="http://localhost:11434")
     p.add_argument("--model", required=True)
-    p.add_argument("--notes", default="", help="free-text run metadata (threads/pinning used, board state) saved into --json")
-    p.add_argument("--prefill-word-targets", type=int, nargs="+", default=DEFAULT_PREFILL_WORD_TARGETS,
-                   help="approximate prompt sizes (in words) to sweep; actual tokenized size is measured and reported")
+    p.add_argument("--notes", default="",
+                   help="free-text run metadata (threads/pinning used, board state) saved into "
+                        "--json")
+    p.add_argument("--prefill-word-targets", type=int, nargs="+",
+                   default=DEFAULT_PREFILL_WORD_TARGETS,
+                   help="approximate prompt sizes (in words) to sweep; actual tokenized size is "
+                        "measured and reported")
     p.add_argument("--decode-tokens", type=int, default=DEFAULT_DECODE_TOKENS)
     p.add_argument("--decode-prompt", default=DEFAULT_DECODE_PROMPT)
     p.add_argument("--decode-repeats", type=int, default=3)
-    p.add_argument("--power-sysfs-path", default=None, help="sysfs file to sample during decode, e.g. /sys/class/hwmon/hwmon0/power1_input")
-    p.add_argument("--power-scale-to-watts", type=float, default=1e-6, help="multiply the raw sysfs value by this to get Watts (default assumes microwatts)")
+    p.add_argument("--power-sysfs-path", default=None,
+                   help="sysfs file to sample during decode, e.g. "
+                        "/sys/class/hwmon/hwmon0/power1_input")
+    p.add_argument("--power-scale-to-watts", type=float, default=1e-6,
+                   help="multiply the raw sysfs value by this to get Watts (default assumes "
+                        "microwatts)")
     p.add_argument("--timeout", type=float, default=300)
-    p.add_argument("--json", default=None, help="write machine-readable results here for baseline tracking over time")
+    p.add_argument("--json", default=None,
+                   help="write machine-readable results here for baseline tracking over time")
     return p.parse_args()
 
 

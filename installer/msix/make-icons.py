@@ -51,7 +51,8 @@ def main(out):
     save(square(m, 50, 0.72, WHITE), "StoreLogo.png")
     # Taskbar / terminal sizes without the plate, as Windows expects for unplated targets.
     for s in (16, 24, 32, 48, 256):
-        save(square(m, s, 0.92, (0, 0, 0, 0)), f"Square44x44Logo.targetsize-{s}_altform-unplated.png")
+        save(square(m, s, 0.92, (0, 0, 0, 0)),
+             f"Square44x44Logo.targetsize-{s}_altform-unplated.png")
     # The wide tile carries the whole logo.
     wide = Image.new("RGBA", (310, 150), WHITE)
     scale = min(280 / logo.width, 120 / logo.height)

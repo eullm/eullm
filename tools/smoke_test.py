@@ -729,7 +729,8 @@ def check_concurrency(rep: Report, api: str, model: str, n: int = 8) -> None:
     if errors:
         rep.add("concurrency: all requests answered", False, "; ".join(errors[:4]))
         return
-    rep.add("concurrency: all requests answered", len(answers) == n, f"{len(answers)}/{n} in {dt:.1f}s")
+    rep.add("concurrency: all requests answered", len(answers) == n,
+            f"{len(answers)}/{n} in {dt:.1f}s")
 
     # The expected product must appear in that request's own answer.
     wrong = []
@@ -1120,7 +1121,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--binary", required=True, type=Path, help="path to the eullm binary")
     ap.add_argument("--model", default=DEFAULT_MODEL,
-                    help=f"catalog id or .gguf path for the inference checks (default: {DEFAULT_MODEL})")
+                    help="catalog id or .gguf path for the inference checks (default: "
+                         f"{DEFAULT_MODEL})")
     ap.add_argument("--pull", action="store_true",
                     help="run `eullm pull <model>` first if it is not on disk")
     ap.add_argument("--fit-model", default=None, metavar="ID",
@@ -1207,7 +1209,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 r = subprocess.run(
                     [str(binary), "pull", model],
-                    env={**os.environ, **env}, capture_output=True, text=True, encoding="utf-8", timeout=7200,
+                    env={**os.environ, **env}, capture_output=True, text=True, encoding="utf-8",
+                    timeout=7200,
                 )
                 tail = (r.stdout or r.stderr).strip().splitlines()
                 rep.add(f"pull {model}", r.returncode == 0, tail[-1][:120] if tail else "")

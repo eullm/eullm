@@ -55,16 +55,35 @@ except ImportError:
 # ── Filler ────────────────────────────────────────────────────────────────────
 
 FILLER_PARAGRAPHS = [
-    "The European Union's digital strategy aims to make this transformation work for people and businesses, while helping to achieve its target of a climate-neutral Europe by 2050. The Commission has outlined key policies and frameworks to guide this transition.",
-    "Recent advances in semiconductor manufacturing have enabled the production of chips at the 3nm node, dramatically increasing transistor density while reducing power consumption. TSMC, Samsung, and Intel are competing to deliver these next-generation processors.",
-    "The Mediterranean basin is home to approximately 25,000 plant species, of which about 50% are endemic. This biodiversity hotspot faces threats from urbanisation, agricultural intensification, and climate change.",
-    "Cloud computing has fundamentally changed how organisations deploy and manage IT infrastructure. The shift from capital expenditure to operational expenditure models has enabled startups and enterprises alike to scale their operations globally.",
-    "Italian Renaissance art underwent several distinct phases, from the early experiments of Giotto in the 13th century to the High Renaissance works of Leonardo, Michelangelo, and Raphael.",
-    "The carbon cycle involves the exchange of carbon between the atmosphere, oceans, terrestrial biosphere, and geological formations. Anthropogenic emissions have disrupted this cycle, leading to an increase in atmospheric CO2 concentrations.",
-    "Quantum computing leverages quantum mechanical phenomena such as superposition and entanglement to perform computations that would be impractical for classical computers.",
-    "The logistics industry handles approximately 65 billion parcels annually worldwide, with e-commerce driving a significant portion of this volume. Last-mile delivery remains the most expensive segment.",
-    "Volcanic activity along tectonic plate boundaries shapes the Earth's surface through both constructive and destructive processes. The Ring of Fire contains approximately 75% of the world's active volcanoes.",
-    "Machine learning models for natural language processing have grown exponentially in size. This scaling has been accompanied by emergent capabilities including in-context learning and chain-of-thought reasoning.",
+    "The European Union's digital strategy aims to make this transformation work for people and "
+    "businesses, while helping to achieve its target of a climate-neutral Europe by 2050. The "
+    "Commission has outlined key policies and frameworks to guide this transition.",
+    "Recent advances in semiconductor manufacturing have enabled the production of chips at the "
+    "3nm node, dramatically increasing transistor density while reducing power consumption. TSMC, "
+    "Samsung, and Intel are competing to deliver these next-generation processors.",
+    "The Mediterranean basin is home to approximately 25,000 plant species, of which about 50% are "
+    "endemic. This biodiversity hotspot faces threats from urbanisation, agricultural "
+    "intensification, and climate change.",
+    "Cloud computing has fundamentally changed how organisations deploy and manage IT "
+    "infrastructure. The shift from capital expenditure to operational expenditure models has "
+    "enabled startups and enterprises alike to scale their operations globally.",
+    "Italian Renaissance art underwent several distinct phases, from the early experiments of "
+    "Giotto in the 13th century to the High Renaissance works of Leonardo, Michelangelo, and "
+    "Raphael.",
+    "The carbon cycle involves the exchange of carbon between the atmosphere, oceans, terrestrial "
+    "biosphere, and geological formations. Anthropogenic emissions have disrupted this cycle, "
+    "leading to an increase in atmospheric CO2 concentrations.",
+    "Quantum computing leverages quantum mechanical phenomena such as superposition and "
+    "entanglement to perform computations that would be impractical for classical computers.",
+    "The logistics industry handles approximately 65 billion parcels annually worldwide, with "
+    "e-commerce driving a significant portion of this volume. Last-mile delivery remains the most "
+    "expensive segment.",
+    "Volcanic activity along tectonic plate boundaries shapes the Earth's surface through both "
+    "constructive and destructive processes. The Ring of Fire contains approximately 75% of the "
+    "world's active volcanoes.",
+    "Machine learning models for natural language processing have grown exponentially in size. "
+    "This scaling has been accompanied by emergent capabilities including in-context learning and "
+    "chain-of-thought reasoning.",
 ]
 
 
@@ -453,7 +472,8 @@ async def collect(args):
             for sub in ["matrix_2x2", "matrix_3x3", "scalar"]:
                 m = [r for r in delayed if r["filler_tokens"] == fl and r["subtype"] == sub]
                 row[sub] = f"{sum(1 for r in m if r['passed'])}/{len(m)}" if m else "-"
-            print(f"  {fl:>6}t   {row['matrix_2x2']:>10} {row['matrix_3x3']:>10} {row['scalar']:>10}")
+            print(f"  {fl:>6}t   {row['matrix_2x2']:>10} {row['matrix_3x3']:>10} "
+                  f"{row['scalar']:>10}")
 
     # Breakdown by context size bucket (to spot precision bugs at specific token ranges)
     ctx_results = [r for r in results if r.get("prompt_tokens", 0) > 0]
@@ -473,7 +493,8 @@ async def collect(args):
                 bt = len(br)
                 bpct = bp / bt * 100
                 avg_ctx = sum(r["prompt_tokens"] for r in br) / bt
-                print(f"  {lo:>5}–{hi:<5}t        {bp:>4}/{bt:<4}        {bpct:>5.1f}%   {avg_ctx:>7.0f}t")
+                print(f"  {lo:>5}–{hi:<5}t        {bp:>4}/{bt:<4}        {bpct:>5.1f}%   "
+                      f"{avg_ctx:>7.0f}t")
 
     # Timing summary
     total_wall = time.time() - run_start
@@ -484,9 +505,11 @@ async def collect(args):
         print("\n  Throughput:")
         print(f"  {'Total wall time':<28} {total_wall:>7.1f}s")
         print(f"  {'Requests':<28} {len(timed):>7}")
-        print(f"  {'Latency mean/min/max (s)':<28} {sum(latencies)/len(latencies):>5.1f} / {min(latencies):>4.1f} / {max(latencies):>4.1f}")
+        print(f"  {'Latency mean/min/max (s)':<28} {sum(latencies)/len(latencies):>5.1f} / "
+              f"{min(latencies):>4.1f} / {max(latencies):>4.1f}")
         if tps_vals:
-            print(f"  {'Tokens/sec mean/min/max':<28} {sum(tps_vals)/len(tps_vals):>5.1f} / {min(tps_vals):>4.1f} / {max(tps_vals):>4.1f}")
+            print(f"  {'Tokens/sec mean/min/max':<28} {sum(tps_vals)/len(tps_vals):>5.1f} / "
+                  f"{min(tps_vals):>4.1f} / {max(tps_vals):>4.1f}")
 
     if args.verbose:
         failed = [r for r in results if not r["passed"]]
@@ -578,8 +601,10 @@ def main():
     c.add_argument("--filler", default="200,500,1000",
                    help="Comma-separated filler token counts (0 = direct only). "
                         "Regression history: "
-                        "v1.3 V-cache precision bug: ctx 1500–2300t → use 200,500,1000,1500,2000,2500. "
-                        "v1.5.3 D=64 multi-turn bug: 9+ turns needed → use 200,500,1000,2500,8000,16000,32000,48000.")
+                        "v1.3 V-cache precision bug: ctx 1500–2300t → use "
+                        "200,500,1000,1500,2000,2500. "
+                        "v1.5.3 D=64 multi-turn bug: 9+ turns needed → use "
+                        "200,500,1000,2500,8000,16000,32000,48000.")
     c.add_argument("--skip-3x3", action="store_true")
     c.add_argument("--skip-scalar", action="store_true")
     c.add_argument("--no-think", action="store_true",
@@ -593,7 +618,8 @@ def main():
                         "Increase to 300+ for large filler levels (32000t/48000t).")
     c.add_argument("--output", "-o")
     c.add_argument("--note", default="",
-                   help="Free-form note saved in JSON metadata (e.g. 'cache-k=q8_0 cache-v=tbq4_1 ctx=32768')")
+                   help="Free-form note saved in JSON metadata (e.g. 'cache-k=q8_0 cache-v=tbq4_1 "
+                        "ctx=32768')")
     c.add_argument("--verbose", "-v", action="store_true")
 
     p = sub.add_parser("compare")

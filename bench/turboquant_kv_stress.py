@@ -34,18 +34,65 @@ except ImportError:
 # ── Filler text generator ────────────────────────────────────────────────────
 
 FILLER_PARAGRAPHS = [
-    "The European Union's digital strategy aims to make this transformation work for people and businesses, while helping to achieve its target of a climate-neutral Europe by 2050. The Commission has outlined key policies and frameworks to guide this transition, including the Digital Markets Act and the Digital Services Act, which set new rules for tech platforms operating in Europe.",
-    "Recent advances in semiconductor manufacturing have enabled the production of chips at the 3nm node, dramatically increasing transistor density while reducing power consumption. TSMC, Samsung, and Intel are competing to deliver these next-generation processors for both consumer devices and data center applications. The economic implications are significant, with global chip demand expected to double by 2030.",
-    "The Mediterranean basin is home to approximately 25,000 plant species, of which about 50% are endemic. This biodiversity hotspot faces threats from urbanization, agricultural intensification, and climate change. Conservation efforts include the establishment of marine protected areas and the restoration of degraded habitats along the coastline from Spain to Turkey.",
-    "Cloud computing has fundamentally changed how organizations deploy and manage IT infrastructure. The shift from capital expenditure to operational expenditure models has enabled startups and enterprises alike to scale their operations globally without significant upfront investment. Major providers including AWS, Azure, and Google Cloud now operate data centers on every inhabited continent.",
-    "Italian Renaissance art underwent several distinct phases, from the early experiments of Giotto in the 13th century to the High Renaissance works of Leonardo, Michelangelo, and Raphael. The development of linear perspective by Brunelleschi and its systematic application by artists transformed the representation of three-dimensional space on two-dimensional surfaces.",
-    "The carbon cycle involves the exchange of carbon between the atmosphere, oceans, terrestrial biosphere, and geological formations. Anthropogenic emissions have disrupted this cycle, leading to an increase in atmospheric CO2 concentrations from approximately 280 ppm in pre-industrial times to over 420 ppm today. Understanding these dynamics is critical for climate modeling.",
-    "Quantum computing leverages quantum mechanical phenomena such as superposition and entanglement to perform computations that would be impractical for classical computers. While current quantum computers are limited by decoherence and error rates, researchers have demonstrated quantum advantage for specific problems. Applications range from drug discovery to cryptographic analysis.",
-    "The logistics industry handles approximately 65 billion parcels annually worldwide, with e-commerce driving a significant portion of this volume. Last-mile delivery remains the most expensive segment, accounting for up to 53% of total shipping costs. Innovations in autonomous delivery vehicles and drone technology promise to reduce these costs in urban areas.",
-    "Volcanic activity along tectonic plate boundaries shapes Earth's surface through both constructive and destructive processes. The Ring of Fire, encircling the Pacific Ocean, contains approximately 75% of the world's active volcanoes and accounts for about 90% of the world's earthquakes. Monitoring these geologically active zones is essential for early warning systems.",
-    "Machine learning models for natural language processing have grown exponentially in size, from millions of parameters in early models to hundreds of billions in current large language models. This scaling has been accompanied by emergent capabilities not predicted by smaller models, including in-context learning, chain-of-thought reasoning, and cross-lingual transfer.",
-    "The agricultural revolution in Europe during the 18th century introduced crop rotation systems, selective breeding of livestock, and mechanical innovations such as the seed drill. These advances dramatically increased food production, supporting population growth and urbanization that would fuel the subsequent Industrial Revolution in Britain and across the continent.",
-    "Photovoltaic technology has seen dramatic cost reductions over the past decade, with the levelized cost of solar electricity dropping below that of fossil fuels in many regions. Advances in perovskite cells, bifacial modules, and tracking systems continue to improve efficiency. Global solar capacity exceeded 1 terawatt for the first time in 2022.",
+    "The European Union's digital strategy aims to make this transformation work for people and "
+    "businesses, while helping to achieve its target of a climate-neutral Europe by 2050. The "
+    "Commission has outlined key policies and frameworks to guide this transition, including the "
+    "Digital Markets Act and the Digital Services Act, which set new rules for tech platforms "
+    "operating in Europe.",
+    "Recent advances in semiconductor manufacturing have enabled the production of chips at the "
+    "3nm node, dramatically increasing transistor density while reducing power consumption. TSMC, "
+    "Samsung, and Intel are competing to deliver these next-generation processors for both "
+    "consumer devices and data center applications. The economic implications are significant, "
+    "with global chip demand expected to double by 2030.",
+    "The Mediterranean basin is home to approximately 25,000 plant species, of which about 50% are "
+    "endemic. This biodiversity hotspot faces threats from urbanization, agricultural "
+    "intensification, and climate change. Conservation efforts include the establishment of marine "
+    "protected areas and the restoration of degraded habitats along the coastline from Spain to "
+    "Turkey.",
+    "Cloud computing has fundamentally changed how organizations deploy and manage IT "
+    "infrastructure. The shift from capital expenditure to operational expenditure models has "
+    "enabled startups and enterprises alike to scale their operations globally without significant "
+    "upfront investment. Major providers including AWS, Azure, and Google Cloud now operate data "
+    "centers on every inhabited continent.",
+    "Italian Renaissance art underwent several distinct phases, from the early experiments of "
+    "Giotto in the 13th century to the High Renaissance works of Leonardo, Michelangelo, and "
+    "Raphael. The development of linear perspective by Brunelleschi and its systematic application "
+    "by artists transformed the representation of three-dimensional space on two-dimensional "
+    "surfaces.",
+    "The carbon cycle involves the exchange of carbon between the atmosphere, oceans, terrestrial "
+    "biosphere, and geological formations. Anthropogenic emissions have disrupted this cycle, "
+    "leading to an increase in atmospheric CO2 concentrations from approximately 280 ppm in "
+    "pre-industrial times to over 420 ppm today. Understanding these dynamics is critical for "
+    "climate modeling.",
+    "Quantum computing leverages quantum mechanical phenomena such as superposition and "
+    "entanglement to perform computations that would be impractical for classical computers. While "
+    "current quantum computers are limited by decoherence and error rates, researchers have "
+    "demonstrated quantum advantage for specific problems. Applications range from drug discovery "
+    "to cryptographic analysis.",
+    "The logistics industry handles approximately 65 billion parcels annually worldwide, with "
+    "e-commerce driving a significant portion of this volume. Last-mile delivery remains the most "
+    "expensive segment, accounting for up to 53% of total shipping costs. Innovations in "
+    "autonomous delivery vehicles and drone technology promise to reduce these costs in urban "
+    "areas.",
+    "Volcanic activity along tectonic plate boundaries shapes Earth's surface through both "
+    "constructive and destructive processes. The Ring of Fire, encircling the Pacific Ocean, "
+    "contains approximately 75% of the world's active volcanoes and accounts for about 90% of the "
+    "world's earthquakes. Monitoring these geologically active zones is essential for early "
+    "warning systems.",
+    "Machine learning models for natural language processing have grown exponentially in size, "
+    "from millions of parameters in early models to hundreds of billions in current large "
+    "language models. This scaling has been accompanied by emergent capabilities not predicted "
+    "by smaller models, including in-context learning, chain-of-thought reasoning, and "
+    "cross-lingual transfer.",
+    "The agricultural revolution in Europe during the 18th century introduced crop rotation "
+    "systems, selective breeding of livestock, and mechanical innovations such as the seed drill. "
+    "These advances dramatically increased food production, supporting population growth and "
+    "urbanization that would fuel the subsequent Industrial Revolution in Britain and across the "
+    "continent.",
+    "Photovoltaic technology has seen dramatic cost reductions over the past decade, with the "
+    "levelized cost of solar electricity dropping below that of fossil fuels in many regions. "
+    "Advances in perovskite cells, bifacial modules, and tracking systems continue to improve "
+    "efficiency. Global solar capacity exceeded 1 terawatt for the first time in 2022.",
 ]
 
 
@@ -84,7 +131,7 @@ Do not reproduce it yet.
 
 {filler}
 
-Now output the original numeric block exactly, line by line, with no explanation. Output ONLY the 15 lines of digits."""
+Now output the original numeric block exactly, line by line, with no explanation. Output ONLY the 15 lines of digits."""  # noqa: E501
 
     return {
         "id": f"kv_numeric_block_{filler_tokens}t",
@@ -121,7 +168,7 @@ Do not answer yet.
 
 {filler}
 
-Answer only with the digit at row {target_row}, column {target_col}. Return ONLY the single digit."""
+Answer only with the digit at row {target_row}, column {target_col}. Return ONLY the single digit."""  # noqa: E501
 
     return {
         "id": f"kv_grid_lookup_{filler_tokens}t",
@@ -218,7 +265,8 @@ def make_test_record_search(filler_tokens: int) -> dict:
 
     records_text = ""
     for i, (uid, city, num, code) in enumerate(records):
-        records_text += f"Record {i+1}: User {uid} lives in {city}, favorite number {num}, project code {code}.\n"
+        records_text += (f"Record {i+1}: User {uid} lives in {city}, "
+                         f"favorite number {num}, project code {code}.\n")
 
     filler = generate_filler(filler_tokens)
 
@@ -402,13 +450,15 @@ async def collect(args):
         fl_lines_ok = sum(r["lines_correct"] for r in fl_results)
         fl_lines_total = sum(r["lines_total"] for r in fl_results)
         fl_line_pct = fl_lines_ok / fl_lines_total * 100 if fl_lines_total > 0 else 0
-        print(f"  {fl:>5}t    {fl_pass}/{fl_total}      {fl_lines_ok}/{fl_lines_total} ({fl_line_pct:.1f}%)")
+        print(f"  {fl:>5}t    {fl_pass}/{fl_total}      {fl_lines_ok}/{fl_lines_total} "
+              f"({fl_line_pct:.1f}%)")
 
     # Breakdown by test type
     print("\n  Test type              Passed")
     print(f"  {'-'*35}")
     test_types = ["numeric_block", "grid_lookup", "delayed_matrix", "binding", "record_search"]
-    type_names = ["Numeric block recall", "Grid cell lookup", "Delayed matrix mult", "Key-value binding", "Record search"]
+    type_names = ["Numeric block recall", "Grid cell lookup", "Delayed matrix mult",
+                  "Key-value binding", "Record search"]
     for ttype, tname in zip(test_types, type_names):
         t_results = [r for r in results if ttype in r["id"]]
         t_pass = sum(1 for r in t_results if r["passed"])
@@ -466,7 +516,8 @@ def compare(args):
             fl_lines_ok = sum(r["lines_correct"] for r in fl_results)
             fl_lines_total = sum(r["lines_total"] for r in fl_results)
             fl_line_pct = fl_lines_ok / fl_lines_total * 100 if fl_lines_total > 0 else 0
-            print(f"    {fl:>5}t: {fl_pass}/{fl_total} tests, {fl_lines_ok}/{fl_lines_total} lines ({fl_line_pct:.1f}%)")
+            print(f"    {fl:>5}t: {fl_pass}/{fl_total} tests, {fl_lines_ok}/{fl_lines_total} lines "
+                  f"({fl_line_pct:.1f}%)")
 
     # Divergent results
     print("\n  Divergent results:")
