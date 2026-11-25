@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Fixed
+- **`--cache-type-k q4_0` with `--no-flash-attn` wrote gibberish**, from 0.9.50: the answer ran on to the token limit, several times slower, on every machine tested (CPU, Metal, Jetson, Raspberry Pi). Before 0.9.50 that combination silently used f16 keys; since 0.9.50 the keys were really q4_0, which llama.cpp does not handle without flash attention either. A q4_0 key cache is now raised to q8_0 with or without flash attention, as it already was with it, and a line says so. Without flash attention, q4_1 and q5_0 keys work, if you need keys smaller than q8_0.
+
 ## 0.10.10 — 2026-11-25
 
 ### Added
