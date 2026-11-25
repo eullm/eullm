@@ -120,7 +120,8 @@ def test_the_rewritten_test_is_graded_as_the_original(tmp_path, monkeypatch, cap
     assert para_mod.main([str(items), "--servers", "http://x",
                                                "--out", str(para)]) == 0
     rewritten = load_eval_set(para)
-    originals = {json.loads(ln)["id"]: json.loads(ln) for ln in items.read_text(encoding="utf-8").splitlines()}
+    originals = {json.loads(ln)["id"]: json.loads(ln)
+                 for ln in items.read_text(encoding="utf-8").splitlines()}
     assert len(rewritten) == 3 * len(originals)
     for it in rewritten:
         src = originals[it.metadata["paraphrase_of"]]

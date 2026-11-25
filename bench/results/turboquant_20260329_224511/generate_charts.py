@@ -70,11 +70,13 @@ print("=" * 70)
 print("  TurboQuant Benchmark Results — Qwen3-14B @ RTX 5070 Ti 16GB")
 print("=" * 70)
 print()
-print(f"{'Cache Type':<22} {'Conc':>4} {'TTFT P50':>10} {'tok/s':>8} {'Agg tok/s':>10} {'Wall':>10}")
+print(f"{'Cache Type':<22} {'Conc':>4} {'TTFT P50':>10} "
+      f"{'tok/s':>8} {'Agg tok/s':>10} {'Wall':>10}")
 print("-" * 70)
 for label, concs in agg.items():
     for c, v in concs.items():
-        print(f"{label:<22} {c:>4} {v['ttft_p50']:>9.1f}ms {v['tps_p50']:>7.1f} {v['agg_tps']:>9.1f} {v['wall']:>9.0f}ms")
+        print(f"{label:<22} {c:>4} {v['ttft_p50']:>9.1f}ms {v['tps_p50']:>7.1f} "
+              f"{v['agg_tps']:>9.1f} {v['wall']:>9.0f}ms")
 print()
 
 # KV cache VRAM comparison
@@ -119,7 +121,8 @@ for i, (label, concs) in enumerate(agg.items()):
 
 ax.set_xlabel("Concurrent Requests", fontsize=12)
 ax.set_ylabel("Aggregate Throughput (tok/s)", fontsize=12)
-ax.set_title("TurboQuant KV Cache — Throughput Comparison\nQwen3-14B @ RTX 5070 Ti 16GB", fontsize=14, fontweight="bold")
+ax.set_title("TurboQuant KV Cache — Throughput Comparison\nQwen3-14B @ RTX 5070 Ti 16GB",
+             fontsize=14, fontweight="bold")
 ax.set_xticks(x_pos)
 ax.set_xticklabels(conc_levels)
 ax.legend(fontsize=11)
@@ -145,7 +148,8 @@ for i, (label, concs) in enumerate(agg.items()):
 
 ax.set_xlabel("Concurrent Requests", fontsize=12)
 ax.set_ylabel("Time to First Token (ms)", fontsize=12)
-ax.set_title("TurboQuant KV Cache — TTFT Comparison\nQwen3-14B @ RTX 5070 Ti 16GB", fontsize=14, fontweight="bold")
+ax.set_title("TurboQuant KV Cache — TTFT Comparison\nQwen3-14B @ RTX 5070 Ti 16GB", fontsize=14,
+             fontweight="bold")
 ax.set_xticks(x_pos)
 ax.set_xticklabels(conc_levels)
 ax.legend(fontsize=11)
@@ -170,7 +174,8 @@ for bar, ctx, vram in zip(bars, max_ctx, kv_vram):
             ha="center", va="bottom", fontsize=10, fontweight="bold")
 
 ax.set_ylabel("Max Context (K tokens)", fontsize=12)
-ax.set_title("Max Context Window on RTX 5070 Ti 16GB\nQwen3-14B Q4_K_M", fontsize=14, fontweight="bold")
+ax.set_title("Max Context Window on RTX 5070 Ti 16GB\nQwen3-14B Q4_K_M", fontsize=14,
+             fontweight="bold")
 ax.set_ylim(0, 160)
 ax.yaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f"{x:.0f}K"))
 ax.grid(axis="y", alpha=0.3)
@@ -197,7 +202,8 @@ for label, concs in agg.items():
                 ha="center", va="bottom", fontsize=11, fontweight="bold")
 
 ax.set_ylabel("Per-Request Throughput (tok/s)", fontsize=12)
-ax.set_title("Per-Request Speed @ 4 Concurrent\nQwen3-14B @ RTX 5070 Ti 16GB", fontsize=14, fontweight="bold")
+ax.set_title("Per-Request Speed @ 4 Concurrent\nQwen3-14B @ RTX 5070 Ti 16GB", fontsize=14,
+             fontweight="bold")
 ax.grid(axis="y", alpha=0.3)
 ax.set_axisbelow(True)
 plt.tight_layout()

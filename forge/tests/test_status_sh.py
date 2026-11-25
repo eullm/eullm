@@ -80,7 +80,8 @@ def runs(tmp_path):
 def watcher_log(runs: Path, name: str, need: Path, left: int = 100) -> None:
     (runs / "logs" / f"{name}-9.out").write_text(
         f"[wait] 2026-09-28 12:34:09 not yet: {need}\n"
-        f"[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 9, {left} tries left)\n", encoding="utf-8")
+        f"[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 9, {left} tries left)\n",
+        encoding="utf-8")
 
 
 def test_this_mornings_three_false_alarms_stay_quiet(tmp_path, runs):
@@ -91,7 +92,8 @@ def test_this_mornings_three_false_alarms_stay_quiet(tmp_path, runs):
     watcher_log(runs, "wait-eullm-stage3", done)
     (runs / "logs" / "wait-eullm-stage3-pkg-8.out").write_text(
         f"[wait] 2026-09-28 12:34:09 not yet: {runs / 'sft' / 'adapter_config.json'}\n"
-        "[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 8, 100 tries left)\n", encoding="utf-8")
+        "[wait] 2026-09-28 12:34:09 will look again in 20 minutes (job 8, 100 tries left)\n",
+        encoding="utf-8")
     out = run_status(
         tmp_path,
         queue=[("wait-eullm-stage3", "PENDING", "BeginTime"),
@@ -183,7 +185,8 @@ def test_an_opd_link_is_watched_like_the_other_training_links(tmp_path):
         "[opd] resuming at step 40\n"
         "[opd] adapter /w/eullm_runs/opd/v01/adapter\n", encoding="utf-8")
     (opd / "eullm-opd-12.out").write_text(
-        "[opd] adapter already at /w/eullm_runs/opd/v01/adapter: nothing left to do\n", encoding="utf-8")
+        "[opd] adapter already at /w/eullm_runs/opd/v01/adapter: nothing left to do\n",
+        encoding="utf-8")
     (opd / "eullm-opd-13.out").write_text(
         "[opd] resuming at step 0\nTraceback (most recent call last):\n", encoding="utf-8")
     out = run_status(tmp_path, queue=[],
@@ -208,8 +211,10 @@ def test_jobs_that_are_short_on_purpose_are_not_stalled_links(tmp_path, runs):
     """
     (runs / "logs" / "eullm-p3-gguf-62.out").write_text(
         "[quant] llama-quantize model-f16.gguf model-Q4_K_M.gguf\n", encoding="utf-8")
-    (runs / "logs" / "eullm-probe-61.out").write_text("[probe] backfill window found\n", encoding="utf-8")
-    (runs / "logs" / "eullm-p2-8b-63.out").write_text("[distill] nothing at all happened\n", encoding="utf-8")
+    (runs / "logs" / "eullm-probe-61.out").write_text("[probe] backfill window found\n",
+                                                      encoding="utf-8")
+    (runs / "logs" / "eullm-p2-8b-63.out").write_text("[distill] nothing at all happened\n",
+                                                      encoding="utf-8")
     out = run_status(tmp_path, queue=[],
                      ended=[("61", "eullm-probe", "COMPLETED", "00:00:21"),
                             ("62", "eullm-p3-gguf", "COMPLETED", "00:04:30"),
@@ -228,7 +233,8 @@ def test_grpo_progress_is_shown_and_a_stop_is_flagged(tmp_path, runs):
     (logs / "eullm-grpo-70.out").write_text(
         "[grpo] step 10/250 reward 0.712 (std 0.301) zero-std 0.45 kl 0.0010 len 88 31s/step\n"
         " 8%|##  | 20/250 [10:00<1:55:00, 30.0s/it]"     # tqdm's bar, no newline
-        "[grpo] step 20/250 reward 0.744 (std 0.288) zero-std 0.48 kl 0.0021 len 85 30s/step\n", encoding="utf-8")
+        "[grpo] step 20/250 reward 0.744 (std 0.288) zero-std 0.48 kl 0.0021 len 85 30s/step\n",
+        encoding="utf-8")
     (logs / "eullm-grpo-71.out").write_text(
         "[grpo] step 10/250 reward 0.990 (std 0.010) zero-std 0.98 kl 0.0001 len 60 30s/step\n"
         "[grpo] STOP: 20 steps in a row with 98% of groups all-equal (step 30): "
@@ -313,7 +319,7 @@ echo "account                start         end         total        localCluster
 echo "                                             (local h)   Consumed(local h)     (local h)               %      (local h)         (local h)"
 echo "---------------------------------------------------------------------"
 echo "AIFAC_P02_1147      20000101    29991231         40000               23616         23616            59.0         19672               6818"
-""")
+""")  # noqa: E501
     out = run_status(tmp_path, queue=[("eullm-grpo", "RUNNING", "None")], ended=[])
     assert "bill (saldo -b, AIFAC_P02_1147): 23616 of 40000 local hours, 59.0%; " \
            "the even pace is" in out
@@ -334,7 +340,8 @@ def test_opd_progress_and_case_law_results_are_shown(tmp_path, runs, monkeypatch
     repo_logs.mkdir()
     (repo_logs / "eullm-cds-exam-9.out").write_text(
         "[cds-exam] v04-4b-q4: 1200 questions; source ruling retrieved 0.350, cited 0.069; "
-        "answers citing only rulings they were given 0.677 -> /w/answers-v04-4b-q4.jsonl\n", encoding="utf-8")
+        "answers citing only rulings they were given 0.677 -> /w/answers-v04-4b-q4.jsonl\n",
+        encoding="utf-8")
     monkeypatch.setenv("EULLM_REPO_LOGS", str(repo_logs))
     out = run_status(tmp_path, queue=[("eullm-opd", "RUNNING", "None")], ended=[])
     assert "     [opd] step 1/60 kl 0.7665" in out

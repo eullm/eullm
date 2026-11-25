@@ -53,7 +53,8 @@ DASH_C_SINGLE = re.compile(INTERP + r"[^\n'\"]*?-c\s+'([^']*)'", re.DOTALL)
 DASH_C_DOUBLE = re.compile(INTERP + r"[^\n'\"]*?-c\s+\"((?:[^\"\\]|\\.)*)\"", re.DOTALL)
 # PowerShell reads and writes with the system's ANSI code page unless told
 # otherwise (Windows PowerShell 5.1, the one install.ps1 meets on most PCs).
-PS_TEXT = re.compile(r"\b(Get-Content|Set-Content|Add-Content|Out-File|Import-Csv|Export-Csv)\b", re.IGNORECASE)
+PS_TEXT = re.compile(r"\b(Get-Content|Set-Content|Add-Content|Out-File|Import-Csv|Export-Csv)\b",
+                     re.IGNORECASE)
 
 
 def is_true(node: ast.expr) -> bool:
@@ -88,9 +89,11 @@ def problems(tree: ast.AST, embedded: bool) -> list[tuple[int, str]]:
         if not embedded:
             continue  # ruff's PLW1514 covers the open() builtin in .py files
         # open(file, mode, buffering, encoding): the fourth by position
-        if isinstance(f, ast.Name) and name == "open" and "encoding" not in kw and len(node.args) < 4:
+        if (isinstance(f, ast.Name) and name == "open" and "encoding" not in kw
+                and len(node.args) < 4):
             mode = kw.get("mode") or (node.args[1] if len(node.args) > 1 else None)
-            binary = isinstance(mode, ast.Constant) and isinstance(mode.value, str) and "b" in mode.value
+            binary = (isinstance(mode, ast.Constant) and isinstance(mode.value, str)
+                      and "b" in mode.value)
             if not binary:
                 found.append((node.lineno, "open() in text mode without encoding="))
     return found
@@ -162,11 +165,13 @@ def main(argv: list[str]) -> int:
                     continue  # shell expansions in an unquoted here-document: not Python as written
                 places += [(first + line - 1, why) for line, why in problems(tree, embedded=True)]
         for line, why in places:
-            shown = path.resolve().relative_to(ROOT) if path.resolve().is_relative_to(ROOT) else path
+            shown = (path.resolve().relative_to(ROOT) if path.resolve().is_relative_to(ROOT)
+                     else path)
             print(f"{shown}:{line}: {why}")
             bad += 1
     if bad:
-        print(f"\n{bad} place(s) read or write text without naming its encoding: add encoding=\"utf-8\""
+        print(f"\n{bad} place(s) read or write text without naming its encoding: "
+              "add encoding=\"utf-8\""
               " (and errors=\"replace\" where the bytes may not be UTF-8).", file=sys.stderr)
     return 1 if bad else 0
 

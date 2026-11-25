@@ -334,7 +334,8 @@ def print_timeline(results: list[RequestResult], wall_start: float):
 
         ttft = r.ttft_ms
         tps = r.tokens_per_sec
-        print(f"  req{r.request_id:>2} |{bar}| TTFT {ttft:>6.0f}ms  {tps:>5.1f} tok/s  {r.token_count:>3} tokens")
+        print(f"  req{r.request_id:>2} |{bar}| TTFT {ttft:>6.0f}ms  {tps:>5.1f} tok/s  "
+              f"{r.token_count:>3} tokens")
 
     print(f"         {''.ljust(width)}")
     print(f"         0{''.ljust(width - 6)}{duration * 1000:.0f}ms")
@@ -348,16 +349,19 @@ def print_verdict(overlap: dict, interleaving: dict, label: str):
     # Overlap verdict
     if overlap.get("is_parallel"):
         pct = overlap["overlap_ratio"] * 100
-        print(f"    Overlap:      YES — {overlap['overlapping_pairs']}/{overlap['total_pairs']} pairs overlap ({pct:.0f}%)")
+        print(f"    Overlap:      YES — {overlap['overlapping_pairs']}/{overlap['total_pairs']} "
+              f"pairs overlap ({pct:.0f}%)")
     else:
         print("    Overlap:      NO  — requests appear sequential")
 
     # Interleaving verdict
     if interleaving.get("is_interleaved"):
         rate = interleaving["transition_rate"] * 100
-        print(f"    Interleaving: YES — {interleaving['transitions']} context switches ({rate:.0f}% transition rate)")
+        print(f"    Interleaving: YES — {interleaving['transitions']} context switches "
+              f"({rate:.0f}% transition rate)")
         print(f"                  (expected sequential: {interleaving['expected_sequential']}, "
-              f"parallel: {interleaving['expected_parallel']}, actual: {interleaving['transitions']})")
+              f"parallel: {interleaving['expected_parallel']}, actual: "
+              f"{interleaving['transitions']})")
     else:
         print("    Interleaving: NO  — tokens arrive in sequence, not interleaved")
         if "transitions" in interleaving:
@@ -366,7 +370,8 @@ def print_verdict(overlap: dict, interleaving: dict, label: str):
                   f"parallel: {interleaving['expected_parallel']})")
 
     # Final verdict
-    is_truly_parallel = overlap.get("is_parallel", False) and interleaving.get("is_interleaved", False)
+    is_truly_parallel = (overlap.get("is_parallel", False)
+                         and interleaving.get("is_interleaved", False))
     if is_truly_parallel:
         print("    VERDICT:      REAL PARALLEL PROCESSING")
     elif overlap.get("is_parallel"):
@@ -378,22 +383,38 @@ def print_verdict(overlap: dict, interleaving: dict, label: str):
 # ── Main benchmark loop ──────────────────────────────────────────────────────
 
 PROMPTS = [
-    "Write a detailed essay about the history of Rome from its founding to the fall of the Western Roman Empire.",
-    "Explain the principles of quantum mechanics, including wave-particle duality, uncertainty principle, and quantum entanglement.",
-    "Describe the complete process of photosynthesis in plants, from light absorption to glucose production.",
-    "Analyze the causes and consequences of the French Revolution, including political, social, and economic factors.",
-    "Explain how modern CPUs work, from transistors to instruction pipelines, cache hierarchies, and branch prediction.",
-    "Describe the evolution of human language, from proto-languages to modern linguistic diversity and language families.",
-    "Explain the fundamentals of general relativity, including spacetime curvature, gravitational waves, and black holes.",
-    "Analyze the Industrial Revolution and its impact on society, technology, economics, and the environment.",
-    "Describe the human immune system in detail, including innate and adaptive immunity, antibodies, and T-cells.",
-    "Explain the history and development of the Internet, from ARPANET to the modern World Wide Web.",
-    "Analyze the economic theories of Adam Smith, Karl Marx, and John Maynard Keynes and their lasting influence.",
-    "Describe the geological history of Earth, from formation to the present day, including major extinction events.",
-    "Explain the principles of machine learning, from linear regression to deep neural networks and transformers.",
-    "Analyze the political philosophy of democracy, from ancient Athens to modern representative systems.",
-    "Describe the solar system in detail, including all planets, their moons, the asteroid belt, and the Kuiper belt.",
-    "Explain the history of mathematics from ancient Babylon and Egypt through calculus and modern abstract algebra.",
+    "Write a detailed essay about the history of Rome from its founding to the fall of the Western "
+    "Roman Empire.",
+    "Explain the principles of quantum mechanics, including wave-particle duality, uncertainty "
+    "principle, and quantum entanglement.",
+    "Describe the complete process of photosynthesis in plants, from light absorption to glucose "
+    "production.",
+    "Analyze the causes and consequences of the French Revolution, including political, social, "
+    "and economic factors.",
+    "Explain how modern CPUs work, from transistors to instruction pipelines, cache hierarchies, "
+    "and branch prediction.",
+    "Describe the evolution of human language, from proto-languages to modern linguistic diversity "
+    "and language families.",
+    "Explain the fundamentals of general relativity, including spacetime curvature, gravitational "
+    "waves, and black holes.",
+    "Analyze the Industrial Revolution and its impact on society, technology, economics, and the "
+    "environment.",
+    "Describe the human immune system in detail, including innate and adaptive immunity, "
+    "antibodies, and T-cells.",
+    "Explain the history and development of the Internet, from ARPANET to the modern World Wide "
+    "Web.",
+    "Analyze the economic theories of Adam Smith, Karl Marx, and John Maynard Keynes and their "
+    "lasting influence.",
+    "Describe the geological history of Earth, from formation to the present day, including major "
+    "extinction events.",
+    "Explain the principles of machine learning, from linear regression to deep neural networks "
+    "and transformers.",
+    "Analyze the political philosophy of democracy, from ancient Athens to modern representative "
+    "systems.",
+    "Describe the solar system in detail, including all planets, their moons, the asteroid belt, "
+    "and the Kuiper belt.",
+    "Explain the history of mathematics from ancient Babylon and Egypt through calculus and modern "
+    "abstract algebra.",
 ]
 
 
@@ -450,7 +471,8 @@ async def main():
         help="Comma-separated concurrency levels (default: 1,2,4,8)"
     )
     parser.add_argument("--tokens", type=int, default=100, help="Tokens per request (default: 100)")
-    parser.add_argument("--rounds", type=int, default=1, help="Rounds per concurrency level (default: 1)")
+    parser.add_argument("--rounds", type=int, default=1,
+                        help="Rounds per concurrency level (default: 1)")
     parser.add_argument("--warmup", action="store_true", help="Send a warmup request first")
     parser.add_argument("--json", default=None, help="Write JSON results to file")
 
@@ -523,15 +545,18 @@ async def main():
 
                 if ttfts:
                     stats = compute_latency_stats(ttfts)
-                    print(f"    TTFT:           P50={stats['p50']:.0f}ms  P95={stats['p95']:.0f}ms  "
+                    print(f"    TTFT:           P50={stats['p50']:.0f}ms  "
+                          f"P95={stats['p95']:.0f}ms  "
                           f"min={stats['min']:.0f}ms  max={stats['max']:.0f}ms")
                 if totals:
                     stats = compute_latency_stats(totals)
-                    print(f"    Total latency:  P50={stats['p50']:.0f}ms  P95={stats['p95']:.0f}ms  "
+                    print(f"    Total latency:  P50={stats['p50']:.0f}ms  "
+                          f"P95={stats['p95']:.0f}ms  "
                           f"min={stats['min']:.0f}ms  max={stats['max']:.0f}ms")
                 if per_req_tps:
                     stats = compute_latency_stats(per_req_tps)
-                    print(f"    Per-req tok/s:  P50={stats['p50']:.1f}  min={stats['min']:.1f}  max={stats['max']:.1f}")
+                    print(f"    Per-req tok/s:  P50={stats['p50']:.1f}  min={stats['min']:.1f}  "
+                          f"max={stats['max']:.1f}")
 
             # Parallelism analysis (only for concurrency > 1)
             if conc > 1:
@@ -574,7 +599,8 @@ async def main():
     print(f"\n{'=' * 80}")
     print(f"  SUMMARY TABLE — {label}")
     print(f"{'=' * 80}")
-    print(f"  {'Conc':>6} | {'Wall (ms)':>10} | {'Throughput':>12} | {'TTFT P50':>10} | {'Parallel?':>10}")
+    print(f"  {'Conc':>6} | {'Wall (ms)':>10} | {'Throughput':>12} | {'TTFT P50':>10} | "
+          f"{'Parallel?':>10}")
     print(f"  {'─' * 6}-+-{'─' * 10}-+-{'─' * 12}-+-{'─' * 10}-+-{'─' * 10}")
 
     for entry in all_json_results:
@@ -588,7 +614,8 @@ async def main():
         if conc > 1 and "overlap" in entry:
             parallel = "YES" if entry["overlap"].get("is_parallel") else "NO"
 
-        print(f"  {conc:>6} | {wall:>10.0f} | {tput:>10.1f}/s | {ttft_p50:>8.0f}ms | {parallel:>10}")
+        print(f"  {conc:>6} | {wall:>10.0f} | {tput:>10.1f}/s | "
+              f"{ttft_p50:>8.0f}ms | {parallel:>10}")
 
     print()
 

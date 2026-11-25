@@ -127,7 +127,8 @@ def main() -> int:
         "--size-mb",
         type=int,
         default=512,
-        help="private buffer size PER THREAD in MiB (default 512; must far exceed last-level cache)",
+        help="private buffer size PER THREAD in MiB "
+             "(default 512; must far exceed last-level cache)",
     )
     p.add_argument("--repeats", type=int, default=4, help="passes over the buffer per timed round")
     p.add_argument("--rounds", type=int, default=3, help="timed rounds; the best one is reported")
