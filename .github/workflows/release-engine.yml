@@ -6,8 +6,9 @@ on:
       - "engine-v*"
       - "EuLLM-v*"
   # Manual dispatch runs only build-arm-cix-p1, build-vulkan, build-rocm and
-  # build-windows-vulkan (and, asked for by name, build-cuda and
-  # build-windows-cuda), so any of them can be iterated on from the Actions
+  # build-windows-vulkan (and, asked for by name, build-cuda,
+  # build-windows-cuda, and `gate`: build-linux-cpu with the answer check
+  # that guards every release), so any of them can be iterated on from the Actions
   # tab without a real tag, without paying for the rest of the release matrix
   # (Windows CUDA alone is a ~50 min cold build), and without ever creating a
   # GitHub Release (the `release` job only runs on an actual tag push).
@@ -26,6 +27,7 @@ on:
         default: all
         options:
           - all
+          - gate
           - cuda
           - rocm
           - vulkan
@@ -170,6 +172,9 @@ jobs:
           set -euo pipefail
           want="${TAG#EuLLM-v}"
           want="${want#engine-v}"
+          # A release candidate (EuLLM-v0.10.20-rc1) carries the version it
+          # is a candidate for: the suffix is the tag's, not the crate's.
+          want="${want%%-*}"
           # Anchored: a dependency's version is `foo = { version = "…" }` or
           # `foo = "…"`, never a line starting with `version`.
           have=$(grep -m1 '^version = ' engine/Cargo.toml | cut -d'"' -f2)
@@ -349,7 +354,9 @@ jobs:
   # untouched; a separate job mirroring build-cuda's proven container
   # recipe is simpler than that gets right the first time.
   build-linux-cpu:
-    if: ${{ github.event_name == 'push' }}
+    # Also asked for by `job: gate`, to run the answer check on a commit
+    # before it is tagged.
+    if: ${{ github.event_name == 'push' || inputs.job == 'gate' }}
     runs-on: ubuntu-22.04
     container:
       image: rockylinux:8
@@ -2592,6 +2599,55 @@ jobs:
           name: eullm-windows-x64-store-msix
           path: eullm-windows-x64-store.msix
 
+  # ── The answers are checked before anything is published ──────────────
+  #
+  # The Linux CPU binary of the release loads qwen3-0.6b and answers three
+  # questions with known answers at temperature 0, under each KV cache
+  # setting in tools/answer_check.py (the default, q8_0 and q4_0 values,
+  # four-bit keys with and without flash attention). An answer passes when it
+  # holds the expected word and the model stopped on its own. If one fails,
+  # `release` does not run and nothing is published.
+  #
+  # Added after 0.9.50, 0.9.60 and 0.10.0 went out writing gibberish with
+  # `--cache-type-k q4_0 --no-flash-attn` (issue #140): the workflow built
+  # the binaries and published them without running one, and the unit tests
+  # cannot see a fault that needs a model loaded. This check, run on 0.10.0,
+  # fails that setting; on 0.10.10 every setting passes (25-11-2026).
+  #
+  # CPU only: GitHub's runners have no GPU, so Metal, CUDA, ROCm and Vulkan
+  # are still covered by testers, on a release candidate (EuLLM-vX.Y.Z-rc1:
+  # a pre-release, never `latest`, no Store package) when a release touches
+  # inference. `job: gate` runs this and build-linux-cpu on any branch, to
+  # check a commit before it is tagged.
+  answer-check:
+    name: Answers checked on the Linux CPU binary
+    needs: build-linux-cpu
+    if: ${{ !cancelled() && (github.event_name == 'push' || inputs.job == 'gate') }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      # Not uploaded again: `release` publishes every artifact of the run.
+      - name: Download the Linux CPU binary
+        uses: actions/download-artifact@v8
+        with:
+          name: eullm-linux-x64
+          path: bin
+
+      # The model, about 500 MB, pulled once and kept: the check must not
+      # depend on Hugging Face being up at release time more than once.
+      - name: Model cache
+        uses: actions/cache@v6
+        with:
+          path: models
+          key: answer-check-qwen3-0.6b-v1
+
+      - name: Check the answers under each KV cache setting
+        run: |
+          chmod +x bin/eullm-linux-x64
+          python3 tools/answer_check.py --binary bin/eullm-linux-x64 --models-dir models --pull
+
   release:
     needs:
       - require_green_ci
@@ -2608,22 +2664,26 @@ jobs:
       - build-windows-vulkan
       - build-windows-rocm
       - build-windows-msix
+      - answer-check
     # Run as long as at least one upstream job built something. We never
     # want a single failing build to nuke a release after CI on the others.
     # Also never run on a manual workflow_dispatch (that's only for testing
     # build-arm-cix-p1 in isolation, and there's no real tag to attach a
     # release to on that trigger).
     #
-    # `require_green_ci` is the one upstream job that is NOT covered by that
-    # graceful degradation: `!cancelled()` deliberately lets this job run even
-    # when needs failed or were skipped, so without naming its result
-    # explicitly a failed gate would skip the builds and then publish a release
-    # with nothing but the source archives attached.
+    # `require_green_ci`, `require_version_match` and `answer-check` are the
+    # upstream jobs NOT covered by that graceful degradation: `!cancelled()`
+    # deliberately lets this job run even when needs failed or were skipped,
+    # so without naming their results explicitly a failed gate would skip the
+    # builds and then publish a release with nothing but the source archives
+    # attached. A release whose answers were not checked, because the check
+    # failed or the Linux CPU build it runs on did, is not published.
     if: >-
       ${{ !cancelled()
           && github.event_name == 'push'
           && needs.require_green_ci.result == 'success'
-          && needs.require_version_match.result == 'success' }}
+          && needs.require_version_match.result == 'success'
+          && needs.answer-check.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
