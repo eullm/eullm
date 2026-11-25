@@ -1557,7 +1557,10 @@ does. It opens the Vulkan library when it starts instead of needing it to
 start, so it still runs in a CUDA container or on a server without Vulkan;
 where that leaves an AMD or Intel Arc card idle, a box on the terminal and a
 banner at the top of the chat say so, with the command that installs Vulkan.
-The datacenter build (A100/H100) and the Windows CUDA build stay CUDA only.
+Since 0.10.10 the Windows CUDA ZIP (`eullm-windows-x64-cuda-13.1.zip`) carries
+Vulkan too, the same way; on Windows the Vulkan library comes with the
+graphics driver of every vendor, so there is nothing to install. The
+datacenter build (A100/H100) stays CUDA only.
 
 To build it yourself on Debian or Ubuntu, Vulkan's build needs its headers,
 the shader compiler and the SPIR-V headers besides CUDA's toolkit:

@@ -620,10 +620,12 @@ Le voci sotto sono da misurare prima di farle, una per volta.
   circa 30-33 tok/s; una 32 GB conta di più sui modelli che oggi non stanno
   nelle GPU (un 70B Q4). La P100 (sm_60) non ha `dp4a`: lettura dei prompt
   più lenta.
-- [ ] **MG-G · Un binario `cuda-vulkan` tra quelli rilasciati**, per chi ha
-  due schede di marche diverse e non compila: una riga in più nella matrice
-  di `release-engine.yml` (Linux x64), con i pacchetti Vulkan nell'immagine
-  di build.
+- [x] **MG-G · Vulkan nei binari CUDA rilasciati**, per chi ha due schede di
+  marche diverse e non compila: `eullm-linux-x64-cuda-13.1` dalla 0.10.0
+  (glslc e SPIR-V headers da shaderc nell'immagine Rocky 8),
+  `eullm-windows-x64-cuda-13.1.zip` dalla 0.10.10 (Vulkan SDK di LunarG). Il
+  loader è aperto a runtime (patch `0017`), quindi partono anche dove Vulkan
+  manca. La build datacenter resta solo CUDA.
 
 ---
 
