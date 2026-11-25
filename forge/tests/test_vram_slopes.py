@@ -37,7 +37,8 @@ def write_job(queue: Path, job: str) -> None:
         f"[{iso(T0 + 6 * 3600)}] failed   long-32b-aaaaaaaaaa after 21600s",
         f"[{iso(T0 + 6 * 3600)}] done     long-control-14b-bbbbbbbbbb after 21600s",
     ]
-    (queue / "logs" / f"eullm-campaign-{job}.out").write_text("\n".join(out) + "\n", encoding="utf-8")
+    (queue / "logs" / f"eullm-campaign-{job}.out").write_text(
+        "\n".join(out) + "\n", encoding="utf-8")
     with open(queue / "results" / f"{job}.node.jsonl", "w", encoding="utf-8") as f:
         for i in range(0, 6 * 3600 + 1, 60):
             t = T0 + i
@@ -103,7 +104,8 @@ def test_another_sites_job_output_is_found(tmp_path, capsys):
     write_job(tmp_path, "2326571")
     logs = tmp_path / "logs"
     (logs / "eullm-campaign-2326571.out").rename(logs / "eullm-gh200-2326571.out")
-    (logs / "eullm-summary-2326571.out").write_text("nothing of the runner's here\n", encoding="utf-8")
+    (logs / "eullm-summary-2326571.out").write_text(
+        "nothing of the runner's here\n", encoding="utf-8")
     assert vram_slopes.job_output(str(tmp_path), "2326571").endswith("eullm-gh200-2326571.out")
     assert vram_slopes.main(["2326571", "--queue", str(tmp_path)]) == 0
     assert "long-32b-aaaaaaaaaa" in capsys.readouterr().out
