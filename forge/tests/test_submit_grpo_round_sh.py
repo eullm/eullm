@@ -235,7 +235,8 @@ def test_the_merged_weights_nothing_needs_are_removed_from_the_scratch(tmp_path)
     # the symlink stays, where remerge_round.py writes the weights back
     assert (grpo / "d" / "merged").is_symlink() and (grpo / "d" / "gguf").is_dir()
     assert "merged weights of d removed" in r.stdout
-    assert (grpo / "jg-x" / "start").read_text(encoding="utf-8").strip() == str(grpo / "b" / "merged")
+    assert ((grpo / "jg-x" / "start").read_text(encoding="utf-8").strip()
+            == str(grpo / "b" / "merged"))
 
 
 def test_the_start_of_a_round_not_packaged_yet_is_kept(tmp_path):
@@ -276,4 +277,5 @@ def test_nothing_is_removed_while_the_scratch_has_room(tmp_path):
     r = _run({**env, "GRPO_MERGED_ROOT": str(root), "GRPO_KEEP_MERGED": "0",
               "GRPO_PRUNE_AT": "101"}, "jg-x", str(Path(env["WORK"]) / "start"), "1", "750")
     assert r.returncode == 0, r.stderr + r.stdout
-    assert {"a", "b"} <= {p.name for p in root.iterdir()} and "removed from the scratch" not in r.stdout
+    assert ({"a", "b"} <= {p.name for p in root.iterdir()}
+            and "removed from the scratch" not in r.stdout)
