@@ -1237,6 +1237,21 @@ own worktree, label `v090f`, round `r-v090f`, the campaigns of `r-v090` with
 4-hour jobs; behind them by dependency, under `v090f-long`, the soaks no
 4-hour job holds, once more on the binary the next release is made from.
 
+26-11-2026: no session from 19-11. `v090f`'s round and soaks were queued to
+about 23-11; what they gave, and how many days the queue stood empty after
+them, is read today. Meanwhile eight releases, 0.9.1 to 0.10.10 (25-11),
+among them what changes inference: llama.cpp b12632 in 0.9.50 (Inkling 2's
+looped architecture; patch `0013` dropped, so the ROCm build of 0.10.10 is
+its first on the MI250X), the answers read in each family's own format
+(0.9.60), the MoE split settled on what llama.cpp measures before the load
+and a micro-batch whose buffer does not fit falling back to 512 (both
+0.9.60), several requests at once for models with a projector (0.9.1).
+Queued: the tag `EuLLM-v0.10.10` built in its own worktree (`eullm-v01010`,
+`eullm-target/v01010`), label `v01010`, round `r-v01010`, the campaigns of
+`r-v090f` and the same points set aside, two chains of 4-hour jobs, and
+behind them by dependency, under `v01010-long`, the soaks no 4-hour job
+holds: about four days, to 30-11.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
