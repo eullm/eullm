@@ -80,6 +80,19 @@ impl LlamaTimings {
         self.timings.n_eval
     }
 
+    /// EuLLM: how many times a compute graph was reused instead of built
+    /// again (llama.cpp's graph reuse).
+    #[must_use]
+    pub fn n_reused(&self) -> i32 {
+        self.timings.n_reused
+    }
+
+    /// EuLLM: graph allocations that kept their size, and that changed it.
+    #[must_use]
+    pub fn n_reallocs(&self) -> (i32, i32) {
+        (self.timings.n_reallocs_same, self.timings.n_reallocs_diff)
+    }
+
     /// Set the start time in milliseconds.
     pub fn set_t_start_ms(&mut self, t_start_ms: f64) {
         self.timings.t_start_ms = t_start_ms;

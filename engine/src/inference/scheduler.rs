@@ -276,8 +276,11 @@ impl StepTimes {
     }
 
     /// Log the window and start the next, once it is `STEPS_EVERY` long. A
-    /// window in which the scheduler only waited is not logged.
-    fn log_if_due(&mut self) {
+    /// window in which the scheduler only waited is not logged. `graphs` says
+    /// what llama.cpp counted of its compute graphs since the load: one built
+    /// again at every token costs its build and its CUDA graph's capture,
+    /// which a reused one does not.
+    fn log_if_due(&mut self, graphs: impl FnOnce() -> String) {
         if !self.on {
             return;
         }
@@ -286,7 +289,12 @@ impl StepTimes {
             return;
         }
         if self.steps > 0 || self.prefill_tokens > 0 {
-            tracing::debug!(target: STEPS_TARGET, "steps: {}", self.summary(wall));
+            tracing::debug!(
+                target: STEPS_TARGET,
+                "steps: {}{}",
+                self.summary(wall),
+                graphs()
+            );
         }
         *self = Self::new(true);
     }
@@ -2611,7 +2619,18 @@ fn run_scheduler_loop(
     loop {
         #[cfg(test)]
         drop(gate.lock().unwrap_or_else(|e| e.into_inner()));
-        times.log_if_due();
+        times.log_if_due(|| {
+            let t = ctx.timings();
+            let (same, diff) = t.n_reallocs();
+            format!(
+                " | llama.cpp since the load: {} tokens written, graphs reused {}, allocated {} \
+                 ({} of them resized)",
+                t.n_eval(),
+                t.n_reused(),
+                same + diff,
+                diff
+            )
+        });
 
         // ── 0. Check shutdown flag ────────────────────────────────────
         if shutdown.load(Ordering::SeqCst) {
@@ -4314,7 +4333,7 @@ mod tests {
         let mut times = StepTimes::new(false);
         assert!(times.start().is_none());
         let since = times.since;
-        times.log_if_due();
+        times.log_if_due(String::new);
         assert_eq!(times.since, since);
         assert!(StepTimes::new(true).start().is_some());
     }
