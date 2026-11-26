@@ -815,6 +815,26 @@ JUPITER, named by its Slurm job id.
   rank 64, two epochs (e1-q27, links 3034522-3034524; GGUF, closed book,
   open book and regression 3034525-3034528).
 
+  **22-26 Nov: five days without a job.** The queue ran out on the 21st and
+  nothing ran until the 26th (355 node-hours left of 1,250 by Slurm). The
+  27B's memory step left no result (being looked into). What did finish:
+  the two models as released, in bf16 on the five sets (judged):
+
+  | | held-out | devbig | practical | practical held-out | LexIA |
+  |---|---:|---:|---:|---:|---:|
+  | Qwen3.8-27B | 195 + 7 | 418 + 25 | 76 + 1 | 44 + 2 | **17** |
+  | Qwen3.5-122B-A10B | 179 + 6 | 411 + 8 | 73 + 0 | 45 + 1 | 13 |
+  | g9prm-r6 (Q4) | 203 + 1 | 442 + 8 | 82 + 10 | 47 + 4 | 13 |
+
+  The 27B as released already answers the practical exam as the 9B
+  candidate does in full answers, and the LexIA traps better than any of
+  ours; the 122B is not a better teacher or judge on these sets. Three
+  rounds without made-up articles after g9prm-r6 (g9prmv) lose the closed
+  book (205 right against 269) and the rewritten traps (935-944 against
+  960): closed. The 4B: g4mv r4-r6 and a second seed (g4mw) stay where
+  g4mv-r2 is (devbig 446-449, held-out 197-202, practical 72-77, the trap
+  test 385-388); g4mv-r2 stays the candidate.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
