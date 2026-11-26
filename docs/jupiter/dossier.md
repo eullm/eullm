@@ -835,6 +835,20 @@ JUPITER, named by its Slurm job id.
   g4mv-r2 is (devbig 446-449, held-out 197-202, practical 72-77, the trap
   test 385-388); g4mv-r2 stays the candidate.
 
+  **26-11, the 27B's memory step on the cleaned corpus** (e1-q27: 74,765
+  examples, two epochs, LoRA rank 64, 6 h; GGUF Q4 through the engine):
+  held-out 169 + 12, devbig 393 + 37, practical 72 + 19, practical
+  held-out 38 + 10, the trap test 369, the rewritten traps 813, LexIA 12,
+  closed book 189 right; GSM8K / ARC-E / ARC-C 380 / 396 / 379, the
+  highest of any model here. As on the 9B, the memory step alone costs the
+  open book and the traps, which the GRPO rounds gave back there. Not yet
+  comparable with the 27B as released (measured in bf16 through
+  transformers, not as shipped): its Q4 through the engine is owed.
+  Queued: GRPO on the released 27B (g27m, the no-premise mix, four rounds;
+  g27v, without made-up articles, three), on e1-q27 (g27e, four rounds),
+  and the 9B candidate's whole path again on the cleaned corpus (e1-g9-cl,
+  then g9cla/b/c, eight rounds), each round as shipped.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
