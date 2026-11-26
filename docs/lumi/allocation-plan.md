@@ -1251,6 +1251,19 @@ Queued: the tag `EuLLM-v0.10.10` built in its own worktree (`eullm-v01010`,
 `r-v090f` and the same points set aside, two chains of 4-hour jobs, and
 behind them by dependency, under `v01010-long`, the soaks no 4-hour job
 holds: about four days, to 30-11.
+Read that evening: the queue stood empty from 24-11 (0.3 node-hours that day,
+0 on 25-11 and 26-11): `v090f`'s round ended 851 points done and 2 failed
+(GLM-5.3-Flash at two GCDs once more, on 19-11, and `ram-480b`'s third
+timeout on 20-11), its soaks 11 done, none failed, and nothing was queued
+behind them. 2,211 node-hours left, 380 ahead of the straight line (15.1
+days), from 432 on 19-11. 0.10.10 built (`eullm 0.10.10 (ROCm)
+[4afb91b6175a]`): 933 points planned, 60 set aside, 852 of 853 timed from
+earlier runs; two chains of 16 jobs of 4 hours ending in 24060845 and
+24060861 (24060830 and 24060846 running at once), and `v01010-long`'s 11
+soaks in a chain of 13 jobs of 8 hours, 24060909 to 24060921, after
+`afterany:24060845:24060861`. Submitting the 45 jobs took about an hour:
+`sbatch` was slow that evening. Covered to about 30-11; the next work goes
+in behind 24060921 by 29-11.
 
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
