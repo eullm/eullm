@@ -24,7 +24,7 @@
 //! user's: the cache already measures itself (`grow_moe_cache`), and several
 //! GPUs are balanced by `fit::balance_moe_split`.
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::num::NonZeroU32;
 
 use super::InferenceConfig;
@@ -207,7 +207,7 @@ pub(crate) fn run(
     {
         let gpus = crate::fit::gpu_devices();
         if gpus.len() > 1 {
-            return run_across_gpus(
+            let (across, speeds) = run_across_gpus(
                 config,
                 fit,
                 &gpus,
@@ -215,6 +215,11 @@ pub(crate) fn run(
                 ctx_size,
                 n_seq_max,
                 n_outputs_max,
+            )?;
+            let shape = (ctx_size, n_seq_max, n_outputs_max);
+            return Some(
+                one_gpu_if_faster(config, fit, &gpus, &across, &speeds, gpu_layers, shape)
+                    .unwrap_or(across),
             );
         }
     }
@@ -229,11 +234,121 @@ pub(crate) fn run(
     let info = crate::fit::read_gguf_info(&config.model_path)?;
     let layout = crate::fit::read_model_moe_layout(&config.model_path, info.n_layers)?;
     let path = CString::new(config.model_path.to_str()?).ok()?;
-    let n_layers = layout.expert_bytes_per_layer.len() as u32;
     let started = std::time::Instant::now();
+    let on = settle_on_gpu(
+        config,
+        fit,
+        &layout,
+        &path,
+        gpu_layers,
+        (ctx_size, n_seq_max, n_outputs_max),
+        config.n_cpu_moe,
+        None,
+    )?;
+    tracing::info!(
+        "Measured on the GPU: {} for the model, its context and compute buffer with the experts \
+         of {} layers in RAM and a micro-batch of {}, against {} available ({} measures, \
+         {:.1}s)",
+        crate::fit::gib(on.settled.used),
+        on.settled.n_cpu_moe,
+        on.n_ubatch,
+        crate::fit::gib(on.budget),
+        on.measures,
+        started.elapsed().as_secs_f64(),
+    );
+    if !on.settled.fits {
+        tracing::warn!(
+            "Measured on the GPU: no split of the experts fits beside the {} kept free; loading \
+             with the experts of {} layers in RAM anyway",
+            crate::fit::gib(config.vram_reserve + fit.keep_bytes),
+            on.settled.n_cpu_moe
+        );
+    }
+    if on.settled.n_cpu_moe == config.n_cpu_moe
+        && on.n_ubatch == config.n_ubatch
+        && on.op_offload == config.op_offload
+    {
+        return None;
+    }
+    let line = format!("Measured placement: {}", on.changes(config).join("; "));
+    tracing::info!("{line}");
+    crate::monitor::history::event("info", line);
+    Some(Measured {
+        n_cpu_moe: on.settled.n_cpu_moe,
+        n_ubatch: on.n_ubatch,
+        op_offload: on.op_offload,
+        tensor_split: None,
+    })
+}
 
+/// The context a measure is made for: `ctx_size` tokens over `n_seq_max`
+/// sequences with `n_outputs_max` logit rows.
+type ContextShape = (NonZeroU32, u32, u32);
+
+/// Where the experts settled on one GPU, and how.
+struct OnGpu {
+    settled: Settled,
+    n_ubatch: u32,
+    op_offload: bool,
+    /// What the GPU had for the model, after what is kept free.
+    budget: u64,
+    measures: u32,
+}
+
+impl OnGpu {
+    /// What differs from `config`, said for the log.
+    fn changes(&self, config: &InferenceConfig) -> Vec<String> {
+        let mut changes = Vec::new();
+        if self.settled.n_cpu_moe != config.n_cpu_moe {
+            changes.push(format!(
+                "the experts of {} layers in RAM instead of {}",
+                self.settled.n_cpu_moe, config.n_cpu_moe
+            ));
+        }
+        if self.op_offload != config.op_offload {
+            changes.push(
+                "the experts in RAM computed on the CPU while prompts are read, instead of on \
+                 the GPU: its copies of them did not fit beside the model (prompts are read \
+                 more slowly)"
+                    .to_string(),
+            );
+        }
+        if self.n_ubatch != config.n_ubatch {
+            changes.push(format!(
+                "prompts read {} tokens at a time instead of {} (--n-ubatch), whose compute \
+                 buffer would have kept more experts in RAM",
+                self.n_ubatch, config.n_ubatch
+            ));
+        }
+        changes
+    }
+}
+
+/// One GPU of several takes every layer: its index in ggml's order, and the
+/// `--tensor-split` that puts them there.
+struct OneOf {
+    index: usize,
+    tensor_split: Vec<f32>,
+}
+
+/// Settle the experts of a MoE model on one GPU: the one `config` loads on,
+/// or `one` of several. Measured from `start` layers' experts in RAM (see
+/// [`settle`]), at the plan's micro-batch and, where the plan raised it, at
+/// the default's; where no split fits, again without op_offload.
+#[allow(clippy::too_many_arguments)]
+fn settle_on_gpu(
+    config: &InferenceConfig,
+    fit: MeasuredFit,
+    layout: &crate::fit::MoeLayout,
+    path: &CStr,
+    gpu_layers: i32,
+    (ctx_size, n_seq_max, n_outputs_max): ContextShape,
+    start: u32,
+    one: Option<&OneOf>,
+) -> Option<OnGpu> {
+    let n_layers = layout.expert_bytes_per_layer.len() as u32;
     // What the GPU would hold, and its free memory, for a split and a
-    // micro-batch. One GPU only: several are balanced elsewhere.
+    // micro-batch.
     let measures = std::cell::Cell::new(0u32);
     let measure = |n_cpu_moe: u32, n_ubatch: u32, op_offload: bool| -> Option<(u64, u64)> {
         let mut probe = config.clone();
@@ -245,16 +360,26 @@ pub(crate) fn run(
             // experts in RAM; without op_offload there are none.
             probe.moe_prefetch_slots = 0;
         }
+        if let Some(one) = one {
+            probe.gpu_split = crate::gpu_split::GpuSplit {
+                mode: crate::gpu_split::SplitMode::default(),
+                tensor_split: one.tensor_split.clone(),
+            };
+        }
         let cparams = super::build_ctx_params(&probe, ctx_size)
             .with_n_seq_max(n_seq_max)
             .with_n_outputs_max(n_outputs_max);
         let rows = super::with_text_model_params(&probe, gpu_layers, |params| {
-            params.measure_device_memory(&path, &cparams)
+            params.measure_device_memory(path, &cparams)
         })
         .ok()??;
         measures.set(measures.get() + 1);
-        let [row] = rows.as_slice() else {
-            return None;
+        let row = match one {
+            None => match rows.as_slice() {
+                [row] => row,
+                _ => return None,
+            },
+            Some(one) => rows.get(one.index)?,
         };
         tracing::debug!(
             "Measured with the experts of {n_cpu_moe} layers in RAM, micro-batch {n_ubatch}: \
@@ -266,7 +391,7 @@ pub(crate) fn run(
         Some((row.total(), u64::try_from(row.free).unwrap_or(0)))
     };
 
-    let (planned_used, free) = measure(config.n_cpu_moe, config.n_ubatch, config.op_offload)?;
+    let (planned_used, free) = measure(start, config.n_ubatch, config.op_offload)?;
     let budget = free
         .saturating_sub(config.vram_reserve)
         .saturating_sub(fit.keep_bytes)
@@ -274,26 +399,20 @@ pub(crate) fn run(
     // The plan's own split is the first thing `settle` measures: measured once.
     let planned = std::cell::Cell::new(Some(planned_used));
     let settle_with = |n_ubatch: u32, op_offload: bool| {
-        settle(
-            config.n_cpu_moe,
-            &layout.expert_bytes_per_layer,
-            budget,
-            |n| {
-                if n == config.n_cpu_moe
-                    && n_ubatch == config.n_ubatch
-                    && op_offload == config.op_offload
-                    && let Some(used) = planned.take()
-                {
-                    return Some(used);
-                }
-                measure(n, n_ubatch, op_offload).map(|(used, _)| used)
-            },
-        )
+        settle(start, &layout.expert_bytes_per_layer, budget, |n| {
+            if n == start
+                && n_ubatch == config.n_ubatch
+                && op_offload == config.op_offload
+                && let Some(used) = planned.take()
+            {
+                return Some(used);
+            }
+            measure(n, n_ubatch, op_offload).map(|(used, _)| used)
+        })
     };
-    let settle_at = |n_ubatch: u32| settle_with(n_ubatch, config.op_offload);
-    let at_plan = settle_at(config.n_ubatch)?;
+    let at_plan = settle_with(config.n_ubatch, config.op_offload)?;
     let (settled, n_ubatch) = if fit.ubatch_raised && config.n_ubatch > super::DEFAULT_N_UBATCH {
-        match settle_at(super::DEFAULT_N_UBATCH) {
+        match settle_with(super::DEFAULT_N_UBATCH, config.op_offload) {
             Some(default) if prefer_default_ubatch(at_plan, default, n_layers) => {
                 (default, super::DEFAULT_N_UBATCH)
             }
@@ -319,61 +438,178 @@ pub(crate) fn run(
             _ => (settled, n_ubatch, config.op_offload),
         }
     };
-
-    let elapsed = started.elapsed();
-    tracing::info!(
-        "Measured on the GPU: {} for the model, its context and compute buffer with the experts \
-         of {} layers in RAM and a micro-batch of {n_ubatch}, against {} available ({} \
-         measures, {:.1}s)",
-        crate::fit::gib(settled.used),
-        settled.n_cpu_moe,
-        crate::fit::gib(budget),
-        measures.get(),
-        elapsed.as_secs_f64(),
-    );
-    if !settled.fits {
-        tracing::warn!(
-            "Measured on the GPU: no split of the experts fits beside the {} kept free; loading \
-             with the experts of {} layers in RAM anyway",
-            crate::fit::gib(config.vram_reserve + fit.keep_bytes),
-            settled.n_cpu_moe
-        );
-    }
-    if settled.n_cpu_moe == config.n_cpu_moe
-        && n_ubatch == config.n_ubatch
-        && op_offload == config.op_offload
-    {
-        return None;
-    }
-    let mut changes = Vec::new();
-    if settled.n_cpu_moe != config.n_cpu_moe {
-        changes.push(format!(
-            "the experts of {} layers in RAM instead of {}",
-            settled.n_cpu_moe, config.n_cpu_moe
-        ));
-    }
-    if op_offload != config.op_offload {
-        changes.push(
-            "the experts in RAM computed on the CPU while prompts are read, instead of on the \
-             GPU: its copies of them did not fit beside the model (prompts are read more slowly)"
-                .to_string(),
-        );
-    }
-    if n_ubatch != config.n_ubatch {
-        changes.push(format!(
-            "prompts read {n_ubatch} tokens at a time instead of {} (--n-ubatch), whose compute \
-             buffer would have kept more experts in RAM",
-            config.n_ubatch
-        ));
-    }
-    let line = format!("Measured placement: {}", changes.join("; "));
-    tracing::info!("{line}");
-    crate::monitor::history::event("info", line);
-    Some(Measured {
-        n_cpu_moe: settled.n_cpu_moe,
+    Some(OnGpu {
+        settled,
         n_ubatch,
         op_offload,
-        tensor_split: None,
+        budget,
+        measures: measures.get(),
+    })
+}
+
+/// What writing one token reads, in bytes, where a MoE model keeps it:
+/// each layer's own weights and its share of active experts, and the output
+/// layer. `active` is the experts a token uses over those a layer has.
+///
+/// The output layer is half of what the GGUF holds outside the layers (the
+/// input embedding, read a row at a time, being the other half); where the
+/// layers' own weights were not read, what is outside the experts is spread
+/// evenly over the layers and the output layer.
+fn token_bytes(layout: &crate::fit::MoeLayout, active: f64) -> (Vec<(f64, f64)>, f64) {
+    let n = layout.expert_bytes_per_layer.len();
+    let in_layers: u64 = layout.non_expert_bytes_per_layer.iter().sum();
+    let (own, output): (Vec<f64>, f64) = if in_layers > 0 {
+        (
+            layout
+                .non_expert_bytes_per_layer
+                .iter()
+                .map(|&b| b as f64)
+                .collect(),
+            layout.non_expert_bytes.saturating_sub(in_layers) as f64 / 2.0,
+        )
+    } else {
+        let each = layout.non_expert_bytes as f64 / (n + 1) as f64;
+        (vec![each; n], each)
+    };
+    let layers = own
+        .into_iter()
+        .zip(&layout.expert_bytes_per_layer)
+        .map(|(own, &experts)| (own, experts as f64 * active))
+        .collect();
+    (layers, output)
+}
+
+/// Seconds to write a token with the layers across GPUs: `counts[i]`
+/// positions on GPU `i` in ggml's order, the output layer the last
+/// position, each GPU reading at `speeds[i]` GB/s.
+pub fn seconds_across(layers: &[(f64, f64)], output: f64, counts: &[u32], speeds: &[f64]) -> f64 {
+    let mut gpu = 0usize;
+    let mut left = counts.first().copied().unwrap_or(0);
+    let mut seconds = 0.0;
+    for position in 0..=layers.len() {
+        while left == 0 && gpu + 1 < counts.len() {
+            gpu += 1;
+            left = counts[gpu];
+        }
+        let bytes = layers.get(position).map_or(output, |(own, experts)| own + experts);
+        seconds += bytes / (speeds.get(gpu).copied().unwrap_or(0.0).max(1.0) * 1e9);
+        left = left.saturating_sub(1);
+    }
+    seconds
+}
+
+/// Seconds to write a token with every layer on one GPU reading at `gpu`
+/// GB/s, but the experts of the first `n_cpu_moe` layers, which the CPU
+/// reads at `cpu` GB/s.
+pub fn seconds_one(layers: &[(f64, f64)], output: f64, n_cpu_moe: u32, gpu: f64, cpu: f64) -> f64 {
+    let (gpu, cpu) = (gpu.max(1.0) * 1e9, cpu.max(1.0) * 1e9);
+    let mut seconds = output / gpu;
+    for (i, (own, experts)) in layers.iter().enumerate() {
+        seconds += own / gpu;
+        seconds += experts / if (i as u32) < n_cpu_moe { cpu } else { gpu };
+    }
+    seconds
+}
+
+/// Roadmap MG-D. A MoE model across GPUs of different speeds, or on the
+/// fastest alone with the experts of some layers in RAM: which writes
+/// faster depends on how many layers would go to RAM. Inkling 2 Mini on an
+/// RTX 5070 Ti (840 GB/s) and a Radeon RX 6700 XT (340 GB/s on PCIe 3.0
+/// x2), 26-11-2026: UD-Q4_K_M 49.5 tokens/s on the 5070 Ti alone, 44.7
+/// with both; UD-Q4_K_XL, which leaves the experts of 9 layers in RAM
+/// alone, 32.8 alone and 39.4 with both. The CPU reads only the experts a
+/// token uses, as a GPU does, but more slowly.
+///
+/// Settles the fastest GPU alone, estimates the seconds a token takes each
+/// way from what each device reads ([`seconds_across`], [`seconds_one`]),
+/// says both in the log, and returns the fastest GPU's placement when it is
+/// the faster and fits; `None` keeps the placement across the GPUs.
+fn one_gpu_if_faster(
+    config: &InferenceConfig,
+    fit: MeasuredFit,
+    gpus: &[llama_cpp_sys_2::ggml_backend_dev_t],
+    across: &Measured,
+    speeds: &[f64],
+    gpu_layers: i32,
+    shape: ContextShape,
+) -> Option<Measured> {
+    let info = crate::fit::read_gguf_info(&config.model_path)?;
+    let layout = crate::fit::read_model_moe_layout(&config.model_path, info.n_layers)?;
+    if !layout.is_moe() {
+        return None;
+    }
+    let (n_expert, n_used) = (info.n_expert?, info.n_expert_used?);
+    if n_expert == 0 || n_used == 0 {
+        return None;
+    }
+    let active = f64::from(n_used) / f64::from(n_expert);
+    let counts: Vec<u32> = across.tensor_split.as_ref()?.iter().map(|&c| c as u32).collect();
+    let fastest = (0..speeds.len()).max_by(|&a, &b| speeds[a].total_cmp(&speeds[b]))?;
+    let path = CString::new(config.model_path.to_str()?).ok()?;
+    let started = std::time::Instant::now();
+
+    // SAFETY: a lookup in ggml's device registry.
+    let cpu_dev = unsafe {
+        llama_cpp_sys_2::ggml_backend_dev_by_type(
+            llama_cpp_sys_2::GGML_BACKEND_DEVICE_TYPE_CPU,
+        )
+    };
+    if cpu_dev.is_null() {
+        return None;
+    }
+    let cpu_speed = read_speed(cpu_dev, Some(config.threads as i32))?;
+
+    let mut tensor_split = vec![0.0f32; gpus.len()];
+    tensor_split[fastest] = (info.n_layers + 1) as f32;
+    let one = OneOf {
+        index: fastest,
+        tensor_split,
+    };
+    let on = settle_on_gpu(
+        config,
+        fit,
+        &layout,
+        &path,
+        gpu_layers,
+        shape,
+        0,
+        Some(&one),
+    )?;
+
+    let (layers, output) = token_bytes(&layout, active);
+    let all = seconds_across(&layers, output, &counts, speeds);
+    let alone = seconds_one(&layers, output, on.settled.n_cpu_moe, speeds[fastest], cpu_speed);
+    let alone_wins = on.settled.fits && alone < all;
+    let line = format!(
+        "MoE on several GPUs: writing estimated at {:.0} tokens/s across them, {:.0} on {} \
+         alone with the experts of {} layers in RAM{} (the CPU reads {:.0} GB/s, {} of {} \
+         experts a token): loading {} ({} measures, {:.1}s)",
+        1.0 / all,
+        1.0 / alone,
+        device_label(gpus[fastest]),
+        on.settled.n_cpu_moe,
+        if on.settled.fits { "" } else { ", which does not fit" },
+        cpu_speed,
+        n_used,
+        n_expert,
+        if alone_wins { "on that GPU alone" } else { "across the GPUs" },
+        on.measures,
+        started.elapsed().as_secs_f64(),
+    );
+    tracing::info!("{line}");
+    crate::monitor::history::event("info", line);
+    if !alone_wins {
+        return None;
+    }
+    let changes = on.changes(config);
+    if !changes.is_empty() {
+        tracing::info!("Measured placement: {}", changes.join("; "));
+    }
+    Some(Measured {
+        n_cpu_moe: on.settled.n_cpu_moe,
+        n_ubatch: on.n_ubatch,
+        op_offload: on.op_offload,
+        tensor_split: Some(one.tensor_split),
     })
 }
 
@@ -381,7 +617,7 @@ pub(crate) fn run(
 /// product over a 512 MiB f16 matrix, what writing a token mostly is.
 /// Measured on the card itself, a few milliseconds, so that the faster of
 /// two cards is known whatever they are. `None` when the card cannot run it.
-fn read_speed(dev: llama_cpp_sys_2::ggml_backend_dev_t) -> Option<f64> {
+fn read_speed(dev: llama_cpp_sys_2::ggml_backend_dev_t, threads: Option<i32>) -> Option<f64> {
     use llama_cpp_sys_2::{
         GGML_STATUS_SUCCESS, GGML_TYPE_F16, GGML_TYPE_F32, ggml_backend_alloc_ctx_tensors,
         ggml_backend_buffer_clear, ggml_backend_buffer_free, ggml_backend_dev_init,
@@ -399,6 +635,10 @@ fn read_speed(dev: llama_cpp_sys_2::ggml_backend_dev_t) -> Option<f64> {
         let backend = ggml_backend_dev_init(dev, std::ptr::null());
         if backend.is_null() {
             return None;
+        }
+        if let Some(threads) = threads {
+            // The CPU device: as many threads as inference runs with.
+            llama_cpp_sys_2::ggml_backend_cpu_set_n_threads(backend, threads);
         }
         let ctx = ggml_init(ggml_init_params {
             mem_size: ggml_tensor_overhead() * 8 + ggml_graph_overhead(),
@@ -530,13 +770,13 @@ fn run_across_gpus(
     ctx_size: NonZeroU32,
     n_seq_max: u32,
     n_outputs_max: u32,
-) -> Option<Measured> {
+) -> Option<(Measured, Vec<f64>)> {
     let info = crate::fit::read_gguf_info(&config.model_path)?;
     let path = CString::new(config.model_path.to_str()?).ok()?;
     let started = std::time::Instant::now();
     let speeds: Vec<f64> = gpus
         .iter()
-        .map(|&dev| read_speed(dev).unwrap_or(0.0))
+        .map(|&dev| read_speed(dev, None).unwrap_or(0.0))
         .collect();
     let labels: Vec<String> = gpus.iter().map(|&dev| device_label(dev)).collect();
     tracing::info!(
@@ -616,12 +856,13 @@ fn run_across_gpus(
             crate::fit::gib(config.vram_reserve)
         );
     }
-    Some(Measured {
+    let measured = Measured {
         n_cpu_moe: config.n_cpu_moe,
         n_ubatch: config.n_ubatch,
         op_offload: config.op_offload,
         tensor_split: Some(counts.iter().map(|&c| c as f32).collect()),
-    })
+    };
+    Some((measured, speeds))
 }
 
 #[cfg(test)]
@@ -629,6 +870,56 @@ mod tests {
     use super::*;
 
     const GIB: u64 = 1 << 30;
+
+    /// Ten layers of 0.1 GB own weights and 1 GB of experts each, a fifth of
+    /// them active; an output layer of 0.5 GB.
+    fn ten_layers() -> (Vec<(f64, f64)>, f64) {
+        (vec![(0.1e9, 0.2e9); 10], 0.5e9)
+    }
+
+    #[test]
+    fn across_gpus_each_device_reads_its_own_layers() {
+        let (layers, output) = ten_layers();
+        // 8 layers on a 1000 GB/s GPU, 2 and the output on a 100 GB/s one.
+        let t = seconds_across(&layers, output, &[8, 3], &[1000.0, 100.0]);
+        let want = 8.0 * 0.3e9 / 1000e9 + 2.0 * 0.3e9 / 100e9 + 0.5e9 / 100e9;
+        assert!((t - want).abs() < 1e-12, "{t} vs {want}");
+    }
+
+    #[test]
+    fn one_gpu_reads_the_experts_in_ram_at_the_cpus_speed() {
+        let (layers, output) = ten_layers();
+        let t = seconds_one(&layers, output, 3, 1000.0, 50.0);
+        let want = (10.0 * 0.1e9 + 7.0 * 0.2e9 + 0.5e9) / 1000e9 + 3.0 * 0.2e9 / 50e9;
+        assert!((t - want).abs() < 1e-12, "{t} vs {want}");
+        // No layer in RAM: everything at the GPU's speed.
+        let all_gpu = seconds_one(&layers, output, 0, 1000.0, 50.0);
+        assert!((all_gpu - 3.5e9 / 1000e9).abs() < 1e-12);
+    }
+
+    #[test]
+    fn the_faster_layout_depends_on_how_much_goes_to_ram() {
+        let (layers, output) = ten_layers();
+        let across = seconds_across(&layers, output, &[8, 3], &[840.0, 340.0]);
+        // Few experts in RAM: the fast GPU alone wins.
+        assert!(seconds_one(&layers, output, 1, 840.0, 150.0) < across);
+        // Many: the second GPU wins.
+        assert!(seconds_one(&layers, output, 6, 840.0, 150.0) > across);
+    }
+
+    #[test]
+    fn token_bytes_takes_the_active_share_of_the_experts() {
+        let layout = crate::fit::MoeLayout {
+            non_expert_bytes: 3_000,
+            non_expert_bytes_per_layer: vec![500, 500],
+            expert_bytes_per_layer: vec![8_000, 8_000],
+            largest_expert_tensor_bytes: 1_000,
+        };
+        let (layers, output) = token_bytes(&layout, 0.25);
+        assert_eq!(layers, vec![(500.0, 2_000.0), (500.0, 2_000.0)]);
+        // Outside the layers: 2,000, half of it the output layer.
+        assert_eq!(output, 1_000.0);
+    }
 
     /// A GPU that holds `fixed` plus the experts of the layers not in RAM,
     /// plus `copy` for the experts in RAM a micro-batch computes from.

@@ -81,6 +81,11 @@ pub struct GgufInfo {
     /// Its sliding-window layers, on a model that has them and says which
     /// (Gemma 2, 3 and 4, gpt-oss): see [`SlidingWindow`].
     pub window: Option<SlidingWindow>,
+    /// A MoE model's experts per layer (`<arch>.expert_count`) and those
+    /// each token uses (`<arch>.expert_used_count`): what writing a token
+    /// reads of them (see `measured_fit`).
+    pub n_expert: Option<u32>,
+    pub n_expert_used: Option<u32>,
 }
 
 /// A model's sliding-window attention layers, which keep only the last
@@ -441,6 +446,8 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
     let mut full_attention_interval: Option<u32> = None;
     let mut nextn_layers: Option<u32> = None;
     let mut context_length: Option<u32> = None;
+    let mut n_expert: Option<u32> = None;
+    let mut n_expert_used: Option<u32> = None;
     let mut architecture: Option<String> = None;
     // Sliding-window layers (see `SlidingWindow`): the window, which layers
     // have it (an array of flags, or a period), their head dimensions, and
@@ -539,6 +546,10 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             Some(&mut nextn_layers)
         } else if key_bytes.ends_with(b".context_length") {
             Some(&mut context_length)
+        } else if key_bytes.ends_with(b".expert_count") {
+            Some(&mut n_expert)
+        } else if key_bytes.ends_with(b".expert_used_count") {
+            Some(&mut n_expert_used)
         } else {
             None
         };
@@ -585,6 +596,9 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
             && nextn_layers.is_some()
             && context_length.is_some()
         {
+            // Not waiting for the expert counts, which a dense model never
+            // has: a MoE writes them with its attention dims, before
+            // `full_attention_interval` and `nextn_predict_layers`.
             break;
         }
     }
@@ -619,6 +633,8 @@ pub fn parse_gguf_header(data: &[u8]) -> Option<GgufInfo> {
         nextn_layers,
         context_length,
         window,
+        n_expert,
+        n_expert_used,
     })
 }
 
@@ -3795,6 +3811,8 @@ mod tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         }
     }
 
@@ -4079,6 +4097,8 @@ mod tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         };
         let free = 15 * 1024 * 1024 * 1024; // ~15 GiB free, 18.5 GB model
         let file = 18_500_000_000;
@@ -4224,6 +4244,8 @@ mod plan_offload_tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         }
     }
 
@@ -5836,6 +5858,21 @@ mod key_length_tests {
     /// write AFTER the attention dims, and `nextn_predict_layers`, which a
     /// model with an MTP head writes after that, so the fixture is shaped
     /// like one. A model without either reads on to the buffer's end.
+    /// A MoE model's expert counts: what writing a token reads of its
+    /// experts (`measured_fit`, roadmap MG-D).
+    #[test]
+    fn reads_the_expert_counts() {
+        let data = header(&[
+            (b"arch.block_count", 24),
+            (b"arch.expert_count", 128),
+            (b"arch.expert_used_count", 8),
+            (b"arch.expert_shared_count", 1),
+        ]);
+        let info = parse_gguf_header(&data).expect("parses");
+        assert_eq!(info.n_expert, Some(128));
+        assert_eq!(info.n_expert_used, Some(8));
+    }
+
     #[test]
     fn stops_reading_once_every_wanted_key_is_in_hand() {
         let data = header(&[
@@ -5879,6 +5916,8 @@ mod key_length_tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         };
         // The reported case: 14.38 GiB free on a 15.92 GiB card, 15.66 GiB
         // of weights, 4096 context, F16 cache.
@@ -5971,6 +6010,8 @@ mod key_length_tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         };
         let hybrid = GgufInfo {
             full_attention_interval: Some(4),
@@ -6010,6 +6051,8 @@ mod key_length_tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         };
         let assumed = GgufInfo {
             key_length: None,
@@ -6348,6 +6391,8 @@ mod moe_fit_tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         }
     }
 
@@ -6705,6 +6750,8 @@ mod balanced_split_tests {
             nextn_layers: None,
             context_length: None,
             window: None,
+            n_expert: None,
+            n_expert_used: None,
         }
     }
 

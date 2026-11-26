@@ -17,6 +17,7 @@ something changed, less so for understanding what it means.
 
 ### Added
 - **llama.cpp b12767** (llama.cpp 1.1.0): Inkling 2's graph does fewer operations per token (part of what Unsloth's own build gained), and two new architectures, Hunyuan V4 Flash (`hy_v4_flash`) and RAON-1 (`raon1`).
+- **A MoE model on two GPUs of different speeds goes where it writes faster**: across both cards, or on the faster alone with the experts of some layers in RAM. The engine measures how fast each card and the CPU read, estimates both ways from what a token reads, says both in the log and loads the faster. Inkling 2 Mini UD-Q4_K_M wrote 49.5 tokens/s on an RTX 5070 Ti alone and 44.7 with a Radeon RX 6700 XT beside it, while UD-Q4_K_XL, which leaves more experts in RAM, wrote 32.8 alone and 39.4 with both: until now the second card was always used.
 
 ### Fixed
 - **Inkling 2 Mini UD-Q4_K_XL ran out of VRAM on a 16 GB GPU** (`-c 16000`, RTX 5070 Ti alone): with some experts in RAM, reading a prompt runs their layers on the GPU on copies of them, and Inkling's loop keeps those copies until its last pass, so sending more experts to RAM freed nothing and the sizing loaded a split it had measured not to fit. Where no split fits, the engine now runs the experts in RAM on the CPU while reading prompts (llama.cpp's `op_offload` off): prompts are read more slowly, the model loads, and the log says so.
