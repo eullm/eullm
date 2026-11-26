@@ -53,7 +53,7 @@ index 778d012bc..7e3fc88fb 100644
  
  void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
 diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-types.h b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
-index 211948ee7..98bbc1235 100644
+index b71e73dd0..e4954f547 100644
 --- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
 @@ -2,6 +2,11 @@
@@ -69,10 +69,10 @@ index 211948ee7..98bbc1235 100644
  
  #if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
 diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-index 60cebe494..585dde57a 100644
+index f28690f68..8a72b54f3 100644
 --- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
 +++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
-@@ -5092,7 +5092,7 @@ vk_device ggml_vk_get_device(size_t idx) {
+@@ -5109,7 +5109,7 @@ vk_device ggml_vk_get_device(size_t idx) {
              device_extensions.push_back("VK_EXT_device_fault");
          }
  
@@ -81,7 +81,7 @@ index 60cebe494..585dde57a 100644
  
          device->device_fault = device->device_fault && fault_features.deviceFault;
  
-@@ -5315,7 +5315,7 @@ vk_device ggml_vk_get_device(size_t idx) {
+@@ -5332,7 +5332,7 @@ vk_device ggml_vk_get_device(size_t idx) {
              std::vector<VkCooperativeMatrixPropertiesKHR> cm_props;
  
              PFN_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR pfn_vkGetPhysicalDeviceCooperativeMatrixPropertiesKHR =
@@ -90,7 +90,7 @@ index 60cebe494..585dde57a 100644
  
              uint32_t cm_props_num;
  
-@@ -5437,7 +5437,7 @@ vk_device ggml_vk_get_device(size_t idx) {
+@@ -5454,7 +5454,7 @@ vk_device ggml_vk_get_device(size_t idx) {
  
          if (device->device_fault) {
              device->pfn_vkGetDeviceFaultInfoEXT = (PFN_vkGetDeviceFaultInfoEXT)
@@ -99,7 +99,7 @@ index 60cebe494..585dde57a 100644
          }
  
          // Queues
-@@ -5799,7 +5799,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
+@@ -5816,7 +5816,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
      }
  #endif
  
@@ -108,7 +108,7 @@ index 60cebe494..585dde57a 100644
  
      fp16 = fp16 && vk12_features.shaderFloat16;
  
-@@ -5875,6 +5875,33 @@ static void ggml_vk_print_gpu_info(size_t idx) {
+@@ -5892,6 +5892,33 @@ static void ggml_vk_print_gpu_info(size_t idx) {
  
  static DispatchLoaderDynamic ggml_vk_default_dispatcher_instance;
  
@@ -142,7 +142,7 @@ index 60cebe494..585dde57a 100644
  DispatchLoaderDynamic & ggml_vk_default_dispatcher() {
      return ggml_vk_default_dispatcher_instance;
  }
-@@ -5886,7 +5913,7 @@ void ggml_vk_instance_init() {
+@@ -5903,7 +5930,7 @@ void ggml_vk_instance_init() {
      VK_LOG_DEBUG("ggml_vk_instance_init()");
  
      // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
@@ -151,7 +151,7 @@ index 60cebe494..585dde57a 100644
  
      // vkEnumerateInstanceVersion is Vulkan 1.1. A null value indicated Vulkan 1.0.
      if (ggml_vk_default_dispatcher_instance.vkEnumerateInstanceVersion == nullptr) {
-@@ -5949,12 +5976,12 @@ void ggml_vk_instance_init() {
+@@ -5966,12 +5993,12 @@ void ggml_vk_instance_init() {
  
      if (debug_utils_ext) {
          vk_instance.debug_utils_support              = true;
@@ -170,7 +170,7 @@ index 60cebe494..585dde57a 100644
      }
  
      vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
-@@ -17596,7 +17623,7 @@ bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
+@@ -17653,7 +17680,7 @@ bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
      vk11_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES;
      device_features2.pNext = &vk11_features;
  

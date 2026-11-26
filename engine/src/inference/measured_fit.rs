@@ -178,6 +178,9 @@ pub fn prefer_default_ubatch(raised: Settled, default: Settled, n_layers: u32) -
 pub struct Measured {
     pub n_cpu_moe: u32,
     pub n_ubatch: u32,
+    /// llama.cpp's `op_offload`: false where the GPU's copies of the experts
+    /// in RAM were what did not fit (see [`run`]).
+    pub op_offload: bool,
     /// Several GPUs: the layers each one holds, in ggml's order of the GPUs
     /// (`--tensor-split` as counts of layers, the output layer last).
     pub tensor_split: Option<Vec<f32>>,
@@ -232,10 +235,16 @@ pub(crate) fn run(
     // What the GPU would hold, and its free memory, for a split and a
     // micro-batch. One GPU only: several are balanced elsewhere.
     let measures = std::cell::Cell::new(0u32);
-    let measure = |n_cpu_moe: u32, n_ubatch: u32| -> Option<(u64, u64)> {
+    let measure = |n_cpu_moe: u32, n_ubatch: u32, op_offload: bool| -> Option<(u64, u64)> {
         let mut probe = config.clone();
         probe.n_cpu_moe = n_cpu_moe;
         probe.n_ubatch = n_ubatch;
+        probe.op_offload = op_offload;
+        if !op_offload {
+            // The prefetch fills VRAM slots for the GPU's copies of the
+            // experts in RAM; without op_offload there are none.
+            probe.moe_prefetch_slots = 0;
+        }
         let cparams = super::build_ctx_params(&probe, ctx_size)
             .with_n_seq_max(n_seq_max)
             .with_n_outputs_max(n_outputs_max);
@@ -257,14 +266,14 @@ pub(crate) fn run(
         Some((row.total(), u64::try_from(row.free).unwrap_or(0)))
     };
 
-    let (planned_used, free) = measure(config.n_cpu_moe, config.n_ubatch)?;
+    let (planned_used, free) = measure(config.n_cpu_moe, config.n_ubatch, config.op_offload)?;
     let budget = free
         .saturating_sub(config.vram_reserve)
         .saturating_sub(fit.keep_bytes)
         .saturating_sub(MARGIN_BYTES);
     // The plan's own split is the first thing `settle` measures: measured once.
     let planned = std::cell::Cell::new(Some(planned_used));
-    let settle_at = |n_ubatch: u32| {
+    let settle_with = |n_ubatch: u32, op_offload: bool| {
         settle(
             config.n_cpu_moe,
             &layout.expert_bytes_per_layer,
@@ -272,14 +281,16 @@ pub(crate) fn run(
             |n| {
                 if n == config.n_cpu_moe
                     && n_ubatch == config.n_ubatch
+                    && op_offload == config.op_offload
                     && let Some(used) = planned.take()
                 {
                     return Some(used);
                 }
-                measure(n, n_ubatch).map(|(used, _)| used)
+                measure(n, n_ubatch, op_offload).map(|(used, _)| used)
             },
         )
     };
+    let settle_at = |n_ubatch: u32| settle_with(n_ubatch, config.op_offload);
     let at_plan = settle_at(config.n_ubatch)?;
     let (settled, n_ubatch) = if fit.ubatch_raised && config.n_ubatch > super::DEFAULT_N_UBATCH {
         match settle_at(super::DEFAULT_N_UBATCH) {
@@ -290,6 +301,23 @@ pub(crate) fn run(
         }
     } else {
         (at_plan, config.n_ubatch)
+    };
+    // Nothing fits because the experts sent to RAM did not leave the GPU:
+    // with op_offload, a prompt's operations on weights in RAM run on the
+    // GPU, on copies of them in its compute buffer, and a model that reads
+    // the same weights again in one pass (Inkling 2's loop) keeps the copies
+    // of every layer in RAM until the last read. Inkling 2 Mini UD-Q4_K_XL
+    // on a 16 GB RTX 5070 Ti at `-c 16000`: 15.22 GiB against 14.11 with the
+    // experts of 8 layers in RAM, and no split fitting, 26-11-2026. Without
+    // op_offload those operations run on the CPU: prompts are read more
+    // slowly, the copies are gone, and the walk to RAM frees what it moves.
+    let (settled, n_ubatch, op_offload) = if settled.fits || !config.op_offload {
+        (settled, n_ubatch, config.op_offload)
+    } else {
+        match settle_with(super::DEFAULT_N_UBATCH, false) {
+            Some(on_cpu) if on_cpu.fits => (on_cpu, super::DEFAULT_N_UBATCH, false),
+            _ => (settled, n_ubatch, config.op_offload),
+        }
     };
 
     let elapsed = started.elapsed();
@@ -311,7 +339,10 @@ pub(crate) fn run(
             settled.n_cpu_moe
         );
     }
-    if settled.n_cpu_moe == config.n_cpu_moe && n_ubatch == config.n_ubatch {
+    if settled.n_cpu_moe == config.n_cpu_moe
+        && n_ubatch == config.n_ubatch
+        && op_offload == config.op_offload
+    {
         return None;
     }
     let mut changes = Vec::new();
@@ -320,6 +351,13 @@ pub(crate) fn run(
             "the experts of {} layers in RAM instead of {}",
             settled.n_cpu_moe, config.n_cpu_moe
         ));
+    }
+    if op_offload != config.op_offload {
+        changes.push(
+            "the experts in RAM computed on the CPU while prompts are read, instead of on the \
+             GPU: its copies of them did not fit beside the model (prompts are read more slowly)"
+                .to_string(),
+        );
     }
     if n_ubatch != config.n_ubatch {
         changes.push(format!(
@@ -334,6 +372,7 @@ pub(crate) fn run(
     Some(Measured {
         n_cpu_moe: settled.n_cpu_moe,
         n_ubatch,
+        op_offload,
         tensor_split: None,
     })
 }
@@ -580,6 +619,7 @@ fn run_across_gpus(
     Some(Measured {
         n_cpu_moe: config.n_cpu_moe,
         n_ubatch: config.n_ubatch,
+        op_offload: config.op_offload,
         tensor_split: Some(counts.iter().map(|&c| c as f32).collect()),
     })
 }

@@ -15,10 +15,10 @@ the switch changes nothing.
 EuLLM patch on llama.cpp v1.0.0 (b12359), after 0001.
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 18c9a7a27..b27f8e371 100644
+index ee261ee5d..fdaff211b 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -7094,6 +7094,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -7153,6 +7153,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_unpin_host_buffer") == 0) {
          return (void *)ggml_backend_cuda_unpin_host_buffer;
      }

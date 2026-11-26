@@ -17,10 +17,10 @@ without shared slots the assignment is the same as before.
 EuLLM patch on llama.cpp b12632+23 (969d733).
 
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 06eb7c929..56b4d5f4b 100644
+index 72ad1b0e3..b362a67f2 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -1813,15 +1813,25 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1904,15 +1904,25 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
          splits[i] = split_sum != 0.0f ? splits[i] / split_sum : float(i + 1) / n_devices();
      }
  
@@ -51,7 +51,7 @@ index 06eb7c929..56b4d5f4b 100644
          auto * dev = devices.at(layer_gpu).dev;
          LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
          return {dev, &pimpl->gpu_buft_list.at(dev)};
-@@ -1834,11 +1844,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -1925,11 +1935,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      // assign the repeating layers to the devices according to the splits
      pimpl->dev_layer.resize(n_layer_all);
      for (int il = 0; il < n_layer_all; ++il) {
@@ -75,10 +75,10 @@ index 06eb7c929..56b4d5f4b 100644
      const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
  
 diff --git a/src/llama-model.h b/src/llama-model.h
-index eae5c6848..943c96cf6 100644
+index 62fbda68a..5c80f2c2a 100644
 --- a/src/llama-model.h
 +++ b/src/llama-model.h
-@@ -1083,6 +1083,10 @@ struct llama_model {
+@@ -1115,6 +1115,10 @@ struct llama_model {
      // optional, runs after the scale pass
      virtual void post_arch_tensors(llama_model_loader &) {}
  
@@ -90,10 +90,10 @@ index eae5c6848..943c96cf6 100644
      llama_model_params params;
  
 diff --git a/src/models/models.h b/src/models/models.h
-index b12642fb9..9e85ba729 100644
+index 85b97dda0..4d04615e0 100644
 --- a/src/models/models.h
 +++ b/src/models/models.h
-@@ -2563,6 +2563,7 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
+@@ -2706,6 +2706,7 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
  
      int n_layer_phys() const override { return n_phys; }
      int layer_phys(int il) const;
