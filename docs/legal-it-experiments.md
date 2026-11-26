@@ -1574,3 +1574,15 @@ layers crossing to the remote GPUs at 80-90 MB/s, the speed of the service
 Ethernet the node names resolve to. Large 4's 420 GB for the remote GPUs at
 that rate is an hour and a half, past the pilot's hour. The job now reaches
 the rpc-servers on the workers' InfiniBand addresses.
+
+**Large 4 over RPC on InfiniBand, 2026-11-25** (probes in `boost_qos_dbg`,
+30 minutes). Gemma 31B on two nodes: loaded in 63 s instead of 187, and
+wrote at 26 cases a minute instead of 10 (72 generated tokens a second
+instead of 29), every token crossing to the remote GPUs. Large 4 on four
+nodes: the first ~20 minutes read the whole file (the read counter passed
+600 GB and kept going: readahead and staging, not a progress bar), then the
+layers crossed to the 12 remote GPUs at ~15 GB a minute (0.25 GB/s); their
+buffers add to ~450 GB, so a load takes 50-55 minutes. Nothing is stuck:
+the pilot's hour was short, and three times shorter than the service
+Ethernet needed. The pilot runs as one job of 4 hours (`RR_LOAD_MIN=90`),
+cases and explanations from one load, the three checkers behind it.
