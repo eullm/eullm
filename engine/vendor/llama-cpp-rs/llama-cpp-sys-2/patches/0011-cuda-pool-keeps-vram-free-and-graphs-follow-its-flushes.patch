@@ -17,7 +17,7 @@ does the same since b11925 when the pool frees after a failed allocation
 (invalidate_cuda_graphs), and this patch calls it from its own flush.
 
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 20577f33d..18c9a7a27 100644
+index ae655cae2..ee261ee5d 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -522,6 +522,25 @@ const ggml_cuda_device_info & ggml_cuda_info() {

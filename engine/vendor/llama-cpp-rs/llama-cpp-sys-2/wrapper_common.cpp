@@ -108,7 +108,11 @@ extern "C" llama_rs_status llama_rs_apply_chat_template_oai(
             inputs.tools = common_chat_tools_parse_oaicompat(common_json::parse(tools_json));
         }
         if (tool_choice && tool_choice[0] != '\0') {
-            inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(tool_choice);
+            // Since b12767 the parser takes the request's JSON value and the tools
+            // (for the named-function and allowed_tools forms); the engine passes
+            // "auto", "none" or "required", a JSON string.
+            inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(
+                common_json(std::string(tool_choice)), inputs.tools);
         }
 
         const auto params = common_chat_templates_apply(tmpls.get(), inputs);

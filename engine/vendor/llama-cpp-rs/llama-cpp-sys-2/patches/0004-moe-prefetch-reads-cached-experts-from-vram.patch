@@ -53,10 +53,10 @@ index 73a0b3eea..70504eba8 100644
  }
  #endif
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 1f253c706..65b0dc325 100644
+index da2a09360..151bfd9a9 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -1218,6 +1218,16 @@ struct ggml_backend_sched_split {
+@@ -1219,6 +1219,16 @@ struct ggml_backend_sched_split {
  // pageable memory a copy would hold the host until its slot is free. The slots are
  // made only if they leave a twentieth of the VRAM, and at least 512 MiB, to what a
  // compute allocates as it goes.
@@ -73,7 +73,7 @@ index 1f253c706..65b0dc325 100644
  #define GGML_SCHED_PREFETCH_MAX_SLOTS 8
  
  struct ggml_backend_sched_prefetch_input {
-@@ -1243,6 +1253,14 @@ struct ggml_backend_sched_prefetch {
+@@ -1244,6 +1254,14 @@ struct ggml_backend_sched_prefetch {
      bool reused;                    // a staged copy is read by a later split as well: not this graph
      bool placed;                    // the inputs are in their slots: their copies run ahead
      bool was_placed;                // the previous graph's were [GGML_SCHED_DEBUG_REALLOC]
@@ -88,7 +88,7 @@ index 1f253c706..65b0dc325 100644
  };
  
  struct ggml_backend_sched {
-@@ -1544,10 +1562,62 @@ static void ggml_backend_sched_prefetch_place(ggml_backend_sched_t sched) {
+@@ -1548,10 +1566,62 @@ static void ggml_backend_sched_prefetch_place(ggml_backend_sched_t sched) {
      pf->placed = true;
  }
  
@@ -154,7 +154,7 @@ index 1f253c706..65b0dc325 100644
      ggml_backend_event_record(pf->copied[in->slot], pf->copy_backend);
  }
  
-@@ -2516,6 +2586,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2576,6 +2646,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
      const int n_staged = pf != NULL ? (int) pf->inputs.size() : 0;
      int staged_issued = 0; // copies queued on the copy stream
      int staged_done   = 0; // staged inputs whose split is queued: their slots can be filled again
@@ -165,7 +165,7 @@ index 1f253c706..65b0dc325 100644
  
      for (int split_id = 0; split_id < sched->n_splits; split_id++) {
          struct ggml_backend_sched_split * split = &splits[split_id];
-@@ -2534,7 +2608,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2594,7 +2668,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
  
          // EuLLM: queue the copies whose slots are free, ahead of the splits that read them
          while (staged_issued < n_staged && staged_issued < staged_done + pf->n_slots) {
@@ -174,7 +174,7 @@ index 1f253c706..65b0dc325 100644
          }
  
          // EuLLM: the slots of the copies this split reads, which the GPU waits for after the other
-@@ -2633,6 +2707,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
+@@ -2698,6 +2772,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
          prev_backend_id = split_backend_id;
      }
  
@@ -187,7 +187,7 @@ index 1f253c706..65b0dc325 100644
      return GGML_STATUS_SUCCESS;
  }
  
-@@ -2873,6 +2953,26 @@ void ggml_backend_sched_set_moe_prefetch(ggml_backend_sched_t sched, int n_slots
+@@ -2942,6 +3022,26 @@ void ggml_backend_sched_set_moe_prefetch(ggml_backend_sched_t sched, int n_slots
      ggml_backend_sched_prefetch_init(sched, n_slots, min_tokens);
  }
  
@@ -215,10 +215,10 @@ index 1f253c706..65b0dc325 100644
      GGML_ASSERT(sched);
      return sched->n_splits;
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 035a480f6..6719caf37 100644
+index e822c75e3..16f897ed8 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -780,6 +780,10 @@ void llama_context::sched_new(const sched_params & params) {
+@@ -796,6 +796,10 @@ void llama_context::sched_new(const sched_params & params) {
      if (cparams.moe_prefetch_slots > 0) {
          // EuLLM: from 512 tokens a micro-batch uses nearly every expert of a layer
          ggml_backend_sched_set_moe_prefetch(sched.get(), (int) cparams.moe_prefetch_slots, 512);
