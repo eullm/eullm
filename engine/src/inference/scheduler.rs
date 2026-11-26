@@ -2074,6 +2074,10 @@ fn run_scheduler_loop(
         {
             config.n_cpu_moe = m.n_cpu_moe;
             config.n_ubatch = m.n_ubatch;
+            config.op_offload = m.op_offload;
+            if !m.op_offload {
+                config.moe_prefetch_slots = 0;
+            }
             if let Some(tensor_split) = &m.tensor_split {
                 config.gpu_split = crate::gpu_split::GpuSplit {
                     mode: crate::gpu_split::SplitMode::default(),

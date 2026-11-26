@@ -18,6 +18,9 @@ something changed, less so for understanding what it means.
 ### Added
 - **llama.cpp b12767** (llama.cpp 1.1.0): Inkling 2's graph does fewer operations per token (part of what Unsloth's own build gained), and two new architectures, Hunyuan V4 Flash (`hy_v4_flash`) and RAON-1 (`raon1`).
 
+### Fixed
+- **Inkling 2 Mini UD-Q4_K_XL ran out of VRAM on a 16 GB GPU** (`-c 16000`, RTX 5070 Ti alone): with some experts in RAM, reading a prompt runs their layers on the GPU on copies of them, and Inkling's loop keeps those copies until its last pass, so sending more experts to RAM freed nothing and the sizing loaded a split it had measured not to fit. Where no split fits, the engine now runs the experts in RAM on the CPU while reading prompts (llama.cpp's `op_offload` off): prompts are read more slowly, the model loads, and the log says so.
+
 ## 0.10.10 — 2026-11-25
 
 ### Added

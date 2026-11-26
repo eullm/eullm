@@ -681,7 +681,8 @@ pub(crate) fn build_ctx_params_with_cache(
         // only while its window still holds what precedes it: the scheduler
         // checks (`prefill_setup`) and keeps checkpoints of the window to go
         // back to (`StateCheckpoint`).
-        .with_swa_full(false);
+        .with_swa_full(false)
+        .with_op_offload(config.op_offload);
 
     if config.moe_cache_bytes > 0 {
         params = params.with_moe_cache_size(config.moe_cache_bytes as usize);
@@ -870,6 +871,11 @@ pub struct InferenceConfig {
     /// scheduler measures the load with llama.cpp before it loads and
     /// settles the split on what it measures (see `measured_fit`).
     pub measured_fit: Option<measured_fit::MeasuredFit>,
+    /// llama.cpp's `op_offload`: a large batch's operations on weights in
+    /// RAM run on the GPU, on copies of those weights in its compute buffer.
+    /// On by default; off only where `measured_fit` finds that those copies
+    /// are what keeps the model from fitting (see `measured_fit::run`).
+    pub op_offload: bool,
 }
 
 impl Default for InferenceConfig {
@@ -905,6 +911,7 @@ impl Default for InferenceConfig {
             kv_unified: false,
             gpu_split: crate::gpu_split::GpuSplit::default(),
             measured_fit: None,
+            op_offload: true,
         }
     }
 }

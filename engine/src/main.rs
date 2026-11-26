@@ -3950,6 +3950,7 @@ async fn cmd_run(
             kv_unified,
             gpu_split: gpu_split.clone(),
             measured_fit,
+            op_offload: true,
         };
 
         // A model with a projector runs on the scheduler too, which reads a

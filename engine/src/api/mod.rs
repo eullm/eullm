@@ -828,6 +828,7 @@ impl AppState {
                 kv_unified: self.kv_unified,
                 gpu_split,
                 measured_fit,
+                op_offload: true,
             };
             if mmproj_path.is_some() {
                 tracing::info!("{}", mmproj_placement.describe());
