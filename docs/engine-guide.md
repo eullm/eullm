@@ -26,7 +26,7 @@ What you get on top of the Ollama-compatible API:
 
 [→ Engine scaling](benchmarks.md) · [→ Why EULLM](why-eullm.md) · [→ Changelog](../CHANGELOG.md)
 
-### Claude Code and Anthropic's API (`/v1/messages`, new in 0.10.30)
+### Claude Code and Anthropic's API (`/v1/messages`, new in 0.10.20)
 
 EuLLM answers Anthropic's Messages API as well, at `/v1/messages` on the
 same port, so Claude Code and the Anthropic SDKs can run on a local model.
@@ -41,6 +41,8 @@ ANTHROPIC_BASE_URL=http://localhost:11434 \
 ANTHROPIC_AUTH_TOKEN=local \
 ANTHROPIC_MODEL=qwen3.8-27b-ud-q4_k_m \
 ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3.8-27b-ud-q4_k_m \
+CLAUDE_CODE_MAX_CONTEXT_TOKENS=65536 \
+CLAUDE_CODE_MAX_OUTPUT_TOKENS=8192 \
 claude
 ```
 
@@ -48,7 +50,13 @@ claude
 `EULLM_API_KEYS` where the server has keys, anything otherwise (it keeps
 Claude Code from asking for a login). `ANTHROPIC_DEFAULT_HAIKU_MODEL` is the
 model Claude Code uses for its background work; without it, it asks for a
-Claude model the server does not have.
+Claude model the server does not have. `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is
+the server's `-c`: Claude Code does not know a model by a name of ours,
+assumes a window of its own (200,000 tokens in 2.1.310, with a warning that
+the model "isn't recognized") and would not compact the conversation before
+the server refuses it. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` keeps the room an
+answer may take (32,000 by default for a model it does not know) from
+crowding out the conversation.
 
 A request is answered by `/v1/chat/completions`: the model's chat template,
 its tool calls, `"model": "auto"` and the audit trail are the same.
@@ -56,7 +64,10 @@ Thinking runs when the request asks for it (`thinking`), as on Anthropic's
 API. A streamed answer is generated whole and then sent as Anthropic's
 events, as a streamed answer with tools is on `/v1/chat/completions`: Claude
 Code always sends tools. Images and documents in a message are replaced by a
-note saying they were not read, and `stop_sequences` is not applied.
+note saying they were not read, and `stop_sequences` is not applied. The
+`system` messages Claude Code puts among the turns join the system prompt
+before the first turn and the user's turn after it, since many chat
+templates take a system message at the start only.
 `/v1/messages/count_tokens` is not there: Claude Code estimates without it.
 
 Claude Code asks a lot of a model. Its instructions and tool definitions
