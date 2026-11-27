@@ -11,8 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import budget
 import pytest
+
+import budget
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools" / "lumi" / "nodi.sh"
