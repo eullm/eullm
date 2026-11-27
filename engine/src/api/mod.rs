@@ -5512,7 +5512,7 @@ mod http_tests {
 
         let (status, text) = post_json(
             &format!("{base}/v1/messages"),
-            serde_json::json!({ "model": "a-pulled-model", "messages": [{ "role": "system", "content": "x" }] }),
+            serde_json::json!({ "model": "a-pulled-model", "messages": [{ "role": "tool", "content": "x" }] }),
         )
         .await;
         assert_eq!(status, 400, "{text}");

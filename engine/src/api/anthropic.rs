@@ -54,9 +54,10 @@ pub(crate) fn to_chat_completions(body: &Value) -> Result<Value, Invalid> {
         match role {
             "user" => user_messages(content, i, &mut messages)?,
             "assistant" => messages.push(assistant_message(content, i)?),
+            "system" => system_message(content, i, &mut messages)?,
             other => {
                 return Err(format!(
-                    "messages[{i}].role is `{other}`: expected `user` or `assistant`"
+                    "messages[{i}].role is `{other}`: expected `user`, `assistant` or `system`"
                 ));
             }
         }
@@ -121,12 +122,49 @@ fn omitted(kind: &str) -> String {
     format!("[{kind} omitted: this server does not read {kind} content]")
 }
 
+/// A `system` message among the turns, as Claude Code sends them: before the
+/// first turn it joins the system prompt; later, it joins the user turn next
+/// to it, since many chat templates take a system message at the start only
+/// (Qwen's raise an error on one anywhere else).
+fn system_message(content: &Value, i: usize, out: &mut Vec<Value>) -> Result<(), Invalid> {
+    let text = blocks_text(content, &format!("messages[{i}].content"))?;
+    if text.is_empty() {
+        return Ok(());
+    }
+    if out.iter().all(|m| m["role"] == "system") {
+        match out.first_mut() {
+            Some(system) => {
+                let joined = format!("{}\n\n{text}", system["content"].as_str().unwrap_or(""));
+                system["content"] = Value::String(joined);
+            }
+            None => out.push(json!({ "role": "system", "content": text })),
+        }
+        return Ok(());
+    }
+    push_user_text(out, text);
+    Ok(())
+}
+
+/// Text from the user, added to the user message before it when that is the
+/// last one, so that two user messages never follow each other: a system
+/// message turned to user text, then the turn itself.
+fn push_user_text(out: &mut Vec<Value>, text: String) {
+    if let Some(last) = out.last_mut()
+        && last["role"] == "user"
+        && let Some(before) = last["content"].as_str()
+    {
+        last["content"] = Value::String(format!("{before}\n\n{text}"));
+        return;
+    }
+    out.push(json!({ "role": "user", "content": text }));
+}
+
 /// A user turn: its `tool_result` blocks become `tool` messages, first, as
 /// the calls they answer came last; the rest one user message.
 fn user_messages(content: &Value, i: usize, out: &mut Vec<Value>) -> Result<(), Invalid> {
     let blocks = match content {
         Value::String(text) => {
-            out.push(json!({ "role": "user", "content": text }));
+            push_user_text(out, text.clone());
             return Ok(());
         }
         Value::Array(blocks) => blocks,
@@ -167,7 +205,7 @@ fn user_messages(content: &Value, i: usize, out: &mut Vec<Value>) -> Result<(), 
         }
     }
     if !text.is_empty() {
-        out.push(json!({ "role": "user", "content": text.join("\n\n") }));
+        push_user_text(out, text.join("\n\n"));
     }
     Ok(())
 }
@@ -450,6 +488,33 @@ mod tests {
             json!({ "role": "tool", "tool_call_id": "toolu_1", "content": "hello" })
         );
         assert_eq!(messages[4], json!({ "role": "user", "content": "And?" }));
+    }
+
+    #[test]
+    fn system_messages_among_the_turns_join_the_system_prompt_or_the_user_turn() {
+        // Claude Code sends some of its instructions as `system` messages in
+        // `messages` (27-11-2026: "messages[1].role is `system`").
+        let out = to_chat_completions(&json!({
+            "system": "S",
+            "messages": [
+                { "role": "system", "content": "T" },
+                { "role": "user", "content": "a" },
+                { "role": "system", "content": [{ "type": "text", "text": "reminder" }] },
+                { "role": "user", "content": [{ "type": "text", "text": "b" }] },
+                { "role": "assistant", "content": "ok" },
+                { "role": "system", "content": "late" },
+            ],
+        }))
+        .unwrap();
+        assert_eq!(
+            out["messages"],
+            json!([
+                { "role": "system", "content": "S\n\nT" },
+                { "role": "user", "content": "a\n\nreminder\n\nb" },
+                { "role": "assistant", "content": "ok" },
+                { "role": "user", "content": "late" },
+            ])
+        );
     }
 
     #[test]
