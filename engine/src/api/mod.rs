@@ -5519,6 +5519,23 @@ mod http_tests {
         let answer: serde_json::Value = serde_json::from_str(&text).expect("json");
         assert_eq!(answer["error"]["type"], "invalid_request_error");
         assert!(text.contains("messages[0].role"), "{text}");
+
+        // Streamed, the stream opens at once with `message_start`, and what
+        // goes wrong after it is an `error` event.
+        let (status, text) = post_json(
+            &format!("{base}/v1/messages"),
+            serde_json::json!({
+                "model": "no-such-model",
+                "stream": true,
+                "messages": [{ "role": "user", "content": "hi" }],
+            }),
+        )
+        .await;
+        assert_eq!(status, 200, "{text}");
+        let start = text.find("event: message_start").expect("message_start");
+        let error = text.find("event: error").expect("an error event");
+        assert!(start < error, "{text}");
+        assert!(text.contains("not_found_error"), "{text}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

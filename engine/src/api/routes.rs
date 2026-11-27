@@ -4196,25 +4196,130 @@ async fn chat_completions_with(
 /// `/v1/messages`: Anthropic's Messages API, translated to and answered by
 /// `/v1/chat/completions` (see `super::anthropic`). Errors go out in
 /// Anthropic's shape, which its clients read.
+///
+/// Streamed, the events start at once: `message_start`, then a `ping` every
+/// [`MESSAGES_PING_SECS`] while the answer is generated whole, then its
+/// blocks. Claude Code gives up on a stream that stays silent: on
+/// Qwen3.8-27B an answer writing a small game (22,844 tokens read, up to
+/// 8,192 written at about 30 tokens/s) sent nothing for five minutes, and
+/// Claude Code reported an API error and asked again from scratch
+/// (27-11-2026). A streamed answer gets no `x-eullm-*` route headers: they
+/// are known only once it is answered, after the headers have gone.
 async fn messages(
     State(state): State<S>,
     axum::Extension(identity): axum::Extension<super::Identity>,
     Json(body): Json<Value>,
 ) -> axum::response::Response {
     use super::anthropic;
-    let refused = |status: StatusCode, message: &str| {
-        (status, Json(anthropic::error(status.as_u16(), message))).into_response()
-    };
-    let error_text = |answer: &Value| match &answer["error"] {
-        Value::String(text) => text.clone(),
-        Value::Null => "the request failed".to_string(),
-        other => other.to_string(),
-    };
     let chat = match anthropic::to_chat_completions(&body) {
         Ok(chat) => chat,
-        Err(why) => return refused(StatusCode::BAD_REQUEST, &why),
+        Err(why) => return MessagesError::new(StatusCode::BAD_REQUEST, why).into_response(),
     };
-    let response = match answer_routed(
+    let model = body["model"].as_str().unwrap_or_default().to_string();
+    if !is_streaming(&body) {
+        return match answer_message(state, identity, chat, model).await {
+            Ok((message, headers)) => {
+                let mut response = Json(message).into_response();
+                response.headers_mut().extend(headers);
+                response
+            }
+            Err(e) => e.into_response(),
+        };
+    }
+    let task = tokio::spawn(answer_message(state, identity, chat, model.clone()));
+    // A client that goes away stops the generation with it.
+    let abort = AbortOnDrop(task.abort_handle());
+    let event = |name: &str, data: Value| {
+        Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data.to_string()))
+    };
+    let stream = async_stream::stream! {
+        let _abort = abort;
+        let mut task = task;
+        yield event("message_start", anthropic::start_event(&model));
+        let mut ping = tokio::time::interval(std::time::Duration::from_secs(MESSAGES_PING_SECS));
+        ping.tick().await;
+        let outcome = loop {
+            tokio::select! {
+                outcome = &mut task => break outcome,
+                _ = ping.tick() => yield event("ping", serde_json::json!({ "type": "ping" })),
+            }
+        };
+        match outcome {
+            Ok(Ok((message, _))) => {
+                for (name, data) in anthropic::stream_events(&message).into_iter().skip(1) {
+                    yield event(name, data);
+                }
+            }
+            Ok(Err(e)) => yield event("error", anthropic::error(e.status.as_u16(), &e.message)),
+            Err(e) => yield event("error", anthropic::error(500, &e.to_string())),
+        }
+    };
+    Sse::new(stream).into_response()
+}
+
+/// How often a streamed `/v1/messages` answer sends a `ping` while it is
+/// generated, as Anthropic's API does, so that a client sees a live stream.
+const MESSAGES_PING_SECS: u64 = 10;
+
+/// Aborts a task when dropped: the stream of a client that went away.
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Why `/v1/messages` could not answer, sent in Anthropic's shape.
+struct MessagesError {
+    status: StatusCode,
+    message: String,
+    retry_after_secs: Option<u64>,
+}
+
+impl MessagesError {
+    fn new(status: StatusCode, message: String) -> Self {
+        Self {
+            status,
+            message,
+            retry_after_secs: None,
+        }
+    }
+
+    /// The text of an error answer of the other endpoints, `{"error": ...}`.
+    fn of(status: StatusCode, answer: &Value) -> Self {
+        let message = match &answer["error"] {
+            Value::String(text) => text.clone(),
+            Value::Null => "the request failed".to_string(),
+            other => other.to_string(),
+        };
+        Self::new(status, message)
+    }
+}
+
+impl IntoResponse for MessagesError {
+    fn into_response(self) -> axum::response::Response {
+        let answer = super::anthropic::error(self.status.as_u16(), &self.message);
+        let mut response = (self.status, Json(answer)).into_response();
+        if let Some(secs) = self.retry_after_secs {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, axum::http::HeaderValue::from(secs));
+        }
+        response
+    }
+}
+
+/// A `/v1/messages` request, already in the shape `/v1/chat/completions`
+/// takes, answered there and translated back: the message, and the route
+/// headers of `"model": "auto"`.
+async fn answer_message(
+    state: S,
+    identity: super::Identity,
+    chat: Value,
+    model: String,
+) -> Result<(Value, axum::http::HeaderMap), MessagesError> {
+    let response = answer_routed(
         state,
         identity,
         chat,
@@ -4222,47 +4327,28 @@ async fn messages(
         chat_completions_with,
     )
     .await
-    {
-        Ok(response) => response,
-        Err(refusal) => {
-            let mut response = refused(refusal.status, &error_text(&refusal.body.0));
-            if let Some(secs) = refusal.retry_after_secs {
-                response
-                    .headers_mut()
-                    .insert(header::RETRY_AFTER, axum::http::HeaderValue::from(secs));
-            }
-            return response;
-        }
-    };
+    .map_err(|refusal| MessagesError {
+        retry_after_secs: refusal.retry_after_secs,
+        ..MessagesError::of(refusal.status, &refusal.body.0)
+    })?;
     let (parts, answer) = response.into_parts();
-    let answer: Value = match axum::body::to_bytes(answer, usize::MAX).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        Err(e) => return refused(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
+    let bytes = axum::body::to_bytes(answer, usize::MAX)
+        .await
+        .map_err(|e| MessagesError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     if !parts.status.is_success() {
-        return refused(parts.status, &error_text(&answer));
+        return Err(MessagesError::of(parts.status, &answer));
     }
-    let model = answer["model"]
-        .as_str()
-        .or_else(|| body["model"].as_str())
-        .unwrap_or_default();
-    let message = anthropic::from_chat_completion(&answer, model);
-    let mut response = if is_streaming(&body) {
-        let event = |(name, data): (&str, Value)| {
-            Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data.to_string()))
-        };
-        let events = anthropic::stream_events(&message).into_iter().map(event);
-        Sse::new(futures_util::stream::iter(events)).into_response()
-    } else {
-        Json(message).into_response()
-    };
+    let model = answer["model"].as_str().unwrap_or(&model);
+    let message = super::anthropic::from_chat_completion(&answer, model);
     // The route `"model": "auto"` took, as on /v1/chat/completions.
+    let mut headers = axum::http::HeaderMap::new();
     for (name, value) in &parts.headers {
         if name.as_str().starts_with("x-eullm") {
-            response.headers_mut().insert(name.clone(), value.clone());
+            headers.insert(name.clone(), value.clone());
         }
     }
-    response
+    Ok((message, headers))
 }
 
 // ── Streaming helpers ────────────────────────────────────────────────────────

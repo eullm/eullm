@@ -63,7 +63,9 @@ its tool calls, `"model": "auto"` and the audit trail are the same.
 Thinking runs when the request asks for it (`thinking`), as on Anthropic's
 API. A streamed answer is generated whole and then sent as Anthropic's
 events, as a streamed answer with tools is on `/v1/chat/completions`: Claude
-Code always sends tools. Images and documents in a message are replaced by a
+Code always sends tools. The stream opens at once and sends a `ping` every
+10 seconds meanwhile, since Claude Code gives up on one that stays silent:
+an answer writing a small program can take minutes on a 27B. Images and documents in a message are replaced by a
 note saying they were not read, and `stop_sequences` is not applied. The
 `system` messages Claude Code puts among the turns join the system prompt
 before the first turn and the user's turn after it, since many chat
@@ -82,8 +84,13 @@ requests to a Claude model, which a local model has none of, and Claude Code
 2.1.332 says so with a notice about `localhost:11434`; for now it falls back
 to its own classifier requests (`CLAUDE_CODE_AUTO_MODE_SERVER=0` hides the
 notice), and a later release drops that fallback, after which checked
-actions are asked about or denied. Use the default mode, where you approve,
-or the one that accepts file edits.
+actions are asked about or denied. Those classifier requests come to EuLLM
+too, a prompt of their own of about 31,000 tokens before each checked
+action, and with one slot each of them and the conversation's next request
+read their whole prompt again instead of reusing the cache: 30-45 seconds
+each on Qwen3.8-27B, against 5 when the conversation alone reuses it
+(27-11-2026). Use the default mode, where you approve, or the one that
+accepts file edits.
 
 ## Decisions without generation
 
