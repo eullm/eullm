@@ -922,6 +922,34 @@ pub fn model_file_bytes(path: &Path) -> u64 {
         .sum()
 }
 
+/// What the GPUs hold of a MoE model whose experts `--cpu-moe` (all) or
+/// `--n-cpu-moe N` (the first N layers') keep in RAM: the weights outside
+/// the experts, and the experts of the other layers. `None` for a dense
+/// model or an unreadable layout, where the file is what is sized.
+///
+/// Sizing the whole file instead put whole layers in RAM besides the
+/// experts the flags asked for: Inkling 2 Mini UD-Q4_K_M with
+/// `--n-cpu-moe 7` on an RTX 5070 Ti wrote 35.5 tokens/s against
+/// llama-server's 42.8 with the same flag, and Qwen3.8-Flash-Next IQ2_XS
+/// with `--cpu-moe` was sized as 63 GiB and loaded with 10 of 48 layers on
+/// the GPU (27-11-2026).
+pub fn gpu_bytes_with_experts_in_ram(path: &Path, cpu_moe: bool, n_cpu_moe: u32) -> Option<u64> {
+    if !cpu_moe && n_cpu_moe == 0 {
+        return None;
+    }
+    let info = read_gguf_info(path)?;
+    let layout = read_model_moe_layout(path, info.n_layers)?;
+    Some(gpu_bytes_of(&layout, cpu_moe, n_cpu_moe))
+}
+
+/// [`gpu_bytes_with_experts_in_ram`] on a layout read already; for a dense
+/// layout, what is outside the experts is all of it.
+pub fn gpu_bytes_of(layout: &MoeLayout, cpu_moe: bool, n_cpu_moe: u32) -> u64 {
+    let in_ram = if cpu_moe { layout.expert_bytes_per_layer.len() } else { n_cpu_moe as usize };
+    let experts_on_gpu: u64 = layout.expert_bytes_per_layer.iter().skip(in_ram).sum();
+    layout.non_expert_bytes + experts_on_gpu
+}
+
 /// [`read_gguf_moe_layout`] over every part of a model: each part's header
 /// describes the tensors in that part, so the layout is their sum. `None`
 /// if any part cannot be read, as for one file.
@@ -2817,6 +2845,7 @@ pub fn run_fit(
     reserve_bytes: u64,
     vram_reserve: u64,
     kv: KvLayout,
+    gpu_bytes: Option<u64>,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -2828,6 +2857,7 @@ pub fn run_fit(
         reserve_bytes,
         vram_reserve,
         kv,
+        gpu_bytes,
         /* allow_prompt */ true,
         /* announce */ true,
     )
@@ -2850,6 +2880,7 @@ pub fn run_fit_headless(
     reserve_bytes: u64,
     vram_reserve: u64,
     kv: KvLayout,
+    gpu_bytes: Option<u64>,
 ) -> FitOutcome {
     run_fit_impl(
         model_path,
@@ -2861,6 +2892,7 @@ pub fn run_fit_headless(
         reserve_bytes,
         vram_reserve,
         kv,
+        gpu_bytes,
         /* allow_prompt */ false,
         /* announce */ false,
     )
@@ -2889,13 +2921,16 @@ fn run_fit_impl(
     reserve_bytes: u64,
     vram_reserve: u64,
     kv: KvLayout,
+    // What the GPU holds of the model when `--cpu-moe`/`--n-cpu-moe` keep
+    // experts in RAM ([`gpu_bytes_with_experts_in_ram`]); `None`: the file.
+    gpu_bytes: Option<u64>,
     allow_prompt: bool,
     announce: bool,
 ) -> FitOutcome {
     let vram = vram_bytes().map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
     let free_vram = vram.map(|(free, _)| free);
     let info = read_gguf_info(model_path).map(|info| info.with_kv_layout(kv));
-    let file_size = model_file_bytes(model_path);
+    let file_size = gpu_bytes.unwrap_or_else(|| model_file_bytes(model_path));
 
     let decision = compute_fit(
         vram,
@@ -3517,10 +3552,18 @@ pub fn plan_offload(
             OffloadBasis::MoeAllExpertsAndPartial { gpu_layers },
         ),
         _ => {
+            // The experts `--cpu-moe`/`--n-cpu-moe` keep in RAM are not the
+            // GPU's to hold (see `gpu_bytes_with_experts_in_ram`).
+            let sized = match layout {
+                Some(layout) if flags.cpu_moe || flags.n_cpu_moe > 0 => {
+                    gpu_bytes_of(layout, flags.cpu_moe, flags.n_cpu_moe)
+                }
+                _ => file_size,
+            };
             let decision = compute_fit(
                 vram,
                 info,
-                file_size,
+                sized,
                 ctx_size,
                 kv_bytes_per_elem_k,
                 kv_bytes_per_elem_v,
@@ -4607,7 +4650,20 @@ mod plan_offload_tests {
                 cpu_moe = true;
                 gl
             }
-            _ => match compute_fit(less(reserve), info, file_size, ctx, F16.0, F16.1, DEFAULT_VRAM_RESERVE_BYTES) {
+            // Since 27-11-2026 the experts `--cpu-moe`/`--n-cpu-moe` keep in
+            // RAM are left out of what is sized for the GPU.
+            _ => match compute_fit(
+                less(reserve),
+                info,
+                match layout {
+                    Some(l) if cpu_moe || n_cpu_moe > 0 => gpu_bytes_of(l, cpu_moe, n_cpu_moe),
+                    _ => file_size,
+                },
+                ctx,
+                F16.0,
+                F16.1,
+                DEFAULT_VRAM_RESERVE_BYTES,
+            ) {
                 FitDecision::FitsFully => -1,
                 FitDecision::Partial { layers, .. } => layers,
                 FitDecision::Unknown { .. } => flags.gpu_layers,
@@ -4699,6 +4755,50 @@ mod plan_offload_tests {
             }
         }
         assert!(cases > 10_000, "{cases}");
+    }
+
+    /// `--cpu-moe`/`--n-cpu-moe` given by hand: what those flags keep in RAM
+    /// is not sized for the GPU. Sizing the whole file put whole layers in
+    /// RAM besides the experts (Inkling 2 Mini with `--n-cpu-moe 7`,
+    /// Qwen3.8-Flash-Next with `--cpu-moe` at 10 of 48 layers, 27-11-2026).
+    #[test]
+    fn experts_kept_in_ram_by_the_flags_are_not_sized_for_the_gpu() {
+        let (info, layout, file_size) = moe();
+        assert_eq!(gpu_bytes_of(&layout, true, 0), 2 * GIB);
+        assert_eq!(gpu_bytes_of(&layout, false, 8), 2 * GIB + 40 * 400 * MIB);
+        assert_eq!(gpu_bytes_of(&layout, false, 0), file_size);
+
+        // 20.75 GiB of file on a card with 12 GiB free: whole with every
+        // expert in RAM, and with those of 30 layers.
+        let plan = |cpu_moe, n_cpu_moe| {
+            plan_offload(
+                Some((12 * GIB, 16 * GIB)),
+                Some(&info),
+                Some(&layout),
+                file_size,
+                4096,
+                F16.0,
+                F16.1,
+                0,
+                0,
+                OffloadFlags {
+                    cpu_moe,
+                    n_cpu_moe,
+                    ..flags()
+                },
+            )
+        };
+        let all = plan(true, 0);
+        assert_eq!(all.basis, OffloadBasis::Dense(FitDecision::FitsFully));
+        assert_eq!(all.gpu_layers, -1);
+        let thirty = plan(false, 30);
+        assert_eq!(thirty.basis, OffloadBasis::Dense(FitDecision::FitsFully));
+        assert_eq!(thirty.gpu_layers, -1);
+        // Too few in RAM for the rest to fit: layers go to RAM as before.
+        assert!(matches!(
+            plan(false, 2).basis,
+            OffloadBasis::Dense(FitDecision::Partial { .. })
+        ));
     }
 
     #[test]
