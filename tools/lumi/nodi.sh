@@ -16,6 +16,11 @@
 #
 #   LUMI_PLAN_END=2027-03-09 LUMI_ALLOC_END=2027-03-12 LUMI_START=2026-09-12
 #   LUMI_NODE_HOURS=4500       what the allocation holds
+#   LUMI_DOWN=2027-01-11:2027-01-29   announced downtimes, FIRST:LAST,... (both
+#                              days in): no job runs then, so they are left out
+#                              of the straight line and of the days to go
+#                              (CSC's notice of 27-11-2026: LUMI offline from
+#                              11 January, back by the end of 29 January 2027)
 
 set -uo pipefail
 # shellcheck source-path=SCRIPTDIR source=campaign_env.sh
@@ -28,7 +33,7 @@ WAIT=$(squeue --me -h -t PENDING -o '%j/%P' 2>/dev/null | sort | uniq -c | awk '
 
 ALLOC="$ALLOC" RUN="$RUN" WAIT="$WAIT" "$PY" - "$EULLM_REPO/bench/campaign" "$ACCOUNT" \
     "${LUMI_NODE_HOURS:-4500}" "${LUMI_START:-2026-09-12}" "${LUMI_PLAN_END:-2027-03-09}" \
-    "${LUMI_ALLOC_END:-2027-03-12}" <<'PY'
+    "${LUMI_ALLOC_END:-2027-03-12}" "${LUMI_DOWN-2027-01-11:2027-01-29}" <<'PY'
 import datetime as dt
 import math
 import os
@@ -39,6 +44,7 @@ import budget  # noqa: E402
 
 account, total = sys.argv[2], float(sys.argv[3])
 start, plan_end, alloc_end = (dt.date.fromisoformat(a) for a in sys.argv[4:7])
+down = budget.parse_downtime(sys.argv[7] if len(sys.argv) > 7 else "")
 per = budget.GPU_HOURS_PER_NODE_HOUR
 now = dt.datetime.now()
 try:
@@ -70,14 +76,19 @@ if billed:
 else:
     left = left_slurm
     print(f"Left: {left:,.0f} node-hours by Slurm, of {total:,.0f} (lumi-allocations gave no figure)")
+for first, last in down:
+    if dt.datetime.combine(last + dt.timedelta(days=1), dt.time()) > now:
+        print(f"  LUMI down {first} to {last} ({(last - first).days + 1} days): no job runs then, "
+              f"left out of the days below and of the straight line")
 for label, end in (("to the plan's end", plan_end), ("to the allocation's end", alloc_end)):
-    to_go = (dt.datetime.combine(end + dt.timedelta(days=1), dt.time()) - now).total_seconds() / 86400
+    to_go = budget.up_seconds(now, dt.datetime.combine(end + dt.timedelta(days=1), dt.time()),
+                              down) / 86400
     need = left / to_go
     print(f"  {label} {end}: {to_go:5.1f} days, {need:5.1f} node-hours a day "
           f"({need / 24:.2f} nodes busy around the clock)")
 # Days without a job are covered only by spending ahead of the line (PI, 04-11-2026).
 alloc_total = billed["allocated"] / per if billed else total
-m = budget.margin(alloc_total, start, plan_end, now, alloc_total - left)
+m = budget.margin(alloc_total, start, plan_end, now, alloc_total - left, down)
 if m["ahead_node_hours"] >= 0:
     print(f"  ahead of the straight line {start} to {plan_end}: {m['ahead_node_hours']:,.0f} "
           f"node-hours, {m['days']:.1f} days without a job before an hour is left over")
@@ -86,7 +97,7 @@ else:
           f"node-hours ({-m['days']:.1f} days at its {m['line_node_hours_per_day']:.1f} a day): "
           f"a day without a job now leaves hours unspent at the end")
 if week > 0:
-    out = budget.runs_out(left, week / 7, now, plan_end)
+    out = budget.runs_out(left, week / 7, now, plan_end, down)
     if out["date"]:
         print(f"  at the last 7 days' {week / 7:.1f} a day the hours run out on {out['date']}, "
               f"{out['days_early']:.0f} days before {plan_end}: more are asked for by then")

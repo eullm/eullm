@@ -128,6 +128,23 @@ is even possible in ten seconds: `ls /usr/share/vulkan/icd.d` and
   at `/opt/rocm` — which happens to be exactly where our build script looks by
   default. The `amdgpu` driver in use is compatible with ROCm userland 6.1 to
   7.0.
+- **January 2027: LUMI offline from 11 January, back by the end of 29 January**
+  (CSC's notice to lumi-users, 27-11-2026; LUMI-O stays up). After it the
+  login nodes run SLES 15 SP7, Slurm and the Slingshot host software are new,
+  the system ROCm at `/opt/rocm` is **7.2.4** with its driver (which runs ROCm
+  userland 6.3 to 10.1), the default programming environment is 26.03 (ROCm 7,
+  clang/LLVM 21, GCC 14), and the 23.09 and 24.03 environments, AOCC 3.2/4.1
+  and GCC 12/13 are removed. Every engine binary built here so far links the
+  ROCm 6.3.4 libraries of `/opt/rocm` (`libamdhip64.so.6`, rocBLAS, hipBLAS,
+  RCCL): after the update they are not expected to start, so each binary is
+  built again with ROCm 7.2.4, and a measurement before the update and one
+  after differ by ROCm too, not only by the engine. The driver in use until
+  then runs ROCm userland up to 7.0: a build with a ROCm 7.0 (LUST's
+  `rocm/7.0.3` module, or the `ccpe/26.03` container CSC offers for testing)
+  can be run and measured before the break, against the same engine on 6.3.4.
+  CSC's pages: the `LUMI-training-materials` "Update-202701" notice; the AI
+  containers it names (`lumi-multitorch-*`) are for PyTorch work and do not
+  concern the engine, which is built natively.
 - **Billing**: on `standard-g` a node-hour costs 4 GPU-hours (whole nodes are
   allocated); `small-g` and `dev-g` bill 0.5 per GCD-hour, so single-device
   experiments are cheap. Storage bills the volume *stored* × time, not the

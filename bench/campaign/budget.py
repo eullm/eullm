@@ -156,16 +156,56 @@ def recovery(budget_node_hours: float, start: dt.date, end: dt.date, behind: flo
     return {"line_node_hours_per_day": round(line, 1), "catch_up_days": catch_up}
 
 
+def parse_downtime(text: str) -> list:
+    """The machine's announced downtimes, `FIRST:LAST,...` with both days in
+    (`2027-01-11:2027-01-29`), as (first, last) dates in order."""
+    out = []
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        first, _, last = part.partition(":")
+        first = dt.date.fromisoformat(first.strip())
+        last = dt.date.fromisoformat((last or first.isoformat()).strip())
+        if last < first:
+            raise ValueError(f"downtime {part}: ends before it starts")
+        out.append((first, last))
+    return sorted(out)
+
+
+def up_seconds(a: dt.datetime, b: dt.datetime, downtime=()) -> float:
+    """Seconds from `a` to `b` that fall outside the downtimes: the time a job
+    can run in."""
+    total = max((b - a).total_seconds(), 0.0)
+    for first, last in downtime:
+        lo = max(a, dt.datetime.combine(first, dt.time()))
+        hi = min(b, dt.datetime.combine(last + dt.timedelta(days=1), dt.time()))
+        if hi > lo:
+            total -= (hi - lo).total_seconds()
+    return max(total, 0.0)
+
+
 def runs_out(left_node_hours: float, rate_node_hours_per_day: float, now: dt.datetime,
-             end: dt.date) -> dict:
+             end: dt.date, downtime=()) -> dict:
     """When what is left is spent at a rate a day: the date, and how many days
     before the end date that is (None for both when nothing is spent at that
     rate, or when it lasts past the end). Spending the allocation by need
     rather than by the straight line makes this the date by which more
-    hours have to be asked for."""
+    hours have to be asked for. Nothing is spent during a downtime."""
     if rate_node_hours_per_day <= 0:
         return {"date": None, "days_early": None}
-    when = now + dt.timedelta(days=max(left_node_hours, 0.0) / rate_node_hours_per_day)
+    need = dt.timedelta(days=max(left_node_hours, 0.0) / rate_node_hours_per_day)
+    when = now
+    for first, last in downtime:
+        down = dt.datetime.combine(first, dt.time())
+        back = dt.datetime.combine(last + dt.timedelta(days=1), dt.time())
+        if back <= when:
+            continue
+        if when + need <= down:
+            break
+        need -= max(down - when, dt.timedelta(0))
+        when = back
+    when = when + need
     early = (dt.datetime.combine(end, dt.time()) - when).total_seconds() / 86400
     if early <= 0:
         return {"date": None, "days_early": None}
@@ -173,15 +213,22 @@ def runs_out(left_node_hours: float, rate_node_hours_per_day: float, now: dt.dat
 
 
 def margin(budget_node_hours: float, start: dt.date, end: dt.date, now: dt.datetime,
-           spent_node_hours: float) -> dict:
+           spent_node_hours: float, downtime=()) -> dict:
     """How far the spend is ahead of the straight line from the start to the
     end of `end` (negative: behind it), in node-hours and in days of that
     line's rate: the days without a job (a maintenance, no way to log in)
     the allocation can take before an hour of it goes unspent at the end.
-    The PI's rule since 04-11-2026: always ahead, never on the line."""
+    The PI's rule since 04-11-2026: always ahead, never on the line.
+
+    The line runs only while the machine is up: an announced `downtime`
+    (LUMI's 11-29 January 2027) is left out of it, so the line is steeper
+    before it and flat across it, and the margin says how far ahead the
+    spend is of what the days the machine will be up require."""
     begin = dt.datetime.combine(start, dt.time())
-    span = (dt.datetime.combine(end + dt.timedelta(days=1), dt.time()) - begin).total_seconds()
-    done = min(max((now - begin).total_seconds() / span, 0.0), 1.0) if span > 0 else 1.0
+    finish = dt.datetime.combine(end + dt.timedelta(days=1), dt.time())
+    span = up_seconds(begin, finish, downtime)
+    done = (min(up_seconds(begin, min(max(now, begin), finish), downtime) / span, 1.0)
+            if span > 0 else 1.0)
     ahead = spent_node_hours - budget_node_hours * done
     rate = budget_node_hours / (span / 86400) if span > 0 else 0.0
     return {"ahead_node_hours": round(ahead, 1), "line_node_hours_per_day": round(rate, 1),
