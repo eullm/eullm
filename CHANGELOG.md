@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **Anthropic's Messages API, `/v1/messages`: EuLLM in Claude Code.** Point Claude Code at EuLLM with `ANTHROPIC_BASE_URL=http://localhost:11434` and `ANTHROPIC_MODEL=<a model of yours>` and it runs on a local model. Tool calls, thinking when asked for, and streaming in Anthropic's events; errors in Anthropic's shape. Images in a message are not read yet. Setup and limits in the engine guide.
+
 ## 0.10.20 — 2026-11-27
 
 ### Added

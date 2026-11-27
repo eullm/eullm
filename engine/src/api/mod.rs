@@ -17,6 +17,7 @@
 //! `resident::ResidentModels`.
 
 pub(crate) mod admin;
+mod anthropic;
 pub(crate) mod auth;
 pub(crate) mod managed;
 mod decision_policy;
@@ -5483,6 +5484,41 @@ mod http_tests {
         assert!(!tags.to_string().contains("eullm-router"), "{tags}");
         let (_, models) = get_json(&format!("{base}/v1/models")).await;
         assert!(!models.to_string().contains(r#""id":"auto""#), "{models}");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// `/v1/messages` answers through `/v1/chat/completions` and errs in
+    /// Anthropic's shape, which Claude Code and the Anthropic SDKs read: a
+    /// model nobody has is `not_found_error`, a request that does not
+    /// translate `invalid_request_error`.
+    #[tokio::test]
+    async fn anthropic_messages_err_in_anthropic_shape() {
+        let tmp = std::env::temp_dir().join(format!("eullm-messages-{}", uuid::Uuid::new_v4()));
+        let base = spawn(store_with_one_model(&tmp, "a-pulled-model")).await;
+        let (status, text) = post_json(
+            &format!("{base}/v1/messages"),
+            serde_json::json!({
+                "model": "no-such-model",
+                "max_tokens": 16,
+                "messages": [{ "role": "user", "content": "hi" }],
+            }),
+        )
+        .await;
+        assert_eq!(status, 404, "{text}");
+        let answer: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(answer["type"], "error");
+        assert_eq!(answer["error"]["type"], "not_found_error");
+        assert!(text.contains("no-such-model"), "{text}");
+
+        let (status, text) = post_json(
+            &format!("{base}/v1/messages"),
+            serde_json::json!({ "model": "a-pulled-model", "messages": [{ "role": "system", "content": "x" }] }),
+        )
+        .await;
+        assert_eq!(status, 400, "{text}");
+        let answer: serde_json::Value = serde_json::from_str(&text).expect("json");
+        assert_eq!(answer["error"]["type"], "invalid_request_error");
+        assert!(text.contains("messages[0].role"), "{text}");
         let _ = std::fs::remove_dir_all(&tmp);
     }
 

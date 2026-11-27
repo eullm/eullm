@@ -354,6 +354,8 @@ pub fn openai_routes() -> Router<S> {
     Router::new()
         .route("/models", get(list_models_openai))
         .route("/chat/completions", post(chat_completions))
+        // Anthropic's Messages API, for Claude Code and the Anthropic SDKs.
+        .route("/messages", post(messages))
         .route("/embeddings", post(embeddings_openai))
         // System One-compatible decisions (TypeSafe's Jev API shape): typed
         // answers read from a decision model's logits. Under /v1 because
@@ -4189,6 +4191,78 @@ async fn chat_completions_with(
             .into_response())
         }
     }
+}
+
+/// `/v1/messages`: Anthropic's Messages API, translated to and answered by
+/// `/v1/chat/completions` (see `super::anthropic`). Errors go out in
+/// Anthropic's shape, which its clients read.
+async fn messages(
+    State(state): State<S>,
+    axum::Extension(identity): axum::Extension<super::Identity>,
+    Json(body): Json<Value>,
+) -> axum::response::Response {
+    use super::anthropic;
+    let refused = |status: StatusCode, message: &str| {
+        (status, Json(anthropic::error(status.as_u16(), message))).into_response()
+    };
+    let error_text = |answer: &Value| match &answer["error"] {
+        Value::String(text) => text.clone(),
+        Value::Null => "the request failed".to_string(),
+        other => other.to_string(),
+    };
+    let chat = match anthropic::to_chat_completions(&body) {
+        Ok(chat) => chat,
+        Err(why) => return refused(StatusCode::BAD_REQUEST, &why),
+    };
+    let response = match answer_routed(
+        state,
+        identity,
+        chat,
+        StreamFormat::OpenAI,
+        chat_completions_with,
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(refusal) => {
+            let mut response = refused(refusal.status, &error_text(&refusal.body.0));
+            if let Some(secs) = refusal.retry_after_secs {
+                response
+                    .headers_mut()
+                    .insert(header::RETRY_AFTER, axum::http::HeaderValue::from(secs));
+            }
+            return response;
+        }
+    };
+    let (parts, answer) = response.into_parts();
+    let answer: Value = match axum::body::to_bytes(answer, usize::MAX).await {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        Err(e) => return refused(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    if !parts.status.is_success() {
+        return refused(parts.status, &error_text(&answer));
+    }
+    let model = answer["model"]
+        .as_str()
+        .or_else(|| body["model"].as_str())
+        .unwrap_or_default();
+    let message = anthropic::from_chat_completion(&answer, model);
+    let mut response = if is_streaming(&body) {
+        let event = |(name, data): (&str, Value)| {
+            Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data.to_string()))
+        };
+        let events = anthropic::stream_events(&message).into_iter().map(event);
+        Sse::new(futures_util::stream::iter(events)).into_response()
+    } else {
+        Json(message).into_response()
+    };
+    // The route `"model": "auto"` took, as on /v1/chat/completions.
+    for (name, value) in &parts.headers {
+        if name.as_str().starts_with("x-eullm") {
+            response.headers_mut().insert(name.clone(), value.clone());
+        }
+    }
+    response
 }
 
 // ── Streaming helpers ────────────────────────────────────────────────────────

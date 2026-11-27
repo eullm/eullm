@@ -26,6 +26,45 @@ What you get on top of the Ollama-compatible API:
 
 [→ Engine scaling](benchmarks.md) · [→ Why EULLM](why-eullm.md) · [→ Changelog](../CHANGELOG.md)
 
+### Claude Code and Anthropic's API (`/v1/messages`, new in 0.10.30)
+
+EuLLM answers Anthropic's Messages API as well, at `/v1/messages` on the
+same port, so Claude Code and the Anthropic SDKs can run on a local model.
+Claude Code reads where to send its requests from the environment:
+
+```bash
+eullm serve --default-model qwen3.8-27b-ud-q4_k_m -c 65536
+```
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:11434 \
+ANTHROPIC_AUTH_TOKEN=local \
+ANTHROPIC_MODEL=qwen3.8-27b-ud-q4_k_m \
+ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3.8-27b-ud-q4_k_m \
+claude
+```
+
+`ANTHROPIC_AUTH_TOKEN` goes out as `Authorization: Bearer`: one of
+`EULLM_API_KEYS` where the server has keys, anything otherwise (it keeps
+Claude Code from asking for a login). `ANTHROPIC_DEFAULT_HAIKU_MODEL` is the
+model Claude Code uses for its background work; without it, it asks for a
+Claude model the server does not have.
+
+A request is answered by `/v1/chat/completions`: the model's chat template,
+its tool calls, `"model": "auto"` and the audit trail are the same.
+Thinking runs when the request asks for it (`thinking`), as on Anthropic's
+API. A streamed answer is generated whole and then sent as Anthropic's
+events, as a streamed answer with tools is on `/v1/chat/completions`: Claude
+Code always sends tools. Images and documents in a message are replaced by a
+note saying they were not read, and `stop_sequences` is not applied.
+`/v1/messages/count_tokens` is not there: Claude Code estimates without it.
+
+Claude Code asks a lot of a model. Its instructions and tool definitions
+are tens of thousands of tokens on every request, so give the server a
+large context (`-c 65536` or more) and a model that calls tools well; a
+small model will lose its way. Anthropic does not support Claude Code on
+models other than Claude.
+
 ## Decisions without generation
 
 ### Decisions without generation (`/v1/systemone`, new in v0.7.20)
