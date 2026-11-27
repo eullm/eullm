@@ -88,3 +88,40 @@ def test_the_margin_is_the_spend_ahead_of_the_straight_line_in_days_of_it():
                          dt.datetime(2026, 9, 1), 0)["ahead_node_hours"] == 0
     assert budget.margin(100, dt.date(2026, 9, 12), dt.date(2027, 3, 9),
                          dt.datetime(2027, 4, 1), 100)["ahead_node_hours"] == 0
+
+
+def test_an_announced_downtime_is_left_out_of_the_line():
+    """CSC's notice of 27-11-2026: LUMI offline 11-29 January 2027. On
+    26-11-2026, 2,289 of 4,500 node-hours spent were 380 ahead of the line
+    over the whole calendar (15.1 days); over the 160 days the machine is up
+    the line is steeper (28.1 a day) and the spend only about 150 ahead."""
+    now = dt.datetime(2026, 11, 26, 21, 40)
+    start, end = dt.date(2026, 9, 12), dt.date(2027, 3, 9)
+    down = budget.parse_downtime("2027-01-11:2027-01-29")
+    assert down == [(dt.date(2027, 1, 11), dt.date(2027, 1, 29))]
+    plain = budget.margin(4500, start, end, now, 2289)
+    assert 375 < plain["ahead_node_hours"] < 385
+    m = budget.margin(4500, start, end, now, 2289, down)
+    assert m["line_node_hours_per_day"] == 28.1
+    assert 140 < m["ahead_node_hours"] < 160 and 5.0 < m["days"] < 5.7
+    # Across the downtime the line stands still, and after the end all of it is due.
+    during = [budget.margin(4500, start, end, dt.datetime(2027, 1, d), 3500, down)
+              for d in (12, 28)]
+    assert during[0]["ahead_node_hours"] == during[1]["ahead_node_hours"]
+    assert budget.margin(4500, start, end, dt.datetime(2027, 4, 1), 4500, down)[
+        "ahead_node_hours"] == 0
+    # 19 days of it fall between now and the end: none of them can be spent.
+    up = budget.up_seconds(now, dt.datetime(2027, 3, 10), down) / 86400
+    assert 84.0 < up < 84.2
+
+
+def test_the_hours_run_out_later_across_a_downtime():
+    now = dt.datetime(2026, 12, 20)
+    down = budget.parse_downtime("2027-01-11:2027-01-29")
+    # 30 days' worth: 22 before the downtime, the other 8 after it.
+    out = budget.runs_out(300, 10, now, dt.date(2027, 3, 9), down)
+    assert out["date"] == "2027-02-07"
+    # Spent before it starts: unchanged.
+    assert budget.runs_out(100, 10, now, dt.date(2027, 3, 9), down)["date"] == "2026-12-30"
+    assert budget.parse_downtime("") == [] and budget.parse_downtime(" 2027-01-11 ") == [
+        (dt.date(2027, 1, 11), dt.date(2027, 1, 11))]

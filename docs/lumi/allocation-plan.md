@@ -1265,6 +1265,30 @@ soaks in a chain of 13 jobs of 8 hours, 24060909 to 24060921, after
 `sbatch` was slow that evening. Covered to about 30-11; the next work goes
 in behind 24060921 by 29-11.
 
+27-11-2026, CSC's notice: **LUMI offline 11-29 January 2027**, ROCm 7.2.4 and
+programming environment 26.03 after it (`lumi-g.md`, "The machine"). What it
+does to this plan:
+
+- **The margin was smaller than `nodi` said.** Its straight line ran over the
+  whole calendar, the 19 days off included; a line over the days the machine
+  is up is steeper (28.1 node-hours a day, not 25.1) and on 26-11 the spend
+  was about 150 node-hours ahead of it (5.4 days), not 380 (15.1).
+  `budget.margin` and `nodi` now leave announced downtimes out of the line,
+  of the days to go and of when the hours run out (`LUMI_DOWN`, set to
+  2027-01-11:2027-01-29 by default).
+- **What is left must go in 84 days, not 103**: 2,211 node-hours at 26.3 a
+  day, so about 30 a day from now to 10-01 (one node and a quarter busy
+  around the clock), no day empty, and over Christmas chains long enough to
+  reach 10-01 without a session. Jobs end before 11-01: a job whose time
+  crosses into the break does not start.
+- **ROCm 7.** The binaries built so far link ROCm 6.3.4 and are not expected
+  to start after the update; the engine is built again with ROCm 7.2.4 then,
+  and before the break once with ROCm 7.0 (which the present driver runs),
+  to find what the move breaks (the HIP sides of patches `0011` and the
+  expert cache, RCCL) while LUMI is still up, and to measure ROCm 6.3 against
+  7.0 on the same engine, so that the first round after the break is read
+  against the right baseline.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
