@@ -3702,6 +3702,10 @@ async fn cmd_run(
                         host_bytes: 0,
                     }
                 };
+                // With `--cpu-moe`/`--n-cpu-moe` the experts those flags keep
+                // in RAM are not the GPU's to hold: only the rest is sized
+                // (`fit::gpu_bytes_with_experts_in_ram`).
+                let gpu_bytes = fit::gpu_bytes_with_experts_in_ram(&gguf_path, cpu_moe, n_cpu_moe);
                 match moe_plan.decision {
                     fit::MoeFitDecision::Proceed { n_cpu_moe: computed } if computed > 0 => {
                         println!(
@@ -3792,6 +3796,7 @@ async fn cmd_run(
                             sizing_reserve,
                             vram_reserve,
                             kv_layout,
+                            gpu_bytes,
                         )
                     } else {
                         fit::run_fit_headless(
@@ -3804,6 +3809,7 @@ async fn cmd_run(
                             sizing_reserve,
                             vram_reserve,
                             kv_layout,
+                            gpu_bytes,
                         )
                     } {
                         fit::FitOutcome::Proceed(n) => {

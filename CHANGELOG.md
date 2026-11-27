@@ -19,6 +19,7 @@ something changed, less so for understanding what it means.
 - **llama.cpp b12767** (llama.cpp 1.1.0): Inkling 2's graph does fewer operations per token (part of what Unsloth's own build gained), and two new architectures, Hunyuan V4 Flash (`hy_v4_flash`) and RAON-1 (`raon1`).
 
 ### Fixed
+- **`--cpu-moe` and `--n-cpu-moe` given by hand put whole layers in RAM too**: the sizing counted the experts those flags keep in RAM as if the GPU had to hold them, found the model too large for the card and moved whole layers to the CPU besides. Qwen3.8-Flash-Next IQ2_XS with `--cpu-moe` loaded 10 of its 48 layers on a 16 GB GPU and wrote 6.3 tokens/s; Inkling 2 Mini with `--n-cpu-moe 7` wrote 35.5 tokens/s against llama-server's 42.8 with the same flag. Now only what stays on the GPU is sized, in `eullm run` and in the models `serve` loads. The engine's own choice of experts in RAM, without those flags, was not affected.
 - **Inkling 2 Mini UD-Q4_K_XL ran out of VRAM on a 16 GB GPU** (`-c 16000`, RTX 5070 Ti alone): with some experts in RAM, reading a prompt runs their layers on the GPU on copies of them, and Inkling's loop keeps those copies until its last pass, so sending more experts to RAM freed nothing and the sizing loaded a split it had measured not to fit. Where no split fits, the engine now runs the experts in RAM on the CPU while reading prompts (llama.cpp's `op_offload` off): prompts are read more slowly, the model loads, and the log says so.
 
 ## 0.10.10 — 2026-11-25
