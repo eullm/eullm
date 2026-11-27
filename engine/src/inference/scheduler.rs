@@ -874,6 +874,13 @@ pub struct ModelReadyInfo {
     /// before it settled on a different number than the plan's
     /// (`measured_fit`): the banner shows this one.
     pub n_cpu_moe: Option<u32>,
+    /// The expert cache the context was built with, in bytes, when it has
+    /// one: the plan's, grown into the VRAM left over or measured beside a
+    /// split across GPUs; the banner shows this one.
+    pub moe_cache_bytes: Option<u64>,
+    /// Every layer's experts in RAM, as the measure loaded them, when it
+    /// measured (`measured_fit`).
+    pub cpu_moe: Option<bool>,
 }
 
 /// The batch scheduler. Owns the llama.cpp backend, model, and context.
@@ -2617,7 +2624,9 @@ fn run_scheduler_loop(
     kv_info.n_batch = Some(ctx.n_batch());
     kv_info.n_ubatch = Some(ctx.n_ubatch());
     kv_info.kv_fallback = kv_fallback;
-    kv_info.n_cpu_moe = measured.map(|m| m.n_cpu_moe);
+    kv_info.n_cpu_moe = measured.as_ref().map(|m| m.n_cpu_moe);
+    kv_info.cpu_moe = measured.as_ref().map(|m| m.cpu_moe);
+    kv_info.moe_cache_bytes = (config.moe_cache_bytes > 0).then_some(config.moe_cache_bytes);
 
     // Signal that the model is loaded and ready.
     let _ = ready_tx.send(Ok((kv_info, Arc::downgrade(&model_owner))));

@@ -3216,6 +3216,9 @@ async fn cmd_run(
     // checks that split against what llama.cpp measures (see
     // `inference::measured_fit`).
     let mut measured_fit: Option<inference::measured_fit::MeasuredFit> = None;
+    // A MoE model with an expert cache, beside a GPU of another backend: the
+    // first GPU alone (`fit::moe_cache_on_first_gpu_alone`).
+    let mut first_gpu_only = false;
     // `--n-batch`, `--n-ubatch` and `--no-mmap` as given, for the API server,
     // which sizes every model it loads from them; the launch model's own may
     // change below with an expert cache (`fit::MOE_CACHE_N_UBATCH`,
@@ -3667,10 +3670,14 @@ async fn cmd_run(
                 gpu_layers = -1;
                 moe_cache_bytes = cache.bytes;
                 moe_cache_grow = cache.grow;
-                // Several GPUs: the first caches, the others hold whole
-                // layers, as llama.cpp measures them to fit
-                // (`inference::measured_fit`).
-                if gpu_split.is_default() && fit::device_vram().len() > 1 {
+                // Several GPUs of the CUDA backend: the first caches, the
+                // others hold whole layers, as llama.cpp measures them to fit
+                // (`inference::measured_fit`). Beside one of another
+                // backend, the first alone.
+                if gpu_split.is_default() && fit::moe_cache_on_first_gpu_alone() {
+                    first_gpu_only = true;
+                    println!("[EULLM] {}.", fit::FIRST_GPU_ALONE_LINE);
+                } else if gpu_split.is_default() && fit::device_vram().len() > 1 {
                     measured_fit = Some(inference::measured_fit::MeasuredFit {
                         keep_bytes: companion_reserve_bytes
                             .saturating_add(mmproj_placement.reserve(mmproj_bytes))
@@ -3932,11 +3939,12 @@ async fn cmd_run(
 
         // The prefetch's slots, where experts are kept in RAM and pinned, on
         // the one CUDA or ROCm GPU it runs on.
-        moe_prefetch_slots = if fit::moe_prefetch_support() {
-            fit::prefetch_slots(moe_prefetch, no_mmap, cpu_moe, n_cpu_moe)
-        } else {
-            0
-        };
+        moe_prefetch_slots =
+            if fit::moe_prefetch_support() && (fit::device_vram().len() <= 1 || first_gpu_only) {
+                fit::prefetch_slots(moe_prefetch, no_mmap, cpu_moe, n_cpu_moe)
+            } else {
+                0
+            };
         if moe_prefetch_slots > 0 {
             println!(
                 "[EULLM] --moe-prefetch: the experts in RAM of a long prompt are copied to the \
@@ -3972,6 +3980,7 @@ async fn cmd_run(
             gpu_split: gpu_split.clone(),
             measured_fit,
             op_offload: true,
+            first_gpu_only,
         };
 
         // A model with a projector runs on the scheduler too, which reads a
@@ -3999,6 +4008,8 @@ async fn cmd_run(
                     n_batch = model_info.n_batch.unwrap_or(n_batch);
                     n_ubatch = model_info.n_ubatch.unwrap_or(n_ubatch);
                     n_cpu_moe = model_info.n_cpu_moe.unwrap_or(n_cpu_moe);
+                    cpu_moe = model_info.cpu_moe.unwrap_or(cpu_moe);
+                    moe_cache_bytes = model_info.moe_cache_bytes.unwrap_or(moe_cache_bytes);
                     scheduler = Some(handle);
                     println!("Model loaded (continuous batching, max_batch_size={batch_size}).");
                 }
