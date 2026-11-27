@@ -736,10 +736,12 @@ impl AppState {
                             crate::fit::OffloadBasis::Dense(crate::fit::FitDecision::FitsFully) => {
                                 plan.gpu_layers < 0 && crate::fit::device_vram().len() > 1
                             }
-                            // An expert cache on several GPUs: the first caches,
-                            // the others hold whole layers.
+                            // An expert cache on several GPUs of the CUDA backend:
+                            // the first caches, the others hold whole layers.
                             crate::fit::OffloadBasis::MoeCache { .. } => {
-                                plan.gpu_layers < 0 && crate::fit::device_vram().len() > 1
+                                plan.gpu_layers < 0
+                                    && crate::fit::device_vram().len() > 1
+                                    && !crate::fit::moe_cache_on_first_gpu_alone()
                             }
                             _ => false,
                         }
@@ -790,8 +792,21 @@ impl AppState {
                     load_no_mmap = true;
                 }
             }
-            let moe_prefetch_slots =
-                crate::fit::prefetch_slots(moe_prefetch, load_no_mmap, cpu_moe, n_cpu_moe);
+            // An expert cache beside a GPU of another backend: the first GPU
+            // alone (`fit::moe_cache_on_first_gpu_alone`).
+            let first_gpu_only = moe_cache_bytes > 0
+                && gpu_split.is_default()
+                && crate::fit::moe_cache_on_first_gpu_alone();
+            if first_gpu_only {
+                tracing::info!("{}", crate::fit::FIRST_GPU_ALONE_LINE);
+            }
+            // The prefetch runs on one GPU: with several, only where the
+            // model goes to the first alone.
+            let moe_prefetch_slots = if crate::fit::device_vram().len() > 1 && !first_gpu_only {
+                0
+            } else {
+                crate::fit::prefetch_slots(moe_prefetch, load_no_mmap, cpu_moe, n_cpu_moe)
+            };
             if moe_prefetch_slots > 0 {
                 tracing::info!(
                     "--moe-prefetch: the experts in RAM of a long prompt are copied to the GPU \
@@ -834,6 +849,7 @@ impl AppState {
                 gpu_split,
                 measured_fit,
                 op_offload: true,
+                first_gpu_only,
             };
             if mmproj_path.is_some() {
                 tracing::info!("{}", mmproj_placement.describe());
@@ -1009,14 +1025,14 @@ impl AppState {
                 // What this load was given, not the server's flags: the plan's
                 // split, and the measure's where it settled on another.
                 gpu_layers,
-                cpu_moe,
+                cpu_moe: info.cpu_moe.unwrap_or(cpu_moe),
                 n_cpu_moe: info.n_cpu_moe.unwrap_or(n_cpu_moe),
                 rs_seq: self.rs_seq,
                 // Drafts on the scheduler's one slot only.
                 mtp: if batch_size == 1 { self.mtp } else { 0 },
                 mtp_p_min: self.mtp_p_min,
                 mtp_model: self.mtp_model.clone(),
-                moe_cache_bytes,
+                moe_cache_bytes: info.moe_cache_bytes.unwrap_or(moe_cache_bytes),
                 no_mmap: load_no_mmap,
                 moe_prefetch_slots,
                 ctx_checkpoints: self.ctx_checkpoints,

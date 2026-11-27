@@ -1549,21 +1549,29 @@ stayed on the first card. Only between the layers of the two cards does
 anything cross between them, a few MB for each micro-batch, so a slot on the
 chipset's slower lanes is enough.
 
-A MoE model whose experts do not fit even on the two cards keeps the expert
-cache (from the release after 0.10.10). llama.cpp caches the experts in RAM
-of each layer on the card the layer is assigned to, so the first card (CUDA,
-or ROCm) takes the first layers, with their experts in RAM, and caches them;
-the other card takes the last layers whole, experts included, as many as
-llama.cpp measures to fit there, and the cache gets what is left on the
-first. The log has a line "Measured placement across the GPUs with the
-expert cache" with the layers on each card and the cache's size. Before, two
-cards turned the cache off: Qwen3.8-Flash-Next IQ2_XS at `-c 40960` wrote
-23.6 tokens/s on the RTX 5070 Ti and the Radeon, the experts of 28 of its 48
-layers read from RAM uncached, against 74.4 on the 5070 Ti alone with the
-cache (`bench/prefetch_check.sh`, 27-11-2026). The prefetch
-(`--moe-prefetch`) still runs on one GPU only, and is off with two:
-prompts are read faster on the 5070 Ti alone (1,795 tokens/s against 884).
-`GGML_VK_VISIBLE_DEVICES=1`, on that machine, leaves the Radeon out.
+A MoE model with the expert cache goes to the NVIDIA card alone, cache and
+prefetch on it, and the other card is left idle (from the release after
+0.10.10; a dense model still uses both). The cache keeps a MoE layer cheap
+on the CUDA card, and on Vulkan the same layer costs more than the cache
+saves. Qwen3.8-Flash-Next IQ2_XS at `-c 40960` (`bench/prefetch_check.sh`,
+27-11-2026):
+
+| Where | Prompt read | Answer written |
+|---|---|---|
+| Both cards, no cache (up to 0.10.10) | 884 tokens/s | 23.6 tokens/s |
+| Both cards, the cache on the 5070 Ti, 10 layers whole on the Radeon | 788 | 35.3 |
+| The 5070 Ti alone, cache and prefetch (the default now) | 1,795 | 74.4 |
+
+Vulkan's per-operation timing (`GGML_VK_PERF_LOGGER=1`) showed why: an
+operation that does almost nothing (`ADD`, `FILL`) takes at least 9 µs on
+the Radeon, a layer of this model has dozens, and the product with a
+layer's experts took 144 µs, ten times what reading them at the card's
+speed would. A dense layer reads hundreds of MB a token, and there the
+card's speed is what counts. The log says "loading on the first GPU alone".
+With two cards of the CUDA backend (CUDA or ROCm), the first caches and the
+other holds the last layers whole, as many as llama.cpp measures to fit
+there ("Measured placement across the GPUs with the expert cache"): not
+measured yet. `--tensor-split` given by hand keeps both cards.
 
 Since 0.10.0 the Linux CUDA binary of the releases (`eullm-linux-x64-cuda-13.1`)
 carries Vulkan too, so nothing has to be built: on an RTX 5070 Ti beside a

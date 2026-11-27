@@ -383,9 +383,13 @@ fn media_token_costs(
 ///
 /// Returns `None` when there is no GPU device at all (a CPU-only run has no
 /// VRAM margin to check) rather than bogus figures.
-fn gpu_memory() -> Option<(u64, u64)> {
-    // Each discrete card once, as llama.cpp loads on it (`fit::gpu_devices`).
-    let gpus = crate::fit::device_vram();
+fn gpu_memory(first_gpu_only: bool) -> Option<(u64, u64)> {
+    // Each discrete card once, as llama.cpp loads on it (`fit::gpu_devices`);
+    // the first alone where the load is on it alone.
+    let mut gpus = crate::fit::device_vram();
+    if first_gpu_only {
+        gpus.truncate(1);
+    }
     if !gpus.is_empty() {
         let (free, total) = gpus
             .iter()
@@ -534,7 +538,7 @@ pub(crate) fn grow_moe_cache(
         let mut probe = config.clone();
         probe.moe_cache_bytes = bytes;
         let ctx = model.new_context(backend, params_for(&probe)).ok()?;
-        let memory = gpu_memory();
+        let memory = gpu_memory(config.first_gpu_only);
         drop(ctx);
         memory
     };
@@ -603,6 +607,16 @@ pub(crate) fn with_text_model_params<R>(
     // unless a device cannot use mapped memory, and is left to decide.
     let model_params = if config.no_mmap {
         model_params.with_use_mmap(false)
+    } else {
+        model_params
+    };
+    // The first GPU alone (`InferenceConfig::first_gpu_only`).
+    let model_params = if config.first_gpu_only {
+        let first = crate::fit::first_gpu_registry_index()
+            .ok_or_else(|| "no GPU to load on alone".to_string())?;
+        model_params
+            .with_devices(&[first])
+            .map_err(|e| format!("loading on the first GPU alone: {e}"))?
     } else {
         model_params
     };
@@ -876,6 +890,10 @@ pub struct InferenceConfig {
     /// On by default; off only where `measured_fit` finds that those copies
     /// are what keeps the model from fitting (see `measured_fit::run`).
     pub op_offload: bool,
+    /// Load on the first GPU alone, the others left idle: a MoE model with an
+    /// expert cache where another GPU is not of the CUDA backend
+    /// (`fit::moe_cache_on_first_gpu_alone`).
+    pub first_gpu_only: bool,
 }
 
 impl Default for InferenceConfig {
@@ -912,6 +930,7 @@ impl Default for InferenceConfig {
             gpu_split: crate::gpu_split::GpuSplit::default(),
             measured_fit: None,
             op_offload: true,
+            first_gpu_only: false,
         }
     }
 }
@@ -2344,7 +2363,7 @@ impl InferenceEngine {
                 // its memory is still held at this point, so this is asking
                 // "what would be left over if this candidate were kept."
                 Ok(ctx) => {
-                    let memory = gpu_memory();
+                    let memory = gpu_memory(config.first_gpu_only);
                     drop(ctx);
                     match memory {
                         Some((free, _)) if free < min_free => {

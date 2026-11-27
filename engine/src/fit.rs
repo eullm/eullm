@@ -2650,11 +2650,65 @@ pub fn moe_cache_support() -> Result<(), String> {
 }
 
 /// Whether the prefetch (`--moe-prefetch`, patches 0003 and 0004) can run:
-/// where the expert cache can, on one GPU. Its copy stream would have to
+/// where the expert cache can, on one GPU, the only one or the first alone
+/// ([`moe_cache_on_first_gpu_alone_on`]). Its copy stream would have to
 /// follow each layer to its GPU, and with several the patch turns it off.
 pub fn moe_prefetch_support() -> bool {
     let gpus = gpu_names();
-    gpus.len() == 1 && moe_cache_support_on(&gpus).is_ok()
+    moe_cache_support_on(&gpus).is_ok()
+        && (gpus.len() == 1 || moe_cache_on_first_gpu_alone_on(&gpus))
+}
+
+/// [`moe_cache_on_first_gpu_alone_on`] for the GPUs ggml lists.
+pub fn moe_cache_on_first_gpu_alone() -> bool {
+    moe_cache_on_first_gpu_alone_on(&gpu_names())
+}
+
+/// Whether a MoE model with an expert cache goes to the first GPU alone:
+/// the first is CUDA or ROCm and another is not (Vulkan, say). The cache
+/// keeps a MoE layer's cost low on the first GPU, and a layer on Vulkan
+/// costs more than the cache saves: on an RTX 5070 Ti beside a Radeon RX
+/// 6700 XT, Qwen3.8-Flash-Next IQ2_XS wrote 35.3 tokens/s with 10 of its 48
+/// layers whole on the Radeon, against 76.2 on the 5070 Ti alone
+/// (27-11-2026). Vulkan's per-operation time showed why: at least 9 µs for
+/// an operation that does almost nothing (`ADD`, `FILL`), dozens of them in
+/// a layer, and the product with a layer's experts 144 µs, ten times what
+/// reading them at the card's speed takes; on a dense model the reading is
+/// most of the time, and there the second card pays. Several GPUs of the
+/// CUDA backend share the model, the first caching
+/// (`inference::measured_fit`): not measured yet.
+pub fn moe_cache_on_first_gpu_alone_on(gpus: &[String]) -> bool {
+    let cuda = |name: &String| name.starts_with("CUDA") || name.starts_with("ROCm");
+    gpus.len() > 1 && cuda(&gpus[0]) && !gpus[1..].iter().all(cuda)
+}
+
+/// What the load log says when a MoE model goes to the first GPU alone.
+pub const FIRST_GPU_ALONE_LINE: &str = "MoE model with an expert cache: loading on the first GPU \
+     alone, the expert cache there; a GPU of another backend beside it computes a MoE layer more \
+     slowly than the cache saves (a dense model uses every GPU)";
+
+/// The free and total VRAM an expert cache is sized against: the first
+/// GPU's where the cache goes to it alone, `None` otherwise (every GPU's,
+/// as the caller has it).
+fn moe_cache_vram() -> Option<(u64, u64)> {
+    if moe_cache_on_first_gpu_alone() {
+        device_vram()
+            .first()
+            .copied()
+            .filter(|&(_, total)| total > 0)
+    } else {
+        None
+    }
+}
+
+/// The first GPU's index in ggml's device registry, what
+/// `LlamaModelParams::with_devices` takes, to load on it alone.
+pub fn first_gpu_registry_index() -> Option<usize> {
+    let first = *gpu_devices().first()?;
+    // SAFETY: indices below the registry's count; `ggml_backend_dev_get`
+    // returns a device the registry owns.
+    let count = unsafe { llama_cpp_sys_2::ggml_backend_dev_count() };
+    (0..count).find(|&i| unsafe { llama_cpp_sys_2::ggml_backend_dev_get(i) } == first)
 }
 
 /// The names ggml gives its GPUs (`CUDA0`, `ROCm0`, ...), in its order.
@@ -3137,7 +3191,9 @@ pub fn run_moe_cache(
         (Some(i), size) if size > 0 => read_model_moe_layout(model_path, i.n_layers),
         _ => None,
     };
-    let vram = vram_bytes().map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
+    let vram = moe_cache_vram()
+        .or_else(vram_bytes)
+        .map(|(free, total)| (free.saturating_sub(reserve_bytes), total));
     plan_moe_cache(
         request,
         vram,
@@ -3491,11 +3547,18 @@ pub fn plan_offload(
         forced => MmprojPlacement::from_flag(forced),
     };
     let vram = without(reserve_bytes.saturating_add(mmproj.reserve(mmproj_bytes)));
+    // The first GPU's alone where the cache goes to it alone.
+    let cache_vram = moe_cache_vram()
+        .map(|(free, total)| {
+            let reserved = reserve_bytes.saturating_add(mmproj.reserve(mmproj_bytes));
+            (free.saturating_sub(reserved), total)
+        })
+        .or(vram);
 
     let cache = flags.moe_cache.and_then(|request| {
         plan_moe_cache(
             request,
-            vram,
+            cache_vram,
             info,
             layout,
             ctx_size,
@@ -3777,6 +3840,14 @@ mod tests {
         assert!(moe_cache_support_on(&gpus(&["ROCm0", "ROCm1"])).is_ok());
         assert!(moe_cache_support_on(&gpus(&["CUDA0", "Vulkan0"])).is_ok());
         assert!(moe_cache_support_on(&gpus(&["Vulkan0", "CUDA0"])).unwrap_err().contains("Vulkan0"));
+        // Beside a GPU of another backend the first goes alone; beside one of
+        // the CUDA backend the two share the model.
+        assert!(!moe_cache_on_first_gpu_alone_on(&gpus(&["CUDA0"])));
+        let alone = |names: &[&str]| moe_cache_on_first_gpu_alone_on(&gpus(names));
+        assert!(alone(&["CUDA0", "Vulkan0"]));
+        assert!(alone(&["ROCm0", "CUDA0", "Vulkan0"]));
+        assert!(!alone(&["CUDA0", "CUDA1"]));
+        assert!(!alone(&["Vulkan0", "CUDA0"]));
     }
 
     /// Build a minimal valid GGUF header with a single `<arch>.block_count`
