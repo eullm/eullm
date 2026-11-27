@@ -26,7 +26,7 @@ What you get on top of the Ollama-compatible API:
 
 [→ Engine scaling](benchmarks.md) · [→ Why EULLM](why-eullm.md) · [→ Changelog](../CHANGELOG.md)
 
-### Claude Code and Anthropic's API (`/v1/messages`, new in 0.10.30)
+### Claude Code and Anthropic's API (`/v1/messages`, new in 0.10.20)
 
 EuLLM answers Anthropic's Messages API as well, at `/v1/messages` on the
 same port, so Claude Code and the Anthropic SDKs can run on a local model.

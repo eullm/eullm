@@ -13,15 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## Unreleased
-
-### Added
-- **Anthropic's Messages API, `/v1/messages`: EuLLM in Claude Code.** Point Claude Code at EuLLM with `ANTHROPIC_BASE_URL=http://localhost:11434` and `ANTHROPIC_MODEL=<a model of yours>` and it runs on a local model. Tool calls, thinking when asked for, and streaming in Anthropic's events; errors in Anthropic's shape. Images in a message are not read yet. Setup and limits in the engine guide.
-
 ## 0.10.20 — 2026-11-27
 
 ### Added
 - **llama.cpp b12767** (llama.cpp 1.1.0): Inkling 2's graph does fewer operations per token (part of what Unsloth's own build gained), and two new architectures, Hunyuan V4 Flash (`hy_v4_flash`) and RAON-1 (`raon1`).
+- **Anthropic's Messages API, `/v1/messages`: EuLLM in Claude Code.** Point Claude Code at EuLLM with `ANTHROPIC_BASE_URL=http://localhost:11434`, `ANTHROPIC_MODEL=<a model of yours>` and `CLAUDE_CODE_MAX_CONTEXT_TOKENS=<the server's -c>`, and it runs on a local model: tried with Claude Code 2.1.332 on Qwen3.8-27B, listing a folder, reading and editing a file. Tool calls, thinking when asked for, and streaming in Anthropic's events (the answer arrives whole, as with tools on `/v1/chat/completions`); errors in Anthropic's shape. Images in a message are not read yet. Setup and limits in the engine guide.
 
 ### Fixed
 - **`--cpu-moe` and `--n-cpu-moe` given by hand put whole layers in RAM too**: the sizing counted the experts those flags keep in RAM as if the GPU had to hold them, found the model too large for the card and moved whole layers to the CPU besides. Qwen3.8-Flash-Next IQ2_XS with `--cpu-moe` loaded 10 of its 48 layers on a 16 GB GPU and wrote 6.3 tokens/s; Inkling 2 Mini with `--n-cpu-moe 7` wrote 35.5 tokens/s against llama-server's 42.8 with the same flag. Now only what stays on the GPU is sized, in `eullm run` and in the models `serve` loads. The engine's own choice of experts in RAM, without those flags, was not affected.

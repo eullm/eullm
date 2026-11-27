@@ -92,7 +92,7 @@ which to use, with startup scripts to copy.
 
 | | |
 |---|---|
-| 🚀 **It starts with one command** | One binary and `eullm run`: the chat UI and the Ollama, OpenAI and Anthropic APIs on port 11434 come up together, so Open WebUI, LangChain, n8n, any OpenAI client and [Claude Code](docs/engine-guide.md#claude-code-and-anthropics-api-v1messages-new-in-01030) work unchanged. Your LM Studio or Hugging Face folders run as they are (`EULLM_MODEL_LIBRARIES`). |
+| 🚀 **It starts with one command** | One binary and `eullm run`: the chat UI and the Ollama, OpenAI and Anthropic APIs on port 11434 come up together, so Open WebUI, LangChain, n8n, any OpenAI client and [Claude Code](docs/engine-guide.md#claude-code-and-anthropics-api-v1messages-new-in-01020) work unchanged. Your LM Studio or Hugging Face folders run as they are (`EULLM_MODEL_LIBRARIES`). |
 | 🌍 **From the edge to HPC** | The same engine on a Raspberry Pi, a 35B MoE at 10.8 tokens/s on an ARM board's CPU alone, Qwen3-8B at 1,065 tokens/s across 16 requests on a desktop RTX 5070 Ti, and the EuroHPC supercomputers Leonardo, LUMI and JUPITER: CUDA, ROCm, Vulkan, Metal and CPU builds. [Where it runs](#runs-everywhere-from-an-arm-board-to-a-supercomputer) |
 | ⚡ **A decision mode: `/v1/systemone`** | The model gives the probability of every option and generates nothing: 64 questions about a page in 0.66 s on one RTX 5070 Ti, the same answer bit for bit, and every decision in the local audit trail. [Decisions in milliseconds](#decisions-in-milliseconds-all-local) |
 
