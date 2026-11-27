@@ -2080,10 +2080,19 @@ fn run_scheduler_loop(
         if let Some(m) =
             super::measured_fit::run(&config, gpu_layers, ctx_size, n_seq_max, n_outputs_max)
         {
+            config.cpu_moe = m.cpu_moe;
             config.n_cpu_moe = m.n_cpu_moe;
             config.n_ubatch = m.n_ubatch;
             config.op_offload = m.op_offload;
             if !m.op_offload {
+                config.moe_prefetch_slots = 0;
+            }
+            // An expert cache on the first of several GPUs: the size measured,
+            // not grown later against every GPU's free memory together, and
+            // no prefetch, which runs on one GPU only.
+            if let Some(bytes) = m.moe_cache_bytes {
+                config.moe_cache_bytes = bytes;
+                config.moe_cache_grow = None;
                 config.moe_prefetch_slots = 0;
             }
             if let Some(tensor_split) = &m.tensor_split {

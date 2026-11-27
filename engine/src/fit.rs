@@ -2642,11 +2642,19 @@ pub fn read_in_whole_on_gpu(
     ))
 }
 
-/// Whether llama.cpp's expert cache can run on this machine: one GPU of
-/// ggml's CUDA backend (see [`moe_cache_support_on`]). `Err` says why not,
-/// for the log.
+/// Whether llama.cpp's expert cache can run on this machine: the first GPU
+/// of ggml's CUDA backend (see [`moe_cache_support_on`]). `Err` says why
+/// not, for the log.
 pub fn moe_cache_support() -> Result<(), String> {
     moe_cache_support_on(&gpu_names())
+}
+
+/// Whether the prefetch (`--moe-prefetch`, patches 0003 and 0004) can run:
+/// where the expert cache can, on one GPU. Its copy stream would have to
+/// follow each layer to its GPU, and with several the patch turns it off.
+pub fn moe_prefetch_support() -> bool {
+    let gpus = gpu_names();
+    gpus.len() == 1 && moe_cache_support_on(&gpus).is_ok()
 }
 
 /// The names ggml gives its GPUs (`CUDA0`, `ROCm0`, ...), in its order.
@@ -2669,22 +2677,31 @@ fn gpu_names() -> Vec<String> {
         .collect()
 }
 
-/// [`moe_cache_support`] for the GPUs ggml lists, by name. The cache
-/// refuses more than one device. What it runs on is ggml's CUDA backend
-/// (pinned host memory, a second stream for the prefetch, patches 0001 to
-/// 0004), which ggml also builds for HIP: its GPUs are `CUDA0` built with
-/// CUDA and `ROCm0` built for AMD's. ROCm is allowed since 14-10-2026, to be
-/// measured on LUMI's MI250X; other backends are refused.
+/// [`moe_cache_support`] for the GPUs ggml lists, by name, in its order.
+/// What the cache runs on is ggml's CUDA backend (pinned host memory, patches
+/// 0001 and 0002), which ggml also builds for HIP: its GPUs are `CUDA0` built
+/// with CUDA and `ROCm0` built for AMD's. ROCm is allowed since 14-10-2026,
+/// to be measured on LUMI's MI250X; other backends are refused.
+///
+/// With several GPUs it is the first that counts. llama.cpp's cache caches
+/// the experts in RAM of each layer on the GPU the layer is assigned to
+/// (b12767's `llama-moe-cache.cpp`), and the layers whose experts stay in
+/// RAM are the first, which go to the first GPU; the others hold whole
+/// layers (`inference::measured_fit`). Until 0.10.10 several GPUs turned the
+/// cache off, a rule of the llama.cpp before, whose cache took one device:
+/// on an RTX 5070 Ti beside a Radeon RX 6700 XT, Qwen3.8-Flash-Next IQ2_XS
+/// then wrote 23.6 tokens/s with the experts of 28 layers in RAM, against
+/// 74.4 on the 5070 Ti alone with the cache (27-11-2026).
 pub fn moe_cache_support_on(gpus: &[String]) -> Result<(), String> {
     match gpus {
         [] => Err("no GPU".to_string()),
-        [name] if name.starts_with("CUDA") || name.starts_with("ROCm") => Ok(()),
-        [name] => Err(format!(
-            "{name} is not a GPU of the CUDA backend (CUDA or ROCm), the only one it runs on"
+        [first, ..] if first.starts_with("CUDA") || first.starts_with("ROCm") => Ok(()),
+        [first] => Err(format!(
+            "{first} is not a GPU of the CUDA backend (CUDA or ROCm), the only one it runs on"
         )),
-        _ => Err(format!(
-            "{} GPUs, and llama.cpp's cache works with one",
-            gpus.len()
+        [first, ..] => Err(format!(
+            "the first GPU, {first}, which holds the layers whose experts are in RAM, is not \
+             one of the CUDA backend (CUDA or ROCm), the only one it runs on"
         )),
     }
 }
@@ -3751,13 +3768,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_expert_cache_runs_on_one_gpu_of_the_cuda_backend_built_for_cuda_or_rocm() {
+    fn the_expert_cache_runs_where_the_first_gpu_is_of_the_cuda_backend() {
         let gpus = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
         assert!(moe_cache_support_on(&gpus(&["CUDA0"])).is_ok());
         assert!(moe_cache_support_on(&gpus(&["ROCm0"])).is_ok());
         assert!(moe_cache_support_on(&gpus(&["Vulkan0"])).unwrap_err().contains("Vulkan0"));
         assert_eq!(moe_cache_support_on(&gpus(&[])).unwrap_err(), "no GPU");
-        assert!(moe_cache_support_on(&gpus(&["ROCm0", "ROCm1"])).unwrap_err().starts_with("2 GPUs"));
+        assert!(moe_cache_support_on(&gpus(&["ROCm0", "ROCm1"])).is_ok());
+        assert!(moe_cache_support_on(&gpus(&["CUDA0", "Vulkan0"])).is_ok());
+        assert!(moe_cache_support_on(&gpus(&["Vulkan0", "CUDA0"])).unwrap_err().contains("Vulkan0"));
     }
 
     /// Build a minimal valid GGUF header with a single `<arch>.block_count`
@@ -4906,8 +4925,8 @@ mod plan_offload_tests {
     }
 
     /// The cache is on by itself only where nothing else says where the
-    /// experts go, and on one GPU of the CUDA backend; what the user asked
-    /// for is kept, `off` aside, which is no cache at all.
+    /// experts go, and where the first GPU is of the CUDA backend; what the
+    /// user asked for is kept, `off` aside, which is no cache at all.
     #[test]
     fn the_expert_cache_comes_on_by_itself_only_where_nothing_places_the_experts() {
         let cuda = vec!["CUDA0".to_string()];
@@ -4928,15 +4947,19 @@ mod plan_offload_tests {
         assert_eq!(on(None, true, false, 20, 0, &cuda), None);
         assert_eq!(on(None, true, false, 0, 2, &cuda), None);
         // Otherwise the default, which the planner keeps to where the cache
-        // gains, on one GPU of the CUDA backend, CUDA or ROCm; not on two
-        // GPUs, on none or on another backend.
+        // gains, where the first GPU is of the CUDA backend, CUDA or ROCm,
+        // another beside it or not; not on none or on another backend.
         assert_eq!(on(None, true, false, 0, 0, &cuda), Some(MoeCache::Default));
         assert_eq!(
             on(None, true, false, 0, 0, &["ROCm0".to_string()]),
             Some(MoeCache::Default)
         );
         assert_eq!(
-            on(None, true, false, 0, 0, &["CUDA0".into(), "CUDA1".into()]),
+            on(None, true, false, 0, 0, &["CUDA0".into(), "Vulkan0".into()]),
+            Some(MoeCache::Default)
+        );
+        assert_eq!(
+            on(None, true, false, 0, 0, &["Vulkan0".into(), "CUDA0".into()]),
             None
         );
         assert_eq!(on(None, true, false, 0, 0, &["Vulkan0".to_string()]), None);

@@ -3629,10 +3629,14 @@ async fn cmd_run(
                     cpu_moe,
                     n_cpu_moe,
                     n_ubatch_flag.is_none(),
-                    // The cache runs on one CUDA or ROCm GPU, which is all the
-                    // prefetch needs besides pinned experts.
+                    // The prefetch runs where the cache does, on one GPU
+                    // only, and needs pinned experts besides.
                     fit::MoePrefetch {
-                        slots: moe_prefetch,
+                        slots: if fit::moe_prefetch_support() {
+                            moe_prefetch
+                        } else {
+                            0
+                        },
                         no_mmap,
                         keep_mapped: mmap,
                         ram_total: fit::system_ram_bytes(),
@@ -3663,6 +3667,17 @@ async fn cmd_run(
                 gpu_layers = -1;
                 moe_cache_bytes = cache.bytes;
                 moe_cache_grow = cache.grow;
+                // Several GPUs: the first caches, the others hold whole
+                // layers, as llama.cpp measures them to fit
+                // (`inference::measured_fit`).
+                if gpu_split.is_default() && fit::device_vram().len() > 1 {
+                    measured_fit = Some(inference::measured_fit::MeasuredFit {
+                        keep_bytes: companion_reserve_bytes
+                            .saturating_add(mmproj_placement.reserve(mmproj_bytes))
+                            .saturating_add(mtp_reserve),
+                        ubatch_raised: false,
+                    });
+                }
                 if let Some(larger) = cache.n_ubatch {
                     n_ubatch = larger;
                     n_batch = inference::batch_for_ubatch(n_batch, larger);
@@ -3916,8 +3931,8 @@ async fn cmd_run(
         }
 
         // The prefetch's slots, where experts are kept in RAM and pinned, on
-        // the one CUDA or ROCm GPU it runs on (the expert cache's own condition).
-        moe_prefetch_slots = if fit::moe_cache_support().is_ok() {
+        // the one CUDA or ROCm GPU it runs on.
+        moe_prefetch_slots = if fit::moe_prefetch_support() {
             fit::prefetch_slots(moe_prefetch, no_mmap, cpu_moe, n_cpu_moe)
         } else {
             0
