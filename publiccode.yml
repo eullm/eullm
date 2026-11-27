@@ -9,8 +9,8 @@ publiccodeYmlVersion: "0.7"
 name: EuLLM
 url: "https://github.com/eullm/eullm"
 landingURL: "https://www.eullm.eu"
-softwareVersion: "0.10.10"
-releaseDate: "2026-11-25"
+softwareVersion: "0.10.20"
+releaseDate: "2026-11-27"
 logo: eullm-logo-github.png
 
 platforms:
