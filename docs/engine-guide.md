@@ -1574,9 +1574,15 @@ there ("Measured placement across the GPUs with the expert cache"): not
 measured yet. `--tensor-split` given by hand keeps both cards.
 
 Since 0.10.0 the Linux CUDA binary of the releases (`eullm-linux-x64-cuda-13.1`)
-carries Vulkan too, so nothing has to be built: on an RTX 5070 Ti beside a
-Radeon RX 6700 XT it wrote Qwen3.8-27B at 25.6 tokens/s, as the build below
-does. It opens the Vulkan library when it starts instead of needing it to
+carries Vulkan too, so nothing has to be built. On an RTX 5070 Ti beside a
+Radeon RX 6700 XT, Qwen3.8-27B UD-Q4_K_M writes 29.6 tokens/s at
+`-c 32768` with 0.10.20, against 22.0 with 0.10.10 (400 tokens, the same
+script and machine, 27-11-2026), and 51.6 at `-c 4096`. The context decides
+it: its KV cache stays beside its layers, and the more of the 5070 Ti it
+takes, the more of the weights go to the Radeon, which reads them two and a
+half times more slowly (9.4 GB on it at `-c 32768`). `--cache-type-k q8_0
+--cache-type-v q8_0` halves the cache and leaves the 5070 Ti more layers.
+It opens the Vulkan library when it starts instead of needing it to
 start, so it still runs in a CUDA container or on a server without Vulkan;
 where that leaves an AMD or Intel Arc card idle, a box on the terminal and a
 banner at the top of the chat say so, with the command that installs Vulkan.
