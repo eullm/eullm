@@ -76,6 +76,15 @@ large context (`-c 65536` or more) and a model that calls tools well; a
 small model will lose its way. Anthropic does not support Claude Code on
 models other than Claude.
 
+Auto mode, where a classifier approves Claude Code's actions, is not one to
+rely on here. Its new version is checked by Anthropic's servers inside the
+requests to a Claude model, which a local model has none of, and Claude Code
+2.1.332 says so with a notice about `localhost:11434`; for now it falls back
+to its own classifier requests (`CLAUDE_CODE_AUTO_MODE_SERVER=0` hides the
+notice), and a later release drops that fallback, after which checked
+actions are asked about or denied. Use the default mode, where you approve,
+or the one that accepts file edits.
+
 ## Decisions without generation
 
 ### Decisions without generation (`/v1/systemone`, new in v0.7.20)
