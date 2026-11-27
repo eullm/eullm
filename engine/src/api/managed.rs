@@ -118,7 +118,7 @@ fn route_of(method: &Method, path: &str) -> Route {
         (
             &Method::POST,
             "/api/generate" | "/api/chat" | "/api/embed" | "/api/route" | "/v1/chat/completions"
-            | "/v1/embeddings" | "/v1/systemone",
+            | "/v1/messages" | "/v1/embeddings" | "/v1/systemone",
         ) => Route::UsesModel,
         _ => Route::Other,
     }

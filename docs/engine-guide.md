@@ -26,6 +26,45 @@ What you get on top of the Ollama-compatible API:
 
 [→ Engine scaling](benchmarks.md) · [→ Why EULLM](why-eullm.md) · [→ Changelog](../CHANGELOG.md)
 
+### Claude Code and Anthropic's API (`/v1/messages`, new in 0.10.30)
+
+EuLLM answers Anthropic's Messages API as well, at `/v1/messages` on the
+same port, so Claude Code and the Anthropic SDKs can run on a local model.
+Claude Code reads where to send its requests from the environment:
+
+```bash
+eullm serve --default-model qwen3.8-27b-ud-q4_k_m -c 65536
+```
+
+```bash
+ANTHROPIC_BASE_URL=http://localhost:11434 \
+ANTHROPIC_AUTH_TOKEN=local \
+ANTHROPIC_MODEL=qwen3.8-27b-ud-q4_k_m \
+ANTHROPIC_DEFAULT_HAIKU_MODEL=qwen3.8-27b-ud-q4_k_m \
+claude
+```
+
+`ANTHROPIC_AUTH_TOKEN` goes out as `Authorization: Bearer`: one of
+`EULLM_API_KEYS` where the server has keys, anything otherwise (it keeps
+Claude Code from asking for a login). `ANTHROPIC_DEFAULT_HAIKU_MODEL` is the
+model Claude Code uses for its background work; without it, it asks for a
+Claude model the server does not have.
+
+A request is answered by `/v1/chat/completions`: the model's chat template,
+its tool calls, `"model": "auto"` and the audit trail are the same.
+Thinking runs when the request asks for it (`thinking`), as on Anthropic's
+API. A streamed answer is generated whole and then sent as Anthropic's
+events, as a streamed answer with tools is on `/v1/chat/completions`: Claude
+Code always sends tools. Images and documents in a message are replaced by a
+note saying they were not read, and `stop_sequences` is not applied.
+`/v1/messages/count_tokens` is not there: Claude Code estimates without it.
+
+Claude Code asks a lot of a model. Its instructions and tool definitions
+are tens of thousands of tokens on every request, so give the server a
+large context (`-c 65536` or more) and a model that calls tools well; a
+small model will lose its way. Anthropic does not support Claude Code on
+models other than Claude.
+
 ## Decisions without generation
 
 ### Decisions without generation (`/v1/systemone`, new in v0.7.20)
@@ -1574,9 +1613,15 @@ there ("Measured placement across the GPUs with the expert cache"): not
 measured yet. `--tensor-split` given by hand keeps both cards.
 
 Since 0.10.0 the Linux CUDA binary of the releases (`eullm-linux-x64-cuda-13.1`)
-carries Vulkan too, so nothing has to be built: on an RTX 5070 Ti beside a
-Radeon RX 6700 XT it wrote Qwen3.8-27B at 25.6 tokens/s, as the build below
-does. It opens the Vulkan library when it starts instead of needing it to
+carries Vulkan too, so nothing has to be built. On an RTX 5070 Ti beside a
+Radeon RX 6700 XT, Qwen3.8-27B UD-Q4_K_M writes 29.6 tokens/s at
+`-c 32768` with 0.10.20, against 22.0 with 0.10.10 (400 tokens, the same
+script and machine, 27-11-2026), and 51.6 at `-c 4096`. The context decides
+it: its KV cache stays beside its layers, and the more of the 5070 Ti it
+takes, the more of the weights go to the Radeon, which reads them two and a
+half times more slowly (9.4 GB on it at `-c 32768`). `--cache-type-k q8_0
+--cache-type-v q8_0` halves the cache and leaves the 5070 Ti more layers.
+It opens the Vulkan library when it starts instead of needing it to
 start, so it still runs in a CUDA container or on a server without Vulkan;
 where that leaves an AMD or Intel Arc card idle, a box on the terminal and a
 banner at the top of the chat say so, with the command that installs Vulkan.

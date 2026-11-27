@@ -13,6 +13,11 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
+## Unreleased
+
+### Added
+- **Anthropic's Messages API, `/v1/messages`: EuLLM in Claude Code.** Point Claude Code at EuLLM with `ANTHROPIC_BASE_URL=http://localhost:11434` and `ANTHROPIC_MODEL=<a model of yours>` and it runs on a local model. Tool calls, thinking when asked for, and streaming in Anthropic's events; errors in Anthropic's shape. Images in a message are not read yet. Setup and limits in the engine guide.
+
 ## 0.10.20 — 2026-11-27
 
 ### Added
@@ -22,6 +27,9 @@ something changed, less so for understanding what it means.
 - **`--cpu-moe` and `--n-cpu-moe` given by hand put whole layers in RAM too**: the sizing counted the experts those flags keep in RAM as if the GPU had to hold them, found the model too large for the card and moved whole layers to the CPU besides. Qwen3.8-Flash-Next IQ2_XS with `--cpu-moe` loaded 10 of its 48 layers on a 16 GB GPU and wrote 6.3 tokens/s; Inkling 2 Mini with `--n-cpu-moe 7` wrote 35.5 tokens/s against llama-server's 42.8 with the same flag. Now only what stays on the GPU is sized, in `eullm run` and in the models `serve` loads. The engine's own choice of experts in RAM, without those flags, was not affected.
 - **Inkling 2 Mini UD-Q4_K_XL ran out of VRAM on a 16 GB GPU** (`-c 16000`, RTX 5070 Ti alone): with some experts in RAM, reading a prompt runs their layers on the GPU on copies of them, and Inkling's loop keeps those copies until its last pass, so sending more experts to RAM freed nothing and the sizing loaded a split it had measured not to fit. Where no split fits, the engine now runs the experts in RAM on the CPU while reading prompts (llama.cpp's `op_offload` off): prompts are read more slowly, the model loads, and the log says so.
 - **A MoE model on two GPUs lost the expert cache**: with a second card the cache was turned off, a rule of the llama.cpp before b12767, whose cache took one GPU. Qwen3.8-Flash-Next IQ2_XS on an RTX 5070 Ti and a Radeon RX 6700 XT wrote 23.6 tokens/s with the experts of 28 layers read from RAM uncached, against 74.4 on the 5070 Ti alone with the cache. Now a MoE model with the cache goes to the NVIDIA card alone, with the cache and the prompt prefetch, where the other card is on Vulkan: on Vulkan a MoE layer costs more than the cache saves (35.3 tokens/s with 10 layers on the Radeon). A dense model still uses both cards. With two cards of the CUDA backend the first caches and the other holds the last layers whole, as many as llama.cpp measures to fit. The summary at start shows the cache the load really made, not the plan's figure.
+
+### Performance
+- **A dense model on two cards writes faster**: Qwen3.8-27B UD-Q4_K_M on an RTX 5070 Ti and a Radeon RX 6700 XT at `-c 32768` writes 29.6 tokens/s, against 22.0 with 0.10.10 on the same machine; more of the model stays on the faster card. A MoE model that uses the expert cache next to a Vulkan card goes from 23.6 to 76.0 tokens/s (Qwen3.8-Flash-Next IQ2_XS, see Fixed).
 
 ## 0.10.10 — 2026-11-25
 
