@@ -1545,10 +1545,25 @@ uses, and gains little from the second card.
 
 Inkling 2's loop needed a change to llama.cpp for this (patch `0016`): the
 layers its later passes repeat were split by index, so their weights all
-stayed on the first card. The expert cache and the
-prefetch run on one GPU only and stay off. Only between the layers of the
-two cards does anything cross between them, a few MB for each micro-batch,
-so a slot on the chipset's slower lanes is enough.
+stayed on the first card. Only between the layers of the two cards does
+anything cross between them, a few MB for each micro-batch, so a slot on the
+chipset's slower lanes is enough.
+
+A MoE model whose experts do not fit even on the two cards keeps the expert
+cache (from the release after 0.10.10). llama.cpp caches the experts in RAM
+of each layer on the card the layer is assigned to, so the first card (CUDA,
+or ROCm) takes the first layers, with their experts in RAM, and caches them;
+the other card takes the last layers whole, experts included, as many as
+llama.cpp measures to fit there, and the cache gets what is left on the
+first. The log has a line "Measured placement across the GPUs with the
+expert cache" with the layers on each card and the cache's size. Before, two
+cards turned the cache off: Qwen3.8-Flash-Next IQ2_XS at `-c 40960` wrote
+23.6 tokens/s on the RTX 5070 Ti and the Radeon, the experts of 28 of its 48
+layers read from RAM uncached, against 74.4 on the 5070 Ti alone with the
+cache (`bench/prefetch_check.sh`, 27-11-2026). The prefetch
+(`--moe-prefetch`) still runs on one GPU only, and is off with two:
+prompts are read faster on the 5070 Ti alone (1,795 tokens/s against 884).
+`GGML_VK_VISIBLE_DEVICES=1`, on that machine, leaves the Radeon out.
 
 Since 0.10.0 the Linux CUDA binary of the releases (`eullm-linux-x64-cuda-13.1`)
 carries Vulkan too, so nothing has to be built: on an RTX 5070 Ti beside a

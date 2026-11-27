@@ -526,9 +526,9 @@ impl AppState {
                 None
             }
         });
-        // The prefetch runs where the expert cache does, on one CUDA or ROCm GPU; it
-        // is on by default, so elsewhere it goes without a word.
-        let moe_prefetch = if crate::fit::moe_cache_support().is_ok() {
+        // The prefetch runs where the expert cache does, on one CUDA or ROCm GPU
+        // only; it is on by default, so elsewhere it goes without a word.
+        let moe_prefetch = if crate::fit::moe_prefetch_support() {
             self.moe_prefetch
         } else {
             0
@@ -734,6 +734,11 @@ impl AppState {
                             crate::fit::OffloadBasis::MoeExperts { .. } => true,
                             // Whole on several GPUs: the fastest filled first.
                             crate::fit::OffloadBasis::Dense(crate::fit::FitDecision::FitsFully) => {
+                                plan.gpu_layers < 0 && crate::fit::device_vram().len() > 1
+                            }
+                            // An expert cache on several GPUs: the first caches,
+                            // the others hold whole layers.
+                            crate::fit::OffloadBasis::MoeCache { .. } => {
                                 plan.gpu_layers < 0 && crate::fit::device_vram().len() > 1
                             }
                             _ => false,

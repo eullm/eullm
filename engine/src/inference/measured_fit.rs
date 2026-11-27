@@ -22,7 +22,9 @@
 //!
 //! Only for a single GPU, without an expert cache and without a split of the
 //! user's: the cache already measures itself (`grow_moe_cache`), and several
-//! GPUs are balanced by `fit::balance_moe_split`.
+//! GPUs are balanced by `fit::balance_moe_split`. Several GPUs are measured
+//! where the model goes to them whole (`run_across_gpus`) and where they share
+//! it with an expert cache (`run_cache_across_gpus`).
 
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -176,6 +178,7 @@ pub fn prefer_default_ubatch(raised: Settled, default: Settled, n_layers: u32) -
 /// with, when they differ from the plan's.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Measured {
+    pub cpu_moe: bool,
     pub n_cpu_moe: u32,
     pub n_ubatch: u32,
     /// llama.cpp's `op_offload`: false where the GPU's copies of the experts
@@ -184,6 +187,10 @@ pub struct Measured {
     /// Several GPUs: the layers each one holds, in ggml's order of the GPUs
     /// (`--tensor-split` as counts of layers, the output layer last).
     pub tensor_split: Option<Vec<f32>>,
+    /// The expert cache measured beside the split, in bytes, where several
+    /// GPUs share a model with one (see [`run_cache_across_gpus`]): it is
+    /// not grown after the load, and the prefetch is off.
+    pub moe_cache_bytes: Option<u64>,
 }
 
 /// Measure the load `config` describes and settle its split (see the module
@@ -199,6 +206,22 @@ pub(crate) fn run(
     n_outputs_max: u32,
 ) -> Option<Measured> {
     let fit = config.measured_fit?;
+    // An expert cache and several GPUs: the first caches, the others hold
+    // whole layers.
+    if config.moe_cache_bytes > 0 && config.gpu_split.is_default() && gpu_layers < 0 {
+        let gpus = crate::fit::gpu_devices();
+        if gpus.len() > 1 {
+            return run_cache_across_gpus(
+                config,
+                fit,
+                &gpus,
+                gpu_layers,
+                ctx_size,
+                n_seq_max,
+                n_outputs_max,
+            );
+        }
+    }
     if !config.cpu_moe
         && config.n_cpu_moe == 0
         && config.moe_cache_bytes == 0
@@ -370,10 +393,12 @@ pub(crate) fn run(
     tracing::info!("{line}");
     crate::monitor::history::event("info", line);
     Some(Measured {
+        cpu_moe: config.cpu_moe,
         n_cpu_moe: settled.n_cpu_moe,
         n_ubatch,
         op_offload,
         tensor_split: None,
+        moe_cache_bytes: None,
     })
 }
 
@@ -617,10 +642,189 @@ fn run_across_gpus(
         );
     }
     Some(Measured {
+        cpu_moe: config.cpu_moe,
         n_cpu_moe: config.n_cpu_moe,
         n_ubatch: config.n_ubatch,
         op_offload: config.op_offload,
         tensor_split: Some(counts.iter().map(|&c| c as f32).collect()),
+        moe_cache_bytes: None,
+    })
+}
+
+/// Cut `n_slots` positions of a layer split (the layers that hold weights,
+/// then the output layer) for an expert cache on the first of several GPUs:
+/// the others, from the last, take whole layers from the end of the model,
+/// each as many as `measure` finds to fit its `budgets` entry, and the first
+/// keeps the rest, at least one. `measure(counts)` is what each GPU would
+/// hold with `counts[i]` positions on GPU `i`. The counts; `None` when a
+/// measure failed.
+pub fn whole_layers_from_the_last(
+    n_slots: u32,
+    budgets: &[u64],
+    mut measure: impl FnMut(&[u32]) -> Option<Vec<u64>>,
+) -> Option<Vec<u32>> {
+    let k = budgets.len();
+    let mut counts = vec![0u32; k];
+    let mut left = n_slots;
+    for d in (1..k).rev() {
+        // The most positions on `d` measured within its budget, leaving the
+        // first GPU one at least.
+        let (mut lo, mut hi, mut best) = (1u32, left.saturating_sub(1), 0u32);
+        while lo <= hi {
+            let mid = lo + (hi - lo) / 2;
+            let mut probe = counts.clone();
+            probe[d] = mid;
+            probe[0] = left - mid;
+            if measure(&probe)?[d] <= budgets[d] {
+                best = mid;
+                lo = mid + 1;
+            } else {
+                hi = mid - 1;
+            }
+        }
+        counts[d] = best;
+        left -= best;
+    }
+    counts[0] = left;
+    Some(counts)
+}
+
+/// Several GPUs and an expert cache (see `run`): llama.cpp caches the experts
+/// in RAM of each layer on the GPU that layer is assigned to, so the first
+/// GPU, CUDA or ROCm (`fit::moe_cache_support_on`), keeps the first layers
+/// with their experts in RAM and caches them, and the others hold the last
+/// layers whole, experts included, as many as llama.cpp measures to fit
+/// them. The cache takes what is left on the first GPU. The plan sized the
+/// cache against the VRAM of every GPU together, and a split by llama.cpp's
+/// default would have spread it, and the layers in RAM, across all of them.
+fn run_cache_across_gpus(
+    config: &InferenceConfig,
+    fit: MeasuredFit,
+    gpus: &[llama_cpp_sys_2::ggml_backend_dev_t],
+    gpu_layers: i32,
+    ctx_size: NonZeroU32,
+    n_seq_max: u32,
+    n_outputs_max: u32,
+) -> Option<Measured> {
+    // Left free on the first GPU beyond the margin, for what the cache's
+    // first misses and the first request make (as `grow_moe_cache` keeps).
+    const CACHE_MARGIN_BYTES: u64 = 256 << 20;
+    // Granularity of the cache, as in `fit::plan_moe_cache`.
+    const STEP: u64 = 256 << 20;
+
+    let info = crate::fit::read_gguf_info(&config.model_path)?;
+    let layout = crate::fit::read_model_moe_layout(&config.model_path, info.n_layers)?;
+    let path = CString::new(config.model_path.to_str()?).ok()?;
+    let n_layers = layout.expert_bytes_per_layer.len() as u32;
+    let n_slots = n_layers + 1;
+    let started = std::time::Instant::now();
+    let labels: Vec<String> = gpus.iter().map(|&dev| device_label(dev)).collect();
+
+    let measures = std::cell::Cell::new(0u32);
+    let free: std::cell::RefCell<Option<Vec<u64>>> = std::cell::RefCell::new(None);
+    let mut measure = |counts: &[u32]| -> Option<Vec<u64>> {
+        let mut probe = config.clone();
+        // The first GPU's layers keep their experts in RAM, the others' hold
+        // theirs; the cache is measured apart, as what is left.
+        probe.cpu_moe = false;
+        probe.n_cpu_moe = counts[0].min(n_layers);
+        probe.moe_cache_bytes = 0;
+        probe.moe_cache_grow = None;
+        probe.moe_prefetch_slots = 0;
+        probe.gpu_split = crate::gpu_split::GpuSplit {
+            mode: crate::gpu_split::SplitMode::default(),
+            tensor_split: counts.iter().map(|&c| c as f32).collect(),
+        };
+        let cparams = super::build_ctx_params(&probe, ctx_size)
+            .with_n_seq_max(n_seq_max)
+            .with_n_outputs_max(n_outputs_max);
+        let rows = super::with_text_model_params(&probe, gpu_layers, |params| {
+            params.measure_device_memory(&path, &cparams)
+        })
+        .ok()??;
+        measures.set(measures.get() + 1);
+        if rows.len() != counts.len() {
+            return None;
+        }
+        free.borrow_mut().get_or_insert_with(|| {
+            rows.iter()
+                .map(|r| u64::try_from(r.free).unwrap_or(0))
+                .collect()
+        });
+        Some(rows.iter().map(|r| r.total()).collect())
+    };
+    // The free memory comes with a first measure: every layer on the first
+    // GPU, its experts in RAM, the output layer on the last.
+    let mut first = vec![0u32; gpus.len()];
+    first[0] = n_layers;
+    if let Some(last) = first.last_mut() {
+        *last += 1;
+    }
+    measure(&first)?;
+    let budgets: Vec<u64> = free
+        .borrow()
+        .clone()?
+        .iter()
+        .enumerate()
+        .map(|(i, &f)| {
+            // What stays free beside the model is kept on the first GPU,
+            // where llama.cpp puts a projector and the companions.
+            let keep = if i == 0 { fit.keep_bytes } else { 0 };
+            f.saturating_sub(config.vram_reserve)
+                .saturating_sub(keep)
+                .saturating_sub(MARGIN_BYTES)
+        })
+        .collect();
+    let counts = whole_layers_from_the_last(n_slots, &budgets, &mut measure)?;
+    let used = measure(&counts)?;
+    let n_cpu_moe = counts[0].min(n_layers);
+    let in_ram: u64 = layout.expert_bytes_per_layer[..n_cpu_moe as usize]
+        .iter()
+        .sum();
+    let room = budgets[0]
+        .saturating_sub(used[0])
+        .saturating_sub(CACHE_MARGIN_BYTES);
+    // Less than the least cache is no cache.
+    let cache = Some(room.min(in_ram) / STEP * STEP)
+        .filter(|&bytes| bytes >= crate::fit::MOE_CACHE_MIN_BYTES)
+        .unwrap_or(0);
+
+    let split = labels
+        .iter()
+        .zip(&counts)
+        .map(|(l, c)| format!("{c} on {l}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let line = format!(
+        "Measured placement across the GPUs with the expert cache: {split} of {n_slots} layers \
+         (the output layer counted); the experts of the {n_cpu_moe} layers on the first in RAM, \
+         {} of its VRAM caching them ({} measures, {:.1}s)",
+        crate::fit::gib(cache),
+        measures.get(),
+        started.elapsed().as_secs_f64()
+    );
+    tracing::info!("{line}");
+    crate::monitor::history::event("info", line);
+    if used.iter().zip(&budgets).any(|(u, b)| u > b) {
+        tracing::warn!(
+            "Measured on the GPUs: the layers do not fit beside the {} kept free on each; \
+             loading with this split anyway",
+            crate::fit::gib(config.vram_reserve)
+        );
+    }
+    if cache == 0 {
+        tracing::warn!(
+            "Measured on the GPUs: no room for the expert cache on the first beside its layers; \
+             the experts of its {n_cpu_moe} layers are read from RAM uncached"
+        );
+    }
+    Some(Measured {
+        cpu_moe: false,
+        n_cpu_moe,
+        n_ubatch: config.n_ubatch,
+        op_offload: config.op_offload,
+        tensor_split: Some(counts.iter().map(|&c| c as f32).collect()),
+        moe_cache_bytes: Some(cache),
     })
 }
 
@@ -756,5 +960,43 @@ mod tests {
         assert!(!prefer_default_ubatch(at(22, true), at(20, true), 40));
         assert!(prefer_default_ubatch(at(40, false), at(30, true), 40));
         assert!(!prefer_default_ubatch(at(30, true), at(40, false), 40));
+    }
+
+    #[test]
+    fn with_an_expert_cache_the_other_gpus_take_whole_layers_from_the_end() {
+        // 48 layers and the output layer. On the first GPU a layer is 0.1 GiB
+        // (its experts in RAM), on the others 0.5 GiB whole, and the output
+        // layer 1 GiB on the last.
+        let measure = |counts: &[u32]| -> Option<Vec<u64>> {
+            let last = counts.len() - 1;
+            Some(
+                counts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &c)| {
+                        if i == 0 {
+                            u64::from(c) * GIB / 10
+                        } else if i == last {
+                            u64::from(c.saturating_sub(1)) * GIB / 2 + GIB
+                        } else {
+                            u64::from(c) * GIB / 2
+                        }
+                    })
+                    .collect(),
+            )
+        };
+        // 7 GiB on the second GPU: the output layer and 12 layers.
+        let counts = whole_layers_from_the_last(49, &[14 * GIB, 7 * GIB], measure).unwrap();
+        assert_eq!(counts, [36, 13]);
+        // Three GPUs: the last filled first, then the middle one.
+        let counts =
+            whole_layers_from_the_last(49, &[14 * GIB, 3 * GIB, 7 * GIB], measure).unwrap();
+        assert_eq!(counts, [30, 6, 13]);
+        // A second GPU that holds nothing gets nothing, and the first all.
+        let counts = whole_layers_from_the_last(49, &[14 * GIB, GIB / 2], measure).unwrap();
+        assert_eq!(counts, [49, 0]);
+        // The first always keeps a layer.
+        let counts = whole_layers_from_the_last(49, &[14 * GIB, 100 * GIB], measure).unwrap();
+        assert_eq!(counts, [1, 48]);
     }
 }
