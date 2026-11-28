@@ -305,6 +305,20 @@ Still unmeasured: the same comparison run *from a compute node* rather than
 the shared login node. A 7.5× gap is unlikely to invert, but the login
 node's storage connectivity is not the one that matters at run time.
 
+### The Playground's weights, copied on 2026-11-28
+
+The November move from the Playground (AIFAC_P02_1147) to the Fast Lane
+copied `eullm_runs`, `eval`, `gguf` and `datasets` without the heavy weights
+(`sbatch_copy_project.slurm` leaves them behind by default): merged models,
+checkpoints and GGUFs of the September-October rounds stayed in
+`/leonardo_work/AIFAC_P02_1147`, r2l's GGUF among them, and were found
+missing when r2l was to sit the practical held-out exam. They are now in
+`$WORK/playground-1147/` (`eullm_runs` 642 GB and `gguf` 74 GB, copied with
+`COPY_HEAVY=1`, "TUTTO COPIATO" in both logs), kept apart from the live
+`eullm_runs`: an rsync over it would put September's versions back over
+files changed since. r2l's GGUF:
+`$WORK/playground-1147/eullm_runs/grpo/r2l-steps-8b-quote/gguf/r2l-steps-8b-quote-q4_k_m.gguf`.
+
 ## What the published 0.7.5-rc4 binaries actually do here (6 Sep 2026)
 
 | Artifact | Result |
