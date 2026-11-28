@@ -3949,21 +3949,23 @@ async fn chat_completions_with(
         response_prefix,
     };
 
-    // ── Tool calling (issue #334): buffered, format-aware path ──────────
+    // ── Tool calling (issue #334): format-aware path ────────────────────
     // Structured tool_calls only exist once the output is complete and
     // parsed, and a client that asked for tools cannot act on half a call
-    // anyway, so this path always buffers the full generation. A streaming
-    // request still gets an SSE response — one delta carrying the whole
-    // parsed message, then the finish chunk — which is valid OpenAI
-    // streaming, just coarse.
+    // anyway. Streamed, the reasoning and the text go out as the model
+    // writes them, read in its format as on the plain path, and the calls
+    // once the output is parsed (`stream_tool_answer_sse`).
     if let Some(tmpl) = oai_template {
         let rx = if let Some(ref sched) = snap.scheduler {
             sched.try_submit(request)?
         } else {
             sequential_to_channel(Arc::clone(snap.engine.as_ref().unwrap()), request)
         };
-        let rx = rx;
         let rx = crate::monitor::watch(rx, &snap.model_name, "chat.completions");
+        if is_streaming(&body) {
+            let stream = stream_tool_answer_sse(rx, model, tmpl, audit, snap.lease);
+            return Ok(Sse::new(stream).into_response());
+        }
         let Collected {
             text,
             tokens_generated,
@@ -3987,46 +3989,7 @@ async fn chat_completions_with(
             &stats,
         );
 
-        let (message, called_tools) = match tmpl.parse_output(&text) {
-            Some(mut parsed) => {
-                // A template parser that left the reasoning in the answer
-                // (Gemma 4's `<|channel>thought`): taken apart here, as the
-                // plain path does.
-                if parsed.reasoning_content.is_none() {
-                    let (reasoning, content) = super::thinking::split(&parsed.content);
-                    parsed.reasoning_content = reasoning;
-                    parsed.content = content;
-                }
-                let mut message = json!({ "role": "assistant" });
-                message["content"] =
-                    if parsed.content.is_empty() && !parsed.tool_calls.is_empty() {
-                        Value::Null
-                    } else {
-                        Value::String(parsed.content)
-                    };
-                if let Some(reasoning) = parsed.reasoning_content {
-                    message["reasoning_content"] = Value::String(reasoning);
-                }
-                let called = !parsed.tool_calls.is_empty();
-                if called {
-                    message["tool_calls"] = parsed
-                        .tool_calls
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, call)| {
-                            json!({
-                                "id": call.id.unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
-                                "index": i,
-                                "type": "function",
-                                "function": { "name": call.name, "arguments": call.arguments },
-                            })
-                        })
-                        .collect();
-                }
-                (message, called)
-            }
-            None => (openai_message(text, None, ""), false),
-        };
+        let (message, called_tools) = tool_answer_message(&tmpl, text);
         let finish_reason = if called_tools {
             "tool_calls"
         } else {
@@ -4039,18 +4002,6 @@ async fn chat_completions_with(
         });
         let timings = openai_timings(tokens_prompt, tokens_generated, &stats);
 
-        if is_streaming(&body) {
-            let stream = buffered_message_sse(
-                model,
-                message,
-                finish_reason.to_string(),
-                usage,
-                timings,
-                snap.lease,
-                audit,
-            );
-            return Ok(Sse::new(stream).into_response());
-        }
         return Ok(Json(audit.extended(json!({
             "id": format!("chatcmpl-{}", uuid::Uuid::new_v4()),
             "object": "chat.completion",
@@ -4197,21 +4148,26 @@ async fn chat_completions_with(
 /// `/v1/chat/completions` (see `super::anthropic`). Errors go out in
 /// Anthropic's shape, which its clients read.
 ///
-/// Streamed, the events start at once: `message_start`, then a `ping` every
-/// [`MESSAGES_PING_SECS`] while the answer is generated whole, then its
-/// blocks. Claude Code gives up on a stream that stays silent: on
-/// Qwen3.8-27B an answer writing a small game (22,844 tokens read, up to
-/// 8,192 written at about 30 tokens/s) sent nothing for five minutes, and
-/// Claude Code reported an API error and asked again from scratch
-/// (27-11-2026). A streamed answer gets no `x-eullm-*` route headers: they
-/// are known only once it is answered, after the headers have gone.
+/// Streamed, the events start at once with `message_start`, a `ping` every
+/// [`MESSAGES_PING_SECS`] follows while the prompt is read, and the answer
+/// goes out as the model writes it: `/v1/chat/completions` is asked
+/// streamed, and its chunks become Anthropic's events
+/// (`anthropic::StreamTranslator`). Claude Code gives up on a stream that
+/// stays silent: on Qwen3.8-27B an answer writing a small game (22,844
+/// tokens read, up to 8,192 written at about 30 tokens/s) sent nothing for
+/// five minutes, and Claude Code reported an API error and asked again from
+/// scratch (27-11-2026); in 0.10.20 the pings kept it waiting, 17 minutes,
+/// with nothing to show (28-11-2026). A streamed answer gets no `x-eullm-*`
+/// route headers: they are known only once it is answered, after the
+/// headers have gone.
 async fn messages(
     State(state): State<S>,
     axum::Extension(identity): axum::Extension<super::Identity>,
     Json(body): Json<Value>,
 ) -> axum::response::Response {
     use super::anthropic;
-    let chat = match anthropic::to_chat_completions(&body) {
+    use futures_util::StreamExt;
+    let mut chat = match anthropic::to_chat_completions(&body) {
         Ok(chat) => chat,
         Err(why) => return MessagesError::new(StatusCode::BAD_REQUEST, why).into_response(),
     };
@@ -4226,8 +4182,10 @@ async fn messages(
             Err(e) => e.into_response(),
         };
     }
-    let task = tokio::spawn(answer_message(state, identity, chat, model.clone()));
-    // A client that goes away stops the generation with it.
+    chat["stream"] = Value::Bool(true);
+    let task = tokio::spawn(start_message_stream(state, identity, chat));
+    // A client that goes away stops the generation with it: the task while
+    // the request waits for the model, the chunks' stream once it answers.
     let abort = AbortOnDrop(task.abort_handle());
     let event = |name: &str, data: Value| {
         Ok::<_, std::convert::Infallible>(Event::default().event(name).data(data.to_string()))
@@ -4244,17 +4202,102 @@ async fn messages(
                 _ = ping.tick() => yield event("ping", serde_json::json!({ "type": "ping" })),
             }
         };
-        match outcome {
-            Ok(Ok((message, _))) => {
-                for (name, data) in anthropic::stream_events(&message).into_iter().skip(1) {
-                    yield event(name, data);
-                }
+        let mut chunks = match outcome {
+            Ok(Ok(response)) => response.into_body().into_data_stream(),
+            Ok(Err(e)) => {
+                yield event("error", anthropic::error(e.status.as_u16(), &e.message));
+                return;
             }
-            Ok(Err(e)) => yield event("error", anthropic::error(e.status.as_u16(), &e.message)),
-            Err(e) => yield event("error", anthropic::error(500, &e.to_string())),
+            Err(e) => {
+                yield event("error", anthropic::error(500, &e.to_string()));
+                return;
+            }
+        };
+        let mut translator = anthropic::StreamTranslator::default();
+        let mut pending: Vec<u8> = Vec::new();
+        loop {
+            tokio::select! {
+                next = chunks.next() => match next {
+                    Some(Ok(bytes)) => {
+                        pending.extend_from_slice(&bytes);
+                        for data in take_sse_data(&mut pending) {
+                            let Ok(chunk) = serde_json::from_str::<Value>(&data) else {
+                                continue;
+                            };
+                            if let Some(e) = chunk.get("error") {
+                                let message = e.as_str().map_or_else(|| e.to_string(), str::to_string);
+                                yield event("error", anthropic::error(500, &message));
+                                return;
+                            }
+                            for (name, data) in translator.chunk(&chunk) {
+                                yield event(name, data);
+                            }
+                        }
+                    }
+                    Some(Err(e)) => {
+                        yield event("error", anthropic::error(500, &e.to_string()));
+                        return;
+                    }
+                    None => break,
+                },
+                _ = ping.tick() => yield event("ping", serde_json::json!({ "type": "ping" })),
+            }
+        }
+        for (name, data) in translator.finish() {
+            yield event(name, data);
         }
     };
     Sse::new(stream).into_response()
+}
+
+/// The `data` of each whole event in `pending`, the bytes of an SSE stream
+/// so far, taken out of it; an event cut between two reads stays for the
+/// next. `[DONE]` is left out.
+fn take_sse_data(pending: &mut Vec<u8>) -> Vec<String> {
+    let mut out = Vec::new();
+    while let Some(end) = pending.windows(2).position(|w| w == b"\n\n") {
+        let event: Vec<u8> = pending.drain(..end + 2).collect();
+        let event = String::from_utf8_lossy(&event);
+        let data: Vec<&str> = event
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(|d| d.strip_prefix(' ').unwrap_or(d))
+            .collect();
+        if !data.is_empty() && data != ["[DONE]"] {
+            out.push(data.join("\n"));
+        }
+    }
+    out
+}
+
+/// A streamed `/v1/messages` request, in the shape `/v1/chat/completions`
+/// takes, asked there: the stream of its chunks, or why it was refused.
+async fn start_message_stream(
+    state: S,
+    identity: super::Identity,
+    chat: Value,
+) -> Result<axum::response::Response, MessagesError> {
+    let response = answer_routed(
+        state,
+        identity,
+        chat,
+        StreamFormat::OpenAI,
+        chat_completions_with,
+    )
+    .await
+    .map_err(|refusal| MessagesError {
+        retry_after_secs: refusal.retry_after_secs,
+        ..MessagesError::of(refusal.status, &refusal.body.0)
+    })?;
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap_or_default();
+    let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    Err(MessagesError::of(status, &answer))
 }
 
 /// How often a streamed `/v1/messages` answer sends a `ping` while it is
@@ -4353,48 +4396,128 @@ async fn answer_message(
 
 // ── Streaming helpers ────────────────────────────────────────────────────────
 
-/// SSE for the buffered tool-calling path: the whole parsed message as one
-/// delta chunk, then a finish chunk with usage, then `[DONE]`. Coarse but
-/// valid OpenAI streaming — structured tool calls cannot be streamed
-/// incrementally without the format-aware incremental parser, which is
-/// separate future work.
+/// SSE of an answer on the tool path: its reasoning and its text as the
+/// model writes them, read in the model's format at each piece as on the
+/// plain path ([`AnswerReader`]), then its tool calls, once the output is
+/// complete and parsed, one delta with each call whole, and the finish chunk
+/// with usage. Until 0.10.20 the whole answer was generated first and sent
+/// as one delta: a client with tools (Claude Code, OpenCode) saw nothing for
+/// as long as the model wrote, 17 minutes for a small game on Qwen3.8-27B
+/// (28-11-2026).
 ///
 /// The stream holds `lease` until it ends, so the model counts as in use for
 /// the whole response — as it does in the other stream helpers.
-fn buffered_message_sse(
+fn stream_tool_answer_sse(
+    mut rx: mpsc::Receiver<StreamEvent>,
     model: String,
-    message: Value,
-    finish_reason: String,
-    usage: Value,
-    timings: Value,
-    lease: Lease,
+    tmpl: crate::inference::DynamicOaiTemplate,
     audit: AuditCtx,
+    lease: Lease,
 ) -> impl Stream<Item = Result<Event, std::convert::Infallible>> {
-    let created = chrono::Utc::now().timestamp();
-    let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
-    let last = audit.extended(json!({
-        "id": completion_id,
-        "object": "chat.completion.chunk",
-        "created": created,
-        "model": model,
-        "choices": [{ "index": 0, "delta": {}, "finish_reason": finish_reason }],
-        "usage": usage,
-        "timings": timings,
-    }));
     async_stream::stream! {
         let _lease = lease;
-        yield Ok(Event::default().data(
+        let completion_id = format!("chatcmpl-{}", uuid::Uuid::new_v4());
+        let chunk = |delta: Value| {
             json!({
                 "id": completion_id,
                 "object": "chat.completion.chunk",
-                "created": created,
+                "created": chrono::Utc::now().timestamp(),
                 "model": model,
-                "choices": [{ "index": 0, "delta": message, "finish_reason": Value::Null }],
+                "choices": [{ "index": 0, "delta": delta, "finish_reason": Value::Null }],
             })
-            .to_string(),
-        ));
-        yield Ok(Event::default().data(last.to_string()));
-        yield Ok(Event::default().data("[DONE]"));
+        };
+        // The template's parser was built for the prompt as rendered, which
+        // the answer follows with nothing before it.
+        let mut reader = Some(AnswerReader::new(tmpl.answer_format(), ""));
+        let mut text = String::new();
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::Token(piece) => {
+                    text.push_str(&piece);
+                    let parts = reader.as_mut().map(|r| r.push(&piece)).unwrap_or_default();
+                    for part in parts {
+                        let data = format_part_event(&part, &model, &completion_id, StreamFormat::OpenAI);
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
+                }
+                StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason, stats } => {
+                    for part in reader.take().map(AnswerReader::finish).unwrap_or_default() {
+                        let data = format_part_event(&part, &model, &completion_id, StreamFormat::OpenAI);
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
+                    audit.log(&model, StreamFormat::OpenAI, tokens_prompt, tokens_generated, duration_ms, &stats);
+                    let (message, called_tools) = tool_answer_message(&tmpl, std::mem::take(&mut text));
+                    if called_tools {
+                        let data = chunk(json!({ "tool_calls": message["tool_calls"] }));
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
+                    let mut last = chunk(json!({}));
+                    last["choices"][0]["finish_reason"] = json!(if called_tools {
+                        "tool_calls"
+                    } else {
+                        stop_reason.as_api_str()
+                    });
+                    last["usage"] = json!({
+                        "prompt_tokens": tokens_prompt,
+                        "completion_tokens": tokens_generated,
+                        "total_tokens": tokens_prompt + tokens_generated,
+                    });
+                    last["timings"] = openai_timings(tokens_prompt, tokens_generated, &stats);
+                    yield Ok(Event::default().data(audit.extended(last).to_string()));
+                    yield Ok(Event::default().data("[DONE]"));
+                    break;
+                }
+                StreamEvent::Error(msg) => {
+                    yield Ok(Event::default().data(json!({ "error": msg }).to_string()));
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// The message of an answer on the tool path: `text`, the model's whole
+/// output, parsed in its format (`DynamicOaiTemplate::parse_output`), and
+/// whether it called tools. Text no parse reads is the answer as it is.
+fn tool_answer_message(tmpl: &crate::inference::DynamicOaiTemplate, text: String) -> (Value, bool) {
+    match tmpl.parse_output(&text) {
+        Some(mut parsed) => {
+            // A template parser that left the reasoning in the answer
+            // (Gemma 4's `<|channel>thought`): taken apart here, as the
+            // plain path does.
+            if parsed.reasoning_content.is_none() {
+                let (reasoning, content) = super::thinking::split(&parsed.content);
+                parsed.reasoning_content = reasoning;
+                parsed.content = content;
+            }
+            let mut message = json!({ "role": "assistant" });
+            message["content"] = if parsed.content.is_empty() && !parsed.tool_calls.is_empty() {
+                Value::Null
+            } else {
+                Value::String(parsed.content)
+            };
+            if let Some(reasoning) = parsed.reasoning_content {
+                message["reasoning_content"] = Value::String(reasoning);
+            }
+            let called = !parsed.tool_calls.is_empty();
+            if called {
+                message["tool_calls"] = parsed
+                    .tool_calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, call)| {
+                        json!({
+                            "id": call.id.unwrap_or_else(|| format!("call_{}", uuid::Uuid::new_v4().simple())),
+                            "index": i,
+                            "type": "function",
+                            "function": { "name": call.name, "arguments": call.arguments },
+                        })
+                    })
+                    .collect();
+            }
+            (message, called)
+        }
+        None => (openai_message(text, None, ""), false),
     }
 }
 
@@ -5113,6 +5236,106 @@ fn format_done_event(
 mod api_chat_tools_tests {
     use super::*;
     use crate::inference::{ParsedChatMessage, ParsedToolCall};
+
+    /// The events of an SSE stream come out whole, whichever way the reads
+    /// cut them, a character of several bytes included; `[DONE]` stays out.
+    #[test]
+    fn sse_events_come_out_whole_however_the_reads_cut_them() {
+        let stream = "data: {\"a\":\"è\"}\n\ndata: {\"b\":1}\n\ndata: [DONE]\n\n".as_bytes();
+        for cut in 1..stream.len() {
+            let mut pending = Vec::new();
+            let mut events = Vec::new();
+            for part in [&stream[..cut], &stream[cut..]] {
+                pending.extend_from_slice(part);
+                events.extend(take_sse_data(&mut pending));
+            }
+            assert_eq!(events, ["{\"a\":\"è\"}", "{\"b\":1}"], "cut at {cut}");
+            assert!(pending.is_empty());
+        }
+    }
+
+    /// A streamed answer with a tool call, read in the model's format as it
+    /// arrives: the reasoning and the text go out as they are written, the
+    /// call's markup never as text, and the call itself once the output is
+    /// whole. On Qwen3.5's own template, which opens the reasoning in the
+    /// prompt. llama.cpp's vocabulary GGUFs carry a plain ChatML template,
+    /// so the GGUF is one of them with the template put in, metadata only
+    /// (6 MB), made from `vendor/llama-cpp-rs/llama-cpp-sys-2/llama.cpp`:
+    ///
+    /// ```text
+    /// PYTHONPATH=gguf-py python3 gguf-py/gguf/scripts/gguf_new_metadata.py \
+    ///   models/ggml-vocab-qwen35.gguf /tmp/qwen35-tools.gguf \
+    ///   --chat-template-file models/templates/Qwen3.5-4B.jinja
+    /// EULLM_TEST_TOOL_TEMPLATE_GGUF=/tmp/qwen35-tools.gguf \
+    ///   cargo test --lib a_tool_answer_streams -- --ignored
+    /// ```
+    #[test]
+    #[ignore = "needs a GGUF with a tool-calling template in EULLM_TEST_TOOL_TEMPLATE_GGUF"]
+    fn a_tool_answer_streams_its_text_and_keeps_its_call_out_of_it() {
+        let path = std::path::PathBuf::from(
+            std::env::var("EULLM_TEST_TOOL_TEMPLATE_GGUF")
+                .expect("set EULLM_TEST_TOOL_TEMPLATE_GGUF to a GGUF with a tool-calling template"),
+        );
+        let params = llama_cpp_2::model::params::LlamaModelParams::default().with_vocab_only(true);
+        let model = llama_cpp_2::model::LlamaModel::load_from_file(
+            &crate::inference::test_backend(),
+            &path,
+            &params,
+        )
+        .expect("the vocabulary GGUF loads");
+        let messages = json!([{ "role": "user", "content": "List the files." }]).to_string();
+        let tools = json!([{ "type": "function", "function": {
+            "name": "Bash", "description": "Run a command",
+            "parameters": { "type": "object",
+                "properties": { "command": { "type": "string" } }, "required": ["command"] },
+        } }])
+        .to_string();
+        let tmpl =
+            crate::inference::render_oai_chat_template(&model, &messages, Some(&tools), None, true)
+                .expect("the template renders with tools");
+
+        let output = "The user wants the files.\n</think>\n\nI'll list them.\n\n<tool_call>\n\
+                      <function=Bash>\n<parameter=command>\nls -la\n</parameter>\n</function>\n\
+                      </tool_call>";
+        let mut reader = AnswerReader::new(tmpl.answer_format(), "");
+        let (mut thinking, mut text) = (String::new(), String::new());
+        let mut text_before_the_end = String::new();
+        let chars: Vec<char> = output.chars().collect();
+        let mut parts = Vec::new();
+        for piece in chars.chunks(3) {
+            parts.extend(reader.push(&piece.iter().collect::<String>()));
+        }
+        for part in &parts {
+            if let Part::Content(t) = part {
+                text_before_the_end.push_str(t);
+            }
+        }
+        parts.extend(reader.finish());
+        for part in parts {
+            match part {
+                Part::Thinking(t) => thinking.push_str(&t),
+                Part::Content(t) => text.push_str(&t),
+            }
+        }
+        assert_eq!(thinking.trim(), "The user wants the files.");
+        assert_eq!(text.trim(), "I'll list them.");
+        assert_eq!(
+            text_before_the_end.trim(),
+            "I'll list them.",
+            "the text streams before the end"
+        );
+
+        let (message, called) = tool_answer_message(&tmpl, output.to_string());
+        assert!(called);
+        assert_eq!(message["tool_calls"][0]["function"]["name"], "Bash");
+        let arguments: Value = serde_json::from_str(
+            message["tool_calls"][0]["function"]["arguments"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(arguments["command"], "ls -la");
+    }
 
     /// An Ollama client's history after one round of tools, as llama.cpp's
     /// template reader needs it: the call typed, the tool named, the
