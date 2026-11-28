@@ -1289,6 +1289,20 @@ does to this plan:
   7.0 on the same engine, so that the first round after the break is read
   against the right baseline.
 
+28-11-2026: no ROCm 7 module on LUMI yet (`rocm/5.2.5` to `rocm/6.4.4`, the
+system's 6.3.4; stacks `LUMI/24.03`, `25.03`, `25.09`, no `26.03` with its
+`rocm/7.0.3`), but CSC's container images are there:
+`/appl/local/containers/easybuild-sif-images/cpe-26.03.01-SP7-LUMI-26.01-ROCm-7.2.4.sif`
+with its recipe `ccpe-26.03-rocm-7.2.4-SP7-LUMI.eb`, LUMI as it will be
+after the break. Installed in the project's EasyBuild tree
+(`/projappl/project_465003366/EasyBuild`; EasyBuild writes into the first
+path of `EASYBUILD_SOURCEPATH`, so the images' read-only directory goes
+second, the first try failing on "Permission denied"). Inside: ROCm 7.2.4 at
+`/opt/rocm`, GCC 14.3.0, CMake 3.28.3, git, hipcc; no cargo, which is the
+host's. `tools/lumi/build_engine_ccpe.sh` runs `build_engine.sh` in the
+container with the host's cargo: 0.10.10 built that way next, into
+`eullm-target/v01010-rocm72`.
+
 25-10-2026, evening, `mtp-ab` on the twins, the first measurement of MTP on
 the MI250X with drafts (jobs 23140145 on `next25` and 23140146 on `next26`,
 `standard-g`, about ten minutes each; the two `small-g` copies were
