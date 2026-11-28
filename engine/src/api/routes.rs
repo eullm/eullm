@@ -3989,7 +3989,7 @@ async fn chat_completions_with(
             &stats,
         );
 
-        let (message, called_tools) = tool_answer_message(&tmpl, text);
+        let (message, called_tools) = tool_answer_message(&tmpl, text, stop_reason);
         let finish_reason = if called_tools {
             "tool_calls"
         } else {
@@ -4430,23 +4430,36 @@ fn stream_tool_answer_sse(
         // the answer follows with nothing before it.
         let mut reader = Some(AnswerReader::new(tmpl.answer_format(), ""));
         let mut text = String::new();
+        // Some of the answer's text has gone out.
+        let mut streamed_text = false;
         while let Some(event) = rx.recv().await {
             match event {
                 StreamEvent::Token(piece) => {
                     text.push_str(&piece);
                     let parts = reader.as_mut().map(|r| r.push(&piece)).unwrap_or_default();
                     for part in parts {
+                        streamed_text |= matches!(&part, Part::Content(t) if !t.trim().is_empty());
                         let data = format_part_event(&part, &model, &completion_id, StreamFormat::OpenAI);
                         yield Ok(Event::default().data(data.to_string()));
                     }
                 }
                 StreamEvent::Done { tokens_generated, tokens_prompt, duration_ms, stop_reason, stats } => {
                     for part in reader.take().map(AnswerReader::finish).unwrap_or_default() {
+                        streamed_text |= matches!(&part, Part::Content(t) if !t.trim().is_empty());
                         let data = format_part_event(&part, &model, &completion_id, StreamFormat::OpenAI);
                         yield Ok(Event::default().data(data.to_string()));
                     }
                     audit.log(&model, StreamFormat::OpenAI, tokens_prompt, tokens_generated, duration_ms, &stats);
-                    let (message, called_tools) = tool_answer_message(&tmpl, std::mem::take(&mut text));
+                    let (message, called_tools) =
+                        tool_answer_message(&tmpl, std::mem::take(&mut text), stop_reason);
+                    // A reasoning given as the answer (see `tool_answer_message`)
+                    // went out as reasoning: it goes out again as the answer.
+                    if !streamed_text
+                        && let Some(content) = message["content"].as_str().filter(|c| !c.is_empty())
+                    {
+                        let data = chunk(json!({ "content": content }));
+                        yield Ok(Event::default().data(data.to_string()));
+                    }
                     if called_tools {
                         let data = chunk(json!({ "tool_calls": message["tool_calls"] }));
                         yield Ok(Event::default().data(data.to_string()));
@@ -4479,7 +4492,18 @@ fn stream_tool_answer_sse(
 /// The message of an answer on the tool path: `text`, the model's whole
 /// output, parsed in its format (`DynamicOaiTemplate::parse_output`), and
 /// whether it called tools. Text no parse reads is the answer as it is.
-fn tool_answer_message(tmpl: &crate::inference::DynamicOaiTemplate, text: String) -> (Value, bool) {
+///
+/// An answer that ended on its own (`stop`, not cut by the token limit) with
+/// reasoning and nothing else gives its reasoning as its text too: the model
+/// wrote its answer without closing its reasoning first, and the client
+/// would show nothing. Seen on Qwen3.8-Flash-Next IQ2_XS in OpenCode
+/// (28-11-2026): 4,316 tokens in 78 seconds, an analysis of a program asked
+/// for, all 14,488 bytes of it reasoning, and OpenCode ended the turn blank.
+fn tool_answer_message(
+    tmpl: &crate::inference::DynamicOaiTemplate,
+    text: String,
+    stop_reason: StopReason,
+) -> (Value, bool) {
     match tmpl.parse_output(&text) {
         Some(mut parsed) => {
             // A template parser that left the reasoning in the answer
@@ -4507,11 +4531,28 @@ fn tool_answer_message(tmpl: &crate::inference::DynamicOaiTemplate, text: String
             {
                 // A client with tools waits for a call or an answer and gets
                 // neither: OpenCode ends the turn with only the reasoning shown.
-                tracing::warn!(
-                    "an answer to a request with tools has no text and no tool call, only {} \
-                     bytes of reasoning",
-                    message["reasoning_content"].as_str().map_or(0, str::len)
-                );
+                let reasoning = message["reasoning_content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                if stop_reason == StopReason::Stop && !reasoning.trim().is_empty() {
+                    tracing::warn!(
+                        "an answer to a request with tools has no text and no tool call, only {} \
+                         bytes of reasoning: the reasoning is given as its text",
+                        reasoning.len()
+                    );
+                    message["content"] = Value::String(reasoning);
+                    if let Some(fields) = message.as_object_mut() {
+                        fields.remove("reasoning_content");
+                    }
+                } else {
+                    tracing::warn!(
+                        "an answer to a request with tools has no text and no tool call, only {} \
+                         bytes of reasoning ({})",
+                        reasoning.len(),
+                        stop_reason.as_api_str()
+                    );
+                }
             }
             if called {
                 message["tool_calls"] = parsed
@@ -5338,7 +5379,7 @@ mod api_chat_tools_tests {
             "the text streams before the end"
         );
 
-        let (message, called) = tool_answer_message(&tmpl, output.to_string());
+        let (message, called) = tool_answer_message(&tmpl, output.to_string(), StopReason::Stop);
         assert!(called);
         assert_eq!(message["tool_calls"][0]["function"]["name"], "Bash");
         let arguments: Value = serde_json::from_str(
@@ -5348,6 +5389,44 @@ mod api_chat_tools_tests {
         )
         .unwrap();
         assert_eq!(arguments["command"], "ls -la");
+    }
+
+    /// An answer written without closing the reasoning the template opened:
+    /// all of it reads as reasoning, and it is given as the text, unless the
+    /// token limit cut it. The GGUF as for the test above.
+    #[test]
+    #[ignore = "needs a GGUF with a tool-calling template in EULLM_TEST_TOOL_TEMPLATE_GGUF"]
+    fn an_answer_left_inside_the_reasoning_is_given_as_the_text() {
+        let path = std::path::PathBuf::from(
+            std::env::var("EULLM_TEST_TOOL_TEMPLATE_GGUF")
+                .expect("set EULLM_TEST_TOOL_TEMPLATE_GGUF to a GGUF with a tool-calling template"),
+        );
+        let params = llama_cpp_2::model::params::LlamaModelParams::default().with_vocab_only(true);
+        let model = llama_cpp_2::model::LlamaModel::load_from_file(
+            &crate::inference::test_backend(),
+            &path,
+            &params,
+        )
+        .expect("the vocabulary GGUF loads");
+        let messages = json!([{ "role": "user", "content": "Improve the game." }]).to_string();
+        let tools = json!([{ "type": "function", "function": {
+            "name": "Bash", "description": "Run a command",
+            "parameters": { "type": "object", "properties": {} },
+        } }])
+        .to_string();
+        let tmpl =
+            crate::inference::render_oai_chat_template(&model, &messages, Some(&tools), None, true)
+                .expect("the template renders with tools");
+        let output = "The user wants improvements. Here they are: 1. cache the HUD text.";
+
+        let (message, called) = tool_answer_message(&tmpl, output.to_string(), StopReason::Stop);
+        assert!(!called);
+        assert_eq!(message["content"], output);
+        assert!(message.get("reasoning_content").is_none());
+
+        let (cut, _) = tool_answer_message(&tmpl, output.to_string(), StopReason::Length);
+        assert_eq!(cut["content"], "");
+        assert_eq!(cut["reasoning_content"], output);
     }
 
     /// An Ollama client's history after one round of tools, as llama.cpp's
