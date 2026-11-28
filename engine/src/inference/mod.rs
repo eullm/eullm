@@ -1734,12 +1734,49 @@ impl DynamicOaiTemplate {
             })
             .unwrap_or_default();
 
-        Some(calls_out_of_the_reasoning(ParsedChatMessage {
+        let message = calls_out_of_the_reasoning(ParsedChatMessage {
             content,
             reasoning_content,
             tool_calls,
-        }))
+        });
+        Some(calls_from_the_whole_output(message, text))
     }
+}
+
+/// An answer the parser read with no call although the output holds a whole
+/// `<tool_call>` block: the strict parse refused something in it, and its
+/// salvage kept what it read before (the reasoning) and dropped the rest.
+/// The calls are taken from the whole output with
+/// [`extract_native_tool_calls`]; the text and the reasoning stay as the
+/// parser read them. Seen on Qwen3.8-Flash-Next IQ2_XS in OpenCode
+/// (28-11-2026): 80 tokens written, 43 bytes of them read ("Let me continue
+/// reading the file in chunks."), and no call. An output still read short of
+/// what it holds is logged with its sizes; at `debug` the output itself, to
+/// see what the parser did not read.
+fn calls_from_the_whole_output(mut message: ParsedChatMessage, text: &str) -> ParsedChatMessage {
+    if !message.tool_calls.is_empty() {
+        return message;
+    }
+    if text.contains("<tool_call>") {
+        let (_, calls) = extract_native_tool_calls(text);
+        if !calls.is_empty() {
+            tracing::warn!(
+                "{} tool call(s) the template's parser did not read: taken from the whole output",
+                calls.len()
+            );
+            message.tool_calls = calls;
+            return message;
+        }
+    }
+    let read = message.content.len() + message.reasoning_content.as_ref().map_or(0, String::len);
+    if text.len() > read + 64 {
+        tracing::warn!(
+            "the template's parser read {read} of the {} bytes of an answer, and no tool call",
+            text.len()
+        );
+        tracing::debug!("the answer as written: {text:?}");
+    }
+    message
 }
 
 /// An answer with no text and no call whose reasoning holds a whole native
@@ -1795,6 +1832,26 @@ pub(crate) fn extract_native_tool_calls(text: &str) -> (String, Vec<ParsedToolCa
         let block = &rest[start + "<tool_call>".len()..start + end_rel];
 
         let parsed = (|| {
+            // The JSON body other Qwen templates write in the same tags:
+            // `{"name": ..., "arguments": {...}}`.
+            if let Ok(serde_json::Value::Object(call)) =
+                serde_json::from_str::<serde_json::Value>(block.trim())
+            {
+                let name = call.get("name")?.as_str()?.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let arguments = match call.get("arguments") {
+                    Some(serde_json::Value::String(s)) => s.clone(),
+                    Some(other) => other.to_string(),
+                    None => "{}".to_string(),
+                };
+                return Some(ParsedToolCall {
+                    id: None,
+                    name,
+                    arguments,
+                });
+            }
             let fn_open = block.find("<function=")?;
             let name_start = fn_open + "<function=".len();
             let name_end = name_start + block[name_start..].find('>')?;
@@ -4276,6 +4333,41 @@ mod stop_reason_tests {
         let out = super::calls_out_of_the_reasoning(thought_only);
         assert!(out.tool_calls.is_empty());
         assert_eq!(out.reasoning_content.as_deref(), Some("Nothing to call."));
+    }
+
+    #[test]
+    fn calls_the_parser_dropped_are_taken_from_the_whole_output() {
+        let text = "Let me continue reading the file in chunks.\n</think>\n\n<tool_call>\n\
+                    {\"name\": \"read\", \"arguments\": {\"filePath\": \"/w/sky1942.py\", \"offset\": 120}}\n\
+                    </tool_call>";
+        let read = ParsedChatMessage {
+            content: String::new(),
+            reasoning_content: Some("Let me continue reading the file in chunks.".into()),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_from_the_whole_output(read, text);
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].name, "read");
+        let arguments: serde_json::Value =
+            serde_json::from_str(&out.tool_calls[0].arguments).unwrap();
+        assert_eq!(arguments["offset"], 120);
+        assert_eq!(
+            out.reasoning_content.as_deref(),
+            Some("Let me continue reading the file in chunks.")
+        );
+        assert!(out.content.is_empty());
+    }
+
+    #[test]
+    fn an_output_without_a_call_block_is_left_as_read() {
+        let read = ParsedChatMessage {
+            content: "Done.".into(),
+            reasoning_content: None,
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_from_the_whole_output(read, "Done.");
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.content, "Done.");
     }
 
     // ── extract_native_tool_calls ───────────────────────────────────────────
