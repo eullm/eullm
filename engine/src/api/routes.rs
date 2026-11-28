@@ -4500,6 +4500,19 @@ fn tool_answer_message(tmpl: &crate::inference::DynamicOaiTemplate, text: String
                 message["reasoning_content"] = Value::String(reasoning);
             }
             let called = !parsed.tool_calls.is_empty();
+            if !called
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|c| c.trim().is_empty())
+            {
+                // A client with tools waits for a call or an answer and gets
+                // neither: OpenCode ends the turn with only the reasoning shown.
+                tracing::warn!(
+                    "an answer to a request with tools has no text and no tool call, only {} \
+                     bytes of reasoning",
+                    message["reasoning_content"].as_str().map_or(0, str::len)
+                );
+            }
             if called {
                 message["tool_calls"] = parsed
                     .tool_calls

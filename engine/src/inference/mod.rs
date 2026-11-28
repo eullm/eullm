@@ -1734,12 +1734,42 @@ impl DynamicOaiTemplate {
             })
             .unwrap_or_default();
 
-        Some(ParsedChatMessage {
+        Some(calls_out_of_the_reasoning(ParsedChatMessage {
             content,
             reasoning_content,
             tool_calls,
-        })
+        }))
     }
+}
+
+/// An answer with no text and no call whose reasoning holds a whole native
+/// `<tool_call>` block: the model wrote the call without closing its
+/// reasoning first, and the parser, which reads calls after the reasoning
+/// only, took it for thought. The call is taken out of the reasoning with
+/// [`extract_native_tool_calls`] and becomes the answer's. Seen on
+/// Qwen3.8-Flash-Next IQ2_XS in OpenCode (28-11-2026): three turns in a row
+/// whose reasoning ended "Let me read the file" and then nothing, each 50 to
+/// 90 tokens longer than the reasoning shown, about the length of a read
+/// call, and OpenCode stopped there for want of one.
+fn calls_out_of_the_reasoning(mut message: ParsedChatMessage) -> ParsedChatMessage {
+    if !message.tool_calls.is_empty() || !message.content.trim().is_empty() {
+        return message;
+    }
+    let Some(reasoning) = message.reasoning_content.as_deref() else {
+        return message;
+    };
+    let (rest, calls) = extract_native_tool_calls(reasoning);
+    if calls.is_empty() {
+        return message;
+    }
+    tracing::warn!(
+        "{} tool call(s) written inside the reasoning, which the template's parser does not \
+         read there: taken out of it",
+        calls.len()
+    );
+    message.reasoning_content = Some(rest.trim_end().to_string()).filter(|r| !r.is_empty());
+    message.tool_calls = calls;
+    message
 }
 
 /// Last-resort extractor for native-syntax tool calls:
@@ -4200,6 +4230,52 @@ mod stop_reason_tests {
         assert_eq!(parsed.content, "<think>weigh the options</think>The answer is 4.");
         assert_eq!(parsed.reasoning_content, None);
         assert!(parsed.tool_calls.is_empty());
+    }
+
+    // ── calls_out_of_the_reasoning ──────────────────────────────────────────
+
+    #[test]
+    fn a_call_written_inside_the_reasoning_becomes_the_answer_s() {
+        let message = ParsedChatMessage {
+            content: String::new(),
+            reasoning_content: Some(
+                "Let me read the file.\n<tool_call>\n<function=read>\n<parameter=filePath>\n\
+                 /w/sky1942.py\n</parameter>\n</function>\n</tool_call>"
+                    .into(),
+            ),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_out_of_the_reasoning(message);
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].name, "read");
+        assert!(out.tool_calls[0].arguments.contains("sky1942.py"));
+        assert_eq!(
+            out.reasoning_content.as_deref(),
+            Some("Let me read the file.")
+        );
+    }
+
+    #[test]
+    fn an_answer_with_text_or_calls_keeps_its_reasoning_as_it_is() {
+        let reasoning = "<tool_call>\n<function=read>\n<parameter=p>\nx\n</parameter>\n\
+                         </function>\n</tool_call>";
+        let with_text = ParsedChatMessage {
+            content: "Here it is.".into(),
+            reasoning_content: Some(reasoning.into()),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_out_of_the_reasoning(with_text);
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.reasoning_content.as_deref(), Some(reasoning));
+
+        let thought_only = ParsedChatMessage {
+            content: String::new(),
+            reasoning_content: Some("Nothing to call.".into()),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_out_of_the_reasoning(thought_only);
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.reasoning_content.as_deref(), Some("Nothing to call."));
     }
 
     // ── extract_native_tool_calls ───────────────────────────────────────────
