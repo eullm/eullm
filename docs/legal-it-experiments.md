@@ -1586,3 +1586,27 @@ buffers add to ~450 GB, so a load takes 50-55 minutes. Nothing is stuck:
 the pilot's hour was short, and three times shorter than the service
 Ethernet needed. The pilot runs as one job of 4 hours (`RR_LOAD_MIN=90`),
 cases and explanations from one load, the three checkers behind it.
+
+## 30. 2026-11-28: the clean candidate, and the "no-note weakness" that was a wrong baseline
+
+**k950-g1-opd200**, the first candidate trained on clean files only (Qwen
+and every Gemma form, `k9`), against r2l: devbig 8:11, practical 8:16, both
+level; closed book 216. Its closed book is not comparable with the
+candidates before it: cleaning took the questions, cases and explanations
+off the closed-book suite's own articles, which the earlier corpora had.
+The same holds for k8 (210) and k9 (232).
+
+**Overturned: "every candidate is weaker without the note".** Since
+section 26 the devbig answers without the note (`-hybnn`) were compared
+with r2l *with* the note. Against r2l without the note
+(`r2l-steps-8b-quote-q4-hybnn`), every candidate is level: k450 10:16 and
+12:13 over its two seeds, k50 7:9 and 12:13, k650 12:13 and 12:12, k950
+14:14. There is no no-note weakness to work on. What is real: the stages
+before OPD collapse without the note (k950-g1 11:79, k950 12:74), and OPD
+brings them back, as in section 21.
+
+**Queued:** k950-g1-opd200 with seed 1; the recipe on k8 (Gemma alone at
+full volume, clean): r2l-k850, g1, OPD 200; the 4B on clean files, jpn17
+with k8-jpn17 merged whole (197 on the closed book) and 300 steps of OPD
+with jpn17 as teacher. The queue stood empty from 26 to 28 November with
+nothing behind the chains that ended: the hours of those two days are lost.
