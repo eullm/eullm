@@ -13,7 +13,7 @@ Entries for **0.6.36 and later** are written by hand. Everything below that is
 derived from the commit history and reads like it: useful for tracing when
 something changed, less so for understanding what it means.
 
-## 0.10.20 — 2026-11-27
+## 0.10.20 — 2026-11-28
 
 ### Added
 - **llama.cpp b12767** (llama.cpp 1.1.0): Inkling 2's graph does fewer operations per token (part of what Unsloth's own build gained), and two new architectures, Hunyuan V4 Flash (`hy_v4_flash`) and RAON-1 (`raon1`).

@@ -10,7 +10,7 @@ name: EuLLM
 url: "https://github.com/eullm/eullm"
 landingURL: "https://www.eullm.eu"
 softwareVersion: "0.10.20"
-releaseDate: "2026-11-27"
+releaseDate: "2026-11-28"
 logo: eullm-logo-github.png
 
 platforms:
