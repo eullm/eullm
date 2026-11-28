@@ -8,9 +8,10 @@
 //! routing, the audit trail. The answer is translated back: a message with
 //! `thinking`, `text` and `tool_use` blocks, or, streamed, the events of
 //! Anthropic's SSE (`message_start`, `content_block_*`, `message_delta`,
-//! `message_stop`). Like a streamed answer with tools on
-//! `/v1/chat/completions`, a streamed one here is generated whole first and
-//! then sent as events: tool calls exist once the output is parsed.
+//! `message_stop`). Streamed, it is asked of `/v1/chat/completions` streamed
+//! and its chunks become those events as they come ([`StreamTranslator`]):
+//! the reasoning and the text as the model writes them, the tool calls once
+//! the output is parsed, as there.
 //!
 //! Asked for by someone who wanted EuLLM in Claude Code (on instagram.com,
 //! 27-11-2026). Claude Code needs `/v1/messages` and nothing else:
@@ -25,8 +26,8 @@ use serde_json::{Map, Value, json};
 /// Where a Messages request does not translate: the message for a 400.
 pub(crate) type Invalid = String;
 
-/// A Messages request as `/v1/chat/completions` takes it, never streamed:
-/// the answer is translated back whole (see the module documentation).
+/// A Messages request as `/v1/chat/completions` takes it, not streamed: the
+/// caller streams it when the request asked (see the module documentation).
 pub(crate) fn to_chat_completions(body: &Value) -> Result<Value, Invalid> {
     let Some(object) = body.as_object() else {
         return Err("the body is not a JSON object".to_string());
@@ -315,27 +316,19 @@ pub(crate) fn from_chat_completion(answer: &Value, model: &str) -> Value {
             .pointer("/function/arguments")
             .and_then(Value::as_str)
             .unwrap_or("{}");
-        // Anthropic's `input` is an object; a model that wrote something else
-        // gets it under `arguments`, which a client can still show.
-        let input = match serde_json::from_str::<Value>(arguments) {
-            Ok(object @ Value::Object(_)) => object,
-            _ => json!({ "arguments": arguments }),
-        };
         content.push(json!({
             "type": "tool_use",
             "id": call.get("id").and_then(Value::as_str).map_or_else(new_tool_id, str::to_string),
             "name": call.pointer("/function/name").and_then(Value::as_str).unwrap_or(""),
-            "input": input,
+            "input": tool_input(arguments),
         }));
     }
-    let stop_reason = match answer
-        .pointer("/choices/0/finish_reason")
-        .and_then(Value::as_str)
-    {
-        _ if !calls.is_empty() => "tool_use",
-        Some("length") => "max_tokens",
-        _ => "end_turn",
-    };
+    let stop_reason = stop_reason(
+        !calls.is_empty(),
+        answer
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str),
+    );
     let tokens = |name: &str| {
         answer
             .pointer(&format!("/usage/{name}"))
@@ -361,6 +354,26 @@ fn new_tool_id() -> String {
     format!("toolu_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// A tool call's `arguments` as Anthropic's `input`, an object: a model that
+/// wrote something else gets it under `arguments`, which a client can still
+/// show.
+fn tool_input(arguments: &str) -> Value {
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(object @ Value::Object(_)) => object,
+        _ => json!({ "arguments": arguments }),
+    }
+}
+
+/// Anthropic's `stop_reason` for an answer that called tools or not and
+/// ended for `finish_reason`.
+fn stop_reason(called_tools: bool, finish_reason: Option<&str>) -> &'static str {
+    match finish_reason {
+        _ if called_tools => "tool_use",
+        Some("length") => "max_tokens",
+        _ => "end_turn",
+    }
+}
+
 /// The `message_start` event of a streamed answer, sent before the answer
 /// exists: an empty message for `model`, whose usage the final
 /// `message_delta` carries.
@@ -380,63 +393,171 @@ pub(crate) fn start_event(model: &str) -> Value {
     })
 }
 
-/// A Messages answer as the events of Anthropic's streaming, `(event, data)`.
-pub(crate) fn stream_events(message: &Value) -> Vec<(&'static str, Value)> {
-    let mut start = message.clone();
-    start["content"] = json!([]);
-    start["stop_reason"] = Value::Null;
-    start["usage"]["output_tokens"] = json!(0);
-    let mut events = vec![(
-        "message_start",
-        json!({ "type": "message_start", "message": start }),
-    )];
-    let blocks = message
-        .get("content")
-        .and_then(Value::as_array)
-        .map_or(&[][..], Vec::as_slice);
-    for (index, block) in blocks.iter().enumerate() {
-        let (empty, delta) = match block.get("type").and_then(Value::as_str) {
-            Some("thinking") => (
-                json!({ "type": "thinking", "thinking": "", "signature": "" }),
-                json!({ "type": "thinking_delta", "thinking": block["thinking"] }),
-            ),
-            Some("tool_use") => (
-                json!({ "type": "tool_use", "id": block["id"], "name": block["name"], "input": {} }),
-                json!({ "type": "input_json_delta", "partial_json": block["input"].to_string() }),
-            ),
-            _ => (
-                json!({ "type": "text", "text": "" }),
-                json!({ "type": "text_delta", "text": block["text"] }),
-            ),
+/// The chunks of a streamed `/v1/chat/completions` answer as the events of
+/// Anthropic's streaming, `(event, data)`, as they come: a `thinking` block
+/// for the reasoning, a `text` block for the answer, each opened by its
+/// first piece and closed when the other kind begins, and the tool calls,
+/// which come whole at the end, as `tool_use` blocks. The `message_start`
+/// goes out before, from [`start_event`].
+#[derive(Default)]
+pub(crate) struct StreamTranslator {
+    /// The block open now: its index, and whether it is the reasoning's.
+    open: Option<(usize, bool)>,
+    blocks: usize,
+    /// Tool calls by their index in the chunks: id, name, arguments.
+    calls: Vec<(Option<String>, String, String)>,
+    finish_reason: Option<String>,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+impl StreamTranslator {
+    /// The events of one chunk.
+    pub(crate) fn chunk(&mut self, chunk: &Value) -> Vec<(&'static str, Value)> {
+        let mut events = Vec::new();
+        let delta = chunk.pointer("/choices/0/delta").unwrap_or(&Value::Null);
+        let text = |key: &str| {
+            delta
+                .get(key)
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
         };
+        if let Some(thinking) = text("reasoning_content") {
+            self.piece(true, thinking, &mut events);
+        }
+        if let Some(content) = text("content") {
+            self.piece(false, content, &mut events);
+        }
+        for (position, call) in delta
+            .get("tool_calls")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .enumerate()
+        {
+            let index = call
+                .get("index")
+                .and_then(Value::as_u64)
+                .map_or(position, |i| i as usize);
+            if self.calls.len() <= index {
+                self.calls
+                    .resize(index + 1, (None, String::new(), String::new()));
+            }
+            let (id, name, arguments) = &mut self.calls[index];
+            if let Some(new) = call.get("id").and_then(Value::as_str) {
+                *id = Some(new.to_string());
+            }
+            if let Some(new) = call.pointer("/function/name").and_then(Value::as_str) {
+                name.push_str(new);
+            }
+            if let Some(new) = call.pointer("/function/arguments").and_then(Value::as_str) {
+                arguments.push_str(new);
+            }
+        }
+        if let Some(reason) = chunk
+            .pointer("/choices/0/finish_reason")
+            .and_then(Value::as_str)
+        {
+            self.finish_reason = Some(reason.to_string());
+        }
+        if let Some(usage) = chunk.get("usage") {
+            let tokens = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+            self.input_tokens = tokens("prompt_tokens");
+            self.output_tokens = tokens("completion_tokens");
+        }
+        events
+    }
+
+    /// The events that end the answer: the open block closed, the tool
+    /// calls, `message_delta` with the stop reason and the usage, and
+    /// `message_stop`.
+    pub(crate) fn finish(mut self) -> Vec<(&'static str, Value)> {
+        let mut events = Vec::new();
+        self.close(&mut events);
+        let calls = std::mem::take(&mut self.calls);
+        let called_tools = !calls.is_empty();
+        for (id, name, arguments) in calls {
+            let index = self.blocks;
+            self.blocks += 1;
+            let arguments = if arguments.is_empty() {
+                "{}".to_string()
+            } else {
+                arguments
+            };
+            events.push((
+                "content_block_start",
+                json!({ "type": "content_block_start", "index": index, "content_block": {
+                    "type": "tool_use", "id": id.unwrap_or_else(new_tool_id), "name": name, "input": {},
+                } }),
+            ));
+            events.push((
+                "content_block_delta",
+                json!({ "type": "content_block_delta", "index": index, "delta": {
+                    "type": "input_json_delta", "partial_json": tool_input(&arguments).to_string(),
+                } }),
+            ));
+            events.push((
+                "content_block_stop",
+                json!({ "type": "content_block_stop", "index": index }),
+            ));
+        }
         events.push((
-            "content_block_start",
-            json!({ "type": "content_block_start", "index": index, "content_block": empty }),
+            "message_delta",
+            json!({
+                "type": "message_delta",
+                "delta": {
+                    "stop_reason": stop_reason(called_tools, self.finish_reason.as_deref()),
+                    "stop_sequence": null,
+                },
+                // The input as well: a stream's `message_start` goes out
+                // before the prompt is read, with none.
+                "usage": { "input_tokens": self.input_tokens, "output_tokens": self.output_tokens },
+            }),
         ));
+        events.push(("message_stop", json!({ "type": "message_stop" })));
+        events
+    }
+
+    /// A piece of the reasoning (`thinking`) or of the text, in its block.
+    fn piece(&mut self, thinking: bool, piece: &str, events: &mut Vec<(&'static str, Value)>) {
+        let index = match self.open {
+            Some((index, open_thinking)) if open_thinking == thinking => index,
+            _ => {
+                self.close(events);
+                let index = self.blocks;
+                self.blocks += 1;
+                self.open = Some((index, thinking));
+                let block = if thinking {
+                    json!({ "type": "thinking", "thinking": "", "signature": "" })
+                } else {
+                    json!({ "type": "text", "text": "" })
+                };
+                events.push((
+                    "content_block_start",
+                    json!({ "type": "content_block_start", "index": index, "content_block": block }),
+                ));
+                index
+            }
+        };
+        let delta = if thinking {
+            json!({ "type": "thinking_delta", "thinking": piece })
+        } else {
+            json!({ "type": "text_delta", "text": piece })
+        };
         events.push((
             "content_block_delta",
             json!({ "type": "content_block_delta", "index": index, "delta": delta }),
         ));
-        events.push((
-            "content_block_stop",
-            json!({ "type": "content_block_stop", "index": index }),
-        ));
     }
-    events.push((
-        "message_delta",
-        json!({
-            "type": "message_delta",
-            "delta": { "stop_reason": message["stop_reason"], "stop_sequence": null },
-            // The input as well: a stream's `message_start` goes out before
-            // the prompt is read, with none.
-            "usage": {
-                "input_tokens": message["usage"]["input_tokens"],
-                "output_tokens": message["usage"]["output_tokens"],
-            },
-        }),
-    ));
-    events.push(("message_stop", json!({ "type": "message_stop" })));
-    events
+
+    fn close(&mut self, events: &mut Vec<(&'static str, Value)>) {
+        if let Some((index, _)) = self.open.take() {
+            events.push((
+                "content_block_stop",
+                json!({ "type": "content_block_stop", "index": index }),
+            ));
+        }
+    }
 }
 
 /// An error as Anthropic sends it, for an HTTP `status` and a `message`.
@@ -617,21 +738,36 @@ mod tests {
 
     #[test]
     fn a_streamed_answer_is_the_events_of_anthropic_streaming_in_order() {
-        let answer = json!({
-            "choices": [{
-                "message": { "content": "Sure.", "tool_calls": [{ "id": "call_1",
-                    "function": { "name": "Bash", "arguments": "{\"command\":\"ls\"}" } }] },
-                "finish_reason": "tool_calls",
-            }],
-            "usage": { "prompt_tokens": 10, "completion_tokens": 5 },
-        });
-        let events = stream_events(&from_chat_completion(&answer, "m"));
+        let chunk = |delta: Value| json!({ "choices": [{ "index": 0, "delta": delta, "finish_reason": null }] });
+        let mut translator = StreamTranslator::default();
+        let mut events = Vec::new();
+        for c in [
+            chunk(json!({ "reasoning_content": "Need " })),
+            chunk(json!({ "reasoning_content": "ls." })),
+            chunk(json!({ "content": "Sure" })),
+            chunk(json!({ "content": "." })),
+            chunk(
+                json!({ "tool_calls": [{ "index": 0, "id": "call_1", "type": "function",
+                "function": { "name": "Bash", "arguments": "{\"command\":\"ls\"}" } }] }),
+            ),
+            json!({ "choices": [{ "index": 0, "delta": {}, "finish_reason": "tool_calls" }],
+                    "usage": { "prompt_tokens": 10, "completion_tokens": 5 } }),
+        ] {
+            events.extend(translator.chunk(&c));
+        }
+        // The reasoning and the text went out before the end.
+        assert_eq!(events.len(), 7);
+        events.extend(translator.finish());
         let names: Vec<&str> = events.iter().map(|(name, _)| *name).collect();
         assert_eq!(
             names,
             [
-                "message_start",
                 "content_block_start",
+                "content_block_delta",
+                "content_block_delta",
+                "content_block_stop",
+                "content_block_start",
+                "content_block_delta",
                 "content_block_delta",
                 "content_block_stop",
                 "content_block_start",
@@ -641,22 +777,42 @@ mod tests {
                 "message_stop",
             ]
         );
-        assert_eq!(events[0].1["message"]["content"], json!([]));
-        assert_eq!(
-            events[1].1["content_block"],
-            json!({ "type": "text", "text": "" })
-        );
+        assert_eq!(events[0].1["content_block"]["type"], "thinking");
         assert_eq!(
             events[2].1["delta"],
-            json!({ "type": "text_delta", "text": "Sure." })
+            json!({ "type": "thinking_delta", "thinking": "ls." })
         );
-        assert_eq!(events[4].1["content_block"]["name"], "Bash");
         assert_eq!(
-            events[5].1["delta"],
+            events[4].1,
+            json!({ "type": "content_block_start", "index": 1,
+                    "content_block": { "type": "text", "text": "" } })
+        );
+        assert_eq!(
+            events[6].1["delta"],
+            json!({ "type": "text_delta", "text": "." })
+        );
+        assert_eq!(events[8].1["index"], 2);
+        assert_eq!(events[8].1["content_block"]["id"], "call_1");
+        assert_eq!(events[8].1["content_block"]["name"], "Bash");
+        assert_eq!(
+            events[9].1["delta"],
             json!({ "type": "input_json_delta", "partial_json": "{\"command\":\"ls\"}" })
         );
-        assert_eq!(events[7].1["delta"]["stop_reason"], "tool_use");
-        assert_eq!(events[7].1["usage"]["output_tokens"], 5);
+        assert_eq!(events[11].1["delta"]["stop_reason"], "tool_use");
+        assert_eq!(events[11].1["usage"]["input_tokens"], 10);
+        assert_eq!(events[11].1["usage"]["output_tokens"], 5);
+    }
+
+    #[test]
+    fn a_streamed_answer_cut_short_says_so() {
+        let mut translator = StreamTranslator::default();
+        translator.chunk(
+            &json!({ "choices": [{ "delta": { "content": "Half" }, "finish_reason": null }] }),
+        );
+        translator.chunk(&json!({ "choices": [{ "delta": {}, "finish_reason": "length" }] }));
+        let events = translator.finish();
+        assert_eq!(events[0].0, "content_block_stop");
+        assert_eq!(events[1].1["delta"]["stop_reason"], "max_tokens");
     }
 
     #[test]

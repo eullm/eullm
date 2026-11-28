@@ -61,11 +61,13 @@ crowding out the conversation.
 A request is answered by `/v1/chat/completions`: the model's chat template,
 its tool calls, `"model": "auto"` and the audit trail are the same.
 Thinking runs when the request asks for it (`thinking`), as on Anthropic's
-API. A streamed answer is generated whole and then sent as Anthropic's
-events, as a streamed answer with tools is on `/v1/chat/completions`: Claude
-Code always sends tools. The stream opens at once and sends a `ping` every
-10 seconds meanwhile, since Claude Code gives up on one that stays silent:
-an answer writing a small program can take minutes on a 27B. Images and documents in a message are replaced by a
+API. A streamed answer goes out as the model writes it (since 0.10.30;
+0.10.20 generated it whole first): the reasoning and the text piece by
+piece, each tool call whole once the output is parsed, as on
+`/v1/chat/completions`, which streams the same way when a request carries
+tools. The stream opens at once and sends a `ping` every 10 seconds, since
+Claude Code gives up on one that stays silent while a long prompt is read.
+Images and documents in a message are replaced by a
 note saying they were not read, and `stop_sequences` is not applied. The
 `system` messages Claude Code puts among the turns join the system prompt
 before the first turn and the user's turn after it, since many chat
