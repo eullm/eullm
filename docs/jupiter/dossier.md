@@ -854,9 +854,12 @@ JUPITER, named by its Slurm job id.
   recovered once cooling returns), and a planned maintenance of all rows
   of the Booster from 2026-11-30 08:00 to 2026-12-14 17:00. Since the 28th
   the login nodes refuse us at the second factor (keyboard-interactive).
-  With 355 node-hours left of 1,250 the plan's end of 15-12 cannot be
-  held; what the outage and the maintenance leave is the rest of
-  December. The jobs queued on the 26th (four lines, 162 jobs) are to be
+  The allocation was granted for two months, which we had read as ending
+  on 15-12, while JSC set its end at 31-12 from the start: the two weeks
+  of maintenance were most likely already known and added. What is lost
+  beyond them is the cooling outage, from the 27th until the maintenance
+  begins. With 355 node-hours left of 1,250, the work moves to
+  14-31 December, about 21 node-hours a day. The jobs queued on the 26th (four lines, 162 jobs) are to be
   checked once the system is back.
 
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
