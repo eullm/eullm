@@ -1144,7 +1144,7 @@ pub fn is_four_bit(t: KvCacheType) -> bool {
 }
 
 /// A key cache that produces garbage output is raised to q8_0, and the log
-/// says so: q4_0 keys always, q4_1 keys with flash attention.
+/// says so: four-bit keys, q4_0 and q4_1, with flash attention or without.
 ///
 /// # What was actually measured
 ///
@@ -1170,6 +1170,15 @@ pub fn is_four_bit(t: KvCacheType) -> bool {
 /// q4_1, q5_0, q5_1 and q8_0 keys coherent (q4_1 visibly worse than f16).
 /// With flash attention, q4_1 keys stay raised as before.
 ///
+/// q4_1 keys without flash attention were kept on that measurement, one
+/// answer each. The same tester then asked qwen3-0.6b the capital of France
+/// 5,390 times with 0.10.10, every key and value type, flash attention on and
+/// off, temperature 0.0 to 1.0, five times each: the 22 answers that never
+/// ended and ran to the token limit all had q4_1 keys without flash
+/// attention, 22 of those 385 runs, one in 18 (reported on github.com,
+/// 28-11-2026). Since 0.10.30 they are raised as well: q5_0 is the smallest
+/// key cache that has held.
+///
 /// So this is not the gradual quality loss that quantizing a cache normally
 /// buys you: those paths produce nonsense rather than refusing.
 ///
@@ -1181,10 +1190,8 @@ pub fn is_four_bit(t: KvCacheType) -> bool {
 /// throughput, while still saving most of the memory the operator was after.
 ///
 /// Returns `(effective_k, corrected)`.
-pub fn correct_kv_cache_k(cache_type_k: KvCacheType, flash_attn: bool) -> (KvCacheType, bool) {
-    let broken = matches!(cache_type_k, KvCacheType::Q4_0)
-        || (flash_attn && is_four_bit(cache_type_k));
-    if broken {
+pub fn correct_kv_cache_k(cache_type_k: KvCacheType) -> (KvCacheType, bool) {
+    if is_four_bit(cache_type_k) {
         (KvCacheType::Q8_0, true)
     } else {
         (cache_type_k, false)
@@ -1199,8 +1206,8 @@ pub fn correct_kv_cache_k(cache_type_k: KvCacheType, flash_attn: bool) -> (KvCac
 /// run with `--cache-type-k q4_0 --cache-type-v q4_0 --no-flash-attn`,
 /// reported on github.com, 22-11-2026). With flash attention off, the value
 /// cache is set to f16 before loading, and the key cache stays as asked:
-/// llama.cpp takes a quantized key without flash attention (except q4_0,
-/// which [`correct_kv_cache_k`] raises to q8_0).
+/// llama.cpp takes a quantized key without flash attention (except the
+/// four-bit ones, which [`correct_kv_cache_k`] raises to q8_0).
 ///
 /// Returns `(effective_v, corrected)`.
 pub fn correct_kv_cache_v_for_no_flash_attn(
@@ -1239,8 +1246,8 @@ pub fn report_kv_cache_k_correction(requested_k: KvCacheType, flash_attn: bool) 
     } else {
         eprintln!(
             "[EULLM] --cache-type-k {name} produces incoherent output, with or without flash \
-             attention: the key cache is raised to q8_0. For keys smaller than q8_0 without \
-             flash attention, q4_1 and q5_0 work."
+             attention: the key cache is raised to q8_0. For keys smaller than q8_0, q5_0 and \
+             q5_1 work."
         );
     }
 }
@@ -1727,12 +1734,42 @@ impl DynamicOaiTemplate {
             })
             .unwrap_or_default();
 
-        Some(ParsedChatMessage {
+        Some(calls_out_of_the_reasoning(ParsedChatMessage {
             content,
             reasoning_content,
             tool_calls,
-        })
+        }))
     }
+}
+
+/// An answer with no text and no call whose reasoning holds a whole native
+/// `<tool_call>` block: the model wrote the call without closing its
+/// reasoning first, and the parser, which reads calls after the reasoning
+/// only, took it for thought. The call is taken out of the reasoning with
+/// [`extract_native_tool_calls`] and becomes the answer's. Seen on
+/// Qwen3.8-Flash-Next IQ2_XS in OpenCode (28-11-2026): three turns in a row
+/// whose reasoning ended "Let me read the file" and then nothing, each 50 to
+/// 90 tokens longer than the reasoning shown, about the length of a read
+/// call, and OpenCode stopped there for want of one.
+fn calls_out_of_the_reasoning(mut message: ParsedChatMessage) -> ParsedChatMessage {
+    if !message.tool_calls.is_empty() || !message.content.trim().is_empty() {
+        return message;
+    }
+    let Some(reasoning) = message.reasoning_content.as_deref() else {
+        return message;
+    };
+    let (rest, calls) = extract_native_tool_calls(reasoning);
+    if calls.is_empty() {
+        return message;
+    }
+    tracing::warn!(
+        "{} tool call(s) written inside the reasoning, which the template's parser does not \
+         read there: taken out of it",
+        calls.len()
+    );
+    message.reasoning_content = Some(rest.trim_end().to_string()).filter(|r| !r.is_empty());
+    message.tool_calls = calls;
+    message
 }
 
 /// Last-resort extractor for native-syntax tool calls:
@@ -3902,10 +3939,10 @@ mod kv_cache_k_correction_tests {
     use super::*;
 
     #[test]
-    fn four_bit_keys_are_raised_when_flash_attention_is_on() {
+    fn four_bit_keys_are_raised() {
         for k in [KvCacheType::Q4_0, KvCacheType::Q4_1] {
-            let (out, corrected) = correct_kv_cache_k(k, true);
-            assert!(corrected, "{k:?} with flash attention must be corrected");
+            let (out, corrected) = correct_kv_cache_k(k);
+            assert!(corrected, "{k:?} must be corrected");
             assert_eq!(out, KvCacheType::Q8_0);
         }
     }
@@ -3914,13 +3951,20 @@ mod kv_cache_k_correction_tests {
     fn q4_0_keys_are_raised_without_flash_attention_too() {
         // Gibberish on every machine of issue #140 once 0.9.50 stopped
         // turning them into f16 keys by accident (see correct_kv_cache_k).
-        assert_eq!(correct_kv_cache_k(KvCacheType::Q4_0, false), (KvCacheType::Q8_0, true));
+        assert_eq!(
+            correct_kv_cache_k(KvCacheType::Q4_0),
+            (KvCacheType::Q8_0, true)
+        );
     }
 
     #[test]
-    fn q4_1_keys_are_kept_without_flash_attention() {
-        // Measured coherent there: the one four-bit key cache that works.
-        assert_eq!(correct_kv_cache_k(KvCacheType::Q4_1, false), (KvCacheType::Q4_1, false));
+    fn q4_1_keys_are_raised_without_flash_attention_too() {
+        // One answer in 18 ran to the token limit on issue #140's 5,390 runs
+        // (see correct_kv_cache_k).
+        assert_eq!(
+            correct_kv_cache_k(KvCacheType::Q4_1),
+            (KvCacheType::Q8_0, true)
+        );
     }
 
     #[test]
@@ -3932,23 +3976,19 @@ mod kv_cache_k_correction_tests {
             KvCacheType::Q5_0,
             KvCacheType::Q5_1,
         ] {
-            for fa in [true, false] {
-                let (out, corrected) = correct_kv_cache_k(k, fa);
-                assert!(!corrected, "{k:?} (flash_attn={fa}) must not be corrected");
-                assert_eq!(out, k);
-            }
+            let (out, corrected) = correct_kv_cache_k(k);
+            assert!(!corrected, "{k:?} must not be corrected");
+            assert_eq!(out, k);
         }
     }
 
     #[test]
     fn the_correction_is_idempotent() {
         // Applying it to its own output must not keep changing things.
-        for fa in [true, false] {
-            let (once, _) = correct_kv_cache_k(KvCacheType::Q4_0, fa);
-            let (twice, corrected) = correct_kv_cache_k(once, fa);
-            assert!(!corrected);
-            assert_eq!(once, twice);
-        }
+        let (once, _) = correct_kv_cache_k(KvCacheType::Q4_0);
+        let (twice, corrected) = correct_kv_cache_k(once);
+        assert!(!corrected);
+        assert_eq!(once, twice);
     }
 }
 
@@ -4190,6 +4230,52 @@ mod stop_reason_tests {
         assert_eq!(parsed.content, "<think>weigh the options</think>The answer is 4.");
         assert_eq!(parsed.reasoning_content, None);
         assert!(parsed.tool_calls.is_empty());
+    }
+
+    // ── calls_out_of_the_reasoning ──────────────────────────────────────────
+
+    #[test]
+    fn a_call_written_inside_the_reasoning_becomes_the_answer_s() {
+        let message = ParsedChatMessage {
+            content: String::new(),
+            reasoning_content: Some(
+                "Let me read the file.\n<tool_call>\n<function=read>\n<parameter=filePath>\n\
+                 /w/sky1942.py\n</parameter>\n</function>\n</tool_call>"
+                    .into(),
+            ),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_out_of_the_reasoning(message);
+        assert_eq!(out.tool_calls.len(), 1);
+        assert_eq!(out.tool_calls[0].name, "read");
+        assert!(out.tool_calls[0].arguments.contains("sky1942.py"));
+        assert_eq!(
+            out.reasoning_content.as_deref(),
+            Some("Let me read the file.")
+        );
+    }
+
+    #[test]
+    fn an_answer_with_text_or_calls_keeps_its_reasoning_as_it_is() {
+        let reasoning = "<tool_call>\n<function=read>\n<parameter=p>\nx\n</parameter>\n\
+                         </function>\n</tool_call>";
+        let with_text = ParsedChatMessage {
+            content: "Here it is.".into(),
+            reasoning_content: Some(reasoning.into()),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_out_of_the_reasoning(with_text);
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.reasoning_content.as_deref(), Some(reasoning));
+
+        let thought_only = ParsedChatMessage {
+            content: String::new(),
+            reasoning_content: Some("Nothing to call.".into()),
+            tool_calls: Vec::new(),
+        };
+        let out = super::calls_out_of_the_reasoning(thought_only);
+        assert!(out.tool_calls.is_empty());
+        assert_eq!(out.reasoning_content.as_deref(), Some("Nothing to call."));
     }
 
     // ── extract_native_tool_calls ───────────────────────────────────────────

@@ -502,7 +502,7 @@ struct RuntimeOpts {
     ///
     /// q8_0 takes half the memory of f16 for a very small quality cost: room
     /// for a longer --ctx-size. Key caches that produce nonsense are raised to
-    /// q8_0 and the log says so: q4_0 always, q4_1 with flash attention on.
+    /// q8_0 and the log says so: four-bit keys, q4_0 and q4_1.
     #[arg(long, value_name = "TYPE", default_value = "f16", help_heading = HELP_GPU)]
     cache_type_k: String,
 
@@ -1527,7 +1527,7 @@ pub async fn main() {
             });
             // So that this sees what will actually be used rather than what
             // was typed.
-            let (fa_k, fa_corrected) = inference::correct_kv_cache_k(ctk, !no_flash_attn);
+            let (fa_k, fa_corrected) = inference::correct_kv_cache_k(ctk);
             if fa_corrected {
                 inference::report_kv_cache_k_correction(ctk, !no_flash_attn);
                 ctk = fa_k;
@@ -1709,7 +1709,7 @@ pub async fn main() {
                 std::process::exit(1);
             });
             let (ctk, _) = {
-                let (k, corrected) = inference::correct_kv_cache_k(ctk, !no_flash_attn);
+                let (k, corrected) = inference::correct_kv_cache_k(ctk);
                 if corrected {
                     inference::report_kv_cache_k_correction(ctk, !no_flash_attn);
                 }
