@@ -4454,11 +4454,11 @@ fn stream_tool_answer_sse(
                         tool_answer_message(&tmpl, std::mem::take(&mut text), stop_reason);
                     // A reasoning given as the answer (see `tool_answer_message`)
                     // went out as reasoning: it goes out again as the answer.
-                    if !streamed_text {
-                        if let Some(content) = message["content"].as_str().filter(|c| !c.is_empty()) {
-                            let data = chunk(json!({ "content": content }));
-                            yield Ok(Event::default().data(data.to_string()));
-                        }
+                    if !streamed_text
+                        && let Some(content) = message["content"].as_str().filter(|c| !c.is_empty())
+                    {
+                        let data = chunk(json!({ "content": content }));
+                        yield Ok(Event::default().data(data.to_string()));
                     }
                     if called_tools {
                         let data = chunk(json!({ "tool_calls": message["tool_calls"] }));
