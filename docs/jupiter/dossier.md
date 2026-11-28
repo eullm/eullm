@@ -849,6 +849,16 @@ JUPITER, named by its Slurm job id.
   and the 9B candidate's whole path again on the cleaned corpus (e1-g9-cl,
   then g9cla/b/c, eight rounds), each round as shipped.
 
+  **27-11: JUPITER down.** JSC's status page records a cooling outage in
+  the data hall from 2026-11-27 05:45 (the system overheating, to be
+  recovered once cooling returns), and a planned maintenance of all rows
+  of the Booster from 2026-11-30 08:00 to 2026-12-14 17:00. Since the 28th
+  the login nodes refuse us at the second factor (keyboard-interactive).
+  With 355 node-hours left of 1,250 the plan's end of 15-12 cannot be
+  held; what the outage and the maintenance leave is the rest of
+  December. The jobs queued on the 26th (four lines, 162 jobs) are to be
+  checked once the system is back.
+
   General abilities (GSM8K / ARC-E / ARC-C, 400 each; g9r-r2 353 / 361 /
   326): the g9e line keeps them and more (r3 353 / 379 / 368); the g9el
   line loses a little arithmetic (r3 341 / 362 / 343); five epochs at
