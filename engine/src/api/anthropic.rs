@@ -361,6 +361,25 @@ fn new_tool_id() -> String {
     format!("toolu_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// The `message_start` event of a streamed answer, sent before the answer
+/// exists: an empty message for `model`, whose usage the final
+/// `message_delta` carries.
+pub(crate) fn start_event(model: &str) -> Value {
+    json!({
+        "type": "message_start",
+        "message": {
+            "id": format!("msg_{}", uuid::Uuid::new_v4().simple()),
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [],
+            "stop_reason": null,
+            "stop_sequence": null,
+            "usage": { "input_tokens": 0, "output_tokens": 0 },
+        },
+    })
+}
+
 /// A Messages answer as the events of Anthropic's streaming, `(event, data)`.
 pub(crate) fn stream_events(message: &Value) -> Vec<(&'static str, Value)> {
     let mut start = message.clone();
@@ -408,7 +427,12 @@ pub(crate) fn stream_events(message: &Value) -> Vec<(&'static str, Value)> {
         json!({
             "type": "message_delta",
             "delta": { "stop_reason": message["stop_reason"], "stop_sequence": null },
-            "usage": { "output_tokens": message["usage"]["output_tokens"] },
+            // The input as well: a stream's `message_start` goes out before
+            // the prompt is read, with none.
+            "usage": {
+                "input_tokens": message["usage"]["input_tokens"],
+                "output_tokens": message["usage"]["output_tokens"],
+            },
         }),
     ));
     events.push(("message_stop", json!({ "type": "message_stop" })));
